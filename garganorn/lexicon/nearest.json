@@ -4,6 +4,7 @@
     "defs": {
         "main": {
             "type": "query",
+            "description": "Find the nearest locations to a given latitude and longitude",
             "parameters": {
                 "type": "params",
                 "required": [
@@ -11,15 +12,12 @@
                     "longitude"
                 ],
                 "properties": {
-                    "latitude": {
-                        "type": "string"
-                    },
-                    "longitude": {
-                        "type": "string"
-                    }
+                    "latitude": { "type": "string" },
+                    "longitude": { "type": "string" }
                 }
             },
             "output": {
+                "description": "The nearest locations to the given latitude and longitude, with distance in meters",
                 "encoding": "application/json",
                 "schema": {
                     "type": "object",
@@ -27,37 +25,32 @@
                         "locations"
                     ],
                     "properties": {
-                        "locations": {
+                        "nearest": {
                             "type": "array",
                             "items": {
                                 "type": "object",
                                 "required": [
-                                    "uri",
-                                    "name"
+                                    "location"
                                 ],
                                 "properties": {
-                                    "uri": {
-                                        "type": "ref",
-                                        "ref": "community.lexicon.geo.location"
+                                    "location": {
+                                        "type": "union",
+                                        "refs": [
+                                            "community.lexicon.geo.location"
+                                        ]
                                     },
-                                    "name": {
-                                        "type": "string"
-                                    },
-                                    "latitude": {
-                                        "type": "string"
-                                    },
-                                    "longitude": {
-                                        "type": "string"
-                                    },
-                                    "distance": {
-                                        "type": "string"
+                                    "distance_m": {
+                                        "type": "integer"
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
+            },
+            "errors": [
+                {"name": "invalid_coordinates", "description": "Latitude and/or longitude are missing or invalid"}
+            ]
         }
     }
 }
