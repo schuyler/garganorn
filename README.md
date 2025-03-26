@@ -4,6 +4,8 @@ Garganorn is intended to be an ATProtocol XRPC server for the evolving lexicon.c
 
 The project is named after the earliest recorded [mammoth goose](https://en.wikipedia.org/wiki/Garganornis).
 
+![Garganornis ballmanni](https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg/374px-Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg)
+
 ## Running
 
 Install and start a Flask server on `localhost:5000`:
