@@ -67,6 +67,8 @@ class Database:
             ST_Distance_Sphere(geom, ST_GeomFromText('POINT({lon} {lat})'))::integer as distance_m,
             from places
             where bbox.xmin > {bbox[0]} and bbox.ymin > {bbox[1]} and bbox.xmax < {bbox[2]} and bbox.ymax < {bbox[3]}
+            and date_refreshed > '2020-03-15'
+            and date_closed is null
             order by distance_m
             limit {limit};
         """.format(bbox=bbox, lat=latitude, lon=longitude, limit=limit)
