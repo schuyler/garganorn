@@ -38,7 +38,7 @@ def nearest(_, latitude: str, longitude: str, limit: str = "50"):
     except ValueError:
         return {"error": "invalid_coordinates"}
     start_time = time.perf_counter()
-    result = db.nearest(lat, lon)
+    result = db.nearest(lat, lon, limit=int(limit))
     run_time = int((time.perf_counter() - start_time) * 1000)
     return {
         "locations": result,
