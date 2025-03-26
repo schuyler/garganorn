@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "garganorn"
+version = "0.1.0"
+description = "An ATProtocol XRPC server for community.lexicon.location"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    {name = "Schuyler Erle"}
+]
+dependencies = [
+    "duckdb",
+    "lexrpc[flask]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "isort",
+]
+
+[tool.setuptools]
+packages = ["garganorn"]
+package-data = {"garganorn" = ["lexicon/*.json"]}

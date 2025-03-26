@@ -1,0 +1,63 @@
+{
+    "lexicon": 1,
+    "id": "info.schuyler.location.nearest",
+    "defs": {
+        "main": {
+            "type": "query",
+            "parameters": {
+                "type": "params",
+                "required": [
+                    "latitude",
+                    "longitude"
+                ],
+                "properties": {
+                    "latitude": {
+                        "type": "string"
+                    },
+                    "longitude": {
+                        "type": "string"
+                    }
+                }
+            },
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "locations"
+                    ],
+                    "properties": {
+                        "locations": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": [
+                                    "uri",
+                                    "name"
+                                ],
+                                "properties": {
+                                    "uri": {
+                                        "type": "ref",
+                                        "ref": "community.lexicon.geo.location"
+                                    },
+                                    "name": {
+                                        "type": "string"
+                                    },
+                                    "latitude": {
+                                        "type": "string"
+                                    },
+                                    "longitude": {
+                                        "type": "string"
+                                    },
+                                    "distance": {
+                                        "type": "string"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
