@@ -40,13 +40,23 @@ class Database:
         stmt = self.conn.execute(query, params)
         rows = stmt.fetchall()
         columns = tuple(c[0] for c in stmt.description)
-        return [dict(zip(columns, row)) for row in rows]
+        return [dict(zip(columns, (v if v is not None else "" for v in row))) for row in rows]
 
     def query_nearest(self):
         raise NotImplementedError
     
     def process_nearest(self, result):
-        return result
+        location = {
+            "latitude": result.pop("latitude"),
+            "longitude": result.pop("longitude"),
+            "name": result.pop("name"),
+        }
+        return {
+            "uri": result.pop("uri"),
+            "distance_m": result.pop("distance_m"),
+            "location": location,
+            "properties": result
+        }
 
     def nearest(self, latitude, longitude, expand_m=5000, limit=50):
         # Expand the bounding box around the point by roughly expand_m meters
@@ -73,7 +83,7 @@ class FoursquareOSP(Database):
     def query_nearest(self):
         return """
             select 
-                concat('foursquare.com/v/', fsq_place_id) as id,
+                concat('https://www.foursquare.com/v/', fsq_place_id) as uri,
                 name,
                 latitude::decimal(10,6)::varchar as latitude,
                 longitude::decimal(10,6)::varchar as longitude,
