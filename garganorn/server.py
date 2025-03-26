@@ -4,7 +4,7 @@ from importlib.resources import files
 
 from lexrpc import Server
 
-from database import FoursquareOSP
+from .database import FoursquareOSP
 
 def load_lexicons():
     """Load all lexicon JSON files from the lexicon directory."""
