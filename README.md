@@ -1,12 +1,28 @@
 # Garganorn
 
-Garganorn is intended to be an ATProtocol XRPC server for the evolving lexicon.community gazetteer specification.
+Garganorn is intended to be a test bed for experimenting adding location data to the ATmosphere.
+
+Currently, the project implements an ATProtocol XRPC server designed to serve static location datasets ("gazetteers"). 
+
+**WARNING: This code has not been formally released and interfaces WILL change without warning. YMMV. Patches welcome.**
 
 The project is named after the earliest recorded [mammoth goose](https://en.wikipedia.org/wiki/Garganornis).
 
 ![Garganornis ballmanni](https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg/374px-Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg)
 
-## Running
+## Data sources
+
+Right now, Garganorn supports either [Foursquare Open Source Places](https://docs.foursquare.com/data-products/docs/fsq-places-open-source) or [Overture Maps](https://overturemaps.org/) as a data source. You will need to modify `garganorn/__main__.py` if you want to use Foursquare OSP instead of Overture.
+
+Look in [`scripts/import-fsq-extract.sh`](scripts/import-fsq-extract.sh) and [`scripts/import-overture-extract.sh`](scripts/import-overture-extract.sh) for examples of how to import data. Example:
+
+```
+$ scripts/import-overture-extract.sh -122.5137 37.7099 -122.3785 37.8101
+```
+
+Building one of these databases takes a few minutes for a reasonable bounding box on a reasonable machine with a reasonable Internet connection. You must build one of these databases locally for the service to have data to serve.
+
+## Running the server
 
 Install and start a Flask server on `localhost:5000`:
 
@@ -15,9 +31,7 @@ pip install .
 python garganorn 
 ```
 
-You must have a DuckDB spatial containing Foursquare OSP in `db/fsq-osp.duckdb` for this to work. See [scripts/import-fsq-osp.sql](scripts/import-fsq-osp.sql).
-
-## Querying
+## Querying the XRPC service
 
 ### Nearest places
 
@@ -148,3 +162,15 @@ Result:
   }
 }
 ```
+
+## Development
+
+As aforementioned, this project is under development and should not be used for production purposes. I intend to try to track the work of the lexicon.community ATGeo working group as it evolves.
+
+Patches are extremely welcome.
+
+Come find us in the BlueSky API Touchers Discord.
+
+## License etc.
+
+It's MIT licensed, yo. See [LICENSE](LICENSE) for details. If it breaks, you get to keep the pieces.
