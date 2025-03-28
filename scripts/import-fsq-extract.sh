@@ -22,6 +22,18 @@ if [ -z "$xmin" ] || [ -z "$ymin" ] || [ -z "$xmax" ] || [ -z "$ymax" ]; then
     exit 1
 fi
 
+# Check that xmin is numerically less than xmax and ymin less than ymax
+if ! [[ "$xmin" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || ! [[ "$ymin" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || \
+   ! [[ "$xmax" =~ ^-?[0-9]+(\.[0-9]+)?$ ]] || ! [[ "$ymax" =~ ^-?[0-9]+(\.[0-9]+)?$ ]]; then
+    echo "All coordinates must be valid numbers."
+    exit 1
+fi
+
+if (( $(echo "$xmin >= $xmax" | bc -l) )) || (( $(echo "$ymin >= $ymax" | bc -l) )); then
+    echo "Invalid bounding box: xmin must be less than xmax and ymin must be less than ymax."
+    exit 1
+fi
+
 # Find the latest release from https://fsq-os-places-us-east-1.s3.amazonaws.com/ using curl
 # The release values are in the format: "<Key>release/dt=2025-03-06/</Key>"
 # The XML file does not contain newlines
