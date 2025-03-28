@@ -104,10 +104,34 @@ class FoursquareOSP(Database):
             limit $limit;
             """
 
+class OvertureMaps(Database):
+    def query_nearest(self):
+        return """
+            select 
+                concat('https://overturemaps.org/id/', id) as uri,
+                names.primary as name,
+                st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
+                st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
+                sources,
+                names,
+                categories,
+                addresses,
+                ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer as distance_m,
+            from places
+            where bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax
+            order by distance_m
+            limit $limit;
+            """
 
 if __name__ == "__main__":
     from pprint import pprint
+
     d = FoursquareOSP("db/fsq-osp.duckdb")
+    result = d.nearest(37.776145, -122.433898)
+    pprint(result)
+    d.close()
+
+    d = OvertureMaps("db/overture-maps.duckdb")
     result = d.nearest(37.776145, -122.433898)
     pprint(result)
     d.close()
