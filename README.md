@@ -1,6 +1,6 @@
 # Garganorn
 
-Garganorn is intended to be a test bed for experimenting adding location data to the ATmosphere.
+Garganorn is intended to be a test bed for experimenting with adding location data to the ATmosphere.
 
 Currently, the project implements an ATProtocol XRPC server designed to serve static location datasets ("gazetteers"). 
 
