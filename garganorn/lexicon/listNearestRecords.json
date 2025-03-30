@@ -1,6 +1,6 @@
 {
     "lexicon": 1,
-    "id": "info.schuyler.geo.listNearestRecords",
+    "id": "social.gazetteer.listNearestRecords",
     "defs": {
         "main": {
             "type": "query",
@@ -51,7 +51,7 @@
                 "value": {
                     "type": "union", 
                     "refs": [
-                        "info.schuyler.geo.place"
+                        "social.gazetteer.place"
                     ]
                 }
             }

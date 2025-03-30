@@ -25,7 +25,7 @@ def load_lexicons():
     return lexicons
 
 class Server:
-    nsid = "info.schuyler.geo"
+    nsid = "social.gazetteer"
     methods = {
         f"{nsid}.listNearestRecords": "nearest_records",
         "com.atproto.repo.getRecord": "get_record",
@@ -79,7 +79,7 @@ class Server:
         return {
             "records": [
                 {
-                    "$type": "info.schuyler.geo.listNearestRecords#record",
+                    "$type": "social.gazetteer.listNearestRecords#record",
                     "uri": self.record_uri(r),
                     "distance_m": r.pop("distance_m"),
                     "value": r,
@@ -102,7 +102,7 @@ if __name__ == "__main__":
     from database import OvertureMaps
 
     db = OvertureMaps("db/overture-maps.duckdb")
-    gazetteer = Server("geo.schuyler.info", db)
+    gazetteer = Server("gazetteer.social", db)
 
     nsid = f"{gazetteer.nsid}.listNearestRecords"
     params = gazetteer.server.decode_params(nsid, (("latitude", "37.776145"), ("longitude", "-122.433898"), ("limit", "5")))
@@ -112,7 +112,7 @@ if __name__ == "__main__":
     nsid = f"com.atproto.repo.getRecord"
     rkey = output["records"][0]["value"]["attributes"]["id"]
     params = gazetteer.server.decode_params(nsid, (
-        ("repo", "geo.schuyler.info"),
+        ("repo", "gazetteer.social"),
         ("collection", "org.overturemaps.id"),
         ("rkey", rkey)
     ))

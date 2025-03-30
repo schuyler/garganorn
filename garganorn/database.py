@@ -47,9 +47,9 @@ class Database:
     
     def process_record(self, result):
         return {
-            "$type": "info.schuyler.geo.place",
+            "$type": "social.gazetteer.place",
             "location":  {
-                "$type": "info.schuyler.geo.place#location",
+                "$type": "social.gazetteer.place#location",
                 "latitude": result.pop("latitude"),
                 "longitude": result.pop("longitude"),
             },
@@ -66,9 +66,9 @@ class Database:
     
     def process_nearest(self, result):
         return {
-            "$type": "info.schuyler.geo.place",
+            "$type": "social.gazetteer.place",
             "location":  {
-                "$type": "info.schuyler.geo.place#location",
+                "$type": "social.gazetteer.place#location",
                 "latitude": result.pop("latitude"),
                 "longitude": result.pop("longitude"),
             },

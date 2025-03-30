@@ -37,18 +37,18 @@ python garganorn
 
 Query:
 ```
-curl 'http://127.0.0.1:5000/xrpc/com.atproto.repo.getRecord?repo=repo.local&collection=org.overturemaps.id&rkey=08f2830829d8c099036c7f5f8bba30ec'
+curl 'http://127.0.0.1:5000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.overturemaps.id&rkey=08f2830829d8c099036c7f5f8bba30ec'
 ```
 
 Result:
 ```
 {
-  "uri": "at://geo.schuyler.info/org.overturemaps.id/08f2830829d8c099036c7f5f8bba30ec",
+  "uri": "at://gazetteer.social/org.overturemaps.id/08f2830829d8c099036c7f5f8bba30ec",
   "value": {
-    "$type": "info.schuyler.geo.place",
+    "$type": "social.gazetteer.place",
     "name": "Full House Picnic Site",
     "location": {
-      "$type": "info.schuyler.geo.place#location",
+      "$type": "social.gazetteer.place#location",
       "latitude": "37.776077",
       "longitude": "-122.433400"
     },
@@ -92,7 +92,7 @@ Result:
 
 Query:
 ```
-$ curl 'http://127.0.0.1:5000/xrpc/info.schuyler.geo.listNearestRecords?latitude=37.776145&longitude=-122.433898&limit=1'
+$ curl 'http://127.0.0.1:5000/xrpc/social.gazetteer.listNearestRecords?latitude=37.776145&longitude=-122.433898&limit=1'
 ```
 
 Result:
@@ -100,14 +100,14 @@ Result:
 {
   "records": [
     {
-      "$type": "info.schuyler.geo.listNearestRecords#record",
+      "$type": "social.gazetteer.listNearestRecords#record",
       "distance_m": 56,
-      "uri": "at://geo.schuyler.info/org.overturemaps.id/08f2830829d8c099036c7f5f8bba30ec",
+      "uri": "at://gazetteer.social/org.overturemaps.id/08f2830829d8c099036c7f5f8bba30ec",
       "value": {
-        "$type": "info.schuyler.geo.place",
+        "$type": "social.gazetteer.place",
         "name": "Full House Picnic Site",
         "location": {
-          "$type": "info.schuyler.geo.place#location",
+          "$type": "social.gazetteer.place#location",
           "latitude": "37.776077",
           "longitude": "-122.433400"
         },
@@ -145,7 +145,7 @@ Result:
       "latitude": "37.776145",
       "limit": 1,
       "longitude": "-122.433898",
-      "repo": "geo.schuyler.info"
+      "repo": "gazetteer.social"
     }
   }
 }
@@ -153,8 +153,8 @@ Result:
 
 ## Lexicon schemas
 
-* [`info.schuyler.geo.place`](garganorn/lexicon/place.json)
-* [`info.schuyler.geo.listNearestRecords`](garganorn/lexicon/listNearestRecords.json)
+* [`social.gazetteer.place`](garganorn/lexicon/place.json)
+* [`social.gazetteer.listNearestRecords`](garganorn/lexicon/listNearestRecords.json)
 
 ## Lexicon dependencies
 * `com.atproto.repo.getRecord`

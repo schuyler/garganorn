@@ -1,6 +1,6 @@
 {
     "lexicon": 1,
-    "id": "info.schuyler.geo.place",
+    "id": "social.gazetteer.place",
     "defs": {
         "main": {
             "type": "object",
