@@ -1,0 +1,70 @@
+{
+    "lexicon": 1,
+    "id": "info.schuyler.geo.place",
+    "defs": {
+        "main": {
+            "type": "object",
+            "required": [
+                "location"
+            ],
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "format": "at-uri"
+                },
+                "location": {
+                    "type": "union",
+                    "refs": [
+                        "#location",
+                        "#shape"
+                    ]
+                },
+                "name": {
+                    "type": "string",
+                    "description": "The name of the place."
+                },
+                "attributes": {
+                    "type": "unknown"
+                }
+            }
+        },
+        "location": {
+            "type": "object",
+            "description": "A location with latitude and longitude.",
+            "required": [
+                "latitude",
+                "longitude"
+            ],
+            "properties": {
+                "latitude": {
+                    "type": "string",
+                    "description": "The latitude of the location."
+                },
+                "longitude": {
+                    "type": "string",
+                    "description": "The longitude of the location."
+                },
+                "altitude": {
+                    "type": "string",
+                    "description": "The altitude of the location."
+                }
+            }
+        },
+        "shape": {
+            "type": "object",
+            "description": "A geometry object with coordinates.",
+            "required": [
+                "coordinates"
+            ],
+            "properties": {
+                "geometry": {
+                    "type": "blob",
+                    "accept": [
+                        "application/geo+json",
+                        "application/vnd.geo+wkt"
+                    ]
+                }
+            }
+        }
+    }
+}

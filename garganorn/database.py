@@ -40,22 +40,41 @@ class Database:
         stmt = self.conn.execute(query, params)
         rows = stmt.fetchall()
         columns = tuple(c[0] for c in stmt.description)
-        return [dict(zip(columns, (v if v is not None else "" for v in row))) for row in rows]
+        return [dict(zip(columns, row)) for row in rows]
+
+    def query_record(self):
+        raise NotImplementedError
+    
+    def process_record(self, result):
+        return {
+            "$type": "info.schuyler.geo.place",
+            "location":  {
+                "$type": "info.schuyler.geo.place#location",
+                "latitude": result.pop("latitude"),
+                "longitude": result.pop("longitude"),
+            },
+            "name": result.pop("name"),
+            "attributes": result
+        }
+    
+    def get_record(self, _repo: str, _collection: str, rkey: str):
+        records = self.execute(self.query_record(), {"rkey": rkey})
+        return self.process_record(records[0]) if records else None
 
     def query_nearest(self):
         raise NotImplementedError
     
     def process_nearest(self, result):
-        location = {
-            "latitude": result.pop("latitude"),
-            "longitude": result.pop("longitude"),
-            "name": result.pop("name"),
-        }
         return {
-            "uri": result.pop("uri"),
+            "$type": "info.schuyler.geo.place",
+            "location":  {
+                "$type": "info.schuyler.geo.place#location",
+                "latitude": result.pop("latitude"),
+                "longitude": result.pop("longitude"),
+            },
+            "name": result.pop("name"),
             "distance_m": result.pop("distance_m"),
-            "location": location,
-            "properties": result
+            "attributes": result
         }
 
     def nearest(self, latitude, longitude, expand_m=5000, limit=50):
@@ -79,11 +98,35 @@ class Database:
         )
         return [self.process_nearest(item) for item in result]
 
+
 class FoursquareOSP(Database):
+    collection = "com.foursquare.fsq_place_id"
+
+    def query_record(self):
+        return """
+            select
+                concat('https://www.foursquare.com/v/', fsq_place_id) as url,
+                fsq_place_id as id,
+                name,
+                latitude::decimal(10,6)::varchar as latitude,
+                longitude::decimal(10,6)::varchar as longitude,
+                address,
+                locality,
+                postcode,
+                region,
+                country,
+                date_created,
+                date_refreshed,
+                fsq_category_labels,
+            from places
+            where fsq_place_id = $rkey
+        """
+
     def query_nearest(self):
         return """
             select 
-                concat('https://www.foursquare.com/v/', fsq_place_id) as uri,
+                concat('https://www.foursquare.com/v/', fsq_place_id) as url,
+                fsq_place_id as id,
                 name,
                 latitude::decimal(10,6)::varchar as latitude,
                 longitude::decimal(10,6)::varchar as longitude,
@@ -105,14 +148,29 @@ class FoursquareOSP(Database):
             """
 
 class OvertureMaps(Database):
-    def query_nearest(self):
+    collection = "org.overturemaps.id"
+
+    def query_record(self):
         return """
-            select 
-                concat('https://overturemaps.org/id/', id) as uri,
+            select
+                id,
                 names.primary as name,
                 st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
                 st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
-                sources,
+                names,
+                categories,
+                addresses,
+            from places
+            where id = $rkey
+        """
+    
+    def query_nearest(self):
+        return """
+            select 
+                id,
+                names.primary as name,
+                st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
+                st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
                 names,
                 categories,
                 addresses,
@@ -134,4 +192,8 @@ if __name__ == "__main__":
     d = OvertureMaps("db/overture-maps.duckdb")
     result = d.nearest(37.776145, -122.433898)
     pprint(result)
+
+    record = d.get_record("", "org.overturemaps.id", result[0]["attributes"]["id"])
+    pprint(record)
+
     d.close()
