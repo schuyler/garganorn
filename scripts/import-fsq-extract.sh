@@ -79,7 +79,7 @@ for i in $(seq 0 99); do
 .print "Importing ${i} / 100"
 insert into places select * from '${source_file}'
     where bbox.xmin >= ${xmin} and bbox.xmax <= ${xmax}
-    and bbox.ymin >= ${ymin} and bbox.ymax >= ${ymax};
+    and bbox.ymin >= ${ymin} and bbox.ymax <= ${ymax};
 EOF
 done >> "${output_dir}/import.sql"
 
