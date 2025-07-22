@@ -9,12 +9,14 @@ def load_lexicons():
     lexicons = []
     lexicon_path = files("garganorn") / "lexicon"
     
-    if not lexicon_path.exists():
+    if not lexicon_path.is_dir():
         print("Warning: No lexicon directory found")
-        return lexicons
+        return []
         
-    for file_path in lexicon_path.glob("*.json"):
-        with open(file_path, 'r') as f:
+    for file_path in lexicon_path.iterdir():
+        if not file_path.is_file() or not file_path.name.endswith(".json"):
+            continue
+        with file_path.open('r') as f:
             try:
                 lexicon_data = json.load(f)
                 lexicons.append(lexicon_data)
@@ -106,7 +108,8 @@ if __name__ == "__main__":
 
     nsid = f"{gazetteer.nsid}.listNearestRecords"
     params = gazetteer.server.decode_params(nsid, (("latitude", "37.776145"), ("longitude", "-122.433898"), ("limit", "5")))
-    output = gazetteer.server.call(nsid, {}, **params)    
+    result = gazetteer.server.call(nsid, {}, **params) 
+    output = dict(result)   
     json.dump(output, sys.stdout, indent=2)
 
     nsid = f"com.atproto.repo.getRecord"
