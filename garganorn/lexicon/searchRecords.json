@@ -1,0 +1,81 @@
+{
+    "lexicon": 1,
+    "id": "community.lexicon.location.searchRecords",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Search for records near a given latitude and longitude",
+            "parameters": {
+                "type": "params",
+                "properties": {
+                    "q": {
+                        "type": "string",
+                        "description": "A text string to filter records by"
+                    },
+                    "latitude": {
+                        "type": "string",
+                        "description": "The latitude of the search centroid"
+                     },
+                    "longitude": {
+                        "type": "string",
+                        "description": "The longitude of the search centroid"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "default": 20
+                    },
+                    "cursor": {
+                        "type": "string",
+                        "description": "A pagination cursor to continue a previous search"
+                    }
+                }
+            },
+            "output": {
+                "description": "The nearest records to the given latitude and longitude, with distance in meters",
+                "encoding": "application/json",
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "records"
+                    ],
+                    "properties": {
+                        "records": {
+                            "type": "array",
+                            "description": "A list of records matching the search criteria",
+                            "items": {
+                                "type": "ref",
+                                "ref": "#record"
+                            }
+                        },
+                        "cursor": {
+                            "type": "string",
+                            "description": "A pagination cursor to continue the search"
+                        }
+                    }
+                }
+            },
+            "errors": [
+                {"name": "InvalidQuery", "description": "Either q or latitude/longitude must be provided"},
+                {"name": "InvalidCoordinates", "description": "Latitude and/or longitude coordinates are invalid"},
+                {"name": "InvalidLimit", "description": "The limit parameter must be a positive integer"},
+                {"name": "InvalidCursor", "description": "The cursor parameter is invalid or expired"}
+            ]
+        },
+        "record": {
+            "type": "object",
+            "description": "A record with its location and distance from the given coordinates",
+            "required": [ "uri", "value" ],
+            "properties": {
+                "uri": { "type": "string", "format": "at-uri" },
+                "cid": { "type": "string", "format": "cid" },
+                "distance_m": { "type": "integer" },
+                "value": {
+                    "type": "union", 
+                    "refs": [
+                        "community.lexicon.location.place"
+                    ]
+                }
+            }
+        }
+    }
+}

@@ -27,9 +27,9 @@ def load_lexicons():
     return lexicons
 
 class Server:
-    nsid = "social.gazetteer"
+    nsid = "community.lexicon.location"
     methods = {
-        f"{nsid}.listNearestRecords": "nearest_records",
+        f"{nsid}.searchRecords": "search_records",
         "com.atproto.repo.getRecord": "get_record",
     }
 
@@ -44,10 +44,10 @@ class Server:
             self.server.register(name, getattr(self, method))
 
     def record_uri(self, record):
-        record_id = record["attributes"]["id"]
-        if not record_id:
-            raise ValueError("Record ID is missing")
-        return f"at://{self.repo}/{self.db.collection}/{record_id}"
+        rkey = record.get("rkey")
+        if not rkey:
+            raise ValueError("Record key is missing")
+        return f"at://{self.repo}/{self.db.collection}/{rkey}"
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
         start_time = time.perf_counter()
@@ -68,20 +68,24 @@ class Server:
             }
         }
     
-    def nearest_records(self, _, latitude: str, longitude: str, limit: str = "50"):
+    def search_records(self, _, latitude: str = "", longitude: str = "", q: str = "", limit: str = "50"):
         """Find the nearest location to a given latitude and longitude."""
-        try: 
-            lat = float(latitude)
-            lon = float(longitude)
-        except ValueError:
-            return {"error": "InvalidCoordinates"}
+        if (not latitude or not longitude) and not q:
+            return {"error": "InvalidQuery"}
+        lat = lon = None
+        if latitude and longitude:
+            try: 
+                lat = float(latitude)
+                lon = float(longitude)
+            except ValueError:
+                return {"error": "InvalidCoordinates"}
         start_time = time.perf_counter()
-        result = self.db.nearest(lat, lon, limit=int(limit))
+        result = self.db.nearest(lat, lon, q, limit=int(limit))
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "records": [
                 {
-                    "$type": "social.gazetteer.listNearestRecords#record",
+                    "$type": f"{nsid}.searchRecords#record",
                     "uri": self.record_uri(r),
                     "distance_m": r.pop("distance_m"),
                     "value": r,
@@ -106,17 +110,17 @@ if __name__ == "__main__":
     db = OvertureMaps("db/overture-maps.duckdb")
     gazetteer = Server("gazetteer.social", db)
 
-    nsid = f"{gazetteer.nsid}.listNearestRecords"
+    nsid = f"{gazetteer.nsid}.searchRecords"
     params = gazetteer.server.decode_params(nsid, (("latitude", "37.776145"), ("longitude", "-122.433898"), ("limit", "5")))
     result = gazetteer.server.call(nsid, {}, **params) 
     output = dict(result)   
     json.dump(output, sys.stdout, indent=2)
 
     nsid = f"com.atproto.repo.getRecord"
-    rkey = output["records"][0]["value"]["attributes"]["id"]
+    rkey = output["records"][0]["value"]["rkey"]
     params = gazetteer.server.decode_params(nsid, (
         ("repo", "gazetteer.social"),
-        ("collection", "org.overturemaps.id"),
+        ("collection", "org.overturemaps.places"),
         ("rkey", rkey)
     ))
     output = gazetteer.server.call(nsid, {}, **params)

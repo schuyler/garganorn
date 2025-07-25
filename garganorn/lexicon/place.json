@@ -1,68 +1,124 @@
 {
     "lexicon": 1,
-    "id": "social.gazetteer.place",
+    "id": "community.lexicon.location.place",
     "defs": {
-        "main": {
+        "name": {
             "type": "object",
-            "required": [
-                "location"
-            ],
+            "required": ["text"],
             "properties": {
-                "uri": {
+                "text": {
                     "type": "string",
-                    "format": "at-uri"
+                    "description": "The name text."
                 },
-                "location": {
-                    "type": "union",
-                    "refs": [
-                        "#location",
-                        "#shape"
-                    ]
-                },
-                "name": {
+                "lang": {
                     "type": "string",
-                    "description": "The name of the place."
+                    "description": "The language of the name, using two-letter ISO 639-1 codes.",
+                    "format": "language"
+                },
+                "priority": {
+                    "type": "integer",
+                    "description": "The priority of the name, where lower numbers indicate higher priority."
+                }
+            }
+        },
+        "main": {
+            "type": "record",
+            "key": "record-key",
+            "description": "A geographic place with location, name(s), and other attributes.",
+            "record": {
+                "type": "object",
+                "required": [],
+                "properties": {
+                    "rkey": {
+                        "type": "string",
+                        "description": "A globally unique identifier for this place record.",
+                        "format": "record-key"
+                    },
+                    "locations": {
+                        "type": "array",
+                        "items": {
+                            "type": "union",
+                            "refs": [
+                                "community.lexicon.location.geo",
+                                "community.lexicon.location.hthree",
+                                "community.lexicon.location.address",
+                                "community.lexicon.location.wkt",
+                                "community.lexicon.location.geojson"
+                            ]
+                        },
+                        "description": "The geographic location of the place, in any available representation."
+                    },
+                    "names": {
+                        "type": "array",
+                        "description": "The names associated with the place, including linguistic and alternate variants.",
+                        "items": {
+                            "type": "#name"
+                        }
+                    },
+                    "attributes": {
+                        "type": "unknown",
+                        "description": "Additional, source-dependent attributes of the place."
+                    },
+                    "published_at": {
+                        "type": "string",
+                        "description": "The date when the place record was last updated",
+                        "format": "datetime"
+                    },
+                    "same_as": {
+                        "type": "array",
+                        "description": "A list of place IDs that refer to the same place in different datasets or contexts.",
+                        "items": {
+                            "type": "string",
+                            "format": "record-key"
+                        }
+                    }
+                }
+            }
+        },
+        "ref": {
+            "type": "object",
+            "description": "A reference to a geographic place defined elsewhere.",
+            "required": ["id"],
+            "properties": {
+                "cid": {
+                    "type": "string",
+                    "description": "An optional reference to a specific version of the place definition.",
+                    "format": "cid"
+                },
+                "id": {
+                    "type": "string",
+                    "description": "A globally unique identifier for the place.",
+                    "format": "record-key"
+                },
+                "locations": {
+                    "type": "array",
+                    "items": {
+                        "type": "union",
+                        "refs": [
+                            "community.lexicon.location.geo",
+                            "community.lexicon.location.hthree",
+                            "community.lexicon.location.address",
+                            "community.lexicon.location.wkt",
+                            "community.lexicon.location.geojson"
+                        ]
+                    },
+                    "description": "The geographic location of the place, in any available representation."
+                },
+                "names": {
+                    "type": "array",
+                    "description": "The names associated with the place, included for durability or convenience.",
+                    "items": {
+                        "type": "#name"
+                    }
                 },
                 "attributes": {
-                    "type": "unknown"
-                }
-            }
-        },
-        "location": {
-            "type": "object",
-            "description": "A location with latitude and longitude.",
-            "required": [
-                "latitude",
-                "longitude"
-            ],
-            "properties": {
-                "latitude": {
-                    "type": "string",
-                    "description": "The latitude of the location."
+                    "type": "unknown",
+                    "description": "Additional attributes, included for durability or convenience."
                 },
-                "longitude": {
+                "published_at": {
                     "type": "string",
-                    "description": "The longitude of the location."
-                },
-                "altitude": {
-                    "type": "string",
-                    "description": "The altitude of the location."
-                }
-            }
-        },
-        "shape": {
-            "type": "object",
-            "description": "A geometry object with coordinates.",
-            "required": [
-                "coordinates"
-            ],
-            "properties": {
-                "geometry": {
-                    "type": "blob",
-                    "accept": [
-                        "application/geo+json",
-                        "application/vnd.geo+wkt"
-                    ]
+                    "description": "The date when the place record was last updated",
+                    "format": "datetime"
                 }
             }
         }
