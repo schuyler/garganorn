@@ -37,7 +37,7 @@ python garganorn
 
 Query:
 ```
-curl 'http://127.0.0.1:5000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.overturemaps.id&rkey=08f2830829d8c099036c7f5f8bba30ec'
+curl 'http://127.0.0.1:5000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.overturemaps.place&rkey=08f2830829d8c099036c7f5f8bba30ec'
 ```
 
 Result:
@@ -80,7 +80,7 @@ Result:
   "_query": {
     "elapsed_ms": 3,
     "parameters": {
-      "collection": "org.overturemaps.id",
+      "collection": "org.overturemaps.place",
       "repo": "repo.local",
       "rkey": "08f2830829d8c099036c7f5f8bba30ec"
     }
@@ -88,29 +88,33 @@ Result:
 }
 ```
 
-### listNearestRecords
+### searchRecords
 
 Query:
 ```
-$ curl 'http://127.0.0.1:5000/xrpc/social.gazetteer.listNearestRecords?latitude=37.776145&longitude=-122.433898&limit=1'
+$ curl 'http://127.0.0.1:5000/xrpc/community.lexicon.location.searchRecords?collection=org.overturemaps.places&latitude=37.776145&longitude=-122.433898&limit=1'
 ```
 
 Result:
 ```
 {
+  "_query": {
+    "elapsed_ms": 81,
+    "parameters": {
+      "collection": "org.overturemaps.places",
+      "latitude": "37.776145",
+      "limit": 1,
+      "longitude": "-122.433898",
+      "repo": "gazetteer.social"
+    }
+  },
   "records": [
     {
-      "$type": "social.gazetteer.listNearestRecords#record",
+      "$type": "community.lexicon.location.searchRecords#record",
       "distance_m": 56,
-      "uri": "at://gazetteer.social/org.overturemaps.id/08f2830829d8c099036c7f5f8bba30ec",
+      "uri": "at://gazetteer.social/org.overturemaps.places/08f2830829d8c099036c7f5f8bba30ec",
       "value": {
-        "$type": "social.gazetteer.place",
-        "name": "Full House Picnic Site",
-        "location": {
-          "$type": "social.gazetteer.place#location",
-          "latitude": "37.776077",
-          "longitude": "-122.433400"
-        },
+        "$type": "community.lexicon.location.place",
         "attributes": {
           "addresses": [
             {
@@ -121,6 +125,7 @@ Result:
               "region": "CA"
             }
           ],
+          "brand": null,
           "categories": {
             "alternate": [
               "attractions_and_activities",
@@ -128,35 +133,48 @@ Result:
             ],
             "primary": "park"
           },
+          "confidence": "0.485",
           "id": "08f2830829d8c099036c7f5f8bba30ec",
           "names": {
             "common": null,
             "primary": "Full House Picnic Site",
             "rules": null
+          },
+          "phones": null,
+          "socials": [
+            "https://www.facebook.com/149829208542296"
+          ],
+          "websites": null
+        },
+        "locations": [
+          {
+            "$type": "community.lexicon.location.geo",
+            "latitude": "37.776077",
+            "longitude": "-122.433400"
           }
-        }
+        ],
+        "names": [
+          {
+            "priority": 0,
+            "text": "Full House Picnic Site"
+          }
+        ],
+        "rkey": "08f2830829d8c099036c7f5f8bba30ec"
       }
     }
-  ],
-  "_query": {
-    "elapsed_ms": 10,
-    "parameters": {
-      "collection": "org.overturemaps.id",
-      "latitude": "37.776145",
-      "limit": 1,
-      "longitude": "-122.433898",
-      "repo": "gazetteer.social"
-    }
-  }
+  ]
 }
 ```
 
-## Lexicon schemas
+## Proposed Lexicon schemas
 
-* [`social.gazetteer.place`](garganorn/lexicon/place.json)
-* [`social.gazetteer.listNearestRecords`](garganorn/lexicon/listNearestRecords.json)
+* [`community.lexicon.location.place`](garganorn/lexicon/place.json)
+* [`community.lexicon.location.searchRecords`](garganorn/lexicon/searchRecords.json)
+
+**NOTE**: These schemas are only *proposed*, and have not been adopted by the Lexicon community.
 
 ## Lexicon dependencies
+
 * `com.atproto.repo.getRecord`
 
 ## Development
