@@ -86,7 +86,7 @@ class Server:
         return {
             "records": [
                 {
-                    "$type": f"{nsid}.searchRecords#record",
+                    "$type": f"{self.nsid}.searchRecords#record",
                     "uri": self.record_uri(collection, r["rkey"]),
                     "distance_m": r.pop("distance_m"),
                     "value": r,
