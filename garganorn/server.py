@@ -33,9 +33,9 @@ class Server:
         "com.atproto.repo.getRecord": "get_record",
     }
 
-    def __init__(self, repo, db):
+    def __init__(self, repo, dbs):
         self.repo = repo
-        self.db = db
+        self.db = dict([(db.collection, db) for db in dbs])
         self.lexicons = load_lexicons()
         self.server = lexrpc.Server(lexicons=self.lexicons)
         for name, method in self.methods.items():
@@ -43,20 +43,19 @@ class Server:
             #print(f"Registering {name} to {method}")
             self.server.register(name, getattr(self, method))
 
-    def record_uri(self, record):
-        rkey = record.get("rkey")
-        if not rkey:
-            raise ValueError("Record key is missing")
-        return f"at://{self.repo}/{self.db.collection}/{rkey}"
+    def record_uri(self, collection, rkey):
+        assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
+        return f"at://{self.repo}/{collection}/{rkey}"
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
         start_time = time.perf_counter()
-        record = self.db.get_record(repo, collection, rkey)
+        assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
+        record = self.db[collection].get_record(repo, collection, rkey)
         if record is None:
             return {"error": "RecordNotFound"}
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
-            "uri": self.record_uri(record),
+            "uri": self.record_uri(collection, record["rkey"]),
             "value": record,
             "_query": {
                 "parameters": {
@@ -68,7 +67,8 @@ class Server:
             }
         }
     
-    def search_records(self, _, latitude: str = "", longitude: str = "", q: str = "", limit: str = "50"):
+    def search_records(self, _, collection: str, latitude: str = "", longitude: str = "", q: str = "", limit: str = "50"):
+        print(f"Searching records in {collection} with latitude={latitude}, longitude={longitude}, q={q}, limit={limit}")
         """Find the nearest location to a given latitude and longitude."""
         if (not latitude or not longitude) and not q:
             return {"error": "InvalidQuery"}
@@ -80,13 +80,14 @@ class Server:
             except ValueError:
                 return {"error": "InvalidCoordinates"}
         start_time = time.perf_counter()
-        result = self.db.nearest(lat, lon, q, limit=int(limit))
+        assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
+        result = self.db[collection].nearest(lat, lon, q, limit=int(limit))
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "records": [
                 {
                     "$type": f"{nsid}.searchRecords#record",
-                    "uri": self.record_uri(r),
+                    "uri": self.record_uri(collection, r["rkey"]),
                     "distance_m": r.pop("distance_m"),
                     "value": r,
                 } for r in result
@@ -94,7 +95,7 @@ class Server:
             "_query": {
                 "parameters": {
                     "repo": self.repo,
-                    "collection": self.db.collection,
+                    "collection": collection,
                     "latitude": latitude,
                     "longitude": longitude,
                     "limit": limit
@@ -107,11 +108,19 @@ if __name__ == "__main__":
     import sys
     from database import OvertureMaps
 
-    db = OvertureMaps("db/overture-maps.duckdb")
-    gazetteer = Server("gazetteer.social", db)
+    dbs = [
+        OvertureMaps("db/overture-maps.duckdb"),
+        # FoursquareOSP("db/fsq-osp.duckdb"),  # Uncomment if you have the Foursquare database
+    ]
+    gazetteer = Server("gazetteer.social", dbs)
 
     nsid = f"{gazetteer.nsid}.searchRecords"
-    params = gazetteer.server.decode_params(nsid, (("latitude", "37.776145"), ("longitude", "-122.433898"), ("limit", "5")))
+    params = gazetteer.server.decode_params(nsid, (
+        ("collection", "org.overturemaps.places"),
+        ("latitude", "37.776145"),
+        ("longitude", "-122.433898"),
+        ("limit", "5")
+    ))
     result = gazetteer.server.call(nsid, {}, **params) 
     output = dict(result)   
     json.dump(output, sys.stdout, indent=2)
