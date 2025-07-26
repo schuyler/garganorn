@@ -241,16 +241,16 @@ class OvertureMaps(Database):
 if __name__ == "__main__":
     from pprint import pprint
 
-    # d = FoursquareOSP("db/fsq-osp.duckdb")
-    # result = d.nearest(37.776145, -122.433898)
-    # pprint(result)
-    # d.close()
+    d = FoursquareOSP("db/fsq-osp.duckdb")
+    result = d.nearest(37.776145, -122.433898)
+    pprint(result)
+    d.close()
 
     d = OvertureMaps("db/overture-maps.duckdb")
     result = d.nearest(37.776145, -122.433898)
     pprint(result)
 
-    # record = d.get_record("", "org.overturemaps.places", result[0]["rkey"])
-    # pprint(record)
+    record = d.get_record("", "org.overturemaps.places", result[0]["rkey"])
+    pprint(record)
 
     d.close()
