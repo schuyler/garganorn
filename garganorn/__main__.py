@@ -1,3 +1,4 @@
+import os
 from flask import Flask
 from lexrpc.flask_server import init_flask
 from garganorn import Server, OvertureMaps, FoursquareOSP
@@ -11,4 +12,15 @@ if __name__ == "__main__":
     gazetteer = Server("gazetteer.social", dbs)
     app = Flask("garganorn")
     init_flask(gazetteer.server, app)
-    app.run(debug=True)
+    
+    # Add a simple health check endpoint
+    @app.route('/health')
+    def health_check():
+        return {"status": "ok", "service": "garganorn"}, 200
+    
+    # Configure for Docker/production environment
+    debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
+    host = os.getenv('FLASK_HOST', '0.0.0.0')
+    port = int(os.getenv('FLASK_PORT', '8000'))
+    
+    app.run(debug=debug, host=host, port=port)

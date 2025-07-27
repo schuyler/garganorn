@@ -24,7 +24,7 @@ Building one of these databases takes a few minutes for a reasonable bounding bo
 
 ## Running the server
 
-Install and start a Flask server on `localhost:5000`:
+Install and start a Flask server on `localhost:8000`:
 
 ```
 pip install .
@@ -37,7 +37,7 @@ python garganorn
 
 Query:
 ```
-curl 'http://127.0.0.1:5000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.overturemaps.place&rkey=08f2830829d8c099036c7f5f8bba30ec'
+curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.overturemaps.place&rkey=08f2830829d8c099036c7f5f8bba30ec'
 ```
 
 Result:
@@ -92,7 +92,7 @@ Result:
 
 Query:
 ```
-$ curl 'http://127.0.0.1:5000/xrpc/community.lexicon.location.searchRecords?collection=org.overturemaps.places&latitude=37.776145&longitude=-122.433898&limit=1'
+$ curl 'http://127.0.0.1:8000/xrpc/community.lexicon.location.searchRecords?collection=org.overturemaps.places&latitude=37.776145&longitude=-122.433898&limit=1'
 ```
 
 Result:

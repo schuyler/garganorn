@@ -1,5 +1,8 @@
 from pathlib import Path
 from typing import TypedDict, Optional
+import tempfile
+import os
+import shutil
 
 import math
 import duckdb
@@ -28,26 +31,47 @@ class Database:
         Initialize a connection to the gazetteer database.
         
         Args:
-            authority: The DID hosting this collection, used to construct AT-URIs
             db_path: Path to the DuckDB database file
         """
         self.db_path = Path(db_path)
         self.conn = None
+        self.temp_dir = None
         
     def connect(self):
         """Connect to the database and load the spatial plugin."""
         if self.conn is None:
-            self.conn = duckdb.connect(str(self.db_path))
+            # Connect in read-only mode
+            self.conn = duckdb.connect(str(self.db_path), read_only=True)
+
+            # Create a temporary directory for DuckDB to use
+            self.temp_dir = tempfile.mkdtemp(prefix='duckdb_temp_')
+            
+            # Configure DuckDB to use our writable temp directory
+            self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
+            
             # Load spatial extension
             self.conn.install_extension("spatial")
             self.conn.load_extension("spatial")
         return self.conn
     
     def close(self):
-        """Close the database connection."""
+        """Close the database connection and clean up temp directory."""
         if self.conn:
             self.conn.close()
             self.conn = None
+            
+        # Clean up temp directory
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            try:
+                shutil.rmtree(self.temp_dir)
+            except OSError as e:
+                print(f"Warning: Could not remove temp directory {self.temp_dir}: {e}")
+            finally:
+                self.temp_dir = None
+    
+    def __del__(self):
+        """Cleanup when object is destroyed."""
+        self.close()
             
     def execute(self, query, params=None):
         """Execute a query on the database."""

@@ -1,0 +1,51 @@
+# Python cache and build files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Database files (these should be mounted as volumes)
+db/
+*.duckdb
+*.duckdb.sf
+
+# Scripts (not needed in container)
+scripts/
+
+# Documentation
+*.md
+
+# OS files
+.DS_Store
+Thumbs.db
