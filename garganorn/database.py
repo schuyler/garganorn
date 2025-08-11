@@ -165,10 +165,21 @@ class FoursquareOSP(Database):
             locality,
             postcode,
             region,
+            admin_region,
+            post_town,
+            po_box,
             country,
             date_created,
             date_refreshed,
-            fsq_category_labels
+            tel,
+            website,
+            email,
+            facebook_id,
+            instagram,
+            twitter,
+            fsq_category_ids,
+            fsq_category_labels,
+            placemaker_url
         """
     
     def query_record(self):
@@ -262,9 +273,12 @@ class OvertureMaps(Database):
             addresses,
             websites,
             socials,
+            emails,
             phones,
             brand,
-            confidence::decimal(4,3)::varchar as confidence
+            confidence::decimal(4,3)::varchar as confidence,
+            version,
+            sources
         """
 
     def query_record(self):
