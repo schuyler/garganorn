@@ -114,22 +114,16 @@ class Database:
         raise NotImplementedError
     
     def process_nearest(self, result):
-        return {
-            "$type": "community.lexicon.location.place",
-            "rkey": result.pop("rkey"),
-            "locations": [
-                {
-                    "$type": "community.lexicon.location.geo",
-                    "latitude": result.pop("latitude"),
-                    "longitude": result.pop("longitude"),
-                }
-            ],
-            "names": [
-                {"text": result.pop("name"), "priority": 0}
-            ],
-            "attributes": result,
-            "distance_m": result.pop("distance_m")
-        }
+        # Extract distance before calling process_record
+        distance_m = result.pop("distance_m")
+        
+        # Use the standard record processing
+        record = self.process_record(result)
+        
+        # Add the distance field
+        record["distance_m"] = distance_m
+        
+        return record
 
     def nearest(self, latitude=None, longitude=None, q=None, expand_m=5000, limit=50):
         params : SearchParams = { "limit": limit }
@@ -158,7 +152,7 @@ class Database:
 
 
 class FoursquareOSP(Database):
-    collection = "com.foursquare.places"
+    collection = "community.lexicon.location.com.foursquare.places"
 
     def record_columns(self):
         return f"""
@@ -212,9 +206,49 @@ class FoursquareOSP(Database):
             order by distance_m
             limit $limit;
         """
+    
+    def process_record(self, result):
+        locations = [
+            {
+                "$type": "community.lexicon.location.geo",
+                "latitude": result.pop("latitude"),
+                "longitude": result.pop("longitude"),
+            }
+        ]
+        
+        # Create address lexicon object if address data is available
+        address_data = {}
+        address_map = [
+            ("country", "country"),
+            ("postcode", "postalCode"),
+            ("region", "region"),
+            ("locality", "locality"),
+            ("address", "street"),
+        ]
+        for src_key, dest_key in address_map:
+            if result.get(src_key):
+                address_data[dest_key] = result.pop(src_key)
+        
+        # Add address to locations if we have at least the required country field
+        if address_data.get("country"):
+            locations.append({
+                "$type": "community.lexicon.location.address",
+                **address_data
+            })
+        
+        return {
+            "$type": "community.lexicon.location.place",
+            "collection": self.collection,
+            "rkey": result.pop("rkey"),
+            "locations": locations,
+            "names": [
+                {"text": result.pop("name"), "priority": 0}
+            ],
+            "attributes": result
+        }
 
 class OvertureMaps(Database):
-    collection = "org.overturemaps.places"
+    collection = "community.lexicon.location.org.overturemaps.places"
 
     def record_columns(self):
         return f"""
@@ -264,6 +298,59 @@ class OvertureMaps(Database):
             order by distance_m
             limit $limit;
             """
+    
+    def process_record(self, result):
+        locations = [
+            {
+                "$type": "community.lexicon.location.geo",
+                "latitude": result.pop("latitude"),
+                "longitude": result.pop("longitude"),
+            }
+        ]
+        
+        # Extract address information from addresses array if available
+        addresses = result.get("addresses")
+        if addresses and isinstance(addresses, list):
+            for address in addresses:
+                address_data = {}
+                address_map = [
+                    ("country", "country"),
+                    ("postcode", "postalCode"),
+                    ("locality", "locality"),
+                    ("freeform", "street"),
+                ]
+                for src_key, dest_key in address_map:
+                    if address.get(src_key):
+                        address_data[dest_key] = address[src_key]
+                
+                # Handle region separately due to country prefix parsing
+                if address.get("region"):
+                    region = address["region"]
+                    if "-" in region:
+                        address_data["region"] = region.split("-", 1)[1]
+                    else:
+                        address_data["region"] = region
+                
+                # Add address to locations if we have at least the required country field
+                if address_data.get("country"):
+                    locations.append({
+                        "$type": "community.lexicon.location.address",
+                        **address_data
+                    })
+            
+            # Remove addresses from result to avoid duplication in attributes
+            result.pop("addresses")
+        
+        return {
+            "$type": "community.lexicon.location.place",
+            "collection": self.collection,
+            "rkey": result.pop("rkey"),
+            "locations": locations,
+            "names": [
+                {"text": result.pop("name"), "priority": 0}
+            ],
+            "attributes": result
+        }
 
 if __name__ == "__main__":
     from pprint import pprint
