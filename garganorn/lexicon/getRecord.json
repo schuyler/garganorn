@@ -37,13 +37,16 @@
           "type": "object",
           "required": ["uri", "value"],
           "properties": {
-            "uri": { "type": "string", "format": "at-uri" },
+            "uri": { "type": "string", "format": "uri" },
             "cid": { "type": "string", "format": "cid" },
             "value": { "type": "unknown" }
           }
         }
       },
-      "errors": [{ "name": "RecordNotFound" }]
+      "errors": [
+        { "name": "RecordNotFound" },
+        { "name": "CollectionNotFound" }
+      ]
     }
   }
 }

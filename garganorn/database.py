@@ -25,7 +25,8 @@ class SearchParams(TypedDict, total=False):
 
 class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
-    
+    collection: str = "social.gazetteer"
+
     def __init__(self, db_path):
         """
         Initialize a connection to the gazetteer database.
@@ -90,6 +91,7 @@ class Database:
     def process_record(self, result):
         return {
             "$type": "community.lexicon.location.place",
+            "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations":  [
                 {
@@ -185,6 +187,7 @@ class FoursquareOSP(Database):
         """
 
     def query_nearest(self, params: SearchParams):
+        assert "centroid" in params or "q" in params, "Either centroid or q must be provided for nearest search."
         columns = self.record_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"

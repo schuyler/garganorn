@@ -64,7 +64,8 @@
                 {"name": "InvalidQuery", "description": "Either q or latitude/longitude must be provided"},
                 {"name": "InvalidCoordinates", "description": "Latitude and/or longitude coordinates are invalid"},
                 {"name": "InvalidLimit", "description": "The limit parameter must be a positive integer"},
-                {"name": "InvalidCursor", "description": "The cursor parameter is invalid or expired"}
+                {"name": "InvalidCursor", "description": "The cursor parameter is invalid or expired"},
+                {"name": "CollectionNotFound", "description": "The specified collection does not exist on the server"}
             ]
         },
         "record": {
@@ -72,7 +73,7 @@
             "description": "A record with its location and distance from the given coordinates",
             "required": [ "uri", "value" ],
             "properties": {
-                "uri": { "type": "string", "format": "at-uri" },
+                "uri": { "type": "string", "format": "uri" },
                 "cid": { "type": "string", "format": "cid" },
                 "distance_m": { "type": "integer" },
                 "value": {

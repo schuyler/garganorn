@@ -1,4 +1,4 @@
-import os
+import os, logging
 from flask import Flask
 from lexrpc.flask_server import init_flask
 from garganorn import Server, OvertureMaps, FoursquareOSP
@@ -9,8 +9,9 @@ dbs = [
 ]
 
 if __name__ == "__main__":
-    gazetteer = Server("gazetteer.social", dbs)
     app = Flask("garganorn")
+    app.logger.setLevel(logging.INFO)
+    gazetteer = Server("gazetteer.social", dbs, app.logger)
     init_flask(gazetteer.server, app)
     
     # Add a simple health check endpoint

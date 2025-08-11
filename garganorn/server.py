@@ -1,8 +1,9 @@
 """Garganorn package for serving ATProtocol XRPC for community.lexicon.location."""
-import json, time
+import json, time, logging
 from importlib.resources import files
 
 import lexrpc
+from lexrpc.base import XrpcError
 
 def load_lexicons():
     """Load all lexicon JSON files from the lexicon directory."""
@@ -33,11 +34,12 @@ class Server:
         "com.atproto.repo.getRecord": "get_record",
     }
 
-    def __init__(self, repo, dbs):
+    def __init__(self, repo, dbs, logger):
         self.repo = repo
         self.db = dict([(db.collection, db) for db in dbs])
         self.lexicons = load_lexicons()
         self.server = lexrpc.Server(lexicons=self.lexicons)
+        self.logger = logger
         for name, method in self.methods.items():
             """Register bound methods with the server."""
             #print(f"Registering {name} to {method}")
@@ -45,14 +47,15 @@ class Server:
 
     def record_uri(self, collection, rkey):
         assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
-        return f"at://{self.repo}/{collection}/{rkey}"
+        return f"https://{self.repo}/{collection}/{rkey}"
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
         start_time = time.perf_counter()
-        assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
+        if collection not in self.db:
+            raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
         record = self.db[collection].get_record(repo, collection, rkey)
         if record is None:
-            return {"error": "RecordNotFound"}
+            raise XrpcError(f"Record {rkey} not found in collection {collection}", "RecordNotFound")
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "uri": self.record_uri(collection, record["rkey"]),
@@ -66,21 +69,23 @@ class Server:
                 "elapsed_ms": run_time
             }
         }
-    
+
     def search_records(self, _, collection: str, latitude: str = "", longitude: str = "", q: str = "", limit: str = "50"):
-        print(f"Searching records in {collection} with latitude={latitude}, longitude={longitude}, q={q}, limit={limit}")
+        self.logger.info(f"Searching records in {collection} with latitude={latitude}, longitude={longitude}, q={q}, limit={limit}")
+        if collection not in self.db:
+            raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
         """Find the nearest location to a given latitude and longitude."""
         if (not latitude or not longitude) and not q:
-            return {"error": "InvalidQuery"}
+            raise XrpcError("Either q or latitude/longitude must be provided", "InvalidQuery")
         lat = lon = None
         if latitude and longitude:
             try: 
                 lat = float(latitude)
                 lon = float(longitude)
             except ValueError:
-                return {"error": "InvalidCoordinates"}
+                raise XrpcError("Latitude and longitude coordinates must be valid numbers", "InvalidCoordinates")
         start_time = time.perf_counter()
-        assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
+        #assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
         result = self.db[collection].nearest(lat, lon, q, limit=int(limit))
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
@@ -103,20 +108,21 @@ class Server:
                 "elapsed_ms": run_time
             }
         }
-
+        
 if __name__ == "__main__":
     import sys
-    from database import OvertureMaps
+    from database import OvertureMaps, FoursquareOSP
 
     dbs = [
         OvertureMaps("db/overture-maps.duckdb"),
-        # FoursquareOSP("db/fsq-osp.duckdb"),  # Uncomment if you have the Foursquare database
+        FoursquareOSP("db/fsq-osp.duckdb"),  # Uncomment if you have the Foursquare database
     ]
-    gazetteer = Server("gazetteer.social", dbs)
+    gazetteer = Server("gazetteer.social", dbs, logging.getLogger())
 
+    collection = "com.foursquare.places"
     nsid = f"{gazetteer.nsid}.searchRecords"
     params = gazetteer.server.decode_params(nsid, (
-        ("collection", "org.overturemaps.places"),
+        ("collection", collection),
         ("latitude", "37.776145"),
         ("longitude", "-122.433898"),
         ("limit", "5")
@@ -129,7 +135,7 @@ if __name__ == "__main__":
     rkey = output["records"][0]["value"]["rkey"]
     params = gazetteer.server.decode_params(nsid, (
         ("repo", "gazetteer.social"),
-        ("collection", "org.overturemaps.places"),
+        ("collection", collection),
         ("rkey", rkey)
     ))
     output = gazetteer.server.call(nsid, {}, **params)
