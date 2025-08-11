@@ -24,11 +24,16 @@ Building one of these databases takes a few minutes for a reasonable bounding bo
 
 ## Running the server
 
-Install and start a Flask server on `localhost:8000`:
+Install in development mode and start a Flask server on `localhost:8000`:
 
 ```
-pip install .
-python garganorn 
+pip install -e .
+flask --app garganorn run --debug --host 0.0.0.0 --port 8000
+```
+
+Or use the traditional Python module approach:
+```
+python -m garganorn
 ```
 
 ## Querying the XRPC service
