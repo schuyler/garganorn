@@ -8,20 +8,21 @@ dbs = [
     FoursquareOSP("db/fsq-osp.duckdb")
 ]
 
-if __name__ == "__main__":
+def create_app():
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
     gazetteer = Server("gazetteer.social", dbs, app.logger)
     init_flask(gazetteer.server, app)
-    
-    # Add a simple health check endpoint
+
     @app.route('/health')
     def health_check():
         return {"status": "ok", "service": "garganorn"}, 200
-    
-    # Configure for Docker/production environment
+
+    return app
+
+if __name__ == "__main__":
+    app = create_app()
     debug = os.getenv('FLASK_DEBUG', 'false').lower() == 'true'
     host = os.getenv('FLASK_HOST', '0.0.0.0')
     port = int(os.getenv('FLASK_PORT', '8000'))
-    
     app.run(debug=debug, host=host, port=port)

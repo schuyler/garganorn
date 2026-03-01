@@ -13,6 +13,7 @@ authors = [
 ]
 dependencies = [
     "duckdb",
+    "gunicorn",
     "lexrpc[flask]",
 ]
 
