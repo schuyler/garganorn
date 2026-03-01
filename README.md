@@ -2,7 +2,7 @@
 
 Garganorn is intended to be a test bed for experimenting with adding location data to the ATmosphere.
 
-Currently, the project implements an ATProtocol XRPC server designed to serve static location datasets ("gazetteers"). 
+Currently, the project implements an ATProtocol XRPC server designed to serve static location datasets ("gazetteers").
 
 **WARNING: This code has not been formally released and interfaces WILL change without warning. YMMV. Patches welcome.**
 
@@ -10,164 +10,169 @@ The project is named after the earliest recorded [mammoth goose](https://en.wiki
 
 ![Garganornis ballmanni](https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg/374px-Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg)
 
-## Data sources
+## Configuration
 
-Right now, Garganorn supports either [Foursquare Open Source Places](https://docs.foursquare.com/data-products/docs/fsq-places-open-source) or [Overture Maps](https://overturemaps.org/) as a data source. You will need to modify `garganorn/__main__.py` if you want to use Foursquare OSP instead of Overture.
+Garganorn loads its data sources from a YAML config file. By default it looks for `config.yaml` in the current directory, or you can set the `GARGANORN_CONFIG` environment variable to point elsewhere.
+
+```yaml
+repo: gazetteer.social
+databases:
+  - type: foursquare
+    path: db/fsq-osp.duckdb
+  - type: overture
+    path: db/overture-maps.duckdb
+```
+
+Supported database types are `foursquare` ([Foursquare Open Source Places](https://docs.foursquare.com/data-products/docs/fsq-places-open-source)) and `overture` ([Overture Maps](https://overturemaps.org/)). You can configure one or both. Paths are relative to the working directory.
+
+## Data import
 
 Look in [`scripts/import-fsq-extract.sh`](scripts/import-fsq-extract.sh) and [`scripts/import-overture-extract.sh`](scripts/import-overture-extract.sh) for examples of how to import data. Example:
 
 ```
-$ scripts/import-overture-extract.sh -122.5137 37.7099 -122.3785 37.8101
+$ scripts/import-fsq-extract.sh -122.5137 37.7099 -122.3785 37.8101
 ```
 
-Building one of these databases takes a few minutes for a reasonable bounding box on a reasonable machine with a reasonable Internet connection. You must build one of these databases locally for the service to have data to serve.
+Building one of these databases takes a few minutes for a reasonable bounding box on a reasonable machine with a reasonable Internet connection. You must build at least one database locally for the service to have data to serve.
 
 ## Running the server
 
-Install in development mode and start a Flask server on `localhost:8000`:
+Install and start a Flask dev server on `localhost:8000`:
 
 ```
 pip install -e .
-flask --app garganorn run --debug --host 0.0.0.0 --port 8000
+python -m garganorn
 ```
 
-Or use the traditional Python module approach:
+For production, use gunicorn:
+
 ```
-python -m garganorn
+gunicorn "garganorn.__main__:create_app()" --bind 0.0.0.0:8000 --workers 2
 ```
 
 ## Querying the XRPC service
 
-### getRecord
+The collection name for each data source is set by the database class. For Foursquare OSP it's `community.lexicon.location.com.foursquare.places`; for Overture Maps it's `community.lexicon.location.org.overturemaps.places`.
 
-Query:
+### searchRecords
+
+Search by location:
 ```
-curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.overturemaps.place&rkey=08f2830829d8c099036c7f5f8bba30ec'
+$ curl 'http://127.0.0.1:8000/xrpc/community.lexicon.location.searchRecords?collection=community.lexicon.location.com.foursquare.places&latitude=37.776145&longitude=-122.433898&limit=1'
+```
+
+Or by name:
+```
+$ curl 'http://127.0.0.1:8000/xrpc/community.lexicon.location.searchRecords?collection=community.lexicon.location.com.foursquare.places&q=Alamo+Square&limit=1'
 ```
 
 Result:
-```
+```json
 {
-  "uri": "at://gazetteer.social/org.overturemaps.id/08f2830829d8c099036c7f5f8bba30ec",
-  "value": {
-    "$type": "social.gazetteer.place",
-    "name": "Full House Picnic Site",
-    "location": {
-      "$type": "social.gazetteer.place#location",
-      "latitude": "37.776077",
-      "longitude": "-122.433400"
-    },
-    "attributes": {
-      "addresses": [
-        {
-          "country": "US",
-          "freeform": null,
-          "locality": "San Francisco",
-          "postcode": null,
-          "region": "CA"
-        }
-      ],
-      "categories": {
-        "alternate": [
-          "attractions_and_activities",
-          "public_plaza"
+  "records": [
+    {
+      "$type": "community.lexicon.location.searchRecords#record",
+      "distance_m": 0,
+      "uri": "https://gazetteer.social/community.lexicon.location.com.foursquare.places/4460d38bf964a5200a331fe3",
+      "value": {
+        "$type": "community.lexicon.location.place",
+        "collection": "community.lexicon.location.com.foursquare.places",
+        "rkey": "4460d38bf964a5200a331fe3",
+        "names": [
+          {"text": "Alamo Square", "priority": 0}
         ],
-        "primary": "park"
-      },
-      "id": "08f2830829d8c099036c7f5f8bba30ec",
-      "names": {
-        "common": null,
-        "primary": "Full House Picnic Site",
-        "rules": null
+        "locations": [
+          {
+            "$type": "community.lexicon.location.geo",
+            "latitude": "37.776146",
+            "longitude": "-122.433898"
+          },
+          {
+            "$type": "community.lexicon.location.address",
+            "country": "US",
+            "region": "CA",
+            "locality": "San Francisco",
+            "postalCode": "94117",
+            "street": "Steiner St"
+          }
+        ],
+        "attributes": {
+          "fsq_place_id": "4460d38bf964a5200a331fe3",
+          "fsq_category_labels": [
+            "Landmarks and Outdoors > Park",
+            "Landmarks and Outdoors > Park > Playground",
+            "Landmarks and Outdoors > Park > Dog Park"
+          ],
+          "tel": "(415) 831-2700",
+          "website": "http://sfrecpark.org/alamo-square"
+        }
       }
     }
-  },
+  ],
   "_query": {
-    "elapsed_ms": 3,
     "parameters": {
-      "collection": "org.overturemaps.place",
-      "repo": "repo.local",
-      "rkey": "08f2830829d8c099036c7f5f8bba30ec"
-    }
+      "collection": "community.lexicon.location.com.foursquare.places",
+      "latitude": "37.776145",
+      "longitude": "-122.433898",
+      "limit": 1,
+      "repo": "gazetteer.social"
+    },
+    "elapsed_ms": 161
   }
 }
 ```
 
-### searchRecords
+### getRecord
 
-Query:
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/community.lexicon.location.searchRecords?collection=org.overturemaps.places&latitude=37.776145&longitude=-122.433898&limit=1'
+$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=community.lexicon.location.com.foursquare.places&rkey=4460d38bf964a5200a331fe3'
 ```
 
 Result:
-```
+```json
 {
-  "_query": {
-    "elapsed_ms": 81,
-    "parameters": {
-      "collection": "org.overturemaps.places",
-      "latitude": "37.776145",
-      "limit": 1,
-      "longitude": "-122.433898",
-      "repo": "gazetteer.social"
+  "uri": "https://gazetteer.social/community.lexicon.location.com.foursquare.places/4460d38bf964a5200a331fe3",
+  "value": {
+    "$type": "community.lexicon.location.place",
+    "collection": "community.lexicon.location.com.foursquare.places",
+    "rkey": "4460d38bf964a5200a331fe3",
+    "names": [
+      {"text": "Alamo Square", "priority": 0}
+    ],
+    "locations": [
+      {
+        "$type": "community.lexicon.location.geo",
+        "latitude": "37.776146",
+        "longitude": "-122.433898"
+      },
+      {
+        "$type": "community.lexicon.location.address",
+        "country": "US",
+        "region": "CA",
+        "locality": "San Francisco",
+        "postalCode": "94117",
+        "street": "Steiner St"
+      }
+    ],
+    "attributes": {
+      "fsq_place_id": "4460d38bf964a5200a331fe3",
+      "fsq_category_labels": [
+        "Landmarks and Outdoors > Park",
+        "Landmarks and Outdoors > Park > Playground",
+        "Landmarks and Outdoors > Park > Dog Park"
+      ],
+      "tel": "(415) 831-2700",
+      "website": "http://sfrecpark.org/alamo-square"
     }
   },
-  "records": [
-    {
-      "$type": "community.lexicon.location.searchRecords#record",
-      "distance_m": 56,
-      "uri": "at://gazetteer.social/org.overturemaps.places/08f2830829d8c099036c7f5f8bba30ec",
-      "value": {
-        "$type": "community.lexicon.location.place",
-        "attributes": {
-          "addresses": [
-            {
-              "country": "US",
-              "freeform": null,
-              "locality": "San Francisco",
-              "postcode": null,
-              "region": "CA"
-            }
-          ],
-          "brand": null,
-          "categories": {
-            "alternate": [
-              "attractions_and_activities",
-              "public_plaza"
-            ],
-            "primary": "park"
-          },
-          "confidence": "0.485",
-          "id": "08f2830829d8c099036c7f5f8bba30ec",
-          "names": {
-            "common": null,
-            "primary": "Full House Picnic Site",
-            "rules": null
-          },
-          "phones": null,
-          "socials": [
-            "https://www.facebook.com/149829208542296"
-          ],
-          "websites": null
-        },
-        "locations": [
-          {
-            "$type": "community.lexicon.location.geo",
-            "latitude": "37.776077",
-            "longitude": "-122.433400"
-          }
-        ],
-        "names": [
-          {
-            "priority": 0,
-            "text": "Full House Picnic Site"
-          }
-        ],
-        "rkey": "08f2830829d8c099036c7f5f8bba30ec"
-      }
-    }
-  ]
+  "_query": {
+    "parameters": {
+      "collection": "community.lexicon.location.com.foursquare.places",
+      "repo": "gazetteer.social",
+      "rkey": "4460d38bf964a5200a331fe3"
+    },
+    "elapsed_ms": 5
+  }
 }
 ```
 
@@ -175,6 +180,8 @@ Result:
 
 * [`community.lexicon.location.place`](garganorn/lexicon/place.json)
 * [`community.lexicon.location.searchRecords`](garganorn/lexicon/searchRecords.json)
+* [`community.lexicon.location.geo`](garganorn/lexicon/geo.json)
+* [`community.lexicon.location.address`](garganorn/lexicon/address.json)
 
 **NOTE**: These schemas are only *proposed*, and have not been adopted by the Lexicon community.
 
