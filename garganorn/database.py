@@ -200,7 +200,7 @@ class FoursquareOSP(Database):
         columns = self.record_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
-            spatial_filter = "ST_Within(geom, ST_MakeEnvelope($xmin, $ymin, $xmax, $ymax))"
+            spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
         else:
             distance_m = "0"
             spatial_filter = ""
@@ -298,7 +298,7 @@ class OvertureMaps(Database):
         columns = self.record_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
-            spatial_filter = "ST_Within(geometry, ST_MakeEnvelope($xmin, $ymin, $xmax, $ymax))"
+            spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
         else:
             distance_m = "0"
             spatial_filter = ""
