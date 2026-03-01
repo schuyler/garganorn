@@ -50,9 +50,8 @@ class Database:
             # Configure DuckDB to use our writable temp directory
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
 
-            # Limit per-connection resources to avoid oversubscription
-            # across multiple gunicorn workers
-            self.conn.execute("SET threads = 2")
+            # Limit per-connection memory to avoid oversubscription
+            # across multiple gunicorn workers (4 × 12GB = 48GB of 64GB)
             self.conn.execute("SET memory_limit = '12GB'")
             
             # Load spatial extension
