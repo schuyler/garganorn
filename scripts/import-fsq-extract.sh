@@ -92,6 +92,11 @@ cat >> "${output_dir}/import.sql" <<EOF
 delete from places where longitude = 0 or latitude = 0 or geom is null;
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geom);
+.print "Creating full-text search index..."
+install fts;
+load fts;
+pragma create_fts_index('places', 'fsq_place_id', 'name',
+    stemmer='porter', stopwords='none', strip_accents=1, lower=1);
 .print "Analyzing..."
 analyze;
 EOF

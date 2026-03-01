@@ -50,9 +50,11 @@ class Database:
             # Configure DuckDB to use our writable temp directory
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
             
-            # Load spatial extension
+            # Load extensions
             self.conn.install_extension("spatial")
             self.conn.load_extension("spatial")
+            self.conn.install_extension("fts")
+            self.conn.load_extension("fts")
         return self.conn
     
     def close(self):
@@ -214,7 +216,7 @@ class FoursquareOSP(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "(name ilike '%' || $q || '%')"
+            text_filter = "fts_main_places.match_bm25(fsq_place_id, $q) IS NOT NULL"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
@@ -319,7 +321,7 @@ class OvertureMaps(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "(name ilike '%' || $q || '%')"
+            text_filter = "fts_main_places.match_bm25(id, $q) IS NOT NULL"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
