@@ -225,8 +225,6 @@ class FoursquareOSP(Database):
                 {distance_m} as distance_m
             from places
             where {filter_conditions}
-                and date_refreshed > '2020-03-15'
-                and date_closed is null
             order by distance_m
             limit $limit;
         """
