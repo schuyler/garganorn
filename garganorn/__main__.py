@@ -1,17 +1,18 @@
 import os, logging
 from flask import Flask
 from lexrpc.flask_server import init_flask
-from garganorn import Server, OvertureMaps, FoursquareOSP
+from garganorn import Server
+from garganorn.config import load_config
 
-dbs = [
-    OvertureMaps("db/overture-maps.duckdb"),
-    FoursquareOSP("db/fsq-osp.duckdb")
-]
+DEFAULT_CONFIG = "config.yaml"
 
 def create_app():
+    config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
+    repo, dbs = load_config(config_path)
+
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
-    gazetteer = Server("gazetteer.social", dbs, app.logger)
+    gazetteer = Server(repo, dbs, app.logger)
     init_flask(gazetteer.server, app)
 
     @app.route('/health')

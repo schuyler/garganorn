@@ -1,0 +1,6 @@
+repo: gazetteer.social
+databases:
+  - type: foursquare
+    path: db/fsq-osp.duckdb
+  - type: overture
+    path: db/overture-maps.duckdb

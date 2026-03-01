@@ -15,6 +15,7 @@ dependencies = [
     "duckdb",
     "gunicorn",
     "lexrpc[flask]",
+    "pyyaml",
 ]
 
 [project.optional-dependencies]
