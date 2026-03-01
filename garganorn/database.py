@@ -49,10 +49,6 @@ class Database:
             
             # Configure DuckDB to use our writable temp directory
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
-
-            # Limit per-connection memory to avoid oversubscription
-            # across multiple gunicorn workers (4 × 12GB = 48GB of 64GB)
-            self.conn.execute("SET memory_limit = '12GB'")
             
             # Load spatial extension
             self.conn.install_extension("spatial")
@@ -185,7 +181,20 @@ class FoursquareOSP(Database):
             fsq_category_labels,
             placemaker_url
         """
-    
+
+    def search_columns(self):
+        return """
+            fsq_place_id as rkey,
+            name,
+            latitude::decimal(10,6)::varchar as latitude,
+            longitude::decimal(10,6)::varchar as longitude,
+            address,
+            locality,
+            postcode,
+            region,
+            country
+        """
+
     def query_record(self):
         columns = self.record_columns()
         return f"""
@@ -197,7 +206,7 @@ class FoursquareOSP(Database):
 
     def query_nearest(self, params: SearchParams):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided for nearest search."
-        columns = self.record_columns()
+        columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
             spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
@@ -285,6 +294,15 @@ class OvertureMaps(Database):
             sources
         """
 
+    def search_columns(self):
+        return """
+            id as rkey,
+            names.primary as name,
+            st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
+            st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
+            addresses
+        """
+
     def query_record(self):
         columns = self.record_columns()
         return f"""
@@ -293,9 +311,9 @@ class OvertureMaps(Database):
             from places
             where id = $rkey
         """
-    
+
     def query_nearest(self, params: SearchParams):
-        columns = self.record_columns()
+        columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
             spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
