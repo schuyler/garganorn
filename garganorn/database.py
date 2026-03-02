@@ -146,6 +146,10 @@ class Database:
             })
         if q:
             params["q"] = q
+            # Pick the longest token for name_index lookup (most selective)
+            tokens = q.lower().split()
+            if tokens:
+                params["token"] = max(tokens, key=len)
         print(f"Searching with params: {params}")
         result = self.execute(
             self.query_nearest(params), params
@@ -216,13 +220,24 @@ class FoursquareOSP(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            # When spatial filter is present, bbox zone maps prune 99.7% of rows
-            # making ILIKE on the remainder faster than FTS (which must scan
-            # the full inverted index then hash-join back to places).
             if spatial_filter:
+                # Spatial + text: bbox zone maps prune 99.7% of rows,
+                # then ILIKE runs on the small remainder.
                 text_filter = "name ILIKE '%' || $q || '%'"
             else:
-                text_filter = "fts_main_places.match_bm25(fsq_place_id, $q) IS NOT NULL"
+                # Text-only: use the sorted name_index table for fast
+                # token lookup via zone maps, no join needed.
+                return f"""
+                    select
+                        fsq_place_id as rkey, name, latitude, longitude,
+                        address, locality, postcode, region, country,
+                        0 as distance_m
+                    from name_index
+                    where token = lower(strip_accents($token))
+                      and name ILIKE '%' || $q || '%'
+                    order by importance desc
+                    limit $limit;
+                """
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))

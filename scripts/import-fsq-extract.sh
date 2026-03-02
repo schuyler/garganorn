@@ -92,11 +92,22 @@ cat >> "${output_dir}/import.sql" <<EOF
 delete from places where longitude = 0 or latitude = 0 or geom is null;
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geom);
-.print "Creating full-text search index..."
-install fts;
-load fts;
-pragma create_fts_index('places', 'fsq_place_id', 'name',
-    stemmer='porter', stopwords='none', strip_accents=1, lower=1);
+.print "Creating name index..."
+create table name_index as
+select token, fsq_place_id, name,
+    latitude::decimal(10,6)::varchar as latitude,
+    longitude::decimal(10,6)::varchar as longitude,
+    address, locality, postcode, region, country,
+    0 as importance
+from (
+    select unnest(string_split(lower(strip_accents(name)), ' ')) as token,
+        fsq_place_id, name, latitude, longitude,
+        address, locality, postcode, region, country
+    from places
+    where name is not null and length(name) > 0
+) sub
+where length(token) > 1
+order by token, importance desc;
 .print "Analyzing..."
 analyze;
 EOF
