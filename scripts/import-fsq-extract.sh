@@ -79,7 +79,9 @@ for i in $(seq 0 99); do
 .print "Importing ${i} / 100"
 insert into places select * from '${source_file}'
     where bbox.xmin >= ${xmin} and bbox.xmax <= ${xmax}
-    and bbox.ymin >= ${ymin} and bbox.ymax <= ${ymax};
+    and bbox.ymin >= ${ymin} and bbox.ymax <= ${ymax}
+    and date_refreshed > '2020-03-15'
+    and date_closed is null;
 EOF
 done >> "${output_dir}/import.sql"
 
@@ -90,6 +92,13 @@ cat >> "${output_dir}/import.sql" <<EOF
 delete from places where longitude = 0 or latitude = 0 or geom is null;
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geom);
+.print "Creating full-text search index..."
+install fts;
+load fts;
+pragma create_fts_index('places', 'fsq_place_id', 'name',
+    stemmer='porter', stopwords='none', strip_accents=1, lower=1);
+.print "Analyzing..."
+analyze;
 EOF
 
 # Run the import script
