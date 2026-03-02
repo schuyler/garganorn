@@ -146,10 +146,12 @@ class Database:
             })
         if q:
             params["q"] = q
-            # Pick the longest token for name_index lookup (most selective)
-            tokens = q.lower().split()
-            if tokens:
-                params["token"] = max(tokens, key=len)
+            # For text-only queries (no spatial), add a token for name_index lookup.
+            # Pick the longest token as it's most selective.
+            if latitude is None or longitude is None:
+                tokens = q.lower().split()
+                if tokens:
+                    params["token"] = max(tokens, key=len)
         print(f"Searching with params: {params}")
         result = self.execute(
             self.query_nearest(params), params
