@@ -216,7 +216,13 @@ class FoursquareOSP(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "fts_main_places.match_bm25(fsq_place_id, $q) IS NOT NULL"
+            # When spatial filter is present, bbox zone maps prune 99.7% of rows
+            # making ILIKE on the remainder faster than FTS (which must scan
+            # the full inverted index then hash-join back to places).
+            if spatial_filter:
+                text_filter = "name ILIKE '%' || $q || '%'"
+            else:
+                text_filter = "fts_main_places.match_bm25(fsq_place_id, $q) IS NOT NULL"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
@@ -230,7 +236,7 @@ class FoursquareOSP(Database):
             order by distance_m
             limit $limit;
         """
-    
+
     def process_record(self, result):
         locations = [
             {
@@ -321,7 +327,10 @@ class OvertureMaps(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "fts_main_places.match_bm25(id, $q) IS NOT NULL"
+            if spatial_filter:
+                text_filter = "names.primary ILIKE '%' || $q || '%'"
+            else:
+                text_filter = "fts_main_places.match_bm25(id, $q) IS NOT NULL"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
@@ -334,7 +343,7 @@ class OvertureMaps(Database):
             order by distance_m
             limit $limit;
             """
-    
+
     def process_record(self, result):
         locations = [
             {
@@ -343,7 +352,7 @@ class OvertureMaps(Database):
                 "longitude": result.pop("longitude"),
             }
         ]
-        
+
         # Extract address information from addresses array if available
         addresses = result.get("addresses")
         if addresses and isinstance(addresses, list):
