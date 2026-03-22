@@ -16,7 +16,7 @@ xmax=$3
 ymax=$4
 
 if [ -z "$xmin" ] || [ -z "$ymin" ] || [ -z "$xmax" ] || [ -z "$ymax" ]; then
-    echo 
+    echo
     echo "Usage: $0 <xmin> <ymin> <xmax> <ymax>"
     echo
     exit 1
@@ -40,10 +40,10 @@ fi
 # We want something POSIX compliant so it will run on both MacOS and Linux
 
 # Fetch the XML and extract the latest release date
-latest_release=$(curl -s "https://fsq-os-places-us-east-1.s3.amazonaws.com/" | 
-  grep -o "<Key>release/dt=[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}/</Key>" | 
-  sed 's/<Key>release\/dt=\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)\/<\/Key>/\1/g' | 
-  sort -r | 
+latest_release=$(curl -s "https://fsq-os-places-us-east-1.s3.amazonaws.com/" |
+  grep -o "<Key>release/dt=[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}/</Key>" |
+  sed 's/<Key>release\/dt=\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)\/<\/Key>/\1/g' |
+  sort -r |
   head -1)
 
 if [ -z "$latest_release" ]; then
@@ -60,6 +60,46 @@ source_data="https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${lates
 # This will be the output directory for the DuckDB database
 output_dir="$(dirname "$(realpath "$0")")/../db"
 mkdir -p "$output_dir"
+
+# Detect density file
+density_file="${output_dir}/density.parquet"
+if [ -f "$(realpath "${density_file}" 2>/dev/null || echo "")" ]; then
+    density_file="$(realpath "${density_file}")"
+    has_density=true
+else
+    has_density=false
+fi
+
+# Detect category IDF file
+idf_file="${output_dir}/category_idf.parquet"
+if [ -f "$(realpath "${idf_file}" 2>/dev/null || echo "")" ]; then
+    idf_file="$(realpath "${idf_file}")"
+    has_idf=true
+else
+    has_idf=false
+fi
+
+# Set IDF SQL fragments (empty strings when has_idf=false so SQL degrades gracefully)
+if [ "$has_idf" = true ]; then
+    idf_cte="WITH place_idf AS (
+    SELECT
+        p.fsq_place_id,
+        max(idf.idf_score) AS max_idf
+    FROM places p,
+        unnest(p.fsq_category_ids) AS t(category)
+    LEFT JOIN read_parquet('${idf_file}') idf
+        ON idf.collection = 'foursquare'
+        AND idf.category = t.category
+    WHERE p.fsq_category_ids IS NOT NULL
+    GROUP BY p.fsq_place_id
+)"
+    idf_join="LEFT JOIN place_idf pi USING (fsq_place_id)"
+    idf_score="coalesce(pi.max_idf, 0)"
+else
+    idf_cte=""
+    idf_join=""
+    idf_score="0"
+fi
 
 # Remove any existing temp file
 rm -f "${output_dir}/fsq-osp.duckdb.tmp"
@@ -92,22 +132,90 @@ cat >> "${output_dir}/import.sql" <<EOF
 delete from places where longitude = 0 or latitude = 0 or geom is null;
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geom);
-.print "Creating name index..."
+EOF
+
+# Build name_index with importance scoring; branch on density file availability
+if [ "$has_density" = true ]; then
+    cat >> "${output_dir}/import.sql" <<EOF
+.print "Loading geography extension for S2 density join..."
+install geography from community;
+load geography;
+.print "Creating name index (with density)..."
 create table name_index as
-select token, fsq_place_id, name,
-    latitude::decimal(10,6)::varchar as latitude,
-    longitude::decimal(10,6)::varchar as longitude,
-    address, locality, postcode, region, country,
-    0 as importance
+${idf_cte}
+select
+    token,
+    p.fsq_place_id,
+    p.name,
+    p.latitude,
+    p.longitude,
+    p.address,
+    p.locality,
+    p.postcode,
+    p.region,
+    p.country,
+    coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
 from (
-    select unnest(string_split(lower(strip_accents(name)), ' ')) as token,
-        fsq_place_id, name, latitude, longitude,
+    select
+        unnest(string_split(lower(strip_accents(name)), ' ')) as token,
+        fsq_place_id,
+        name,
+        latitude::decimal(10,6)::varchar as latitude,
+        longitude::decimal(10,6)::varchar as longitude,
+        latitude as lat_raw,
+        longitude as lon_raw,
+        address, locality, postcode, region, country
+    from places
+    where name is not null and length(name) > 0
+) p
+${idf_join}
+left join read_parquet('${density_file}') c
+    on c.level = 12
+    and c.cell_id = s2_cell_parent(
+        s2_cellfromlonlat(p.lon_raw, p.lat_raw), 12
+    )
+where length(p.token) > 1
+order by token, importance desc;
+.print "Creating name index token index..."
+create index name_index_token on name_index (token);
+EOF
+else
+    cat >> "${output_dir}/import.sql" <<EOF
+.print "Creating name index (no density)..."
+create table name_index as
+${idf_cte}
+select
+    token,
+    fsq_place_id,
+    name,
+    latitude,
+    longitude,
+    address,
+    locality,
+    postcode,
+    region,
+    country,
+    ${idf_score} as importance
+from (
+    select
+        unnest(string_split(lower(strip_accents(name)), ' ')) as token,
+        fsq_place_id,
+        name,
+        latitude::decimal(10,6)::varchar as latitude,
+        longitude::decimal(10,6)::varchar as longitude,
         address, locality, postcode, region, country
     from places
     where name is not null and length(name) > 0
 ) sub
+${idf_join}
 where length(token) > 1
 order by token, importance desc;
+.print "Creating name index token index..."
+create index name_index_token on name_index (token);
+EOF
+fi
+
+cat >> "${output_dir}/import.sql" <<EOF
 .print "Analyzing..."
 analyze;
 EOF

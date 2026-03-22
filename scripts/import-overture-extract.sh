@@ -20,7 +20,7 @@ ymax=$4
 release=$5
 
 if [ -z "$xmin" ] || [ -z "$ymin" ] || [ -z "$xmax" ] || [ -z "$ymax" ]; then
-    echo 
+    echo
     echo "Usage: $0 <xmin> <ymin> <xmax> <ymax> [release]"
     echo "  release: Optional Overture release date (format: YYYY-MM-DD.N)"
     echo
@@ -52,6 +52,35 @@ fi
 # Create the db/ directory in the parent folder relative to this script
 output_dir="$(dirname "$(realpath "$0")")/../db"
 mkdir -p "$output_dir"
+
+# Detect density file
+density_file="${output_dir}/density.parquet"
+if [ -f "$(realpath "${density_file}" 2>/dev/null || echo "")" ]; then
+    density_file="$(realpath "${density_file}")"
+    has_density=true
+else
+    has_density=false
+fi
+
+# Detect category IDF file
+idf_file="${output_dir}/category_idf.parquet"
+if [ -f "$(realpath "${idf_file}" 2>/dev/null || echo "")" ]; then
+    idf_file="$(realpath "${idf_file}")"
+    has_idf=true
+else
+    has_idf=false
+fi
+
+# Set IDF SQL fragments (empty strings when has_idf=false so SQL degrades gracefully)
+if [ "$has_idf" = true ]; then
+    idf_join_ov="left join read_parquet('${idf_file}') idf
+        on idf.collection = 'overture'
+        and idf.category = sub.categories_primary"
+    idf_score_ov="coalesce(idf.idf_score, 0)"
+else
+    idf_join_ov=""
+    idf_score_ov="0"
+fi
 
 # Remove any existing temp file
 rm -f "${output_dir}/${db_filename}.tmp"
@@ -93,11 +122,11 @@ file_number=0
 echo "$parquet_files" | while read -r file; do
   file_number=$((file_number + 1))
   file_url="${source_base}/${file}"
-  
+
   cat <<EOF
 .print "Importing file ${file_number}/${file_count}: ${file}"
 insert into places select * from '${file_url}'
-    where bbox.xmin >= ${xmin} 
+    where bbox.xmin >= ${xmin}
       and bbox.xmax <= ${xmax}
       and bbox.ymin >= ${ymin}
       and bbox.ymax <= ${ymax};
@@ -111,6 +140,85 @@ delete from places where geometry is null;
 
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geometry);
+EOF
+
+# Build name_index with importance scoring; branch on density file availability
+if [ "$has_density" = true ]; then
+    cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Loading geography extension for S2 density join..."
+install geography from community;
+load geography;
+.print "Creating name index (with density)..."
+create table name_index as
+select token, p.id, p.name, p.latitude, p.longitude, p.importance
+from (
+    select
+        sub.token,
+        sub.id,
+        sub.name,
+        sub.latitude,
+        sub.longitude,
+        sub.lat_num,
+        sub.lon_num,
+        coalesce(ln(1 + c.pt_count), 0) + ${idf_score_ov} as importance
+    from (
+        select
+            unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
+            id,
+            names.primary as name,
+            st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
+            st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
+            st_y(st_centroid(geometry)) as lat_num,
+            st_x(st_centroid(geometry)) as lon_num,
+            categories.primary as categories_primary
+        from places
+        where names.primary is not null and length(names.primary) > 0
+    ) sub
+    left join read_parquet('${density_file}') c
+        on c.level = 12
+        and c.cell_id = s2_cell_parent(
+            s2_cellfromlonlat(sub.lon_num, sub.lat_num), 12
+        )
+    ${idf_join_ov}
+    where length(sub.token) > 1
+) p
+order by p.token, p.importance desc;
+.print "Creating name index token index..."
+create index name_index_token on name_index (token);
+EOF
+else
+    cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Creating name index (no density)..."
+create table name_index as
+select
+    token,
+    id,
+    name,
+    latitude,
+    longitude,
+    ${idf_score_ov} as importance
+from (
+    select
+        unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
+        id,
+        names.primary as name,
+        st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
+        st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
+        categories.primary as categories_primary
+    from places
+    where names.primary is not null and length(names.primary) > 0
+) sub
+${idf_join_ov}
+where length(token) > 1
+order by token, importance desc;
+.print "Creating name index token index..."
+create index name_index_token on name_index (token);
+EOF
+fi
+
+cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Analyzing..."
+analyze;
 EOF
 
 # Run the import script
