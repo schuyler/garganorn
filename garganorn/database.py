@@ -51,11 +51,9 @@ class Database:
             # Configure DuckDB to use our writable temp directory
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
             
-            # Load extensions
+            # Load spatial extension
             self.conn.install_extension("spatial")
             self.conn.load_extension("spatial")
-            self.conn.install_extension("fts")
-            self.conn.load_extension("fts")
 
             tables = self.conn.execute(
                 "SELECT table_name FROM information_schema.tables WHERE table_name = 'name_index'"
@@ -134,6 +132,7 @@ class Database:
         return record
 
     def nearest(self, latitude=None, longitude=None, q=None, expand_m=5000, limit=50):
+        self.connect()  # Ensure has_name_index is populated before query routing
         params : SearchParams = { "limit": limit }
         if latitude is not None and longitude is not None:
         # Expand the bounding box around the point by roughly expand_m meters
@@ -152,12 +151,9 @@ class Database:
             })
         if q:
             params["q"] = q
-            # For text-only queries (no spatial), add a token for name_index lookup.
-            # Pick the longest token as it's most selective.
-            if latitude is None or longitude is None:
-                tokens = q.lower().split()
-                if tokens:
-                    params["token"] = max(tokens, key=len)
+            # Use the longest word as the most selective token for name_index lookup
+            words = q.strip().split()
+            params["token"] = max(words, key=len) if words else q
         print(f"Searching with params: {params}")
         result = self.execute(
             self.query_nearest(params), params
@@ -232,7 +228,7 @@ class FoursquareOSP(Database):
                 country,
                 0 AS distance_m
             FROM name_index
-            WHERE token = lower(strip_accents(split_part($q, ' ', 1)))
+            WHERE token = lower(strip_accents($token))
               AND name ILIKE '%' || $q || '%'
             ORDER BY importance DESC
             LIMIT $limit;
@@ -245,7 +241,7 @@ class FoursquareOSP(Database):
         if not params.get("centroid") and params.get("q") and self.has_name_index:
             return self._query_name_index(params)
 
-        columns = self.search_columns()
+        columns = self.record_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
             spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
@@ -253,24 +249,7 @@ class FoursquareOSP(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            if spatial_filter:
-                # Spatial + text: bbox zone maps prune 99.7% of rows,
-                # then ILIKE runs on the small remainder.
-                text_filter = "name ILIKE '%' || $q || '%'"
-            else:
-                # Text-only: use the sorted name_index table for fast
-                # token lookup via zone maps, no join needed.
-                return f"""
-                    select
-                        fsq_place_id as rkey, name, latitude, longitude,
-                        address, locality, postcode, region, country,
-                        0 as distance_m
-                    from name_index
-                    where token = lower(strip_accents($token))
-                      and name ILIKE '%' || $q || '%'
-                    order by importance desc
-                    limit $limit;
-                """
+            text_filter = "(name ilike '%' || $q || '%')"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
@@ -281,6 +260,8 @@ class FoursquareOSP(Database):
                 {distance_m} as distance_m
             from places
             where {filter_conditions}
+                and date_refreshed > '2020-03-15'
+                and date_closed is null
             order by distance_m
             limit $limit;
         """
@@ -375,7 +356,7 @@ class OvertureMaps(Database):
                 longitude,
                 0 AS distance_m
             FROM name_index
-            WHERE token = lower(strip_accents(split_part($q, ' ', 1)))
+            WHERE token = lower(strip_accents($token))
               AND name ILIKE '%' || $q || '%'
             ORDER BY importance DESC
             LIMIT $limit;
@@ -386,7 +367,7 @@ class OvertureMaps(Database):
         if not params.get("centroid") and params.get("q") and self.has_name_index:
             return self._query_name_index(params)
 
-        columns = self.search_columns()
+        columns = self.record_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
             spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
@@ -394,10 +375,7 @@ class OvertureMaps(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            if spatial_filter:
-                text_filter = "names.primary ILIKE '%' || $q || '%'"
-            else:
-                text_filter = "fts_main_places.match_bm25(id, $q) IS NOT NULL"
+            text_filter = "(names.primary ilike '%' || $q || '%')"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
