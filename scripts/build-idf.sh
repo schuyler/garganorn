@@ -114,6 +114,7 @@ time duckdb -bail < "${sql_file}"
 if [ $? -ne 0 ]; then
     echo "Failed to build category IDF table."
     rm -f "$output_file_tmp"
+    rm -f "${sql_file}"
     exit 1
 fi
 
