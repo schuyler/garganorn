@@ -30,13 +30,14 @@ class Database:
     def __init__(self, db_path):
         """
         Initialize a connection to the gazetteer database.
-        
+
         Args:
             db_path: Path to the DuckDB database file
         """
         self.db_path = Path(db_path)
         self.conn = None
         self.temp_dir = None
+        self.has_name_index = False
         
     def connect(self):
         """Connect to the database and load the spatial plugin."""
@@ -55,6 +56,11 @@ class Database:
             self.conn.load_extension("spatial")
             self.conn.install_extension("fts")
             self.conn.load_extension("fts")
+
+            tables = self.conn.execute(
+                "SELECT table_name FROM information_schema.tables WHERE table_name = 'name_index'"
+            ).fetchall()
+            self.has_name_index = len(tables) > 0
         return self.conn
     
     def close(self):
@@ -212,8 +218,33 @@ class FoursquareOSP(Database):
             where fsq_place_id = $rkey
         """
 
+    def _query_name_index(self, params: SearchParams):
+        return """
+            SELECT
+                fsq_place_id AS rkey,
+                name,
+                latitude,
+                longitude,
+                address,
+                locality,
+                postcode,
+                region,
+                country,
+                0 AS distance_m
+            FROM name_index
+            WHERE token = lower(strip_accents(split_part($q, ' ', 1)))
+              AND name ILIKE '%' || $q || '%'
+            ORDER BY importance DESC
+            LIMIT $limit;
+        """
+
     def query_nearest(self, params: SearchParams):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided for nearest search."
+
+        # Text-only search: use name_index if available
+        if not params.get("centroid") and params.get("q") and self.has_name_index:
+            return self._query_name_index(params)
+
         columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
@@ -335,7 +366,26 @@ class OvertureMaps(Database):
             where id = $rkey
         """
 
+    def _query_name_index(self, params: SearchParams):
+        return """
+            SELECT
+                id AS rkey,
+                name,
+                latitude,
+                longitude,
+                0 AS distance_m
+            FROM name_index
+            WHERE token = lower(strip_accents(split_part($q, ' ', 1)))
+              AND name ILIKE '%' || $q || '%'
+            ORDER BY importance DESC
+            LIMIT $limit;
+        """
+
     def query_nearest(self, params: SearchParams):
+        # Text-only search: use name_index if available
+        if not params.get("centroid") and params.get("q") and self.has_name_index:
+            return self._query_name_index(params)
+
         columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
