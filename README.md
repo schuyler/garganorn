@@ -35,6 +35,30 @@ $ scripts/import-fsq-extract.sh -122.5137 37.7099 -122.3785 37.8101
 
 Building one of these databases takes a few minutes for a reasonable bounding box on a reasonable machine with a reasonable Internet connection. You must build at least one database locally for the service to have data to serve.
 
+The import scripts also build a `name_index` table used for text search. If `db/density.parquet` and/or `db/category_idf.parquet` exist at import time, places are assigned importance scores for ranking. If absent, importance defaults to 0 and text search still works.
+
+## Building the density and IDF tables
+
+The density and category IDF tables are optional artifacts used to rank text search results. Neither is required — if absent, text search works with all results at equal importance.
+
+To build the density table, pass either `fsq` or `overture` to indicate which global dataset to use:
+
+```
+$ scripts/build-density.sh fsq
+```
+
+To build the category IDF table:
+
+```
+$ scripts/build-idf.sh all
+```
+
+The `all` option processes both Foursquare and Overture categories. You can also pass `fsq` or `overture` individually.
+
+Both scripts produce versioned parquet files in `db/` with symlinks (`density.parquet`, `category_idf.parquet`). Rebuilding is rarely needed — global density patterns and category distributions change slowly.
+
+See [`docs/s2_duckdb_design.md`](docs/s2_duckdb_design.md) for design details.
+
 ## Running the server
 
 Install and start a Flask dev server on `localhost:8000`:
