@@ -141,6 +141,7 @@ rm -f "${output_dir}/fsq-osp.duckdb.tmp"
 # Initialize the spatial extension and the places table
 cat > "${output_dir}/import.sql" <<EOF
 .print "Initializing..."
+SET memory_limit='48GB';
 install spatial;
 load spatial;
 create table places as select * EXCLUDE (geom), geom::GEOMETRY as geom from '${cache_dir}/places-00000.zstd.parquet' limit 0;
