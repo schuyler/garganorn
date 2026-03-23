@@ -79,9 +79,12 @@ else
     has_idf=false
 fi
 
-# Set IDF SQL fragments (empty strings when has_idf=false so SQL degrades gracefully)
+# Set IDF SQL fragments
+# idf_cte: a CTE fragment WITHOUT the leading WITH keyword, WITH trailing comma.
+# It will be composed as: WITH tokens AS (...), <idf_cte> codes AS (...), ...
+# When has_idf=false, idf_cte is empty string (no extra CTE).
 if [ "$has_idf" = true ]; then
-    idf_cte="WITH place_idf AS (
+    idf_cte="place_idf AS (
     SELECT
         p.fsq_place_id,
         max(idf.idf_score) AS max_idf
@@ -92,7 +95,7 @@ if [ "$has_idf" = true ]; then
         AND idf.category = t.category
     WHERE p.fsq_category_ids IS NOT NULL
     GROUP BY p.fsq_place_id
-)"
+),"
     idf_join="LEFT JOIN place_idf pi USING (fsq_place_id)"
     idf_score="coalesce(pi.max_idf, 0)"
 else
@@ -134,28 +137,17 @@ delete from places where longitude = 0 or latitude = 0 or geom is null;
 create index places_rtree on places using rtree (geom);
 EOF
 
-# Build name_index with importance scoring; branch on density file availability
+# Build name_index with phonetic codes; branch on density file availability
 if [ "$has_density" = true ]; then
     cat >> "${output_dir}/import.sql" <<EOF
-.print "Loading geography extension for S2 density join..."
+.print "Loading extensions for phonetic index + density..."
 install geography from community;
 load geography;
+install splink_udfs from community;
+load splink_udfs;
 .print "Creating name index (with density)..."
 create table name_index as
-${idf_cte}
-select
-    token,
-    p.fsq_place_id,
-    p.name,
-    p.latitude,
-    p.longitude,
-    p.address,
-    p.locality,
-    p.postcode,
-    p.region,
-    p.country,
-    coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
-from (
+with tokens as (
     select
         unnest(string_split(lower(strip_accents(name)), ' ')) as token,
         fsq_place_id,
@@ -167,36 +159,66 @@ from (
         address, locality, postcode, region, country
     from places
     where name is not null and length(name) > 0
-) p
-${idf_join}
-left join read_parquet('${density_file}') c
-    on c.level = 12
-    and c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(p.lon_raw, p.lat_raw), 12
-    )
-where length(p.token) > 1
-order by token, importance desc;
-.print "Creating name index token index..."
-create index name_index_token on name_index (token);
+),
+${idf_cte}
+codes as (
+    select
+        unnest(double_metaphone(t.token)) as dm_code,
+        t.token,
+        t.fsq_place_id,
+        t.name,
+        t.latitude,
+        t.longitude,
+        t.address,
+        t.locality,
+        t.postcode,
+        t.region,
+        t.country,
+        coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
+    from tokens t
+    ${idf_join}
+    left join read_parquet('${density_file}') c
+        on c.level = 12
+        and c.cell_id = s2_cell_parent(
+            s2_cellfromlonlat(t.lon_raw, t.lat_raw), 12
+        )
+    where length(t.token) > 1
+),
+filtered_codes as (
+    select * from codes
+    where dm_code is not null and dm_code != ''
+),
+place_code_counts as (
+    select fsq_place_id, count(distinct dm_code) as n_place_codes
+    from filtered_codes
+    group by fsq_place_id
+)
+select
+    fc.dm_code,
+    fc.token,
+    fc.fsq_place_id,
+    fc.name,
+    fc.latitude,
+    fc.longitude,
+    fc.address,
+    fc.locality,
+    fc.postcode,
+    fc.region,
+    fc.country,
+    fc.importance,
+    pc.n_place_codes
+from filtered_codes fc
+join place_code_counts pc using (fsq_place_id)
+order by fc.dm_code;
 EOF
 else
     cat >> "${output_dir}/import.sql" <<EOF
+.print "Loading splink_udfs extension for phonetic indexing..."
+install splink_udfs from community;
+load splink_udfs;
 .print "Creating name index (no density)..."
 create table name_index as
-${idf_cte}
-select
-    token,
-    fsq_place_id,
-    name,
-    latitude,
-    longitude,
-    address,
-    locality,
-    postcode,
-    region,
-    country,
-    ${idf_score} as importance
-from (
+with tokens as (
     select
         unnest(string_split(lower(strip_accents(name)), ' ')) as token,
         fsq_place_id,
@@ -206,12 +228,52 @@ from (
         address, locality, postcode, region, country
     from places
     where name is not null and length(name) > 0
-) sub
-${idf_join}
-where length(token) > 1
-order by token, importance desc;
-.print "Creating name index token index..."
-create index name_index_token on name_index (token);
+),
+${idf_cte}
+codes as (
+    select
+        unnest(double_metaphone(t.token)) as dm_code,
+        t.token,
+        t.fsq_place_id,
+        t.name,
+        t.latitude,
+        t.longitude,
+        t.address,
+        t.locality,
+        t.postcode,
+        t.region,
+        t.country,
+        ${idf_score} as importance
+    from tokens t
+    ${idf_join}
+    where length(t.token) > 1
+),
+filtered_codes as (
+    select * from codes
+    where dm_code is not null and dm_code != ''
+),
+place_code_counts as (
+    select fsq_place_id, count(distinct dm_code) as n_place_codes
+    from filtered_codes
+    group by fsq_place_id
+)
+select
+    fc.dm_code,
+    fc.token,
+    fc.fsq_place_id,
+    fc.name,
+    fc.latitude,
+    fc.longitude,
+    fc.address,
+    fc.locality,
+    fc.postcode,
+    fc.region,
+    fc.country,
+    fc.importance,
+    pc.n_place_codes
+from filtered_codes fc
+join place_code_counts pc using (fsq_place_id)
+order by fc.dm_code;
 EOF
 fi
 
@@ -226,6 +288,7 @@ time duckdb -bail "${output_dir}/fsq-osp.duckdb.tmp" < "${output_dir}/import.sql
 
 if [ $? -ne 0 ]; then
     echo "Failed to import data into DuckDB."
+    rm -f "${output_dir}/import.sql"
     exit 1
 fi
 

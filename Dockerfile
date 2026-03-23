@@ -16,6 +16,20 @@ COPY garganorn/ ./garganorn/
 # Install Python dependencies
 RUN pip install --no-cache-dir .
 
+# Pre-install DuckDB extensions into the image so they are available at runtime
+# without needing write access to ~/.duckdb/extensions/
+# The Python script creates a temporary DuckDB to trigger extension installation,
+# then the extensions are cached in /root/.duckdb/extensions/ within the image layer.
+RUN python -c "\
+import duckdb; \
+conn = duckdb.connect(':memory:'); \
+conn.install_extension('spatial'); \
+conn.load_extension('spatial'); \
+conn.install_extension('splink_udfs', repository='community'); \
+conn.load_extension('splink_udfs'); \
+conn.close(); \
+print('Extensions pre-installed successfully')"
+
 # Create directory for database volume mount
 RUN mkdir -p /app/db
 

@@ -71,13 +71,26 @@ else
     has_idf=false
 fi
 
-# Set IDF SQL fragments (empty strings when has_idf=false so SQL degrades gracefully)
+# Set IDF SQL fragments for Overture
+# Same CTE pattern as FSQ: fragment WITHOUT leading WITH, WITH trailing comma.
 if [ "$has_idf" = true ]; then
-    idf_join_ov="left join read_parquet('${idf_file}') idf
-        on idf.collection = 'overture'
-        and idf.category = sub.categories_primary"
-    idf_score_ov="coalesce(idf.idf_score, 0)"
+    idf_cte_ov="place_idf AS (
+    SELECT
+        sub.id,
+        coalesce(idf.idf_score, 0) AS max_idf
+    FROM (
+        SELECT id, categories.primary AS categories_primary
+        FROM places
+        WHERE categories.primary IS NOT NULL
+    ) sub
+    LEFT JOIN read_parquet('${idf_file}') idf
+        ON idf.collection = 'overture'
+        AND idf.category = sub.categories_primary
+),"
+    idf_join_ov="LEFT JOIN place_idf pi USING (id)"
+    idf_score_ov="coalesce(pi.max_idf, 0)"
 else
+    idf_cte_ov=""
     idf_join_ov=""
     idf_score_ov="0"
 fi
@@ -142,62 +155,78 @@ delete from places where geometry is null;
 create index places_rtree on places using rtree (geometry);
 EOF
 
-# Build name_index with importance scoring; branch on density file availability
+# Build name_index with phonetic codes; branch on density file availability
 if [ "$has_density" = true ]; then
     cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Loading geography extension for S2 density join..."
+.print "Loading extensions for phonetic index + density..."
 install geography from community;
 load geography;
+install splink_udfs from community;
+load splink_udfs;
 .print "Creating name index (with density)..."
 create table name_index as
-select token, p.id, p.name, p.latitude, p.longitude, p.importance
-from (
+with tokens as (
     select
-        sub.token,
-        sub.id,
-        sub.name,
-        sub.latitude,
-        sub.longitude,
-        sub.lat_num,
-        sub.lon_num,
+        unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
+        id,
+        names.primary as name,
+        st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
+        st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
+        st_y(st_centroid(geometry)) as lat_num,
+        st_x(st_centroid(geometry)) as lon_num,
+        categories.primary as categories_primary
+    from places
+    where names.primary is not null and length(names.primary) > 0
+),
+${idf_cte_ov}
+codes as (
+    select
+        unnest(double_metaphone(t.token)) as dm_code,
+        t.token,
+        t.id,
+        t.name,
+        t.latitude,
+        t.longitude,
         coalesce(ln(1 + c.pt_count), 0) + ${idf_score_ov} as importance
-    from (
-        select
-            unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
-            id,
-            names.primary as name,
-            st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
-            st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
-            st_y(st_centroid(geometry)) as lat_num,
-            st_x(st_centroid(geometry)) as lon_num,
-            categories.primary as categories_primary
-        from places
-        where names.primary is not null and length(names.primary) > 0
-    ) sub
+    from tokens t
+    ${idf_join_ov}
     left join read_parquet('${density_file}') c
         on c.level = 12
         and c.cell_id = s2_cell_parent(
-            s2_cellfromlonlat(sub.lon_num, sub.lat_num), 12
+            s2_cellfromlonlat(t.lon_num, t.lat_num), 12
         )
-    ${idf_join_ov}
-    where length(sub.token) > 1
-) p
-order by p.token, p.importance desc;
-.print "Creating name index token index..."
-create index name_index_token on name_index (token);
+    where length(t.token) > 1
+),
+filtered_codes as (
+    select * from codes
+    where dm_code is not null and dm_code != ''
+),
+place_code_counts as (
+    select id, count(distinct dm_code) as n_place_codes
+    from filtered_codes
+    group by id
+)
+select
+    fc.dm_code,
+    fc.token,
+    fc.id,
+    fc.name,
+    fc.latitude,
+    fc.longitude,
+    fc.importance,
+    pc.n_place_codes
+from filtered_codes fc
+join place_code_counts pc using (id)
+order by fc.dm_code;
 EOF
 else
     cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Loading splink_udfs extension for phonetic indexing..."
+install splink_udfs from community;
+load splink_udfs;
 .print "Creating name index (no density)..."
 create table name_index as
-select
-    token,
-    id,
-    name,
-    latitude,
-    longitude,
-    ${idf_score_ov} as importance
-from (
+with tokens as (
     select
         unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
         id,
@@ -207,12 +236,42 @@ from (
         categories.primary as categories_primary
     from places
     where names.primary is not null and length(names.primary) > 0
-) sub
-${idf_join_ov}
-where length(token) > 1
-order by token, importance desc;
-.print "Creating name index token index..."
-create index name_index_token on name_index (token);
+),
+${idf_cte_ov}
+codes as (
+    select
+        unnest(double_metaphone(t.token)) as dm_code,
+        t.token,
+        t.id,
+        t.name,
+        t.latitude,
+        t.longitude,
+        ${idf_score_ov} as importance
+    from tokens t
+    ${idf_join_ov}
+    where length(t.token) > 1
+),
+filtered_codes as (
+    select * from codes
+    where dm_code is not null and dm_code != ''
+),
+place_code_counts as (
+    select id, count(distinct dm_code) as n_place_codes
+    from filtered_codes
+    group by id
+)
+select
+    fc.dm_code,
+    fc.token,
+    fc.id,
+    fc.name,
+    fc.latitude,
+    fc.longitude,
+    fc.importance,
+    pc.n_place_codes
+from filtered_codes fc
+join place_code_counts pc using (id)
+order by fc.dm_code;
 EOF
 fi
 
@@ -227,6 +286,7 @@ time duckdb -bail "${output_dir}/${db_filename}.tmp" < "${output_dir}/import-ove
 
 if [ $? -ne 0 ]; then
     echo "Failed to import data into DuckDB."
+    rm -f "${output_dir}/import-overture.sql"
     exit 1
 fi
 
