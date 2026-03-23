@@ -241,7 +241,7 @@ class FoursquareOSP(Database):
         if not params.get("centroid") and params.get("q") and self.has_name_index:
             return self._query_name_index(params)
 
-        columns = self.record_columns()
+        columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
             spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
@@ -249,7 +249,7 @@ class FoursquareOSP(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "(name ilike '%' || $q || '%')"
+            text_filter = "name ILIKE '%' || $q || '%'"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
@@ -260,8 +260,6 @@ class FoursquareOSP(Database):
                 {distance_m} as distance_m
             from places
             where {filter_conditions}
-                and date_refreshed > '2020-03-15'
-                and date_closed is null
             order by distance_m
             limit $limit;
         """
@@ -367,7 +365,7 @@ class OvertureMaps(Database):
         if not params.get("centroid") and params.get("q") and self.has_name_index:
             return self._query_name_index(params)
 
-        columns = self.record_columns()
+        columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
             spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
@@ -375,7 +373,7 @@ class OvertureMaps(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "(names.primary ilike '%' || $q || '%')"
+            text_filter = "names.primary ILIKE '%' || $q || '%'"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
