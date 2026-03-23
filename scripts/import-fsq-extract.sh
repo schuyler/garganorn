@@ -191,6 +191,18 @@ with name_prep as (
     where name is not null and length(name) > 0
 ),
 ${idf_cte}
+place_importance as (
+    select
+        np.fsq_place_id,
+        coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
+    from name_prep np
+    ${idf_join}
+    left join read_parquet('${density_file}') c
+        on c.level = 12
+        and c.cell_id = s2_cell_parent(
+            s2_cellfromlonlat(np.lon_raw, np.lat_raw), 12
+        )
+),
 trigrams as (
     select distinct
         substr(np.norm_name, pos, 3) as trigram,
@@ -203,14 +215,9 @@ trigrams as (
         np.postcode,
         np.region,
         np.country,
-        coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
+        coalesce(pi.importance, 0) as importance
     from name_prep np
-    ${idf_join}
-    left join read_parquet('${density_file}') c
-        on c.level = 12
-        and c.cell_id = s2_cell_parent(
-            s2_cellfromlonlat(np.lon_raw, np.lat_raw), 12
-        )
+    left join place_importance pi using (fsq_place_id)
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
     where length(np.norm_name) >= 3
 )

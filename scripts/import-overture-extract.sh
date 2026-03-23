@@ -176,13 +176,9 @@ with name_prep as (
     where names.primary is not null and length(names.primary) > 0
 ),
 ${idf_cte_ov}
-trigrams as (
-    select distinct
-        substr(np.norm_name, pos, 3) as trigram,
+place_importance as (
+    select
         np.id,
-        np.name,
-        np.latitude,
-        np.longitude,
         coalesce(ln(1 + c.pt_count), 0) + ${idf_score_ov} as importance
     from name_prep np
     ${idf_join_ov}
@@ -191,6 +187,17 @@ trigrams as (
         and c.cell_id = s2_cell_parent(
             s2_cellfromlonlat(np.lon_num, np.lat_num), 12
         )
+),
+trigrams as (
+    select distinct
+        substr(np.norm_name, pos, 3) as trigram,
+        np.id,
+        np.name,
+        np.latitude,
+        np.longitude,
+        coalesce(pi.importance, 0) as importance
+    from name_prep np
+    left join place_importance pi using (id)
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
     where length(np.norm_name) >= 3
 )
