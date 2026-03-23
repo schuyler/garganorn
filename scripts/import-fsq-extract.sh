@@ -61,6 +61,37 @@ source_data="https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${lates
 output_dir="$(dirname "$(realpath "$0")")/../db"
 mkdir -p "$output_dir"
 
+# Download and cache parquet files locally
+cache_dir="${output_dir}/cache/fsq/${latest_release}"
+mkdir -p "$cache_dir"
+
+cached_count=0
+for i in $(seq 0 99); do
+    filename="places-$(printf '%05d' $i).zstd.parquet"
+    dest="${cache_dir}/${filename}"
+    if [ -f "$dest" ]; then
+        cached_count=$((cached_count + 1))
+    fi
+done
+
+dl_count=0
+for i in $(seq 0 99); do
+    filename="places-$(printf '%05d' $i).zstd.parquet"
+    dest="${cache_dir}/${filename}"
+    if [ -f "$dest" ]; then
+        continue
+    fi
+    dl_count=$((dl_count + 1))
+    echo "Downloading $dl_count / $((100 - cached_count)) (cached: $cached_count)"
+    url=$(echo "${source_data}" | sed "s/places-00000.zstd.parquet/${filename}/")
+    if ! curl -sf -o "${dest}.tmp" "$url"; then
+        echo "Failed to download ${url}"
+        rm -f "${dest}.tmp"
+        exit 1
+    fi
+    mv "${dest}.tmp" "$dest"
+done
+
 # Detect density file
 density_file="${output_dir}/density.parquet"
 if [ -f "$(realpath "${density_file}" 2>/dev/null || echo "")" ]; then
@@ -112,12 +143,12 @@ cat > "${output_dir}/import.sql" <<EOF
 .print "Initializing..."
 install spatial;
 load spatial;
-create table places as select * EXCLUDE (geom), geom::GEOMETRY as geom from '${source_data}' limit 0;
+create table places as select * EXCLUDE (geom), geom::GEOMETRY as geom from '${cache_dir}/places-00000.zstd.parquet' limit 0;
 EOF
 
 # Load the data from each parquet file into the places table
 for i in $(seq 0 99); do
-    source_file=$(echo "${source_data}" | sed "s/places-00000.zstd.parquet/places-$(printf '%05d' $i).zstd.parquet/")
+    source_file="${cache_dir}/places-$(printf '%05d' $i).zstd.parquet"
     cat <<EOF
 .print "Importing ${i} / 100"
 insert into places select * EXCLUDE (geom), geom::GEOMETRY as geom from '${source_file}'
@@ -266,6 +297,13 @@ fi
 # Copy over any existing database
 mv "${output_dir}/fsq-osp.duckdb.tmp" "${output_dir}/fsq-osp.duckdb"
 rm -f "${output_dir}/import.sql"
+
+# Clean up old release caches
+# for old_cache in "${output_dir}/cache/fsq/"*/; do
+#     if [ "$(basename "$old_cache")" != "${latest_release}" ]; then
+#         rm -rf "$old_cache"
+#     fi
+# done
 
 echo
 duckdb "${output_dir}/fsq-osp.duckdb" -c "select count(*) from places;"
