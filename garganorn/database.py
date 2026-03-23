@@ -27,10 +27,35 @@ class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
     collection: str = "social.gazetteer"
 
+    MAX_QUERY_TOKENS = 7
+    _JOIN_ALIASES = "abcdefg"
+
+    @staticmethod
+    def _tokenize_query(q: str) -> list:
+        words = q.strip().split()
+        words = [w for w in words if len(w) > 1]
+        if len(words) > Database.MAX_QUERY_TOKENS:
+            words = sorted(words, key=len, reverse=True)[:Database.MAX_QUERY_TOKENS]
+        return words
+
+    @staticmethod
+    def _build_name_index_join(n_tokens: int, join_key: str) -> str:
+        aliases = Database._JOIN_ALIASES
+        first = aliases[0]
+        lines = [f"FROM name_index {first}"]
+        for i in range(1, n_tokens):
+            alias = aliases[i]
+            lines.append(f"JOIN name_index {alias} ON {first}.{join_key} = {alias}.{join_key}")
+        where_clauses = [f"{aliases[i]}.token = lower(strip_accents($t{i}))" for i in range(n_tokens)]
+        lines.append("WHERE " + "\n  AND ".join(where_clauses))
+        lines.append(f"ORDER BY {first}.importance DESC")
+        lines.append("LIMIT $limit")
+        return "\n".join(lines)
+
     def __init__(self, db_path):
         """
         Initialize a connection to the gazetteer database.
-
+        
         Args:
             db_path: Path to the DuckDB database file
         """
@@ -38,7 +63,7 @@ class Database:
         self.conn = None
         self.temp_dir = None
         self.has_name_index = False
-        
+
     def connect(self):
         """Connect to the database and load the spatial plugin."""
         if self.conn is None:
@@ -47,11 +72,11 @@ class Database:
 
             # Create a temporary directory for DuckDB to use
             self.temp_dir = tempfile.mkdtemp(prefix='duckdb_temp_')
-            
+
             # Configure DuckDB to use our writable temp directory
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
-            
-            # Load spatial extension
+
+            # Load extensions
             self.conn.install_extension("spatial")
             self.conn.load_extension("spatial")
 
@@ -132,7 +157,7 @@ class Database:
         return record
 
     def nearest(self, latitude=None, longitude=None, q=None, expand_m=5000, limit=50):
-        self.connect()  # Ensure has_name_index is populated before query routing
+        self.connect()
         params : SearchParams = { "limit": limit }
         if latitude is not None and longitude is not None:
         # Expand the bounding box around the point by roughly expand_m meters
@@ -151,9 +176,9 @@ class Database:
             })
         if q:
             params["q"] = q
-            # Use the longest word as the most selective token for name_index lookup
-            words = q.strip().split()
-            params["token"] = max(words, key=len) if words else q
+            tokens = self._tokenize_query(q)
+            for i, token in enumerate(tokens):
+                params[f"t{i}"] = token
         print(f"Searching with params: {params}")
         result = self.execute(
             self.query_nearest(params), params
@@ -215,32 +240,30 @@ class FoursquareOSP(Database):
         """
 
     def _query_name_index(self, params: SearchParams):
-        return """
-            SELECT
-                fsq_place_id AS rkey,
-                name,
-                latitude,
-                longitude,
-                address,
-                locality,
-                postcode,
-                region,
-                country,
-                0 AS distance_m
-            FROM name_index
-            WHERE token = lower(strip_accents($token))
-              AND name ILIKE '%' || $q || '%'
-            ORDER BY importance DESC
-            LIMIT $limit;
-        """
+        tokens = [v for k, v in sorted(
+            ((k, v) for k, v in params.items() if k.startswith("t") and k[1:].isdigit()),
+            key=lambda kv: int(kv[0][1:])
+        )]
+        if not tokens:
+            return "SELECT NULL WHERE false"
+
+        select_clause = """SELECT
+        a.fsq_place_id AS rkey,
+        a.name,
+        a.latitude,
+        a.longitude,
+        a.address,
+        a.locality,
+        a.postcode,
+        a.region,
+        a.country,
+        0 AS distance_m"""
+
+        join_clause = self._build_name_index_join(len(tokens), "fsq_place_id")
+        return f"{select_clause}\n{join_clause};"
 
     def query_nearest(self, params: SearchParams):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided for nearest search."
-
-        # Text-only search: use name_index if available
-        if not params.get("centroid") and params.get("q") and self.has_name_index:
-            return self._query_name_index(params)
-
         columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
@@ -249,7 +272,15 @@ class FoursquareOSP(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "name ILIKE '%' || $q || '%'"
+            if spatial_filter:
+                # Spatial + text: bbox zone maps prune 99.7% of rows,
+                # then ILIKE runs on the small remainder.
+                text_filter = "name ILIKE '%' || $q || '%'"
+            elif self.has_name_index:
+                # Text-only: use multi-token self-join on name_index.
+                return self._query_name_index(params)
+            else:
+                text_filter = "name ILIKE '%' || $q || '%'"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
@@ -346,25 +377,24 @@ class OvertureMaps(Database):
         """
 
     def _query_name_index(self, params: SearchParams):
-        return """
-            SELECT
-                id AS rkey,
-                name,
-                latitude,
-                longitude,
-                0 AS distance_m
-            FROM name_index
-            WHERE token = lower(strip_accents($token))
-              AND name ILIKE '%' || $q || '%'
-            ORDER BY importance DESC
-            LIMIT $limit;
-        """
+        tokens = [v for k, v in sorted(
+            ((k, v) for k, v in params.items() if k.startswith("t") and k[1:].isdigit()),
+            key=lambda kv: int(kv[0][1:])
+        )]
+        if not tokens:
+            return "SELECT NULL WHERE false"
+
+        select_clause = """SELECT
+        a.id AS rkey,
+        a.name,
+        a.latitude,
+        a.longitude,
+        0 AS distance_m"""
+
+        join_clause = self._build_name_index_join(len(tokens), "id")
+        return f"{select_clause}\n{join_clause};"
 
     def query_nearest(self, params: SearchParams):
-        # Text-only search: use name_index if available
-        if not params.get("centroid") and params.get("q") and self.has_name_index:
-            return self._query_name_index(params)
-
         columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
@@ -373,7 +403,13 @@ class OvertureMaps(Database):
             distance_m = "0"
             spatial_filter = ""
         if params.get("q"):
-            text_filter = "names.primary ILIKE '%' || $q || '%'"
+            if spatial_filter:
+                text_filter = "names.primary ILIKE '%' || $q || '%'"
+            elif self.has_name_index:
+                # Text-only: use multi-token self-join on name_index.
+                return self._query_name_index(params)
+            else:
+                text_filter = "names.primary ILIKE '%' || $q || '%'"
         else:
             text_filter = ""
         filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
