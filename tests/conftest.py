@@ -60,7 +60,8 @@ def _create_fsq_db(db_path, with_name_index=True):
             fsq_category_ids VARCHAR[],
             fsq_category_labels VARCHAR[],
             placemaker_url VARCHAR,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            importance DOUBLE
         )
     """)
 
@@ -76,7 +77,8 @@ def _create_fsq_db(db_path, with_name_index=True):
                 NULL, NULL, NULL, NULL, NULL, NULL,
                 ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
                 NULL,
-                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}
+                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
+                1.0
             )
         """, [fsq_id, name, lat, lon, lon, lat,
               address, locality, postcode, region, admin_region, post_town, po_box,
@@ -140,7 +142,8 @@ def _create_overture_db(db_path, with_name_index=True):
             brand STRUCT(names STRUCT("primary" VARCHAR)),
             confidence DOUBLE,
             version INTEGER,
-            sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[]
+            sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
+            importance DOUBLE
         )
     """)
 
@@ -155,7 +158,8 @@ def _create_overture_db(db_path, with_name_index=True):
                 [{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}],
                 NULL, NULL, NULL, NULL,
                 NULL,
-                0.9, 1, NULL
+                0.9, 1, NULL,
+                1.0
             )
         """, [ovr_id, lon, lat,
               lon, lat, lon, lat,
@@ -290,7 +294,8 @@ def _create_fsq_trigram_db(db_path):
             fsq_category_ids VARCHAR[],
             fsq_category_labels VARCHAR[],
             placemaker_url VARCHAR,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            importance DOUBLE
         )
     """)
 
@@ -306,7 +311,8 @@ def _create_fsq_trigram_db(db_path):
                 NULL, NULL, NULL, NULL, NULL, NULL,
                 ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
                 NULL,
-                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}
+                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
+                1.0
             )
         """, [fsq_id, name, lat, lon, lon, lat,
               address, locality, postcode, region, admin_region, post_town, po_box,
@@ -366,7 +372,8 @@ def _create_overture_trigram_db(db_path):
             brand STRUCT(names STRUCT("primary" VARCHAR)),
             confidence DOUBLE,
             version INTEGER,
-            sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[]
+            sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
+            importance DOUBLE
         )
     """)
 
@@ -381,7 +388,8 @@ def _create_overture_trigram_db(db_path):
                 [{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}],
                 NULL, NULL, NULL, NULL,
                 NULL,
-                0.9, 1, NULL
+                0.9, 1, NULL,
+                1.0
             )
         """, [ovr_id, lon, lat,
               lon, lat, lon, lat,

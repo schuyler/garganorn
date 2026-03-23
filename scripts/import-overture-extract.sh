@@ -155,13 +155,61 @@ delete from places where geometry is null;
 create index places_rtree on places using rtree (geometry);
 EOF
 
-# Build name_index with trigrams; branch on density file availability
+# Compute importance and store in places; branch on density/IDF availability
 if [ "$has_density" = true ]; then
     cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Loading geography extension for density..."
+.print "Loading geography extension for importance scoring..."
 install geography from community;
 load geography;
-.print "Creating name index (with density)..."
+.print "Computing importance scores (with density)..."
+ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
+UPDATE places SET importance = coalesce(sub.importance, 0)
+FROM (
+    SELECT
+        p.id,
+        coalesce(ln(1 + c.pt_count), 0) + coalesce(max(idf.idf_score), 0) AS importance
+    FROM places p
+    LEFT JOIN read_parquet('${density_file}') c
+        ON c.level = 12
+        AND c.cell_id = s2_cell_parent(
+            s2_cellfromlonlat(
+                st_x(st_centroid(p.geometry)),
+                st_y(st_centroid(p.geometry))
+            ), 12
+        )
+    LEFT JOIN read_parquet('${idf_file}') idf
+        ON idf.collection = 'overture'
+        AND idf.category = p.categories.primary
+    GROUP BY p.id, c.pt_count
+) sub
+WHERE places.id = sub.id;
+EOF
+elif [ "$has_idf" = true ]; then
+    cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Computing importance scores (IDF only)..."
+ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
+UPDATE places SET importance = coalesce(sub.importance, 0)
+FROM (
+    SELECT
+        p.id,
+        coalesce(max(idf.idf_score), 0) AS importance
+    FROM places p
+    LEFT JOIN read_parquet('${idf_file}') idf
+        ON idf.collection = 'overture'
+        AND idf.category = p.categories.primary
+    GROUP BY p.id
+) sub
+WHERE places.id = sub.id;
+EOF
+else
+    cat >> "${output_dir}/import-overture.sql" <<EOF
+ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
+EOF
+fi
+
+# Build name_index with trigrams (reads importance directly from places)
+cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Creating name index..."
 create table name_index as
 with name_prep as (
     select
@@ -170,23 +218,9 @@ with name_prep as (
         lower(strip_accents(names.primary)) as norm_name,
         st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
         st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
-        st_y(st_centroid(geometry)) as lat_num,
-        st_x(st_centroid(geometry)) as lon_num
+        coalesce(importance, 0) as importance
     from places
     where names.primary is not null and length(names.primary) > 0
-),
-${idf_cte_ov}
-place_importance as (
-    select
-        np.id,
-        coalesce(ln(1 + c.pt_count), 0) + ${idf_score_ov} as importance
-    from name_prep np
-    ${idf_join_ov}
-    left join read_parquet('${density_file}') c
-        on c.level = 12
-        and c.cell_id = s2_cell_parent(
-            s2_cellfromlonlat(np.lon_num, np.lat_num), 12
-        )
 ),
 trigrams as (
     select distinct
@@ -195,9 +229,8 @@ trigrams as (
         np.name,
         np.latitude,
         np.longitude,
-        coalesce(pi.importance, 0) as importance
+        np.importance
     from name_prep np
-    left join place_importance pi using (id)
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
     where length(np.norm_name) >= 3
 )
@@ -205,39 +238,6 @@ select trigram, id, name, latitude, longitude, importance
 from trigrams
 order by trigram;
 EOF
-else
-    cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Creating name index (no density)..."
-create table name_index as
-with name_prep as (
-    select
-        id,
-        names.primary as name,
-        lower(strip_accents(names.primary)) as norm_name,
-        st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
-        st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude
-    from places
-    where names.primary is not null and length(names.primary) > 0
-),
-${idf_cte_ov}
-trigrams as (
-    select distinct
-        substr(np.norm_name, pos, 3) as trigram,
-        np.id,
-        np.name,
-        np.latitude,
-        np.longitude,
-        ${idf_score_ov} as importance
-    from name_prep np
-    ${idf_join_ov}
-    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
-    where length(np.norm_name) >= 3
-)
-select trigram, id, name, latitude, longitude, importance
-from trigrams
-order by trigram;
-EOF
-fi
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Analyzing..."

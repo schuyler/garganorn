@@ -169,76 +169,58 @@ delete from places where longitude = 0 or latitude = 0 or geom is null;
 create index places_rtree on places using rtree (geom);
 EOF
 
-# Build name_index with trigrams; branch on density file availability
+# Compute importance and store in places; branch on density/IDF availability
 if [ "$has_density" = true ]; then
     cat >> "${output_dir}/import.sql" <<EOF
-.print "Loading geography extension for density..."
+.print "Loading geography extension for importance scoring..."
 install geography from community;
 load geography;
-.print "Creating name index (with density)..."
-create table name_index as
-with name_prep as (
-    select
-        fsq_place_id,
-        name,
-        lower(strip_accents(name)) as norm_name,
-        latitude::decimal(10,6)::varchar as latitude,
-        longitude::decimal(10,6)::varchar as longitude,
-        latitude as lat_raw,
-        longitude as lon_raw,
-        address, locality, postcode, region, country
-    from places
-    where name is not null and length(name) > 0
-),
-${idf_cte}
-place_importance as (
-    select
-        np.fsq_place_id,
-        coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
-    from name_prep np
-    ${idf_join}
-    left join read_parquet('${density_file}') c
-        on c.level = 12
-        and c.cell_id = s2_cell_parent(
-            s2_cellfromlonlat(np.lon_raw, np.lat_raw), 12
+.print "Computing importance scores (with density)..."
+ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
+UPDATE places SET importance = coalesce(sub.importance, 0)
+FROM (
+    SELECT
+        p.fsq_place_id,
+        coalesce(ln(1 + c.pt_count), 0) + coalesce(max(idf.idf_score), 0) AS importance
+    FROM places p
+    LEFT JOIN read_parquet('${density_file}') c
+        ON c.level = 12
+        AND c.cell_id = s2_cell_parent(
+            s2_cellfromlonlat(p.longitude, p.latitude), 12
         )
-),
-trigrams as (
-    select distinct
-        substr(np.norm_name, pos, 3) as trigram,
-        np.fsq_place_id,
-        np.name,
-        np.latitude,
-        np.longitude,
-        np.address,
-        np.locality,
-        np.postcode,
-        np.region,
-        np.country,
-        coalesce(pi.importance, 0) as importance
-    from name_prep np
-    left join place_importance pi using (fsq_place_id)
-    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
-    where length(np.norm_name) >= 3
-)
-select
-    trigram,
-    fsq_place_id,
-    name,
-    latitude,
-    longitude,
-    address,
-    locality,
-    postcode,
-    region,
-    country,
-    importance
-from trigrams
-order by trigram;
+    LEFT JOIN read_parquet('${idf_file}') idf
+        ON idf.collection = 'foursquare'
+        AND idf.category = ANY(p.fsq_category_ids)
+    GROUP BY p.fsq_place_id, c.pt_count
+) sub
+WHERE places.fsq_place_id = sub.fsq_place_id;
+EOF
+elif [ "$has_idf" = true ]; then
+    cat >> "${output_dir}/import.sql" <<EOF
+.print "Computing importance scores (IDF only)..."
+ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
+UPDATE places SET importance = coalesce(sub.importance, 0)
+FROM (
+    SELECT
+        p.fsq_place_id,
+        coalesce(max(idf.idf_score), 0) AS importance
+    FROM places p
+    LEFT JOIN read_parquet('${idf_file}') idf
+        ON idf.collection = 'foursquare'
+        AND idf.category = ANY(p.fsq_category_ids)
+    GROUP BY p.fsq_place_id
+) sub
+WHERE places.fsq_place_id = sub.fsq_place_id;
 EOF
 else
     cat >> "${output_dir}/import.sql" <<EOF
-.print "Creating name index (no density)..."
+ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
+EOF
+fi
+
+# Build name_index with trigrams (reads importance directly from places)
+cat >> "${output_dir}/import.sql" <<EOF
+.print "Creating name index..."
 create table name_index as
 with name_prep as (
     select
@@ -247,11 +229,11 @@ with name_prep as (
         lower(strip_accents(name)) as norm_name,
         latitude::decimal(10,6)::varchar as latitude,
         longitude::decimal(10,6)::varchar as longitude,
-        address, locality, postcode, region, country
+        address, locality, postcode, region, country,
+        coalesce(importance, 0) as importance
     from places
     where name is not null and length(name) > 0
 ),
-${idf_cte}
 trigrams as (
     select distinct
         substr(np.norm_name, pos, 3) as trigram,
@@ -264,9 +246,8 @@ trigrams as (
         np.postcode,
         np.region,
         np.country,
-        ${idf_score} as importance
+        np.importance
     from name_prep np
-    ${idf_join}
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
     where length(np.norm_name) >= 3
 )
@@ -285,7 +266,6 @@ select
 from trigrams
 order by trigram;
 EOF
-fi
 
 cat >> "${output_dir}/import.sql" <<EOF
 .print "Analyzing..."
