@@ -118,7 +118,7 @@ EOF
 rm -f "$output_file_tmp"
 
 echo
-time duckdb -bail < "${sql_file}"
+time duckdb -bail -c ".read ${sql_file}"
 
 if [ $? -ne 0 ]; then
     echo "Failed to build density table."

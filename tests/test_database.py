@@ -128,23 +128,104 @@ def test_execute_returns_dicts(fsq_db_path):
     db.close()
 
 
-@pytest.mark.xfail(reason=(
-    "Modern DuckDB always returns a description for all statements, "
-    "making the `assert stmt.description is not None` guard unreachable. "
-    "The AssertionError contract is documented but untriggerable in practice."
-), strict=False)
-def test_execute_non_select_raises_assertion_error(fsq_db_path):
-    """DML statement raises AssertionError (documented contract).
 
-    The execute() method asserts stmt.description is not None after execution.
-    In older DuckDB versions, DML statements returned None for description.
-    Modern DuckDB returns a Count/success description for all statement types,
-    so this guard cannot be triggered. Test is marked xfail to document intent.
-    """
-    db = FoursquareOSP(fsq_db_path)
+# ---------------------------------------------------------------------------
+# Unit tests for Database._strip_accents (static method)
+# ---------------------------------------------------------------------------
+
+def test_strip_accents_cafe():
+    """café -> cafe."""
+    assert Database._strip_accents("café") == "cafe"
+
+
+def test_strip_accents_naive():
+    """naïve -> naive."""
+    assert Database._strip_accents("naïve") == "naive"
+
+
+def test_strip_accents_plain():
+    """Plain ASCII string is returned unchanged."""
+    assert Database._strip_accents("hello") == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for Database._compute_trigrams (static method)
+# ---------------------------------------------------------------------------
+
+def test_compute_trigrams_basic():
+    """'coffee' produces sorted list of its 3-char substrings."""
+    result = Database._compute_trigrams("coffee")
+    assert result == sorted(["cof", "off", "ffe", "fee"])
+
+
+def test_compute_trigrams_with_spaces():
+    """'pizza hut' includes cross-word trigrams spanning the space."""
+    result = Database._compute_trigrams("pizza hut")
+    assert "za " in result
+    assert "a h" in result
+    assert " hu" in result
+
+
+def test_compute_trigrams_short_query():
+    """Strings shorter than 3 chars produce no trigrams."""
+    assert Database._compute_trigrams("ab") == []
+
+
+def test_compute_trigrams_accents():
+    """Accented input produces same trigrams as its ASCII equivalent."""
+    assert Database._compute_trigrams("café") == Database._compute_trigrams("cafe")
+
+
+def test_compute_trigrams_max_cap():
+    """Output is capped at MAX_QUERY_TRIGRAMS for very long strings."""
+    long_string = "abcdefghijklmnopqrstuvwxyz" * 10  # 260 chars -> 258 trigrams
+    result = Database._compute_trigrams(long_string)
+    assert len(result) <= Database.MAX_QUERY_TRIGRAMS
+
+
+# ---------------------------------------------------------------------------
+# Integration tests for has_trigram_index detection
+# ---------------------------------------------------------------------------
+
+def test_trigram_index_detection(tmp_path):
+    """connect() sets has_trigram_index=True when name_index has trigram column."""
+    import duckdb as _duckdb
+    db_path = tmp_path / "trigram_detect.duckdb"
+    conn = _duckdb.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE name_index (
+            trigram VARCHAR,
+            fsq_place_id VARCHAR,
+            name VARCHAR,
+            lat DOUBLE,
+            lon DOUBLE,
+            importance DOUBLE
+        )
+    """)
+    conn.close()
+
+    db = FoursquareOSP(db_path)
     db.connect()
-    # In a writable context, INSERT returns a Count description — no AssertionError.
-    # This xfail test documents the intended behavior of the guard.
-    with pytest.raises(AssertionError):
-        db.execute("SELECT")  # Placeholder — would need DuckDB version where DML returns None description
+    assert db.has_trigram_index is True
+    db.close()
+
+
+def test_trigram_index_detection_missing(tmp_path):
+    """connect() sets has_trigram_index=False when name_index has no trigram column."""
+    import duckdb as _duckdb
+    db_path = tmp_path / "no_trigram_detect.duckdb"
+    conn = _duckdb.connect(str(db_path))
+    conn.execute("""
+        CREATE TABLE name_index (
+            dm_code VARCHAR,
+            fsq_place_id VARCHAR,
+            name VARCHAR,
+            importance DOUBLE
+        )
+    """)
+    conn.close()
+
+    db = FoursquareOSP(db_path)
+    db.connect()
+    assert db.has_trigram_index is False
     db.close()

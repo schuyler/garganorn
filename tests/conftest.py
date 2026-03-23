@@ -243,3 +243,197 @@ def overture_db(overture_db_path):
     db.connect()
     yield db
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Trigram index fixtures
+# ---------------------------------------------------------------------------
+
+def _generate_trigrams(name):
+    """Generate distinct trigrams from a place name (lowercased full string)."""
+    s = name.lower()
+    trigrams = set()
+    for i in range(len(s) - 2):
+        trigrams.add(s[i:i+3])
+    return trigrams
+
+
+def _create_fsq_trigram_db(db_path):
+    """Create a FSQ DuckDB database with trigram name_index."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE places (
+            fsq_place_id VARCHAR PRIMARY KEY,
+            name VARCHAR,
+            latitude DOUBLE,
+            longitude DOUBLE,
+            geom GEOMETRY,
+            address VARCHAR,
+            locality VARCHAR,
+            postcode VARCHAR,
+            region VARCHAR,
+            admin_region VARCHAR,
+            post_town VARCHAR,
+            po_box VARCHAR,
+            country VARCHAR,
+            date_created DATE,
+            date_refreshed DATE,
+            date_closed DATE,
+            tel VARCHAR,
+            website VARCHAR,
+            email VARCHAR,
+            facebook_id VARCHAR,
+            instagram VARCHAR,
+            twitter VARCHAR,
+            fsq_category_ids VARCHAR[],
+            fsq_category_labels VARCHAR[],
+            placemaker_url VARCHAR,
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+        )
+    """)
+
+    for row in FSQ_PLACES:
+        fsq_id, name, lat, lon, address, locality, postcode, region, admin_region, post_town, po_box, country = row
+        conn.execute("""
+            INSERT INTO places VALUES (
+                ?, ?, ?, ?,
+                ST_Point(?, ?),
+                ?, ?, ?, ?, ?, ?, ?,
+                ?,
+                '2021-01-01', '2022-01-01', NULL,
+                NULL, NULL, NULL, NULL, NULL, NULL,
+                ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
+                NULL,
+                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}
+            )
+        """, [fsq_id, name, lat, lon, lon, lat,
+              address, locality, postcode, region, admin_region, post_town, po_box,
+              country,
+              lon, lat, lon, lat])
+
+    conn.execute("""
+        CREATE TABLE name_index (
+            trigram VARCHAR,
+            fsq_place_id VARCHAR,
+            name VARCHAR,
+            latitude VARCHAR,
+            longitude VARCHAR,
+            address VARCHAR,
+            locality VARCHAR,
+            postcode VARCHAR,
+            region VARCHAR,
+            country VARCHAR,
+            importance DOUBLE
+        )
+    """)
+
+    for row in FSQ_PLACES:
+        fsq_id, name, lat, lon, address, locality, postcode, region, _, _, _, country = row
+        for trigram in _generate_trigrams(name):
+            conn.execute("""
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, [trigram, fsq_id, name, f"{lat:.6f}", f"{lon:.6f}",
+                  address, locality, postcode, region, country, 1.0])
+
+    conn.close()
+
+
+def _create_overture_trigram_db(db_path):
+    """Create an Overture DuckDB database with trigram name_index."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE places (
+            id VARCHAR PRIMARY KEY,
+            geometry GEOMETRY,
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            names STRUCT("primary" VARCHAR),
+            categories STRUCT("primary" VARCHAR),
+            addresses STRUCT(
+                country VARCHAR,
+                postcode VARCHAR,
+                locality VARCHAR,
+                freeform VARCHAR,
+                region VARCHAR
+            )[],
+            websites VARCHAR[],
+            socials VARCHAR[],
+            emails VARCHAR[],
+            phones VARCHAR[],
+            brand STRUCT(names STRUCT("primary" VARCHAR)),
+            confidence DOUBLE,
+            version INTEGER,
+            sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[]
+        )
+    """)
+
+    for row in OVERTURE_PLACES:
+        ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
+        conn.execute("""
+            INSERT INTO places VALUES (
+                ?, ST_Point(?, ?),
+                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
+                {'primary': ?},
+                {'primary': NULL},
+                [{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}],
+                NULL, NULL, NULL, NULL,
+                NULL,
+                0.9, 1, NULL
+            )
+        """, [ovr_id, lon, lat,
+              lon, lat, lon, lat,
+              name,
+              country, postcode, locality, freeform, region])
+
+    conn.execute("""
+        CREATE TABLE name_index (
+            trigram VARCHAR,
+            id VARCHAR,
+            name VARCHAR,
+            latitude VARCHAR,
+            longitude VARCHAR,
+            importance DOUBLE
+        )
+    """)
+
+    for row in OVERTURE_PLACES:
+        ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
+        for trigram in _generate_trigrams(name):
+            conn.execute("""
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
+            """, [trigram, ovr_id, name, f"{lat:.6f}", f"{lon:.6f}", 1.0])
+
+    conn.close()
+
+
+@pytest.fixture(scope="session")
+def fsq_trigram_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("fsq_trigram") / "fsq_trigram.duckdb"
+    _create_fsq_trigram_db(db_path)
+    return db_path
+
+
+@pytest.fixture(scope="session")
+def overture_trigram_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("overture_trigram") / "overture_trigram.duckdb"
+    _create_overture_trigram_db(db_path)
+    return db_path
+
+
+@pytest.fixture
+def fsq_trigram_db(fsq_trigram_db_path):
+    db = FoursquareOSP(fsq_trigram_db_path)
+    db.connect()
+    yield db
+    db.close()
+
+
+@pytest.fixture
+def overture_trigram_db(overture_trigram_db_path):
+    db = OvertureMaps(overture_trigram_db_path)
+    db.connect()
+    yield db
+    db.close()

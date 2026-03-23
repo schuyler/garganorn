@@ -3,6 +3,7 @@ from typing import TypedDict, Optional
 import tempfile
 import os
 import shutil
+import unicodedata
 
 import math
 import duckdb
@@ -29,7 +30,27 @@ class Database:
 
     JACCARD_THRESHOLD = 0.1
     MAX_QUERY_TOKENS = 7
+    MAX_QUERY_TRIGRAMS = 50
     _JOIN_ALIASES = "abcdefg"
+
+    @staticmethod
+    def _strip_accents(s: str) -> str:
+        """Remove accent marks from a string using NFD normalization."""
+        return "".join(
+            c for c in unicodedata.normalize("NFD", s)
+            if unicodedata.category(c) != "Mn"
+        )
+
+    @staticmethod
+    def _compute_trigrams(q: str) -> list:
+        """
+        Compute sorted, deduplicated trigrams from a query string.
+        Lowercases and strips accents, then generates all 3-char substrings
+        from the full string (including spaces). Caps at MAX_QUERY_TRIGRAMS.
+        """
+        s = Database._strip_accents(q.lower())
+        trigrams = sorted(set(s[i:i+3] for i in range(len(s) - 2)))
+        return trigrams[:Database.MAX_QUERY_TRIGRAMS]
 
     @staticmethod
     def _build_name_index_join(n_tokens: int, join_key: str) -> str:
@@ -56,7 +77,7 @@ class Database:
         self.conn = None
         self.temp_dir = None
         self.has_name_index = False
-        self.has_phonetic_index = False
+        self.has_trigram_index = False
 
     def connect(self):
         """Connect to the database and load extensions."""
@@ -81,25 +102,14 @@ class Database:
             ).fetchall()
             self.has_name_index = len(tables) > 0
 
-            # Detect phonetic columns in name_index
-            self.has_phonetic_index = False
+            # Detect trigram column in name_index
+            self.has_trigram_index = False
             if self.has_name_index:
-                columns = self.conn.execute(
+                tri_columns = self.conn.execute(
                     "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'name_index' AND column_name = 'dm_code'"
+                    "WHERE table_name = 'name_index' AND column_name = 'trigram'"
                 ).fetchall()
-                self.has_phonetic_index = len(columns) > 0
-
-            # Load splink_udfs only if we have a phonetic index to query
-            if self.has_phonetic_index:
-                try:
-                    self._load_extension("splink_udfs", repository="community")
-                except Exception as e:
-                    # If splink_udfs can't load, fall back to non-phonetic search.
-                    # The name_index still has token columns for exact-match search.
-                    print(f"Warning: splink_udfs extension not available ({e}). "
-                          f"Phonetic search disabled, falling back to token search.")
-                    self.has_phonetic_index = False
+                self.has_trigram_index = len(tri_columns) > 0
 
         return self.conn
 
@@ -164,35 +174,6 @@ class Database:
             tokens = sorted(tokens, key=len, reverse=True)[:self.MAX_QUERY_TOKENS]
         return tokens
 
-    def _compute_phonetic_codes(self, q: str) -> list:
-        """
-        Compute phonetic codes for a query string using DuckDB's
-        double_metaphone(). Returns a deduplicated list of non-empty codes.
-
-        Uses DuckDB to guarantee identical encoding to what was used at index
-        build time. Requires splink_udfs to be loaded on self.conn.
-        """
-        tokens = self._tokenize_query(q)
-        if not tokens:
-            return []
-
-        # Build a single SQL that computes dm codes for all tokens at once.
-        # Uses VALUES clause to pass tokens, then unnest double_metaphone.
-        values = ", ".join(f"($t{i})" for i in range(len(tokens)))
-        params = {f"t{i}": token for i, token in enumerate(tokens)}
-
-        rows = self.conn.execute(f"""
-            SELECT DISTINCT code
-            FROM (
-                SELECT unnest(double_metaphone(col0)) AS code
-                FROM (VALUES {values}) AS t(col0)
-                WHERE length(col0) > 1
-            ) sub
-            WHERE code IS NOT NULL AND code != ''
-        """, params).fetchall()
-
-        return [row[0] for row in rows]
-
     def query_record(self):
         raise NotImplementedError
 
@@ -218,13 +199,13 @@ class Database:
         records = self.execute(self.query_record(), {"rkey": rkey})
         return self.process_record(records[0]) if records else None
 
-    def query_nearest(self, _params: SearchParams):
+    def query_nearest(self, _params: SearchParams, trigrams=None):
         raise NotImplementedError
 
     def process_nearest(self, result):
         # Extract distance before calling process_record
         distance_m = result.pop("distance_m")
-        result.pop("jaccard", None)  # Internal scoring, not exposed in API
+        result.pop("score", None)    # Internal scoring, not exposed in API
 
         # Use the standard record processing
         record = self.process_record(result)
@@ -252,15 +233,20 @@ class Database:
                 "xmax": bbox[2],
                 "ymax": bbox[3]
             })
+        trigrams = None
         if q:
             params["q"] = q
             # Tokenize and bind t0, t1, ... for multi-token name_index self-join.
             tokens = self._tokenize_query(q)
             for i, token in enumerate(tokens):
                 params[f"t{i}"] = token
+            # Compute trigrams for trigram index path
+            trigrams = self._compute_trigrams(q)
+            for i, tri in enumerate(trigrams):
+                params[f"g{i}"] = tri
         print(f"Searching with params: {params}")
         result = self.execute(
-            self.query_nearest(params), params
+            self.query_nearest(params, trigrams=trigrams), params
         )
         return [self.process_nearest(item) for item in result]
 
@@ -345,24 +331,13 @@ class FoursquareOSP(Database):
         join_clause = self._build_name_index_join(len(tokens), "fsq_place_id")
         return f"{select_clause}\n{join_clause};"
 
-    def _query_phonetic_name_index(self, params: SearchParams) -> str:
+    def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
-        Build a text-only phonetic search query against name_index.
-        Uses Jaccard similarity on double_metaphone codes.
-        Mutates params to add c0, c1, ... phonetic code parameters.
+        Text-only trigram search using trigram Jaccard similarity.
+        Computes intersection/union directly from name_index rows.
         """
-        codes = self._compute_phonetic_codes(params["q"])
-        if not codes:
-            return "SELECT NULL as rkey, NULL as name, NULL as latitude, NULL as longitude, NULL as address, NULL as locality, NULL as postcode, NULL as region, NULL as country, 0 as distance_m WHERE false"
-
-        n_query_codes = len(codes)
-
-        # Bind phonetic codes as parameters c0, c1, ...
-        for i, code in enumerate(codes):
-            params[f"c{i}"] = code
-
-        code_placeholders = ", ".join(f"$c{i}" for i in range(len(codes)))
-
+        n_query = len(trigrams)
+        placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
             SELECT
                 fsq_place_id AS rkey,
@@ -375,38 +350,28 @@ class FoursquareOSP(Database):
                 region,
                 country,
                 0 AS distance_m,
-                count(DISTINCT dm_code)::float
-                    / (n_place_codes + {n_query_codes}
-                       - count(DISTINCT dm_code))::float AS jaccard
+                count(DISTINCT trigram)::float
+                    / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
+                       - count(DISTINCT trigram))::float AS score
             FROM name_index
-            WHERE dm_code IN ({code_placeholders})
+            WHERE trigram IN ({placeholders})
             GROUP BY fsq_place_id, name, latitude, longitude,
-                     address, locality, postcode, region, country,
-                     n_place_codes
-            HAVING count(DISTINCT dm_code)::float
-                / (n_place_codes + {n_query_codes}
-                   - count(DISTINCT dm_code))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY jaccard DESC, max(importance) DESC
+                     address, locality, postcode, region, country
+            HAVING count(DISTINCT trigram)::float
+                / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
+                   - count(DISTINCT trigram))::float >= {self.JACCARD_THRESHOLD}
+            ORDER BY score DESC, max(importance) DESC
             LIMIT $limit
         """
 
-    def _query_phonetic_spatial(self, params: SearchParams) -> str:
+    def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
-        Build a spatial + phonetic text query.
-        Uses bbox spatial filter + dm_code IN filter + Jaccard scoring.
-        Mutates params to add c0, c1, ... phonetic code parameters.
+        Spatial + text trigram search using trigram Jaccard similarity.
+        Joins places to name_index with bbox + trigram IN filters.
+        No Jaccard threshold — bbox constrains the result set.
         """
-        codes = self._compute_phonetic_codes(params["q"])
-        if not codes:
-            return "SELECT NULL as rkey, NULL as name, NULL as latitude, NULL as longitude, NULL as address, NULL as locality, NULL as postcode, NULL as region, NULL as country, 0 as distance_m WHERE false"
-
-        n_query_codes = len(codes)
-
-        for i, code in enumerate(codes):
-            params[f"c{i}"] = code
-
-        code_placeholders = ", ".join(f"$c{i}" for i in range(len(codes)))
-
+        n_query = len(trigrams)
+        placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
             SELECT
                 p.fsq_place_id AS rkey,
@@ -418,26 +383,22 @@ class FoursquareOSP(Database):
                 p.postcode,
                 p.region,
                 p.country,
-                ST_Distance_Sphere(p.geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                count(DISTINCT n.dm_code)::float
-                    / (n.n_place_codes + {n_query_codes}
-                       - count(DISTINCT n.dm_code))::float AS jaccard
+                min(ST_Distance_Sphere(p.geom, ST_GeomFromText($centroid))::integer) AS distance_m,
+                count(DISTINCT n.trigram)::float
+                    / (greatest(length(lower(strip_accents(p.name))) - 2, 1) + {n_query}
+                       - count(DISTINCT n.trigram))::float AS score
             FROM places p
             JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
             WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
               AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-              AND n.dm_code IN ({code_placeholders})
+              AND n.trigram IN ({placeholders})
             GROUP BY p.fsq_place_id, p.name, p.latitude, p.longitude,
-                     p.address, p.locality, p.postcode, p.region, p.country,
-                     p.geom, n.n_place_codes
-            HAVING count(DISTINCT n.dm_code)::float
-                / (n.n_place_codes + {n_query_codes}
-                   - count(DISTINCT n.dm_code))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY jaccard DESC, distance_m
+                     p.address, p.locality, p.postcode, p.region, p.country, p.geom
+            ORDER BY score DESC, distance_m
             LIMIT $limit
         """
 
-    def query_nearest(self, params: SearchParams):
+    def query_nearest(self, params: SearchParams, trigrams=None):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided for nearest search."
         columns = self.search_columns()
         if params.get("centroid"):
@@ -448,17 +409,15 @@ class FoursquareOSP(Database):
             spatial_filter = ""
         if params.get("q"):
             if spatial_filter:
-                # Spatial + text: use phonetic spatial query if available,
-                # otherwise fall back to ILIKE on the bbox-filtered set.
-                if self.has_phonetic_index:
-                    return self._query_phonetic_spatial(params)
+                # Spatial + text: use trigram spatial if available, else ILIKE
+                if self.has_trigram_index and trigrams:
+                    return self._query_trigram_spatial(params, trigrams)
                 text_filter = "name ILIKE '%' || $q || '%'"
             else:
-                # Text-only: use the sorted name_index table for fast
-                # lookup via zone maps.
+                # Text-only: use trigram index if available
+                if self.has_trigram_index and trigrams:
+                    return self._query_trigram_text(params, trigrams)
                 if self.has_name_index:
-                    if self.has_phonetic_index:
-                        return self._query_phonetic_name_index(params)
                     return self._query_name_index(params)
                 # No name_index at all: fall back to full scan ILIKE
                 return f"""
@@ -588,23 +547,13 @@ class OvertureMaps(Database):
         join_clause = self._build_name_index_join(len(tokens), "id")
         return f"{select_clause}\n{join_clause};"
 
-    def _query_phonetic_name_index(self, params: SearchParams) -> str:
+    def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
-        Build a text-only phonetic search query against name_index.
-        Uses Jaccard similarity on double_metaphone codes.
-        Mutates params to add c0, c1, ... phonetic code parameters.
+        Text-only trigram search using trigram Jaccard similarity.
+        Computes intersection/union directly from name_index rows.
         """
-        codes = self._compute_phonetic_codes(params["q"])
-        if not codes:
-            return "SELECT NULL as rkey, NULL as name, NULL as latitude, NULL as longitude, NULL as addresses, 0 as distance_m WHERE false"
-
-        n_query_codes = len(codes)
-
-        for i, code in enumerate(codes):
-            params[f"c{i}"] = code
-
-        code_placeholders = ", ".join(f"$c{i}" for i in range(len(codes)))
-
+        n_query = len(trigrams)
+        placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
             SELECT
                 id AS rkey,
@@ -613,36 +562,27 @@ class OvertureMaps(Database):
                 longitude,
                 NULL AS addresses,
                 0 AS distance_m,
-                count(DISTINCT dm_code)::float
-                    / (n_place_codes + {n_query_codes}
-                       - count(DISTINCT dm_code))::float AS jaccard
+                count(DISTINCT trigram)::float
+                    / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
+                       - count(DISTINCT trigram))::float AS score
             FROM name_index
-            WHERE dm_code IN ({code_placeholders})
-            GROUP BY id, name, latitude, longitude, n_place_codes
-            HAVING count(DISTINCT dm_code)::float
-                / (n_place_codes + {n_query_codes}
-                   - count(DISTINCT dm_code))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY jaccard DESC, max(importance) DESC
+            WHERE trigram IN ({placeholders})
+            GROUP BY id, name, latitude, longitude
+            HAVING count(DISTINCT trigram)::float
+                / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
+                   - count(DISTINCT trigram))::float >= {self.JACCARD_THRESHOLD}
+            ORDER BY score DESC, max(importance) DESC
             LIMIT $limit
         """
 
-    def _query_phonetic_spatial(self, params: SearchParams) -> str:
+    def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
-        Build a spatial + phonetic text query.
-        Uses bbox spatial filter + dm_code IN filter + Jaccard scoring.
-        Mutates params to add c0, c1, ... phonetic code parameters.
+        Spatial + text trigram search using trigram Jaccard similarity.
+        Joins places to name_index with bbox + trigram IN filters.
+        No Jaccard threshold — bbox constrains the result set.
         """
-        codes = self._compute_phonetic_codes(params["q"])
-        if not codes:
-            return "SELECT NULL as rkey, NULL as name, NULL as latitude, NULL as longitude, NULL as addresses, 0 as distance_m WHERE false"
-
-        n_query_codes = len(codes)
-
-        for i, code in enumerate(codes):
-            params[f"c{i}"] = code
-
-        code_placeholders = ", ".join(f"$c{i}" for i in range(len(codes)))
-
+        n_query = len(trigrams)
+        placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
             SELECT
                 p.id AS rkey,
@@ -650,24 +590,21 @@ class OvertureMaps(Database):
                 st_y(st_centroid(p.geometry))::decimal(10,6)::varchar AS latitude,
                 st_x(st_centroid(p.geometry))::decimal(10,6)::varchar AS longitude,
                 p.addresses,
-                ST_Distance_Sphere(p.geometry, ST_GeomFromText($centroid))::integer AS distance_m,
-                count(DISTINCT n.dm_code)::float
-                    / (n.n_place_codes + {n_query_codes}
-                       - count(DISTINCT n.dm_code))::float AS jaccard
+                min(ST_Distance_Sphere(p.geometry, ST_GeomFromText($centroid))::integer) AS distance_m,
+                count(DISTINCT n.trigram)::float
+                    / (greatest(length(lower(strip_accents(p.names.primary))) - 2, 1) + {n_query}
+                       - count(DISTINCT n.trigram))::float AS score
             FROM places p
             JOIN name_index n ON p.id = n.id
             WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
               AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-              AND n.dm_code IN ({code_placeholders})
-            GROUP BY p.id, p.names, p.geometry, p.addresses, n.n_place_codes
-            HAVING count(DISTINCT n.dm_code)::float
-                / (n.n_place_codes + {n_query_codes}
-                   - count(DISTINCT n.dm_code))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY jaccard DESC, distance_m
+              AND n.trigram IN ({placeholders})
+            GROUP BY p.id, p.names, p.geometry, p.addresses
+            ORDER BY score DESC, distance_m
             LIMIT $limit
         """
 
-    def query_nearest(self, params: SearchParams):
+    def query_nearest(self, params: SearchParams, trigrams=None):
         columns = self.search_columns()
         if params.get("centroid"):
             distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
@@ -677,16 +614,15 @@ class OvertureMaps(Database):
             spatial_filter = ""
         if params.get("q"):
             if spatial_filter:
-                # Spatial + text: use phonetic spatial query if available,
-                # otherwise fall back to ILIKE on the bbox-filtered set.
-                if self.has_phonetic_index:
-                    return self._query_phonetic_spatial(params)
+                # Spatial + text: use trigram spatial if available, else ILIKE
+                if self.has_trigram_index and trigrams:
+                    return self._query_trigram_spatial(params, trigrams)
                 text_filter = "names.primary ILIKE '%' || $q || '%'"
             else:
-                # Text-only: use the sorted name_index for fast lookup.
+                # Text-only: use trigram index if available
+                if self.has_trigram_index and trigrams:
+                    return self._query_trigram_text(params, trigrams)
                 if self.has_name_index:
-                    if self.has_phonetic_index:
-                        return self._query_phonetic_name_index(params)
                     return self._query_name_index(params)
                 # No name_index at all: fall back to full scan
                 text_filter = "names.primary ILIKE '%' || $q || '%'"

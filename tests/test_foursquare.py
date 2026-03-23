@@ -8,11 +8,10 @@ from garganorn.database import FoursquareOSP, SearchParams
 # Unit tests — SQL generation (no DB connection needed)
 # ---------------------------------------------------------------------------
 
-def _make_fsq(db_path=None, has_name_index=True, has_phonetic_index=False):
+def _make_fsq(db_path=None, has_name_index=True):
     """Create a FoursquareOSP instance with optional index flags."""
     db = FoursquareOSP(db_path or ":memory:")
     db.has_name_index = has_name_index
-    db.has_phonetic_index = has_phonetic_index
     return db
 
 
@@ -198,3 +197,88 @@ def test_get_record_not_found(fsq_db):
     """Unknown rkey returns None."""
     record = fsq_db.get_record("", "community.lexicon.location.com.foursquare.places", "nonexistent")
     assert record is None
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — trigram SQL generation (no DB connection needed)
+# ---------------------------------------------------------------------------
+
+def _make_fsq_trigram(db_path=None):
+    """Create a FoursquareOSP instance with trigram index flag set."""
+    db = FoursquareOSP(db_path or ":memory:")
+    db.has_name_index = True
+    db.has_trigram_index = True
+    return db
+
+
+def test_query_trigram_text_uses_jaccard():
+    """_query_trigram_text SQL uses trigram Jaccard scoring."""
+    db = _make_fsq_trigram()
+    params: SearchParams = {"q": "coffee", "limit": 10}
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "count(DISTINCT trigram)" in sql
+    assert "trigram IN" in sql or "trigram in" in sql.lower()
+    assert "AS score" in sql or "as score" in sql.lower()
+
+
+def test_query_trigram_text_no_limit_5000():
+    """_query_trigram_text SQL does not use an intermediate candidate LIMIT."""
+    db = _make_fsq_trigram()
+    params: SearchParams = {"q": "coffee", "limit": 10}
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "5000" not in sql
+
+
+def test_query_trigram_spatial_uses_jaccard():
+    """_query_trigram_spatial SQL uses trigram Jaccard, trigram IN, ST_Distance_Sphere."""
+    db = _make_fsq_trigram()
+    params: SearchParams = {
+        "q": "coffee",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "count(DISTINCT" in sql
+    assert "trigram IN" in sql or "trigram in" in sql.lower()
+    assert "ST_Distance_Sphere" in sql
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — FSQ trigram DB
+# ---------------------------------------------------------------------------
+
+def test_trigram_nearest_text_exact_match(fsq_trigram_db):
+    """Text-only trigram search for 'Tartine Bakery' returns it as first result."""
+    results = fsq_trigram_db.nearest(q="Tartine Bakery")
+    assert len(results) > 0
+    names = [r["names"][0]["text"] for r in results]
+    assert names[0] == "Tartine Bakery"
+
+
+def test_trigram_nearest_text_no_scoring_in_attributes(fsq_trigram_db):
+    """Trigram search results do not expose score or jaccard in attributes."""
+    results = fsq_trigram_db.nearest(q="Tartine Bakery")
+    assert len(results) > 0
+    for r in results:
+        assert "score" not in r.get("attributes", {})
+        assert "jaccard" not in r.get("attributes", {})
+
+
+def test_trigram_nearest_spatial_with_text(fsq_trigram_db):
+    """Spatial + text trigram search returns results with distance_m."""
+    results = fsq_trigram_db.nearest(latitude=37.7749, longitude=-122.4194, q="coffee")
+    assert len(results) > 0
+    assert all(r["distance_m"] >= 0 for r in results)
+    # Verify the result has the expected name (Blue Bottle Coffee has "coffee" trigrams)
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Coffee" in n for n in names)
+
+
+def test_trigram_nearest_unrelated_query(fsq_trigram_db):
+    """Completely unrelated query returns 0 results."""
+    results = fsq_trigram_db.nearest(q="xyzqwerty")
+    assert len(results) == 0

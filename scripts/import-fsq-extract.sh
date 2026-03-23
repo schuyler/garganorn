@@ -81,7 +81,7 @@ fi
 
 # Set IDF SQL fragments
 # idf_cte: a CTE fragment WITHOUT the leading WITH keyword, WITH trailing comma.
-# It will be composed as: WITH tokens AS (...), <idf_cte> codes AS (...), ...
+# It will be composed as: WITH name_prep AS (...), <idf_cte> trigrams AS (...), ...
 # When has_idf=false, idf_cte is empty string (no extra CTE).
 if [ "$has_idf" = true ]; then
     idf_cte="place_idf AS (
@@ -112,7 +112,7 @@ cat > "${output_dir}/import.sql" <<EOF
 .print "Initializing..."
 install spatial;
 load spatial;
-create table places as select * from '${source_data}' limit 0;
+create table places as select * EXCLUDE (geom), geom::GEOMETRY as geom from '${source_data}' limit 0;
 EOF
 
 # Load the data from each parquet file into the places table
@@ -120,7 +120,7 @@ for i in $(seq 0 99); do
     source_file=$(echo "${source_data}" | sed "s/places-00000.zstd.parquet/places-$(printf '%05d' $i).zstd.parquet/")
     cat <<EOF
 .print "Importing ${i} / 100"
-insert into places select * from '${source_file}'
+insert into places select * EXCLUDE (geom), geom::GEOMETRY as geom from '${source_file}'
     where bbox.xmin >= ${xmin} and bbox.xmax <= ${xmax}
     and bbox.ymin >= ${ymin} and bbox.ymax <= ${ymax}
     and date_refreshed > '2020-03-15'
@@ -137,21 +137,19 @@ delete from places where longitude = 0 or latitude = 0 or geom is null;
 create index places_rtree on places using rtree (geom);
 EOF
 
-# Build name_index with phonetic codes; branch on density file availability
+# Build name_index with trigrams; branch on density file availability
 if [ "$has_density" = true ]; then
     cat >> "${output_dir}/import.sql" <<EOF
-.print "Loading extensions for phonetic index + density..."
+.print "Loading geography extension for density..."
 install geography from community;
 load geography;
-install splink_udfs from community;
-load splink_udfs;
 .print "Creating name index (with density)..."
 create table name_index as
-with tokens as (
+with name_prep as (
     select
-        unnest(string_split(lower(strip_accents(name)), ' ')) as token,
         fsq_place_id,
         name,
+        lower(strip_accents(name)) as norm_name,
         latitude::decimal(10,6)::varchar as latitude,
         longitude::decimal(10,6)::varchar as longitude,
         latitude as lat_raw,
@@ -161,68 +159,53 @@ with tokens as (
     where name is not null and length(name) > 0
 ),
 ${idf_cte}
-codes as (
-    select
-        unnest(double_metaphone(t.token)) as dm_code,
-        t.token,
-        t.fsq_place_id,
-        t.name,
-        t.latitude,
-        t.longitude,
-        t.address,
-        t.locality,
-        t.postcode,
-        t.region,
-        t.country,
+trigrams as (
+    select distinct
+        substr(np.norm_name, pos, 3) as trigram,
+        np.fsq_place_id,
+        np.name,
+        np.latitude,
+        np.longitude,
+        np.address,
+        np.locality,
+        np.postcode,
+        np.region,
+        np.country,
         coalesce(ln(1 + c.pt_count), 0) + ${idf_score} as importance
-    from tokens t
+    from name_prep np
     ${idf_join}
     left join read_parquet('${density_file}') c
         on c.level = 12
         and c.cell_id = s2_cell_parent(
-            s2_cellfromlonlat(t.lon_raw, t.lat_raw), 12
+            s2_cellfromlonlat(np.lon_raw, np.lat_raw), 12
         )
-    where length(t.token) > 1
-),
-filtered_codes as (
-    select * from codes
-    where dm_code is not null and dm_code != ''
-),
-place_code_counts as (
-    select fsq_place_id, count(distinct dm_code) as n_place_codes
-    from filtered_codes
-    group by fsq_place_id
+    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
+    where length(np.norm_name) >= 3
 )
 select
-    fc.dm_code,
-    fc.token,
-    fc.fsq_place_id,
-    fc.name,
-    fc.latitude,
-    fc.longitude,
-    fc.address,
-    fc.locality,
-    fc.postcode,
-    fc.region,
-    fc.country,
-    fc.importance,
-    pc.n_place_codes
-from filtered_codes fc
-join place_code_counts pc using (fsq_place_id)
-order by fc.dm_code;
+    trigram,
+    fsq_place_id,
+    name,
+    latitude,
+    longitude,
+    address,
+    locality,
+    postcode,
+    region,
+    country,
+    importance
+from trigrams
+order by trigram;
 EOF
 else
     cat >> "${output_dir}/import.sql" <<EOF
-.print "Loading splink_udfs extension for phonetic indexing..."
-install splink_udfs from community;
-load splink_udfs;
 .print "Creating name index (no density)..."
 create table name_index as
-with tokens as (
+with name_prep as (
     select
-        unnest(string_split(lower(strip_accents(name)), ' ')) as token,
         fsq_place_id,
         name,
+        lower(strip_accents(name)) as norm_name,
         latitude::decimal(10,6)::varchar as latitude,
         longitude::decimal(10,6)::varchar as longitude,
         address, locality, postcode, region, country
@@ -230,50 +213,38 @@ with tokens as (
     where name is not null and length(name) > 0
 ),
 ${idf_cte}
-codes as (
-    select
-        unnest(double_metaphone(t.token)) as dm_code,
-        t.token,
-        t.fsq_place_id,
-        t.name,
-        t.latitude,
-        t.longitude,
-        t.address,
-        t.locality,
-        t.postcode,
-        t.region,
-        t.country,
+trigrams as (
+    select distinct
+        substr(np.norm_name, pos, 3) as trigram,
+        np.fsq_place_id,
+        np.name,
+        np.latitude,
+        np.longitude,
+        np.address,
+        np.locality,
+        np.postcode,
+        np.region,
+        np.country,
         ${idf_score} as importance
-    from tokens t
+    from name_prep np
     ${idf_join}
-    where length(t.token) > 1
-),
-filtered_codes as (
-    select * from codes
-    where dm_code is not null and dm_code != ''
-),
-place_code_counts as (
-    select fsq_place_id, count(distinct dm_code) as n_place_codes
-    from filtered_codes
-    group by fsq_place_id
+    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
+    where length(np.norm_name) >= 3
 )
 select
-    fc.dm_code,
-    fc.token,
-    fc.fsq_place_id,
-    fc.name,
-    fc.latitude,
-    fc.longitude,
-    fc.address,
-    fc.locality,
-    fc.postcode,
-    fc.region,
-    fc.country,
-    fc.importance,
-    pc.n_place_codes
-from filtered_codes fc
-join place_code_counts pc using (fsq_place_id)
-order by fc.dm_code;
+    trigram,
+    fsq_place_id,
+    name,
+    latitude,
+    longitude,
+    address,
+    locality,
+    postcode,
+    region,
+    country,
+    importance
+from trigrams
+order by trigram;
 EOF
 fi
 
@@ -284,7 +255,7 @@ EOF
 
 # Run the import script
 echo
-time duckdb -bail "${output_dir}/fsq-osp.duckdb.tmp" < "${output_dir}/import.sql"
+time duckdb -bail "${output_dir}/fsq-osp.duckdb.tmp" -c ".read ${output_dir}/import.sql"
 
 if [ $? -ne 0 ]; then
     echo "Failed to import data into DuckDB."
@@ -297,4 +268,4 @@ mv "${output_dir}/fsq-osp.duckdb.tmp" "${output_dir}/fsq-osp.duckdb"
 rm -f "${output_dir}/import.sql"
 
 echo
-echo "select count(*) from places;" | duckdb "${output_dir}/fsq-osp.duckdb"
+duckdb "${output_dir}/fsq-osp.duckdb" -c "select count(*) from places;"

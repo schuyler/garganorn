@@ -8,10 +8,9 @@ from garganorn.database import OvertureMaps, SearchParams
 # Unit tests — SQL generation (no DB connection needed)
 # ---------------------------------------------------------------------------
 
-def _make_ovr(db_path=None, has_name_index=False, has_phonetic_index=False):
+def _make_ovr(db_path=None, has_name_index=False):
     db = OvertureMaps(db_path or ":memory:")
     db.has_name_index = has_name_index
-    db.has_phonetic_index = has_phonetic_index
     return db
 
 
@@ -157,3 +156,45 @@ def test_get_record(overture_db):
     assert record["names"][0]["text"] == "Philz Coffee"
     # Should have geo location
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — Overture trigram SQL generation
+# ---------------------------------------------------------------------------
+
+def _make_ovr_trigram(db_path=None):
+    """Create an OvertureMaps instance with trigram index flag set."""
+    db = OvertureMaps(db_path or ":memory:")
+    db.has_name_index = True
+    db.has_trigram_index = True
+    return db
+
+
+def test_overture_query_trigram_text_uses_jaccard():
+    """_query_trigram_text SQL uses trigram Jaccard scoring."""
+    db = _make_ovr_trigram()
+    params: SearchParams = {"q": "anchor brewing", "limit": 10}
+    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "count(DISTINCT trigram)" in sql
+    assert "trigram IN" in sql or "trigram in" in sql.lower()
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — Overture trigram DB
+# ---------------------------------------------------------------------------
+
+def test_overture_trigram_nearest_text(overture_trigram_db):
+    """Trigram text search for 'Anchor Brewing' finds it in results."""
+    results = overture_trigram_db.nearest(q="Anchor Brewing")
+    assert len(results) > 0
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Anchor" in n for n in names)
+
+
+def test_overture_trigram_nearest_no_scoring_in_attributes(overture_trigram_db):
+    """Trigram search results do not expose score in attributes."""
+    results = overture_trigram_db.nearest(q="Anchor Brewing")
+    assert len(results) > 0
+    for r in results:
+        assert "score" not in r.get("attributes", {})

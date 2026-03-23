@@ -155,123 +155,80 @@ delete from places where geometry is null;
 create index places_rtree on places using rtree (geometry);
 EOF
 
-# Build name_index with phonetic codes; branch on density file availability
+# Build name_index with trigrams; branch on density file availability
 if [ "$has_density" = true ]; then
     cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Loading extensions for phonetic index + density..."
+.print "Loading geography extension for density..."
 install geography from community;
 load geography;
-install splink_udfs from community;
-load splink_udfs;
 .print "Creating name index (with density)..."
 create table name_index as
-with tokens as (
+with name_prep as (
     select
-        unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
         id,
         names.primary as name,
+        lower(strip_accents(names.primary)) as norm_name,
         st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
         st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
         st_y(st_centroid(geometry)) as lat_num,
-        st_x(st_centroid(geometry)) as lon_num,
-        categories.primary as categories_primary
+        st_x(st_centroid(geometry)) as lon_num
     from places
     where names.primary is not null and length(names.primary) > 0
 ),
 ${idf_cte_ov}
-codes as (
-    select
-        unnest(double_metaphone(t.token)) as dm_code,
-        t.token,
-        t.id,
-        t.name,
-        t.latitude,
-        t.longitude,
+trigrams as (
+    select distinct
+        substr(np.norm_name, pos, 3) as trigram,
+        np.id,
+        np.name,
+        np.latitude,
+        np.longitude,
         coalesce(ln(1 + c.pt_count), 0) + ${idf_score_ov} as importance
-    from tokens t
+    from name_prep np
     ${idf_join_ov}
     left join read_parquet('${density_file}') c
         on c.level = 12
         and c.cell_id = s2_cell_parent(
-            s2_cellfromlonlat(t.lon_num, t.lat_num), 12
+            s2_cellfromlonlat(np.lon_num, np.lat_num), 12
         )
-    where length(t.token) > 1
-),
-filtered_codes as (
-    select * from codes
-    where dm_code is not null and dm_code != ''
-),
-place_code_counts as (
-    select id, count(distinct dm_code) as n_place_codes
-    from filtered_codes
-    group by id
+    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
+    where length(np.norm_name) >= 3
 )
-select
-    fc.dm_code,
-    fc.token,
-    fc.id,
-    fc.name,
-    fc.latitude,
-    fc.longitude,
-    fc.importance,
-    pc.n_place_codes
-from filtered_codes fc
-join place_code_counts pc using (id)
-order by fc.dm_code;
+select trigram, id, name, latitude, longitude, importance
+from trigrams
+order by trigram;
 EOF
 else
     cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Loading splink_udfs extension for phonetic indexing..."
-install splink_udfs from community;
-load splink_udfs;
 .print "Creating name index (no density)..."
 create table name_index as
-with tokens as (
+with name_prep as (
     select
-        unnest(string_split(lower(strip_accents(names.primary)), ' ')) as token,
         id,
         names.primary as name,
+        lower(strip_accents(names.primary)) as norm_name,
         st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
-        st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
-        categories.primary as categories_primary
+        st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude
     from places
     where names.primary is not null and length(names.primary) > 0
 ),
 ${idf_cte_ov}
-codes as (
-    select
-        unnest(double_metaphone(t.token)) as dm_code,
-        t.token,
-        t.id,
-        t.name,
-        t.latitude,
-        t.longitude,
+trigrams as (
+    select distinct
+        substr(np.norm_name, pos, 3) as trigram,
+        np.id,
+        np.name,
+        np.latitude,
+        np.longitude,
         ${idf_score_ov} as importance
-    from tokens t
+    from name_prep np
     ${idf_join_ov}
-    where length(t.token) > 1
-),
-filtered_codes as (
-    select * from codes
-    where dm_code is not null and dm_code != ''
-),
-place_code_counts as (
-    select id, count(distinct dm_code) as n_place_codes
-    from filtered_codes
-    group by id
+    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
+    where length(np.norm_name) >= 3
 )
-select
-    fc.dm_code,
-    fc.token,
-    fc.id,
-    fc.name,
-    fc.latitude,
-    fc.longitude,
-    fc.importance,
-    pc.n_place_codes
-from filtered_codes fc
-join place_code_counts pc using (id)
-order by fc.dm_code;
+select trigram, id, name, latitude, longitude, importance
+from trigrams
+order by trigram;
 EOF
 fi
 
@@ -282,7 +239,7 @@ EOF
 
 # Run the import script
 echo
-time duckdb -bail "${output_dir}/${db_filename}.tmp" < "${output_dir}/import-overture.sql"
+time duckdb -bail "${output_dir}/${db_filename}.tmp" -c ".read ${output_dir}/import-overture.sql"
 
 if [ $? -ne 0 ]; then
     echo "Failed to import data into DuckDB."
@@ -295,4 +252,4 @@ mv "${output_dir}/${db_filename}.tmp" "${output_dir}/${db_filename}"
 rm -f "${output_dir}/import-overture.sql"
 
 echo
-echo "select count(*) from places;" | duckdb "${output_dir}/${db_filename}"
+duckdb "${output_dir}/${db_filename}" -c "select count(*) from places;"
