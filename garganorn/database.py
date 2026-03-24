@@ -602,6 +602,158 @@ class OvertureMaps(Database):
             "attributes": result
         }
 
+class OpenStreetMap(Database):
+    collection = "community.lexicon.location.org.openstreetmap.places"
+
+    def record_columns(self):
+        return """
+            osm_type || osm_id::VARCHAR AS rkey,
+            name,
+            latitude::decimal(10,6)::varchar AS latitude,
+            longitude::decimal(10,6)::varchar AS longitude,
+            tags
+        """
+
+    def search_columns(self):
+        return """
+            osm_type || osm_id::VARCHAR AS rkey,
+            name,
+            latitude::decimal(10,6)::varchar AS latitude,
+            longitude::decimal(10,6)::varchar AS longitude
+        """
+
+    def query_record(self):
+        columns = self.record_columns()
+        return f"""
+            select
+                {columns}
+            from places
+            where osm_type = left($rkey, 1)
+              and osm_id = substr($rkey, 2)::BIGINT
+        """
+
+    def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
+        n_query = len(trigrams)
+        placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
+        return f"""
+            SELECT
+                rkey,
+                name,
+                latitude,
+                longitude,
+                0 AS distance_m,
+                count(DISTINCT trigram)::float
+                    / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
+                       - count(DISTINCT trigram))::float AS score
+            FROM name_index
+            WHERE trigram IN ({placeholders})
+              AND importance >= $importance_floor
+            GROUP BY rkey, name, latitude, longitude
+            HAVING count(DISTINCT trigram)::float
+                / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
+                   - count(DISTINCT trigram))::float >= {self.JACCARD_THRESHOLD}
+            ORDER BY score DESC, max(importance) DESC
+            LIMIT $limit
+        """
+
+    def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
+        n_query = len(trigrams)
+        placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
+        return f"""
+            SELECT
+                p.osm_type || p.osm_id::VARCHAR AS rkey,
+                p.name,
+                p.latitude::decimal(10,6)::varchar AS latitude,
+                p.longitude::decimal(10,6)::varchar AS longitude,
+                min(ST_Distance_Sphere(p.geom, ST_GeomFromText($centroid))::integer) AS distance_m,
+                count(DISTINCT n.trigram)::float
+                    / (greatest(length(lower(strip_accents(p.name))) - 2, 1) + {n_query}
+                       - count(DISTINCT n.trigram))::float AS score
+            FROM places p
+            JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
+            WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+              AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+              AND n.trigram IN ({placeholders})
+              AND n.importance >= $importance_floor
+            GROUP BY p.osm_type, p.osm_id, p.name, p.latitude, p.longitude, p.geom
+            ORDER BY score DESC, distance_m
+            LIMIT $limit
+        """
+
+    def query_nearest(self, params: SearchParams, trigrams=None):
+        assert "centroid" in params or "q" in params, "Either centroid or q must be provided"
+
+        has_spatial = "centroid" in params
+        has_text = "q" in params
+
+        if has_text and has_spatial:
+            return self._query_trigram_spatial(params, trigrams)
+        elif has_text:
+            return self._query_trigram_text(params, trigrams)
+        else:
+            columns = self.search_columns()
+            return f"""
+                select
+                    {columns},
+                    ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer as distance_m
+                from places
+                where bbox.xmin > $xmin and bbox.ymin > $ymin
+                  and bbox.xmax < $xmax and bbox.ymax < $ymax
+                order by distance_m
+                limit $limit;
+            """
+
+    def process_record(self, result):
+        tags = result.pop("tags", []) or []
+        tag_dict = {}
+        for tag in tags:
+            k, _, v = tag.partition("=")
+            tag_dict[k] = v
+
+        locations = [
+            {
+                "$type": "community.lexicon.location.geo",
+                "latitude": result.pop("latitude"),
+                "longitude": result.pop("longitude"),
+            }
+        ]
+
+        # Build address from addr:* tags
+        address_data = {}
+        addr_map = [
+            ("addr:country", "country"),
+            ("addr:postcode", "postalCode"),
+            ("addr:city", "locality"),
+            ("addr:street", "street"),
+        ]
+        for tag_key, dest_key in addr_map:
+            if tag_dict.get(tag_key):
+                address_data[dest_key] = tag_dict.pop(tag_key)
+        # Prepend housenumber to street if present
+        if tag_dict.get("addr:housenumber") and address_data.get("street"):
+            address_data["street"] = (
+                tag_dict.pop("addr:housenumber") + " " + address_data["street"]
+            )
+        elif tag_dict.get("addr:housenumber"):
+            tag_dict.pop("addr:housenumber")  # Remove orphan housenumber
+        if address_data.get("country"):
+            locations.append({
+                "$type": "community.lexicon.location.address",
+                **address_data
+            })
+
+        return {
+            "$type": "community.lexicon.location.place",
+            "collection": self.collection,
+            "rkey": result.pop("rkey"),
+            "locations": locations,
+            "names": [
+                {"text": result.pop("name"), "priority": 0}
+            ],
+            "attributes": tag_dict
+        }
+
+
 if __name__ == "__main__":
     from pprint import pprint
 

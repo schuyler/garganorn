@@ -1,11 +1,12 @@
 """Configuration loader for Garganorn."""
 import yaml
 from pathlib import Path
-from .database import FoursquareOSP, OvertureMaps
+from .database import FoursquareOSP, OvertureMaps, OpenStreetMap
 
 DATABASE_TYPES = {
     "foursquare": FoursquareOSP,
     "overture": OvertureMaps,
+    "osm": OpenStreetMap,
 }
 
 def load_config(path):
