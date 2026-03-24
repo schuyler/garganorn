@@ -3,7 +3,7 @@ import pytest
 import yaml
 
 from garganorn.config import load_config
-from garganorn.database import FoursquareOSP, OvertureMaps
+from garganorn.database import FoursquareOSP, OvertureMaps, OpenStreetMap
 
 
 def _write_config(tmp_path, data):
@@ -67,3 +67,15 @@ def test_overture_type_creates_overture_maps(tmp_path):
     repo, dbs = load_config(config_path)
     assert len(dbs) == 1
     assert isinstance(dbs[0], OvertureMaps)
+
+
+def test_osm_type_creates_openstreetmap(tmp_path):
+    """'osm' type creates an OpenStreetMap instance."""
+    fake_db = tmp_path / "osm.duckdb"
+    fake_db.touch()
+    config_path = _write_config(tmp_path, {
+        "databases": [{"type": "osm", "path": str(fake_db)}]
+    })
+    repo, dbs = load_config(config_path)
+    assert len(dbs) == 1
+    assert isinstance(dbs[0], OpenStreetMap)
