@@ -141,49 +141,49 @@ WITH filtered AS (
     SELECT
         left(split_part(feature_id, '/', 1), 1) AS osm_type,
         split_part(feature_id, '/', 2)::BIGINT AS osm_id,
-        tags['name'][1] AS name,
+        tags['name'] AS name,
         geometry,
         tags,
         CASE
-            WHEN tags['amenity'][1] IS NOT NULL THEN 'amenity=' || tags['amenity'][1]
-            WHEN tags['shop'][1] IS NOT NULL THEN 'shop=' || tags['shop'][1]
-            WHEN tags['tourism'][1] IS NOT NULL THEN 'tourism=' || tags['tourism'][1]
-            WHEN tags['leisure'][1] IS NOT NULL THEN 'leisure=' || tags['leisure'][1]
-            WHEN tags['office'][1] IS NOT NULL THEN 'office=' || tags['office'][1]
-            WHEN tags['craft'][1] IS NOT NULL THEN 'craft=' || tags['craft'][1]
-            WHEN tags['healthcare'][1] IS NOT NULL THEN 'healthcare=' || tags['healthcare'][1]
-            WHEN tags['historic'][1] IS NOT NULL THEN 'historic=' || tags['historic'][1]
-            WHEN tags['natural'][1] IS NOT NULL THEN 'natural=' || tags['natural'][1]
-            WHEN tags['man_made'][1] IS NOT NULL THEN 'man_made=' || tags['man_made'][1]
-            WHEN tags['aeroway'][1] IS NOT NULL THEN 'aeroway=' || tags['aeroway'][1]
-            WHEN tags['railway'][1] IS NOT NULL THEN 'railway=' || tags['railway'][1]
-            WHEN tags['public_transport'][1] IS NOT NULL THEN 'public_transport=' || tags['public_transport'][1]
-            WHEN tags['place'][1] IS NOT NULL THEN 'place=' || tags['place'][1]
+            WHEN tags['amenity'] IS NOT NULL THEN 'amenity=' || tags['amenity']
+            WHEN tags['shop'] IS NOT NULL THEN 'shop=' || tags['shop']
+            WHEN tags['tourism'] IS NOT NULL THEN 'tourism=' || tags['tourism']
+            WHEN tags['leisure'] IS NOT NULL THEN 'leisure=' || tags['leisure']
+            WHEN tags['office'] IS NOT NULL THEN 'office=' || tags['office']
+            WHEN tags['craft'] IS NOT NULL THEN 'craft=' || tags['craft']
+            WHEN tags['healthcare'] IS NOT NULL THEN 'healthcare=' || tags['healthcare']
+            WHEN tags['historic'] IS NOT NULL THEN 'historic=' || tags['historic']
+            WHEN tags['natural'] IS NOT NULL THEN 'natural=' || tags['natural']
+            WHEN tags['man_made'] IS NOT NULL THEN 'man_made=' || tags['man_made']
+            WHEN tags['aeroway'] IS NOT NULL THEN 'aeroway=' || tags['aeroway']
+            WHEN tags['railway'] IS NOT NULL THEN 'railway=' || tags['railway']
+            WHEN tags['public_transport'] IS NOT NULL THEN 'public_transport=' || tags['public_transport']
+            WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
         END AS primary_category
     FROM read_parquet('${parquet_file}')
     WHERE
         -- Amenity: all except infrastructure, require name
-        (tags['amenity'][1] IS NOT NULL
-         AND tags['amenity'][1] NOT IN (
+        (tags['amenity'] IS NOT NULL
+         AND tags['amenity'] NOT IN (
              'parking', 'parking_space', 'bench', 'waste_basket',
              'bicycle_parking', 'shelter', 'recycling', 'toilets',
              'post_box', 'drinking_water', 'vending_machine',
              'waste_disposal', 'hunting_stand', 'parking_entrance',
              'grit_bin', 'give_box', 'bbq'
          )
-         AND tags['name'][1] IS NOT NULL)
+         AND tags['name'] IS NOT NULL)
         OR
         -- Shop: all except yes/vacant, require name
-        (tags['shop'][1] IS NOT NULL
-         AND tags['shop'][1] NOT IN ('yes', 'vacant')
-         AND tags['name'][1] IS NOT NULL)
+        (tags['shop'] IS NOT NULL
+         AND tags['shop'] NOT IN ('yes', 'vacant')
+         AND tags['name'] IS NOT NULL)
         OR
         -- Tourism: all, require name
-        (tags['tourism'][1] IS NOT NULL
-         AND tags['name'][1] IS NOT NULL)
+        (tags['tourism'] IS NOT NULL
+         AND tags['name'] IS NOT NULL)
         OR
         -- Leisure: curated list, require name
-        (tags['leisure'][1] IN (
+        (tags['leisure'] IN (
              'park', 'sports_centre', 'fitness_centre', 'swimming_pool',
              'golf_course', 'stadium', 'sports_hall', 'marina',
              'nature_reserve', 'garden', 'playground', 'dog_park',
@@ -192,63 +192,63 @@ WITH filtered AS (
              'amusement_arcade', 'adult_gaming_centre', 'trampoline_park',
              'escape_game', 'hackerspace'
          )
-         AND tags['name'][1] IS NOT NULL)
+         AND tags['name'] IS NOT NULL)
         OR
         -- Office: all except yes, require name
-        (tags['office'][1] IS NOT NULL
-         AND tags['office'][1] != 'yes'
-         AND tags['name'][1] IS NOT NULL)
+        (tags['office'] IS NOT NULL
+         AND tags['office'] != 'yes'
+         AND tags['name'] IS NOT NULL)
         OR
         -- Craft: all except yes, require name
-        (tags['craft'][1] IS NOT NULL
-         AND tags['craft'][1] != 'yes'
-         AND tags['name'][1] IS NOT NULL)
+        (tags['craft'] IS NOT NULL
+         AND tags['craft'] != 'yes'
+         AND tags['name'] IS NOT NULL)
         OR
         -- Healthcare: all except yes, require name
-        (tags['healthcare'][1] IS NOT NULL
-         AND tags['healthcare'][1] != 'yes'
-         AND tags['name'][1] IS NOT NULL)
+        (tags['healthcare'] IS NOT NULL
+         AND tags['healthcare'] != 'yes'
+         AND tags['name'] IS NOT NULL)
         OR
         -- Historic: curated list, require name
-        (tags['historic'][1] IN (
+        (tags['historic'] IN (
              'castle', 'monument', 'memorial', 'archaeological_site',
              'ruins', 'fort', 'manor', 'church', 'city_gate',
              'building', 'mine', 'wreck'
          )
-         AND tags['name'][1] IS NOT NULL)
+         AND tags['name'] IS NOT NULL)
         OR
         -- Natural: curated list, require name
-        (tags['natural'][1] IN (
+        (tags['natural'] IN (
              'peak', 'beach', 'spring', 'bay', 'cave_entrance',
              'volcano', 'glacier', 'hot_spring', 'cape', 'hill',
              'valley', 'saddle', 'ridge', 'geyser', 'arch', 'gorge', 'rock'
          )
-         AND tags['name'][1] IS NOT NULL)
+         AND tags['name'] IS NOT NULL)
         OR
         -- Man-made: curated list, require name
-        (tags['man_made'][1] IN (
+        (tags['man_made'] IN (
              'lighthouse', 'tower', 'pier', 'observatory', 'windmill',
              'water_tower', 'works', 'chimney', 'obelisk', 'watermill',
              'beacon'
          )
-         AND tags['name'][1] IS NOT NULL)
+         AND tags['name'] IS NOT NULL)
         OR
         -- Aeroway: airports and terminals only
-        (tags['aeroway'][1] IN ('aerodrome', 'terminal', 'heliport'))
+        (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport'))
         OR
         -- Railway: stations only
-        (tags['railway'][1] IN ('station', 'halt', 'tram_stop', 'subway_entrance'))
+        (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance'))
         OR
         -- Public transport: stations only, require name
-        (tags['public_transport'][1] = 'station'
-         AND tags['name'][1] IS NOT NULL)
+        (tags['public_transport'] = 'station'
+         AND tags['name'] IS NOT NULL)
         OR
         -- Place: populated places, require name
-        (tags['place'][1] IN (
+        (tags['place'] IN (
              'city', 'town', 'village', 'hamlet', 'suburb',
              'neighbourhood', 'quarter', 'island', 'square'
          )
-         AND tags['name'][1] IS NOT NULL)
+         AND tags['name'] IS NOT NULL)
 )
 SELECT
     osm_type,
