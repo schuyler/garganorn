@@ -88,7 +88,7 @@ def test_process_record_full_address():
                  "addr:postcode": "94110", "addr:country": "US"},
     }
     record = db.process_record(result)
-    assert record["$type"] == "community.lexicon.location.place"
+    assert record["$type"] == "org.atgeo.place"
     assert record["rkey"] == "n240109189"
     assert record["names"][0]["text"] == "Tartine Manufactory"
     # Geo location present
@@ -201,7 +201,7 @@ def test_nearest_spatial_text(osm_db):
 
 def test_get_record_found(osm_db):
     """Known rkey like 'n240109189' returns a record."""
-    record = osm_db.get_record("", "community.lexicon.location.org.openstreetmap.places", "n240109189")
+    record = osm_db.get_record("", "org.atgeo.places.osm", "n240109189")
     assert record is not None
     assert record["rkey"] == "n240109189"
     assert record["names"][0]["text"] == "Tartine Manufactory"
@@ -209,7 +209,7 @@ def test_get_record_found(osm_db):
 
 def test_get_record_not_found(osm_db):
     """Unknown rkey returns None."""
-    record = osm_db.get_record("", "community.lexicon.location.org.openstreetmap.places", "n9999999")
+    record = osm_db.get_record("", "org.atgeo.places.osm", "n9999999")
     assert record is None
 
 

@@ -603,7 +603,7 @@ class OvertureMaps(Database):
         }
 
 class OpenStreetMap(Database):
-    collection = "community.lexicon.location.org.openstreetmap.places"
+    collection = "org.atgeo.places.osm"
 
     def record_columns(self):
         return """
@@ -748,7 +748,7 @@ class OpenStreetMap(Database):
             })
 
         return {
-            "$type": "community.lexicon.location.place",
+            "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
