@@ -97,14 +97,22 @@ done
 density_file="${output_dir}/density-fsq.parquet"
 if [ ! -f "$density_file" ]; then
     echo "Building FSQ density table..."
-    "${script_dir}/build-density.sh" fsq "${cache_dir}"
+    "${script_dir}/build-density.sh" fsq "${cache_dir}" || { echo "Failed to build density table."; exit 1; }
+    if [ ! -f "$density_file" ]; then
+        echo "Density file not found after build: ${density_file}"
+        exit 1
+    fi
 fi
 
 # Detect or auto-build category IDF file
 idf_file="${output_dir}/category_idf-fsq.parquet"
 if [ ! -f "$idf_file" ]; then
     echo "Building FSQ IDF table..."
-    "${script_dir}/build-idf.sh" fsq "${cache_dir}"
+    "${script_dir}/build-idf.sh" fsq "${cache_dir}" || { echo "Failed to build IDF table."; exit 1; }
+    if [ ! -f "$idf_file" ]; then
+        echo "IDF file not found after build: ${idf_file}"
+        exit 1
+    fi
 fi
 
 # Remove any existing temp file
