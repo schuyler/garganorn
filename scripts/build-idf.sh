@@ -10,12 +10,14 @@ if ! command -v duckdb &> /dev/null; then
     exit 1
 fi
 
-if [ "$1" != "fsq" ] && [ "$1" != "overture" ]; then
+if [ "$1" != "fsq" ] && [ "$1" != "overture" ] && [ "$1" != "osm" ]; then
     echo
     echo "Usage: $0 <source> [source_path_or_release]"
     echo
-    echo "  source: fsq or overture"
-    echo "  source_path_or_release: optional local directory path or release version string"
+    echo "  source: fsq, overture, or osm"
+    echo "  source_path_or_release:"
+    echo "    fsq/overture: optional local directory path or release version string"
+    echo "    osm: path to osm.duckdb (or osm.duckdb.tmp) database file"
     echo
     exit 1
 fi
@@ -31,6 +33,9 @@ version="$(date +%Y-%m)"
 if [ "$source" = "fsq" ]; then
     output_file="${output_dir}/category_idf-fsq-${version}.parquet"
     output_symlink="${output_dir}/category_idf-fsq.parquet"
+elif [ "$source" = "osm" ]; then
+    output_file="${output_dir}/category_idf-osm-${version}.parquet"
+    output_symlink="${output_dir}/category_idf-osm.parquet"
 else
     output_file="${output_dir}/category_idf-overture-${version}.parquet"
     output_symlink="${output_dir}/category_idf-overture.parquet"
@@ -40,7 +45,19 @@ output_file_tmp="${output_file}.tmp"
 sql_file="${output_dir}/build-idf.sql"
 
 # Determine the read_parquet(...) expression based on source and argument
-if [ "$source" = "fsq" ]; then
+if [ "$source" = "osm" ]; then
+    # OSM mode: source_arg is path to osm.duckdb (or osm.duckdb.tmp)
+    osm_db_path="$source_arg"
+    if [ -z "$osm_db_path" ]; then
+        echo "OSM mode requires a path to the osm.duckdb database file."
+        exit 1
+    fi
+    if [ ! -f "$osm_db_path" ]; then
+        echo "OSM database file not found: $osm_db_path"
+        exit 1
+    fi
+    use_httpfs=false
+elif [ "$source" = "fsq" ]; then
     if [[ -d "$source_arg" ]]; then
         # Local directory path
         parquet_expr="read_parquet('${source_arg}/places-*.zstd.parquet')"
@@ -106,7 +123,22 @@ CREATE TABLE category_idf (
 );
 EOF
 
-if [ "$source" = "fsq" ]; then
+if [ "$source" = "osm" ]; then
+    cat >> "${sql_file}" <<EOF
+ATTACH '${osm_db_path}' AS osm_import (READ_ONLY);
+.print "Computing IDF from OSM..."
+INSERT INTO category_idf
+SELECT primary_category AS category,
+    count(*) AS n_places,
+    ln(N.total::double / count(*)::double) AS idf_score
+FROM osm_import.places
+CROSS JOIN (
+    SELECT count(*) AS total FROM osm_import.places
+) N
+WHERE primary_category IS NOT NULL
+GROUP BY primary_category, N.total;
+EOF
+elif [ "$source" = "fsq" ]; then
     cat >> "${sql_file}" <<EOF
 .print "Computing IDF from FSQ..."
 INSERT INTO category_idf
