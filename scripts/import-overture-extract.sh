@@ -58,14 +58,14 @@ mkdir -p "$output_dir"
 density_file="${output_dir}/density-overture.parquet"
 if [ ! -f "$density_file" ]; then
     echo "Building Overture density table..."
-    "${script_dir}/build-density.sh" overture "${release}"
+    "${script_dir}/build-density.sh" overture "${latest_release}"
 fi
 
 # Detect or auto-build category IDF file
 idf_file="${output_dir}/category_idf-overture.parquet"
 if [ ! -f "$idf_file" ]; then
     echo "Building Overture IDF table..."
-    "${script_dir}/build-idf.sh" overture "${release}"
+    "${script_dir}/build-idf.sh" overture "${latest_release}"
 fi
 
 # Remove any existing temp file

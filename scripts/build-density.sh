@@ -65,8 +65,8 @@ if [ "$source" = "fsq" ]; then
         echo "Using FSQ release: $release"
         # Build list of 100 S3 URLs
         url_list=""
-        for i in $(seq -w 0 99); do
-            url="'https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${release}/places/parquet/places-${i}.zstd.parquet'"
+        for i in $(seq 0 99); do
+            url="'https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${release}/places/parquet/places-$(printf '%05d' $i).zstd.parquet'"
             if [ -z "$url_list" ]; then
                 url_list="$url"
             else
