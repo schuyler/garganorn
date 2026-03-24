@@ -76,18 +76,18 @@ gunicorn "garganorn.__main__:create_app()" --bind 0.0.0.0:8000 --workers 2
 
 ## Querying the XRPC service
 
-The collection name for each data source is set by the database class. For Foursquare OSP it's `community.lexicon.location.com.foursquare.places`; for Overture Maps it's `community.lexicon.location.org.overturemaps.places`.
+The collection name for each data source is set by the database class. For Foursquare OSP it's `org.atgeo.places.foursquare`; for Overture Maps it's `org.atgeo.places.overture`.
 
 ### searchRecords
 
 Search by location:
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/community.lexicon.location.searchRecords?collection=community.lexicon.location.com.foursquare.places&latitude=37.776145&longitude=-122.433898&limit=1'
+$ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.searchRecords?collection=org.atgeo.places.foursquare&latitude=37.776145&longitude=-122.433898&limit=1'
 ```
 
 Or by name:
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/community.lexicon.location.searchRecords?collection=community.lexicon.location.com.foursquare.places&q=Alamo+Square&limit=1'
+$ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.searchRecords?collection=org.atgeo.places.foursquare&q=Alamo+Square&limit=1'
 ```
 
 Result:
@@ -95,12 +95,12 @@ Result:
 {
   "records": [
     {
-      "$type": "community.lexicon.location.searchRecords#record",
+      "$type": "org.atgeo.searchRecords#record",
       "distance_m": 0,
-      "uri": "https://gazetteer.social/community.lexicon.location.com.foursquare.places/4460d38bf964a5200a331fe3",
+      "uri": "https://gazetteer.social/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
       "value": {
-        "$type": "community.lexicon.location.place",
-        "collection": "community.lexicon.location.com.foursquare.places",
+        "$type": "org.atgeo.place",
+        "collection": "org.atgeo.places.foursquare",
         "rkey": "4460d38bf964a5200a331fe3",
         "names": [
           {"text": "Alamo Square", "priority": 0}
@@ -135,7 +135,7 @@ Result:
   ],
   "_query": {
     "parameters": {
-      "collection": "community.lexicon.location.com.foursquare.places",
+      "collection": "org.atgeo.places.foursquare",
       "latitude": "37.776145",
       "longitude": "-122.433898",
       "limit": 1,
@@ -149,16 +149,16 @@ Result:
 ### getRecord
 
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=community.lexicon.location.com.foursquare.places&rkey=4460d38bf964a5200a331fe3'
+$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.atgeo.places.foursquare&rkey=4460d38bf964a5200a331fe3'
 ```
 
 Result:
 ```json
 {
-  "uri": "https://gazetteer.social/community.lexicon.location.com.foursquare.places/4460d38bf964a5200a331fe3",
+  "uri": "https://gazetteer.social/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
   "value": {
-    "$type": "community.lexicon.location.place",
-    "collection": "community.lexicon.location.com.foursquare.places",
+    "$type": "org.atgeo.place",
+    "collection": "org.atgeo.places.foursquare",
     "rkey": "4460d38bf964a5200a331fe3",
     "names": [
       {"text": "Alamo Square", "priority": 0}
@@ -191,7 +191,7 @@ Result:
   },
   "_query": {
     "parameters": {
-      "collection": "community.lexicon.location.com.foursquare.places",
+      "collection": "org.atgeo.places.foursquare",
       "repo": "gazetteer.social",
       "rkey": "4460d38bf964a5200a331fe3"
     },
@@ -202,8 +202,8 @@ Result:
 
 ## Proposed Lexicon schemas
 
-* [`community.lexicon.location.place`](garganorn/lexicon/place.json)
-* [`community.lexicon.location.searchRecords`](garganorn/lexicon/searchRecords.json)
+* [`org.atgeo.place`](garganorn/lexicon/place.json)
+* [`org.atgeo.searchRecords`](garganorn/lexicon/searchRecords.json)
 * [`community.lexicon.location.geo`](garganorn/lexicon/geo.json)
 * [`community.lexicon.location.address`](garganorn/lexicon/address.json)
 

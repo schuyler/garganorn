@@ -1,7 +1,7 @@
 # Proposed changes to the place lexicon
 
 This document summarizes the changes we're contemplating for
-`community.lexicon.location.place` and related schemas, based on
+`org.atgeo.place` and related schemas, based on
 discussions in the [ATGeo working group](https://discourse.lexicon.community/tag/wg-atgeo)
 through late 2025.
 
@@ -86,11 +86,11 @@ structured source references:
 {
   "sources": [
     {
-      "collection": "community.lexicon.location.com.foursquare.places",
+      "collection": "org.atgeo.places.foursquare",
       "id": "40982e80f964a520ecf21ee3"
     },
     {
-      "collection": "community.lexicon.location.org.overturemaps.places",
+      "collection": "org.atgeo.places.overture",
       "id": "08f2830829d8c099036c7f5f8bba30ec"
     }
   ]

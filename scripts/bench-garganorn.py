@@ -11,7 +11,7 @@ import urllib.parse
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-XRPC_NSID = "community.lexicon.location.searchRecords"
+XRPC_NSID = "org.atgeo.searchRecords"
 
 QUERIES = [
     # Spatial only
@@ -181,7 +181,7 @@ def main():
                         help="Concurrent requests per query (default: %(default)s)")
     parser.add_argument("--warmup", type=int, default=1,
                         help="Warmup iterations to discard (default: %(default)s)")
-    parser.add_argument("--collection", default="community.lexicon.location.com.foursquare.places",
+    parser.add_argument("--collection", default="org.atgeo.places.foursquare",
                         help="Collection to query (default: %(default)s)")
     parser.add_argument("--json", dest="json_output", action="store_true",
                         help="Output results as JSON")

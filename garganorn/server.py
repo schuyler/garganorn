@@ -1,4 +1,4 @@
-"""Garganorn package for serving ATProtocol XRPC for community.lexicon.location."""
+"""Garganorn package for serving ATProtocol XRPC for org.atgeo."""
 import json, time, logging
 from importlib.resources import files
 
@@ -28,7 +28,7 @@ def load_lexicons():
     return lexicons
 
 class Server:
-    nsid = "community.lexicon.location"
+    nsid = "org.atgeo"
     methods = {
         f"{nsid}.searchRecords": "search_records",
         "com.atproto.repo.getRecord": "get_record",
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     ]
     gazetteer = Server("gazetteer.social", dbs, logging.getLogger())
 
-    collection = "com.foursquare.places"
+    collection = "org.atgeo.places.foursquare"
     nsid = f"{gazetteer.nsid}.searchRecords"
     params = gazetteer.server.decode_params(nsid, (
         ("collection", collection),

@@ -1,6 +1,6 @@
 {
     "lexicon": 1,
-    "id": "community.lexicon.location.searchRecords",
+    "id": "org.atgeo.searchRecords",
     "defs": {
         "main": {
             "type": "query",
@@ -79,7 +79,7 @@
                 "value": {
                     "type": "union", 
                     "refs": [
-                        "community.lexicon.location.place"
+                        "org.atgeo.place"
                     ]
                 }
             }

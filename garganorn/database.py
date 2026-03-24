@@ -36,7 +36,7 @@ class SearchParams(TypedDict, total=False):
 
 class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
-    collection: str = "social.gazetteer"
+    collection: str = "org.atgeo"
 
     JACCARD_THRESHOLD = 0.1
     MAX_QUERY_TRIGRAMS = 50
@@ -164,7 +164,7 @@ class Database:
 
     def process_record(self, result):
         return {
-            "$type": "community.lexicon.location.place",
+            "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations":  [
@@ -240,7 +240,7 @@ class Database:
 
 
 class FoursquareOSP(Database):
-    collection = "community.lexicon.location.com.foursquare.places"
+    collection = "org.atgeo.places.foursquare"
 
     def record_columns(self):
         return f"""
@@ -415,7 +415,7 @@ class FoursquareOSP(Database):
             })
 
         return {
-            "$type": "community.lexicon.location.place",
+            "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
@@ -426,7 +426,7 @@ class FoursquareOSP(Database):
         }
 
 class OvertureMaps(Database):
-    collection = "community.lexicon.location.org.overturemaps.places"
+    collection = "org.atgeo.places.overture"
 
     def record_columns(self):
         return f"""
@@ -592,7 +592,7 @@ class OvertureMaps(Database):
             result.pop("addresses")
 
         return {
-            "$type": "community.lexicon.location.place",
+            "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,

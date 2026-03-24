@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "garganorn"
 version = "0.1.0"
-description = "An ATProtocol XRPC server for community.lexicon.location"
+description = "An ATProtocol XRPC server for org.atgeo"
 readme = "README.md"
 requires-python = ">=3.8"
 authors = [
