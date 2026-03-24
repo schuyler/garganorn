@@ -69,7 +69,7 @@ def _create_fsq_db(db_path, with_name_index=True):
         "fsq001": 75,
         "fsq002": 60,
         "fsq003": 85,
-        "fsq004": 45,
+        "fsq004": 55,
         "fsq005": 90,
     }
 
@@ -161,7 +161,7 @@ def _create_overture_db(db_path, with_name_index=True):
         "ovr001": 70,
         "ovr002": 55,
         "ovr003": 80,
-        "ovr004": 40,
+        "ovr004": 55,
         "ovr005": 65,
     }
 
@@ -322,7 +322,7 @@ def _create_fsq_trigram_db(db_path):
         "fsq001": 75,
         "fsq002": 60,
         "fsq003": 85,
-        "fsq004": 45,
+        "fsq004": 55,
         "fsq005": 90,
     }
 
@@ -410,7 +410,7 @@ def _create_overture_trigram_db(db_path):
         "ovr001": 70,
         "ovr002": 55,
         "ovr003": 80,
-        "ovr004": 40,
+        "ovr004": 55,
         "ovr005": 65,
     }
 

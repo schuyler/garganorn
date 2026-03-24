@@ -11,6 +11,16 @@ import duckdb
 DEG_TO_M = 111194.927
 DEG_TO_RAD = math.pi / 180
 
+IMPORTANCE_FLOOR_K = 1000
+GLOBE_AREA_KM2 = 510_000_000
+
+
+def compute_importance_floor(area_km2: float, K: float = IMPORTANCE_FLOOR_K) -> int:
+    """Compute minimum importance threshold based on search area size."""
+    if area_km2 <= 0:
+        return 0
+    return min(int(4 * math.log(1 + area_km2 / K)), 100)
+
 # SearchParams is a type that holds parameters for spatial queries. The keys are:
 # - centroid: a POINT in WKT format (e.g., "POINT(longitude latitude)")
 # - xmin, ymin, xmax, ymax: bounding box coordinates
@@ -61,6 +71,7 @@ class Database:
             alias = aliases[i]
             lines.append(f"JOIN name_index {alias} ON {first}.{join_key} = {alias}.{join_key}")
         where_clauses = [f"{aliases[i]}.token = lower(strip_accents($t{i}))" for i in range(n_tokens)]
+        where_clauses.append(f"{first}.importance >= $importance_floor")
         lines.append("WHERE " + "\n  AND ".join(where_clauses))
         lines.append(f"ORDER BY {first}.importance DESC")
         lines.append("LIMIT $limit")
@@ -233,6 +244,11 @@ class Database:
                 "xmax": bbox[2],
                 "ymax": bbox[3]
             })
+            width_km = (bbox[2] - bbox[0]) * 111 * math.cos(math.radians(latitude))
+            height_km = (bbox[3] - bbox[1]) * 111
+            area_km2 = width_km * height_km
+        else:
+            area_km2 = GLOBE_AREA_KM2
         trigrams = None
         if q:
             params["q"] = q
@@ -244,6 +260,8 @@ class Database:
             trigrams = self._compute_trigrams(q)
             for i, tri in enumerate(trigrams):
                 params[f"g{i}"] = tri
+            importance_floor = compute_importance_floor(area_km2)
+            params["importance_floor"] = importance_floor
         print(f"Searching with params: {params}")
         result = self.execute(
             self.query_nearest(params, trigrams=trigrams), params
@@ -355,6 +373,7 @@ class FoursquareOSP(Database):
                        - count(DISTINCT trigram))::float AS score
             FROM name_index
             WHERE trigram IN ({placeholders})
+              AND importance >= $importance_floor
             GROUP BY fsq_place_id, name, latitude, longitude,
                      address, locality, postcode, region, country
             HAVING count(DISTINCT trigram)::float
@@ -392,6 +411,7 @@ class FoursquareOSP(Database):
             WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
               AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
               AND n.trigram IN ({placeholders})
+              AND n.importance >= $importance_floor
             GROUP BY p.fsq_place_id, p.name, p.latitude, p.longitude,
                      p.address, p.locality, p.postcode, p.region, p.country, p.geom
             ORDER BY score DESC, distance_m
@@ -426,12 +446,14 @@ class FoursquareOSP(Database):
                         0 as distance_m
                     from places
                     where name ILIKE '%' || $q || '%'
-                    order by name
+                      and importance >= $importance_floor
+                    order by importance desc
                     limit $limit;
                 """
         else:
             text_filter = ""
-        filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
+        importance_filter = "importance >= $importance_floor" if params.get("importance_floor", 0) > 0 else ""
+        filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter, importance_filter)))
 
         return f"""
             select
@@ -567,6 +589,7 @@ class OvertureMaps(Database):
                        - count(DISTINCT trigram))::float AS score
             FROM name_index
             WHERE trigram IN ({placeholders})
+              AND importance >= $importance_floor
             GROUP BY id, name, latitude, longitude
             HAVING count(DISTINCT trigram)::float
                 / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
@@ -599,6 +622,7 @@ class OvertureMaps(Database):
             WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
               AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
               AND n.trigram IN ({placeholders})
+              AND n.importance >= $importance_floor
             GROUP BY p.id, p.names, p.geometry, p.addresses
             ORDER BY score DESC, distance_m
             LIMIT $limit
@@ -628,7 +652,8 @@ class OvertureMaps(Database):
                 text_filter = "names.primary ILIKE '%' || $q || '%'"
         else:
             text_filter = ""
-        filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter)))
+        importance_filter = "importance >= $importance_floor" if params.get("importance_floor", 0) > 0 else ""
+        filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter, importance_filter)))
         return f"""
             select
                 {columns},

@@ -177,7 +177,7 @@ def fsq_tiebreak_db_path(tmp_path_factory):
     # Two places with identical names but different importance
     places = [
         ("tie001", "Test Place", 37.7749, -122.4194, 80),
-        ("tie002", "Test Place", 37.7750, -122.4195, 30),
+        ("tie002", "Test Place", 37.7750, -122.4195, 55),
     ]
     for fsq_id, name, lat, lon, importance in places:
         conn.execute("""
@@ -243,5 +243,5 @@ def test_trigram_tiebreaking_by_importance(fsq_tiebreak_db_path):
         f"Expected tie001 (importance=80) first, got {rkeys[0]}"
     )
     assert rkeys[1] == "tie002", (
-        f"Expected tie002 (importance=30) second, got {rkeys[1]}"
+        f"Expected tie002 (importance=55) second, got {rkeys[1]}"
     )
