@@ -10,11 +10,11 @@ if ! command -v duckdb &> /dev/null; then
     exit 1
 fi
 
-if [ "$1" != "fsq" ] && [ "$1" != "overture" ]; then
+if [ "$1" != "fsq" ] && [ "$1" != "overture" ] && [ "$1" != "osm" ]; then
     echo
     echo "Usage: $0 <source> [source_path_or_release]"
     echo
-    echo "  source: fsq or overture"
+    echo "  source: fsq, overture, or osm"
     echo "  source_path_or_release: optional local directory path or release version string"
     echo
     exit 1
@@ -31,9 +31,12 @@ version="$(date +%Y-%m)"
 if [ "$source" = "fsq" ]; then
     output_file="${output_dir}/density-fsq-${version}.parquet"
     output_symlink="${output_dir}/density-fsq.parquet"
-else
+elif [ "$source" = "overture" ]; then
     output_file="${output_dir}/density-overture-${version}.parquet"
     output_symlink="${output_dir}/density-overture.parquet"
+else
+    output_file="${output_dir}/density-osm-${version}.parquet"
+    output_symlink="${output_dir}/density-osm.parquet"
 fi
 
 output_file_tmp="${output_file}.tmp"
@@ -76,6 +79,19 @@ if [ "$source" = "fsq" ]; then
         fsq_parquet_expr="read_parquet([${url_list}])"
         use_httpfs=true
     fi
+elif [ "$source" = "osm" ]; then
+    # OSM mode: source_arg is a local GeoParquet file path (required)
+    if [ -z "$source_arg" ]; then
+        echo "Error: OSM source requires a path to the stage 1 GeoParquet file."
+        echo "Usage: $0 osm <geoparquet_path>"
+        exit 1
+    fi
+    if [ ! -f "$source_arg" ]; then
+        echo "Error: GeoParquet file not found: $source_arg"
+        exit 1
+    fi
+    osm_parquet_path="$source_arg"
+    use_httpfs=false
 else
     # Overture mode
     if [ -n "$source_arg" ]; then
@@ -119,6 +135,25 @@ SELECT
     count(*) AS pt_count
 FROM ${fsq_parquet_expr}
 WHERE longitude != 0 AND latitude != 0
+GROUP BY cell_id;
+EOF
+elif [ "$source" = "osm" ]; then
+    cat >> "${sql_file}" <<EOF
+INSTALL spatial;
+LOAD spatial;
+.print "Aggregating level 14 from OSM..."
+INSERT INTO cell_counts
+SELECT
+    14 AS level,
+    s2_cell_parent(
+        s2_cellfromlonlat(
+            ST_X(ST_PointOnSurface(geometry)),
+            ST_Y(ST_PointOnSurface(geometry))
+        ), 14
+    ) AS cell_id,
+    count(*) AS pt_count
+FROM read_parquet('${osm_parquet_path}')
+WHERE geometry IS NOT NULL
 GROUP BY cell_id;
 EOF
 else
