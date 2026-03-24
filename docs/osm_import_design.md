@@ -220,11 +220,13 @@ WITH filtered AS (
          )
          AND tags['name'][1] IS NOT NULL)
         OR
-        -- Aeroway: airports and terminals only
-        (tags['aeroway'][1] IN ('aerodrome', 'terminal', 'heliport'))
+        -- Aeroway: airports and terminals only, require name
+        (tags['aeroway'][1] IN ('aerodrome', 'terminal', 'heliport')
+         AND tags['name'][1] IS NOT NULL)
         OR
-        -- Railway: stations only
-        (tags['railway'][1] IN ('station', 'halt', 'tram_stop', 'subway_entrance'))
+        -- Railway: stations only, require name
+        (tags['railway'][1] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+         AND tags['name'][1] IS NOT NULL)
         OR
         -- Public transport: stations only, require name
         (tags['public_transport'][1] = 'station'
@@ -489,10 +491,12 @@ the share-alike requirement is straightforward to satisfy.
 
 ## Open Questions
 
-1. **QuackOSM MAP access syntax**: The `tags['key'][1]` syntax for MAP
-   access in DuckDB needs verification with QuackOSM's actual output
-   format. If tags is `MAP(VARCHAR, VARCHAR)`, this should work, but
-   the `[1]` index behavior needs testing.
+1. ~~**QuackOSM MAP access syntax**~~: **Resolved.** QuackOSM outputs
+   `tags` as `MAP(VARCHAR, VARCHAR)` (scalar values, not lists). The
+   `[1]` subscript extracted the first *character* of the string, not a
+   list element. All `[1]` subscripts removed. Use `tags['key']` directly.
+   Also: DuckDB 1.4.x does not support `map_entries(tags).transform(...)`;
+   use `list_transform(map_entries(tags), ...)` instead.
 
 2. **Deduplication**: Features with multiple qualifying tags (e.g.,
    `amenity=hospital` + `healthcare=hospital`) should produce one row,
