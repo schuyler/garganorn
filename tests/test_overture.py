@@ -54,7 +54,7 @@ def test_process_record_with_addresses():
         ],
     }
     record = db.process_record(result)
-    assert record["$type"] == "community.lexicon.location.place"
+    assert record["$type"] == "org.atgeo.place"
     assert record["rkey"] == "ovr001"
     assert len(record["locations"]) == 2
     addr = record["locations"][1]
@@ -108,7 +108,7 @@ def test_nearest_text(overture_db):
 
 def test_get_record(overture_db):
     """Known id returns a record with expected structure."""
-    record = overture_db.get_record("", "community.lexicon.location.org.overturemaps.places", "ovr001")
+    record = overture_db.get_record("", "org.atgeo.places.overture", "ovr001")
     assert record is not None
     assert record["rkey"] == "ovr001"
     assert record["names"][0]["text"] == "Philz Coffee"

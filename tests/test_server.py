@@ -12,11 +12,11 @@ from garganorn.server import Server, load_lexicons
 # Helpers
 # ---------------------------------------------------------------------------
 
-FSQ_COLLECTION = "community.lexicon.location.com.foursquare.places"
-OVR_COLLECTION = "community.lexicon.location.org.overturemaps.places"
+FSQ_COLLECTION = "org.atgeo.places.foursquare"
+OVR_COLLECTION = "org.atgeo.places.overture"
 
 SAMPLE_RECORD = {
-    "$type": "community.lexicon.location.place",
+    "$type": "org.atgeo.place",
     "collection": FSQ_COLLECTION,
     "rkey": "fsq001",
     "distance_m": 42,

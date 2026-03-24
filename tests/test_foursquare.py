@@ -52,7 +52,7 @@ def test_process_record_full():
         "fsq_place_id": "fsq001",
     }
     record = db.process_record(result)
-    assert record["$type"] == "community.lexicon.location.place"
+    assert record["$type"] == "org.atgeo.place"
     assert record["rkey"] == "fsq001"
     assert record["names"][0]["text"] == "Blue Bottle Coffee"
     # Geo location
@@ -127,7 +127,7 @@ def test_nearest_text(fsq_db):
 
 def test_get_record_found(fsq_db):
     """Known rkey returns a record."""
-    record = fsq_db.get_record("", "community.lexicon.location.com.foursquare.places", "fsq001")
+    record = fsq_db.get_record("", "org.atgeo.places.foursquare", "fsq001")
     assert record is not None
     assert record["rkey"] == "fsq001"
     assert record["names"][0]["text"] == "Blue Bottle Coffee"
@@ -135,7 +135,7 @@ def test_get_record_found(fsq_db):
 
 def test_get_record_not_found(fsq_db):
     """Unknown rkey returns None."""
-    record = fsq_db.get_record("", "community.lexicon.location.com.foursquare.places", "nonexistent")
+    record = fsq_db.get_record("", "org.atgeo.places.foursquare", "nonexistent")
     assert record is None
 
 
