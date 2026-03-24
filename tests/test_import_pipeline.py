@@ -15,6 +15,7 @@ osm-pbf-parquet schema:
 import math
 import os
 import shutil
+import subprocess
 import tempfile
 
 import duckdb
@@ -157,7 +158,7 @@ def parquet_dir(tmp_path_factory):
       1003 — named park (leisure=park)            (should pass)
       1004 — named shop (shop=convenience)        (should pass)
       1005 — amenity=bench, no name              (should be filtered out)
-      1006 — named railway station               (should pass, no name required)
+      1006 — railway station, no name             (passes tag filter but dropped by outer name check)
       1007 — tourism=hotel with name             (should pass)
 
     Way data (with constituent node refs):
@@ -798,7 +799,6 @@ class TestOutputSchema:
 
     def test_all_rows_have_non_null_geom(self, osm_duckdb):
         conn = duckdb.connect(str(osm_duckdb), read_only=True)
-        conn.execute("INSTALL spatial; LOAD spatial;")
         try:
             null_count = conn.execute(
                 "SELECT count(*) FROM places WHERE geom IS NULL"
@@ -931,7 +931,6 @@ class TestDensityOsmMode:
         this test confirms that gap exists and will fail until the script is
         updated.
         """
-        import subprocess
         script = os.path.join(
             os.path.dirname(__file__), "..", "scripts", "build-density.sh"
         )
@@ -1136,7 +1135,6 @@ class TestIdfOsmMode:
         This test verifies the gap exists and will fail once the
         new osm mode is added that expects a .duckdb path.
         """
-        import subprocess
         script = os.path.join(
             os.path.dirname(__file__), "..", "scripts", "build-idf.sh"
         )
@@ -1171,10 +1169,16 @@ class TestImportOsmScript:
             "the new pipeline script has not been created yet"
         )
 
+    def _read_script(self):
+        """Read the script contents, skipping if the file doesn't exist yet."""
+        if not os.path.isfile(self.SCRIPT_PATH):
+            pytest.skip("scripts/import-osm.sh not yet implemented")
+        with open(self.SCRIPT_PATH) as f:
+            return f.read()
+
     def test_script_does_not_reference_quackosm(self):
         """New import-osm.sh must not reference QuackOSM."""
-        with open(self.SCRIPT_PATH) as f:
-            content = f.read()
+        content = self._read_script()
         assert "quackosm" not in content.lower(), (
             "import-osm.sh still references QuackOSM — "
             "should use osm-pbf-parquet instead"
@@ -1182,24 +1186,21 @@ class TestImportOsmScript:
 
     def test_script_references_osm_pbf_parquet(self):
         """New import-osm.sh must reference osm-pbf-parquet."""
-        with open(self.SCRIPT_PATH) as f:
-            content = f.read()
+        content = self._read_script()
         assert "osm-pbf-parquet" in content, (
             "import-osm.sh does not reference osm-pbf-parquet"
         )
 
     def test_script_type_node_partition(self):
         """Script must read from type=node/ partition."""
-        with open(self.SCRIPT_PATH) as f:
-            content = f.read()
+        content = self._read_script()
         assert "type=node" in content, (
             "import-osm.sh must read from type=node/ Hive partition"
         )
 
     def test_script_type_way_partition(self):
         """Script must read from type=way/ partition."""
-        with open(self.SCRIPT_PATH) as f:
-            content = f.read()
+        content = self._read_script()
         assert "type=way" in content, (
             "import-osm.sh must read from type=way/ Hive partition"
         )
