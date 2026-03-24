@@ -61,9 +61,17 @@ def _create_fsq_db(db_path, with_name_index=True):
             fsq_category_labels VARCHAR[],
             placemaker_url VARCHAR,
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance DOUBLE
+            importance INTEGER
         )
     """)
+
+    fsq_importance = {
+        "fsq001": 75,
+        "fsq002": 60,
+        "fsq003": 85,
+        "fsq004": 45,
+        "fsq005": 90,
+    }
 
     for row in FSQ_PLACES:
         fsq_id, name, lat, lon, address, locality, postcode, region, admin_region, post_town, po_box, country = row
@@ -78,12 +86,13 @@ def _create_fsq_db(db_path, with_name_index=True):
                 ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
                 NULL,
                 {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                1.0
+                ?
             )
         """, [fsq_id, name, lat, lon, lon, lat,
               address, locality, postcode, region, admin_region, post_town, po_box,
               country,
-              lon, lat, lon, lat])
+              lon, lat, lon, lat,
+              fsq_importance[fsq_id]])
 
     if with_name_index:
         # Token-only name_index (no dm_code column) so connect() sets
@@ -100,7 +109,7 @@ def _create_fsq_db(db_path, with_name_index=True):
                 postcode VARCHAR,
                 region VARCHAR,
                 country VARCHAR,
-                importance DOUBLE
+                importance INTEGER
             )
         """)
         for row in FSQ_PLACES:
@@ -111,7 +120,8 @@ def _create_fsq_db(db_path, with_name_index=True):
                         INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """, [word, fsq_id, name,
                           f"{lat:.6f}", f"{lon:.6f}",
-                          address, locality, postcode, region, country, 1.0])
+                          address, locality, postcode, region, country,
+                          fsq_importance[fsq_id]])
 
     conn.close()
 
@@ -143,9 +153,17 @@ def _create_overture_db(db_path, with_name_index=True):
             confidence DOUBLE,
             version INTEGER,
             sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
-            importance DOUBLE
+            importance INTEGER
         )
     """)
+
+    ovr_importance = {
+        "ovr001": 70,
+        "ovr002": 55,
+        "ovr003": 80,
+        "ovr004": 40,
+        "ovr005": 65,
+    }
 
     for row in OVERTURE_PLACES:
         ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
@@ -159,12 +177,13 @@ def _create_overture_db(db_path, with_name_index=True):
                 NULL, NULL, NULL, NULL,
                 NULL,
                 0.9, 1, NULL,
-                1.0
+                ?
             )
         """, [ovr_id, lon, lat,
               lon, lat, lon, lat,
               name,
-              country, postcode, locality, freeform, region])
+              country, postcode, locality, freeform, region,
+              ovr_importance[ovr_id]])
 
     # Note: The production schema documents a RTREE index on bbox, but DuckDB
     # requires a GEOMETRY column for RTREE. The production queries use bbox
@@ -181,7 +200,7 @@ def _create_overture_db(db_path, with_name_index=True):
                 name VARCHAR,
                 latitude VARCHAR,
                 longitude VARCHAR,
-                importance DOUBLE
+                importance INTEGER
             )
         """)
         for row in OVERTURE_PLACES:
@@ -191,7 +210,7 @@ def _create_overture_db(db_path, with_name_index=True):
                     conn.execute("""
                         INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
                     """, [word, ovr_id, name,
-                          f"{lat:.6f}", f"{lon:.6f}", 1.0])
+                          f"{lat:.6f}", f"{lon:.6f}", ovr_importance[ovr_id]])
 
     conn.close()
 
@@ -295,9 +314,17 @@ def _create_fsq_trigram_db(db_path):
             fsq_category_labels VARCHAR[],
             placemaker_url VARCHAR,
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance DOUBLE
+            importance INTEGER
         )
     """)
+
+    fsq_importance = {
+        "fsq001": 75,
+        "fsq002": 60,
+        "fsq003": 85,
+        "fsq004": 45,
+        "fsq005": 90,
+    }
 
     for row in FSQ_PLACES:
         fsq_id, name, lat, lon, address, locality, postcode, region, admin_region, post_town, po_box, country = row
@@ -312,12 +339,13 @@ def _create_fsq_trigram_db(db_path):
                 ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
                 NULL,
                 {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                1.0
+                ?
             )
         """, [fsq_id, name, lat, lon, lon, lat,
               address, locality, postcode, region, admin_region, post_town, po_box,
               country,
-              lon, lat, lon, lat])
+              lon, lat, lon, lat,
+              fsq_importance[fsq_id]])
 
     conn.execute("""
         CREATE TABLE name_index (
@@ -331,7 +359,7 @@ def _create_fsq_trigram_db(db_path):
             postcode VARCHAR,
             region VARCHAR,
             country VARCHAR,
-            importance DOUBLE
+            importance INTEGER
         )
     """)
 
@@ -341,7 +369,8 @@ def _create_fsq_trigram_db(db_path):
             conn.execute("""
                 INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [trigram, fsq_id, name, f"{lat:.6f}", f"{lon:.6f}",
-                  address, locality, postcode, region, country, 1.0])
+                  address, locality, postcode, region, country,
+                  fsq_importance[fsq_id]])
 
     conn.close()
 
@@ -373,9 +402,17 @@ def _create_overture_trigram_db(db_path):
             confidence DOUBLE,
             version INTEGER,
             sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
-            importance DOUBLE
+            importance INTEGER
         )
     """)
+
+    ovr_importance = {
+        "ovr001": 70,
+        "ovr002": 55,
+        "ovr003": 80,
+        "ovr004": 40,
+        "ovr005": 65,
+    }
 
     for row in OVERTURE_PLACES:
         ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
@@ -389,12 +426,13 @@ def _create_overture_trigram_db(db_path):
                 NULL, NULL, NULL, NULL,
                 NULL,
                 0.9, 1, NULL,
-                1.0
+                ?
             )
         """, [ovr_id, lon, lat,
               lon, lat, lon, lat,
               name,
-              country, postcode, locality, freeform, region])
+              country, postcode, locality, freeform, region,
+              ovr_importance[ovr_id]])
 
     conn.execute("""
         CREATE TABLE name_index (
@@ -403,7 +441,7 @@ def _create_overture_trigram_db(db_path):
             name VARCHAR,
             latitude VARCHAR,
             longitude VARCHAR,
-            importance DOUBLE
+            importance INTEGER
         )
     """)
 
@@ -412,7 +450,8 @@ def _create_overture_trigram_db(db_path):
         for trigram in _generate_trigrams(name):
             conn.execute("""
                 INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
-            """, [trigram, ovr_id, name, f"{lat:.6f}", f"{lon:.6f}", 1.0])
+            """, [trigram, ovr_id, name, f"{lat:.6f}", f"{lon:.6f}",
+                  ovr_importance[ovr_id]])
 
     conn.close()
 

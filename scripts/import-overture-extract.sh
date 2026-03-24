@@ -71,28 +71,9 @@ else
     has_idf=false
 fi
 
-# Set IDF SQL fragments for Overture
-# Same CTE pattern as FSQ: fragment WITHOUT leading WITH, WITH trailing comma.
-if [ "$has_idf" = true ]; then
-    idf_cte_ov="place_idf AS (
-    SELECT
-        sub.id,
-        coalesce(idf.idf_score, 0) AS max_idf
-    FROM (
-        SELECT id, categories.primary AS categories_primary
-        FROM places
-        WHERE categories.primary IS NOT NULL
-    ) sub
-    LEFT JOIN read_parquet('${idf_file}') idf
-        ON idf.collection = 'overture'
-        AND idf.category = sub.categories_primary
-),"
-    idf_join_ov="LEFT JOIN place_idf pi USING (id)"
-    idf_score_ov="coalesce(pi.max_idf, 0)"
-else
-    idf_cte_ov=""
-    idf_join_ov=""
-    idf_score_ov="0"
+if [ "$has_density" != true ] || [ "$has_idf" != true ]; then
+    echo "Error: both density.parquet and category_idf.parquet are required in ${output_dir}"
+    exit 1
 fi
 
 # Remove any existing temp file
@@ -155,19 +136,22 @@ delete from places where geometry is null;
 create index places_rtree on places using rtree (geometry);
 EOF
 
-# Compute importance and store in places; branch on density/IDF availability
-if [ "$has_density" = true ]; then
-    cat >> "${output_dir}/import-overture.sql" <<EOF
+# Compute importance as normalized 0-100 integer score
+# 60% density (S2 level 12 cell count) + 40% category IDF
+cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Loading geography extension for importance scoring..."
 install geography from community;
 load geography;
-.print "Computing importance scores (with density)..."
-ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
-UPDATE places SET importance = coalesce(sub.importance, 0)
+.print "Computing importance scores..."
+ALTER TABLE places ADD COLUMN importance INTEGER DEFAULT 0;
+UPDATE places SET importance = sub.importance
 FROM (
     SELECT
         p.id,
-        coalesce(ln(1 + c.pt_count), 0) + coalesce(max(idf.idf_score), 0) AS importance
+        round(
+            60 * least(coalesce(ln(1 + c.pt_count), 0) / 10.0, 1.0)
+          + 40 * least(coalesce(max(idf.idf_score), 0) / 18.0, 1.0)
+        )::INTEGER AS importance
     FROM places p
     LEFT JOIN read_parquet('${density_file}') c
         ON c.level = 12
@@ -184,28 +168,6 @@ FROM (
 ) sub
 WHERE places.id = sub.id;
 EOF
-elif [ "$has_idf" = true ]; then
-    cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Computing importance scores (IDF only)..."
-ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
-UPDATE places SET importance = coalesce(sub.importance, 0)
-FROM (
-    SELECT
-        p.id,
-        coalesce(max(idf.idf_score), 0) AS importance
-    FROM places p
-    LEFT JOIN read_parquet('${idf_file}') idf
-        ON idf.collection = 'overture'
-        AND idf.category = p.categories.primary
-    GROUP BY p.id
-) sub
-WHERE places.id = sub.id;
-EOF
-else
-    cat >> "${output_dir}/import-overture.sql" <<EOF
-ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
-EOF
-fi
 
 # Build name_index with trigrams (reads importance directly from places)
 cat >> "${output_dir}/import-overture.sql" <<EOF

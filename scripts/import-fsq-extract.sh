@@ -110,29 +110,9 @@ else
     has_idf=false
 fi
 
-# Set IDF SQL fragments
-# idf_cte: a CTE fragment WITHOUT the leading WITH keyword, WITH trailing comma.
-# It will be composed as: WITH name_prep AS (...), <idf_cte> trigrams AS (...), ...
-# When has_idf=false, idf_cte is empty string (no extra CTE).
-if [ "$has_idf" = true ]; then
-    idf_cte="place_idf AS (
-    SELECT
-        p.fsq_place_id,
-        max(idf.idf_score) AS max_idf
-    FROM places p,
-        unnest(p.fsq_category_ids) AS t(category)
-    LEFT JOIN read_parquet('${idf_file}') idf
-        ON idf.collection = 'foursquare'
-        AND idf.category = t.category
-    WHERE p.fsq_category_ids IS NOT NULL
-    GROUP BY p.fsq_place_id
-),"
-    idf_join="LEFT JOIN place_idf pi USING (fsq_place_id)"
-    idf_score="coalesce(pi.max_idf, 0)"
-else
-    idf_cte=""
-    idf_join=""
-    idf_score="0"
+if [ "$has_density" != true ] || [ "$has_idf" != true ]; then
+    echo "Error: both density.parquet and category_idf.parquet are required in ${output_dir}"
+    exit 1
 fi
 
 # Remove any existing temp file
@@ -169,19 +149,22 @@ delete from places where longitude = 0 or latitude = 0 or geom is null;
 create index places_rtree on places using rtree (geom);
 EOF
 
-# Compute importance and store in places; branch on density/IDF availability
-if [ "$has_density" = true ]; then
-    cat >> "${output_dir}/import.sql" <<EOF
+# Compute importance as normalized 0-100 integer score
+# 60% density (S2 level 12 cell count) + 40% category IDF
+cat >> "${output_dir}/import.sql" <<EOF
 .print "Loading geography extension for importance scoring..."
 install geography from community;
 load geography;
-.print "Computing importance scores (with density)..."
-ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
-UPDATE places SET importance = coalesce(sub.importance, 0)
+.print "Computing importance scores..."
+ALTER TABLE places ADD COLUMN importance INTEGER DEFAULT 0;
+UPDATE places SET importance = sub.importance
 FROM (
     SELECT
         p.fsq_place_id,
-        coalesce(ln(1 + c.pt_count), 0) + coalesce(max(idf.idf_score), 0) AS importance
+        round(
+            60 * least(coalesce(ln(1 + c.pt_count), 0) / 10.0, 1.0)
+          + 40 * least(coalesce(max(idf.idf_score), 0) / 18.0, 1.0)
+        )::INTEGER AS importance
     FROM places p
     LEFT JOIN read_parquet('${density_file}') c
         ON c.level = 12
@@ -195,28 +178,6 @@ FROM (
 ) sub
 WHERE places.fsq_place_id = sub.fsq_place_id;
 EOF
-elif [ "$has_idf" = true ]; then
-    cat >> "${output_dir}/import.sql" <<EOF
-.print "Computing importance scores (IDF only)..."
-ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
-UPDATE places SET importance = coalesce(sub.importance, 0)
-FROM (
-    SELECT
-        p.fsq_place_id,
-        coalesce(max(idf.idf_score), 0) AS importance
-    FROM places p
-    LEFT JOIN read_parquet('${idf_file}') idf
-        ON idf.collection = 'foursquare'
-        AND idf.category = ANY(p.fsq_category_ids)
-    GROUP BY p.fsq_place_id
-) sub
-WHERE places.fsq_place_id = sub.fsq_place_id;
-EOF
-else
-    cat >> "${output_dir}/import.sql" <<EOF
-ALTER TABLE places ADD COLUMN importance DOUBLE DEFAULT 0;
-EOF
-fi
 
 # Build name_index with trigrams (reads importance directly from places)
 cat >> "${output_dir}/import.sql" <<EOF

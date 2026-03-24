@@ -199,7 +199,7 @@ def test_trigram_index_detection(tmp_path):
             name VARCHAR,
             lat DOUBLE,
             lon DOUBLE,
-            importance DOUBLE
+            importance INTEGER
         )
     """)
     conn.close()
@@ -220,7 +220,7 @@ def test_trigram_index_detection_missing(tmp_path):
             dm_code VARCHAR,
             fsq_place_id VARCHAR,
             name VARCHAR,
-            importance DOUBLE
+            importance INTEGER
         )
     """)
     conn.close()
