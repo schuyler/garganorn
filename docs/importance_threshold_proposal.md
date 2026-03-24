@@ -27,23 +27,23 @@ expensive GROUP BY.
 ### Formula
 
 ```
-importance_floor = min(8 * ln(1 + area_km2 / K), 100)
+importance_floor = min(4 * ln(1 + area_km2 / K), 100)
 ```
 
 Where:
 - `area_km2` is the bounding box area in square kilometers
 - For text-only queries (no bbox), use the full globe: ~510,000,000 km²
 - `K` is a tuning constant controlling pruning aggressiveness
-- The `8 *` scaling factor maps the raw log value to the 0–100 importance scale
+- The `4 *` scaling factor maps the raw log value to the 0–100 importance scale
 
 ### Example thresholds (K=1000)
 
 | Search scope       | Area (km²)     | Floor | Effect                        |
 |--------------------|----------------|-------|-------------------------------|
-| 5km local bbox     | ~100           | 1     | Nearly all places qualify     |
+| 5km local bbox     | ~100           | 0     | All places qualify            |
 | City-scale bbox    | ~2,500         | 5     | Filters lowest-importance     |
-| NorCal region      | ~70,000        | 15    | Most qualify                  |
-| Global (no bbox)   | 510,000,000    | 50    | Only prominent places         |
+| NorCal region      | ~70,000        | 17    | Most qualify                  |
+| Global (no bbox)   | 510,000,000    | 52    | Only prominent places         |
 
 ### Why this works
 
@@ -96,7 +96,7 @@ else:
     area_km2 = 510_000_000  # globe
 
 K = 1000  # tuning constant
-importance_floor = min(int(8 * math.log(1 + area_km2 / K)), 100)
+importance_floor = min(int(4 * math.log(1 + area_km2 / K)), 100)
 params["importance_floor"] = importance_floor
 ```
 
