@@ -120,16 +120,9 @@ def test_get_record(overture_db):
 # Unit tests — Overture trigram SQL generation
 # ---------------------------------------------------------------------------
 
-def _make_ovr_trigram(db_path=None):
-    """Create an OvertureMaps instance with trigram index flag set."""
-    db = OvertureMaps(db_path or ":memory:")
-    db.has_trigram_index = True
-    return db
-
-
 def test_overture_query_trigram_text_uses_jaccard():
     """_query_trigram_text SQL uses trigram Jaccard scoring."""
-    db = _make_ovr_trigram()
+    db = _make_ovr()
     params: SearchParams = {"q": "anchor brewing", "limit": 10}
     trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
     sql = db._query_trigram_text(params, trigrams)

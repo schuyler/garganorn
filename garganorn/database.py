@@ -39,9 +39,7 @@ class Database:
     collection: str = "social.gazetteer"
 
     JACCARD_THRESHOLD = 0.1
-    MAX_QUERY_TOKENS = 7
     MAX_QUERY_TRIGRAMS = 50
-    _JOIN_ALIASES = "abcdefg"
 
     @staticmethod
     def _strip_accents(s: str) -> str:
@@ -62,21 +60,6 @@ class Database:
         trigrams = sorted(set(s[i:i+3] for i in range(len(s) - 2)))
         return trigrams[:Database.MAX_QUERY_TRIGRAMS]
 
-    @staticmethod
-    def _build_name_index_join(n_tokens: int, join_key: str) -> str:
-        aliases = Database._JOIN_ALIASES
-        first = aliases[0]
-        lines = [f"FROM name_index {first}"]
-        for i in range(1, n_tokens):
-            alias = aliases[i]
-            lines.append(f"JOIN name_index {alias} ON {first}.{join_key} = {alias}.{join_key}")
-        where_clauses = [f"{aliases[i]}.token = lower(strip_accents($t{i}))" for i in range(n_tokens)]
-        where_clauses.append(f"{first}.importance >= $importance_floor")
-        lines.append("WHERE " + "\n  AND ".join(where_clauses))
-        lines.append(f"ORDER BY {first}.importance DESC")
-        lines.append("LIMIT $limit")
-        return "\n".join(lines)
-
     def __init__(self, db_path):
         """
         Initialize a connection to the gazetteer database.
@@ -87,8 +70,6 @@ class Database:
         self.db_path = Path(db_path)
         self.conn = None
         self.temp_dir = None
-        self.has_name_index = False
-        self.has_trigram_index = False
 
     def connect(self):
         """Connect to the database and load extensions."""
@@ -106,21 +87,25 @@ class Database:
             # fall back to install+load (works in dev / writable environments).
             self._load_extension("spatial")
 
-            # Detect name_index table
+            # Validate required schema
             tables = self.conn.execute(
                 "SELECT table_name FROM information_schema.tables "
                 "WHERE table_name = 'name_index'"
             ).fetchall()
-            self.has_name_index = len(tables) > 0
-
-            # Detect trigram column in name_index
-            self.has_trigram_index = False
-            if self.has_name_index:
-                tri_columns = self.conn.execute(
-                    "SELECT column_name FROM information_schema.columns "
-                    "WHERE table_name = 'name_index' AND column_name = 'trigram'"
-                ).fetchall()
-                self.has_trigram_index = len(tri_columns) > 0
+            if not tables:
+                raise RuntimeError(
+                    f"Required table 'name_index' not found in {self.db_path}. "
+                    "Run the import script to create the database with trigram indexing."
+                )
+            columns = self.conn.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name = 'name_index' AND column_name = 'trigram'"
+            ).fetchall()
+            if not columns:
+                raise RuntimeError(
+                    f"Required column 'trigram' not found in name_index in {self.db_path}. "
+                    "Re-run the import script with trigram indexing."
+                )
 
         return self.conn
 
@@ -173,17 +158,6 @@ class Database:
         assert stmt.description is not None, "Query did not return any results."
         columns = tuple(c[0] for c in stmt.description)
         return [dict(zip(columns, row)) for row in rows]
-
-    def _tokenize_query(self, q: str) -> list:
-        """
-        Tokenize a query string the same way the import scripts do:
-        lowercase, split on spaces, filter tokens with length <= 1.
-        Caps at MAX_QUERY_TOKENS, preferring longest tokens.
-        """
-        tokens = [t for t in q.lower().split() if len(t) > 1]
-        if len(tokens) > self.MAX_QUERY_TOKENS:
-            tokens = sorted(tokens, key=len, reverse=True)[:self.MAX_QUERY_TOKENS]
-        return tokens
 
     def query_record(self):
         raise NotImplementedError
@@ -252,10 +226,6 @@ class Database:
         trigrams = None
         if q:
             params["q"] = q
-            # Tokenize and bind t0, t1, ... for multi-token name_index self-join.
-            tokens = self._tokenize_query(q)
-            for i, token in enumerate(tokens):
-                params[f"t{i}"] = token
             # Compute trigrams for trigram index path
             trigrams = self._compute_trigrams(q)
             for i, tri in enumerate(trigrams):
@@ -321,33 +291,6 @@ class FoursquareOSP(Database):
             from places
             where fsq_place_id = $rkey
         """
-
-    def _query_name_index(self, params: SearchParams) -> str:
-        """
-        Multi-token self-join text-only search against name_index.
-        Used as fallback when phonetic index is not available.
-        """
-        tokens = [v for k, v in sorted(
-            ((k, v) for k, v in params.items() if k.startswith("t") and k[1:].isdigit()),
-            key=lambda kv: int(kv[0][1:])
-        )]
-        if not tokens:
-            return "SELECT NULL WHERE false"
-
-        select_clause = """SELECT
-        a.fsq_place_id AS rkey,
-        a.name,
-        a.latitude,
-        a.longitude,
-        a.address,
-        a.locality,
-        a.postcode,
-        a.region,
-        a.country,
-        0 AS distance_m"""
-
-        join_clause = self._build_name_index_join(len(tokens), "fsq_place_id")
-        return f"{select_clause}\n{join_clause};"
 
     def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
@@ -419,51 +362,28 @@ class FoursquareOSP(Database):
         """
 
     def query_nearest(self, params: SearchParams, trigrams=None):
-        assert "centroid" in params or "q" in params, "Either centroid or q must be provided for nearest search."
-        columns = self.search_columns()
-        if params.get("centroid"):
-            distance_m = "ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer"
-            spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
-        else:
-            distance_m = "0"
-            spatial_filter = ""
-        if params.get("q"):
-            if spatial_filter:
-                # Spatial + text: use trigram spatial if available, else ILIKE
-                if self.has_trigram_index and trigrams:
-                    return self._query_trigram_spatial(params, trigrams)
-                text_filter = "name ILIKE '%' || $q || '%'"
-            else:
-                # Text-only: use trigram index if available
-                if self.has_trigram_index and trigrams:
-                    return self._query_trigram_text(params, trigrams)
-                if self.has_name_index:
-                    return self._query_name_index(params)
-                # No name_index at all: fall back to full scan ILIKE
-                return f"""
-                    select
-                        {columns},
-                        0 as distance_m
-                    from places
-                    where name ILIKE '%' || $q || '%'
-                      and importance >= $importance_floor
-                    order by importance desc
-                    limit $limit;
-                """
-        else:
-            text_filter = ""
-        importance_filter = "importance >= $importance_floor" if params.get("importance_floor", 0) > 0 else ""
-        filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter, importance_filter)))
+        assert "centroid" in params or "q" in params, "Either centroid or q must be provided"
 
-        return f"""
-            select
-                {columns},
-                {distance_m} as distance_m
-            from places
-            where {filter_conditions}
-            order by distance_m
-            limit $limit;
-        """
+        has_spatial = "centroid" in params
+        has_text = "q" in params
+
+        if has_text and has_spatial:
+            return self._query_trigram_spatial(params, trigrams)
+        elif has_text:
+            return self._query_trigram_text(params, trigrams)
+        else:
+            # Spatial-only
+            columns = self.search_columns()
+            return f"""
+                select
+                    {columns},
+                    ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer as distance_m
+                from places
+                where bbox.xmin > $xmin and bbox.ymin > $ymin
+                  and bbox.xmax < $xmax and bbox.ymax < $ymax
+                order by distance_m
+                limit $limit;
+            """
 
     def process_record(self, result):
         locations = [
@@ -546,29 +466,6 @@ class OvertureMaps(Database):
             where id = $rkey
         """
 
-    def _query_name_index(self, params: SearchParams) -> str:
-        """
-        Multi-token self-join text-only search against name_index.
-        Used as fallback when phonetic index is not available.
-        """
-        tokens = [v for k, v in sorted(
-            ((k, v) for k, v in params.items() if k.startswith("t") and k[1:].isdigit()),
-            key=lambda kv: int(kv[0][1:])
-        )]
-        if not tokens:
-            return "SELECT NULL WHERE false"
-
-        select_clause = """SELECT
-        a.id AS rkey,
-        a.name,
-        a.latitude,
-        a.longitude,
-        NULL AS addresses,
-        0 AS distance_m"""
-
-        join_clause = self._build_name_index_join(len(tokens), "id")
-        return f"{select_clause}\n{join_clause};"
-
     def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
         Text-only trigram search using trigram Jaccard similarity.
@@ -629,39 +526,27 @@ class OvertureMaps(Database):
         """
 
     def query_nearest(self, params: SearchParams, trigrams=None):
-        columns = self.search_columns()
-        if params.get("centroid"):
-            distance_m = "ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer"
-            spatial_filter = "bbox.xmin > $xmin and bbox.ymin > $ymin and bbox.xmax < $xmax and bbox.ymax < $ymax"
+        assert "centroid" in params or "q" in params, "Either centroid or q must be provided"
+
+        has_spatial = "centroid" in params
+        has_text = "q" in params
+
+        if has_text and has_spatial:
+            return self._query_trigram_spatial(params, trigrams)
+        elif has_text:
+            return self._query_trigram_text(params, trigrams)
         else:
-            distance_m = "0"
-            spatial_filter = ""
-        if params.get("q"):
-            if spatial_filter:
-                # Spatial + text: use trigram spatial if available, else ILIKE
-                if self.has_trigram_index and trigrams:
-                    return self._query_trigram_spatial(params, trigrams)
-                text_filter = "names.primary ILIKE '%' || $q || '%'"
-            else:
-                # Text-only: use trigram index if available
-                if self.has_trigram_index and trigrams:
-                    return self._query_trigram_text(params, trigrams)
-                if self.has_name_index:
-                    return self._query_name_index(params)
-                # No name_index at all: fall back to full scan
-                text_filter = "names.primary ILIKE '%' || $q || '%'"
-        else:
-            text_filter = ""
-        importance_filter = "importance >= $importance_floor" if params.get("importance_floor", 0) > 0 else ""
-        filter_conditions = " and ".join(filter(None, (spatial_filter, text_filter, importance_filter)))
-        return f"""
-            select
-                {columns},
-                {distance_m} as distance_m
-            from places
-            where {filter_conditions}
-            order by distance_m
-            limit $limit;
+            # Spatial-only
+            columns = self.search_columns()
+            return f"""
+                select
+                    {columns},
+                    ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer as distance_m
+                from places
+                where bbox.xmin > $xmin and bbox.ymin > $ymin
+                  and bbox.xmax < $xmax and bbox.ymax < $ymax
+                order by distance_m
+                limit $limit;
             """
 
     def process_record(self, result):

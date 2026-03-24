@@ -131,8 +131,6 @@ def main():
     db.connect()
 
     print(f"Database: {DB_PATH}")
-    print(f"has_name_index: {db.has_name_index}")
-    print(f"has_trigram_index: {db.has_trigram_index}")
     print()
 
     # Warmup: run one query to ensure extensions are loaded, caches warm

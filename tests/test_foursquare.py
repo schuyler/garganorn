@@ -143,16 +143,9 @@ def test_get_record_not_found(fsq_db):
 # Unit tests — trigram SQL generation (no DB connection needed)
 # ---------------------------------------------------------------------------
 
-def _make_fsq_trigram(db_path=None):
-    """Create a FoursquareOSP instance with trigram index flag set."""
-    db = FoursquareOSP(db_path or ":memory:")
-    db.has_trigram_index = True
-    return db
-
-
 def test_query_trigram_text_uses_jaccard():
     """_query_trigram_text SQL uses trigram Jaccard scoring."""
-    db = _make_fsq_trigram()
+    db = _make_fsq()
     params: SearchParams = {"q": "coffee", "limit": 10}
     trigrams = ["cof", "off", "ffe", "fee"]
     sql = db._query_trigram_text(params, trigrams)
@@ -163,7 +156,7 @@ def test_query_trigram_text_uses_jaccard():
 
 def test_query_trigram_text_no_limit_5000():
     """_query_trigram_text SQL does not use an intermediate candidate LIMIT."""
-    db = _make_fsq_trigram()
+    db = _make_fsq()
     params: SearchParams = {"q": "coffee", "limit": 10}
     trigrams = ["cof", "off", "ffe", "fee"]
     sql = db._query_trigram_text(params, trigrams)
@@ -172,7 +165,7 @@ def test_query_trigram_text_no_limit_5000():
 
 def test_query_trigram_spatial_uses_jaccard():
     """_query_trigram_spatial SQL uses trigram Jaccard, trigram IN, ST_Distance_Sphere."""
-    db = _make_fsq_trigram()
+    db = _make_fsq()
     params: SearchParams = {
         "q": "coffee",
         "centroid": "POINT(-122.4194 37.7749)",
