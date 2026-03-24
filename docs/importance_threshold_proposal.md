@@ -5,10 +5,10 @@
 **Scoring formula**: Implemented. importance is now a normalized 0–100
 INTEGER stored in the `places` table and propagated to `name_index`.
 
-**Threshold filtering**: Proposed. Not yet implemented. Validated as
-necessary for global-scale datasets (100M+ places) but not testable on
-the NorCal 321K extract because the importance distribution is too flat
-(99% of places >= 13 on the 0–100 scale).
+**Threshold filtering**: Implemented. Validation against the global
+dataset is pending — the NorCal 321K extract has a flat importance
+distribution (99% of places >= 13 on the 0–100 scale) that does not
+exercise this filter meaningfully.
 
 ## Problem
 
