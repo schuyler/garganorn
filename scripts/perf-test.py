@@ -91,9 +91,10 @@ def format_result(r, index):
     lat = loc.get("latitude", "?")
     lon = loc.get("longitude", "?")
     dist = r.get("distance_m", None)
-    attrs = r.get("attributes", {})
-    locality = attrs.get("locality", "")
-    region = attrs.get("region", "")
+    locs = r.get("locations", [])
+    addr = next((l for l in locs if l.get("$type", "").endswith(".address")), {})
+    locality = addr.get("locality", "")
+    region = addr.get("region", "")
 
     location_str = f"{locality}, {region}" if locality else region or ""
     dist_str = f"  ({dist}m)" if dist and dist > 0 else ""
