@@ -611,6 +611,7 @@ class OpenStreetMap(Database):
             name,
             latitude::decimal(10,6)::varchar AS latitude,
             longitude::decimal(10,6)::varchar AS longitude,
+            primary_category,
             tags
         """
 
@@ -619,7 +620,8 @@ class OpenStreetMap(Database):
             osm_type || osm_id::VARCHAR AS rkey,
             name,
             latitude::decimal(10,6)::varchar AS latitude,
-            longitude::decimal(10,6)::varchar AS longitude
+            longitude::decimal(10,6)::varchar AS longitude,
+            primary_category
         """
 
     def query_record(self):
@@ -704,10 +706,13 @@ class OpenStreetMap(Database):
             """
 
     def process_record(self, result):
-        tags = result.pop("tags", []) or []
-        tag_dict = {}
-        for tag in tags:
-            k, _, v = tag.partition("=")
+        # tags comes as a dict from DuckDB MAP type (absent in search results)
+        tag_dict = dict(result.pop("tags", None) or {})
+
+        # Parse primary_category (e.g., "amenity=cafe") into tag_dict
+        primary_category = result.pop("primary_category", None)
+        if primary_category:
+            k, _, v = primary_category.partition("=")
             tag_dict[k] = v
 
         locations = [

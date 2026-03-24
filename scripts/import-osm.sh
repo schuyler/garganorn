@@ -58,6 +58,9 @@ script_dir="$(dirname "$(realpath "$0")")"
 output_dir="${script_dir}/../db"
 mkdir -p "$output_dir"
 
+# Python with QuackOSM installed (default: python3)
+QUACKOSM_PYTHON="${QUACKOSM_PYTHON:-python3}"
+
 # ─── Stage 1: Convert PBF to GeoParquet using QuackOSM ───────────────────────
 
 cache_dir="${output_dir}/cache/osm"
@@ -68,7 +71,7 @@ if [ -f "$parquet_file" ]; then
     echo "Using cached GeoParquet: $parquet_file"
 else
     echo "Converting PBF to GeoParquet with QuackOSM..."
-    python3 -c "
+    ${QUACKOSM_PYTHON} -c "
 import quackosm
 quackosm.convert_pbf_to_parquet(
     pbf_path='${pbf_path}',
@@ -254,13 +257,12 @@ SELECT
     ST_Y(ST_PointOnSurface(geometry)) AS latitude,
     ST_X(ST_PointOnSurface(geometry)) AS longitude,
     ST_PointOnSurface(geometry) AS geom,
-    list_prepend(
-        primary_category,
+    primary_category,
+    map_from_entries(
         list_filter(
-            map_entries(tags)
-                .transform(e -> e.key || '=' || e.value),
-            x -> x != primary_category
-               AND split_part(x, '=', 1) IN (
+            map_entries(tags),
+            e -> e.key != split_part(primary_category, '=', 1)
+               AND e.key IN (
                    'cuisine', 'sport', 'religion', 'denomination',
                    'opening_hours', 'phone', 'website', 'wikidata',
                    'wheelchair', 'internet_access',
@@ -276,6 +278,7 @@ SELECT
     } AS bbox
 FROM filtered
 WHERE primary_category IS NOT NULL
+  AND name IS NOT NULL
 EOF
 
 # Append bbox filter if provided
@@ -322,7 +325,7 @@ SELECT
     p.osm_id,
     coalesce(idf.idf_score, 0) AS idf_score
 FROM places p
-LEFT JOIN t_idf idf ON idf.category = p.tags[1];
+LEFT JOIN t_idf idf ON idf.category = p.primary_category;
 UPDATE places SET importance = round(
     60 * least(d.density_score / 10.0, 1.0)
   + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
@@ -366,7 +369,7 @@ UPDATE places SET importance = round(
     40 * least(coalesce(idf.idf_score, 0) / 18.0, 1.0)
 )::INTEGER
 FROM t_idf idf
-WHERE idf.category = places.tags[1];
+WHERE idf.category = places.primary_category;
 DROP TABLE t_idf;
 EOF
 else

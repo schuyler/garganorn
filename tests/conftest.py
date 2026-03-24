@@ -259,17 +259,25 @@ def overture_db(overture_db_path):
 # ---------------------------------------------------------------------------
 
 OSM_PLACES = [
-    # osm_type, osm_id, name, latitude, longitude, tags (VARCHAR[])
+    # osm_type, osm_id, name, latitude, longitude, primary_category, tags (dict)
     ("n", 240109189, "Tartine Manufactory", 37.7612, -122.4195,
-     ["amenity=cafe", "cuisine=coffee", "addr:street=Alabama St", "addr:housenumber=595", "addr:city=San Francisco", "addr:postcode=94110", "addr:country=US"]),
+     "amenity=cafe",
+     {"cuisine": "coffee", "addr:street": "Alabama St", "addr:housenumber": "595",
+      "addr:city": "San Francisco", "addr:postcode": "94110", "addr:country": "US"}),
     ("n", 1234567, "UCSF Medical Center", 37.7631, -122.4576,
-     ["amenity=hospital", "healthcare=hospital", "addr:street=Parnassus Ave", "addr:housenumber=505", "addr:city=San Francisco", "addr:country=US"]),
+     "amenity=hospital",
+     {"healthcare": "hospital", "addr:street": "Parnassus Ave", "addr:housenumber": "505",
+      "addr:city": "San Francisco", "addr:country": "US"}),
     ("w", 50637691, "Dolores Park", 37.7596, -122.4269,
-     ["leisure=park"]),
+     "leisure=park",
+     {}),
     ("n", 9876543, "Bi-Rite Market", 37.7614, -122.4253,
-     ["shop=supermarket", "addr:street=18th St", "addr:housenumber=3639", "addr:city=San Francisco", "addr:postcode=94110", "addr:country=US"]),
+     "shop=supermarket",
+     {"addr:street": "18th St", "addr:housenumber": "3639",
+      "addr:city": "San Francisco", "addr:postcode": "94110", "addr:country": "US"}),
     ("w", 88776655, "Caltrain Station", 37.7764, -122.3942,
-     ["railway=station"]),
+     "railway=station",
+     {}),
 ]
 
 OSM_IMPORTANCE = {
@@ -294,26 +302,34 @@ def _create_osm_db(db_path):
             latitude DOUBLE,
             longitude DOUBLE,
             geom GEOMETRY,
-            tags VARCHAR[],
+            primary_category VARCHAR,
+            tags MAP(VARCHAR, VARCHAR),
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
             importance INTEGER
         )
     """)
 
     for row in OSM_PLACES:
-        osm_type, osm_id, name, lat, lon, tags = row
+        osm_type, osm_id, name, lat, lon, primary_category, tags = row
         rkey = osm_type + str(osm_id)
         importance = OSM_IMPORTANCE[rkey]
-        tags_literal = "[" + ", ".join(f"'{t}'" for t in tags) + "]"
+        # Build MAP literal: MAP {'key1': 'val1', 'key2': 'val2'}
+        if tags:
+            map_entries = ", ".join(f"'{k}': '{v}'" for k, v in tags.items())
+            map_literal = f"MAP {{{map_entries}}}"
+        else:
+            map_literal = "MAP()::MAP(VARCHAR, VARCHAR)"
         conn.execute(f"""
             INSERT INTO places VALUES (
                 ?, ?, ?, ?, ?,
                 ST_Point(?, ?),
-                {tags_literal}::VARCHAR[],
+                ?,
+                {map_literal},
                 {{'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}},
                 ?
             )
         """, [osm_type, osm_id, name, lat, lon, lon, lat,
+              primary_category,
               lon, lat, lon, lat,
               importance])
 
@@ -328,7 +344,7 @@ def _create_osm_db(db_path):
         )
     """)
     for row in OSM_PLACES:
-        osm_type, osm_id, name, lat, lon, tags = row
+        osm_type, osm_id, name, lat, lon, primary_category, tags = row
         rkey = osm_type + str(osm_id)
         importance = OSM_IMPORTANCE[rkey]
         for trigram in _generate_trigrams(name):

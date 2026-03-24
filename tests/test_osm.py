@@ -82,9 +82,10 @@ def test_process_record_full_address():
         "name": "Tartine Manufactory",
         "latitude": "37.761200",
         "longitude": "-122.419500",
-        "tags": ["amenity=cafe", "cuisine=coffee", "addr:street=Alabama St",
-                 "addr:housenumber=595", "addr:city=San Francisco",
-                 "addr:postcode=94110", "addr:country=US"],
+        "primary_category": "amenity=cafe",
+        "tags": {"cuisine": "coffee", "addr:street": "Alabama St",
+                 "addr:housenumber": "595", "addr:city": "San Francisco",
+                 "addr:postcode": "94110", "addr:country": "US"},
     }
     record = db.process_record(result)
     assert record["$type"] == "community.lexicon.location.place"
@@ -110,8 +111,8 @@ def test_process_record_housenumber_prepend():
         "name": "Tartine Manufactory",
         "latitude": "37.761200",
         "longitude": "-122.419500",
-        "tags": ["amenity=cafe", "addr:street=Alabama St",
-                 "addr:housenumber=595", "addr:country=US"],
+        "primary_category": "amenity=cafe",
+        "tags": {"addr:street": "Alabama St", "addr:housenumber": "595", "addr:country": "US"},
     }
     record = db.process_record(result)
     assert len(record["locations"]) == 2
@@ -127,7 +128,8 @@ def test_process_record_no_country():
         "name": "Dolores Park",
         "latitude": "37.759600",
         "longitude": "-122.426900",
-        "tags": ["leisure=park"],
+        "primary_category": "leisure=park",
+        "tags": {},
     }
     record = db.process_record(result)
     assert len(record["locations"]) == 1
@@ -135,36 +137,38 @@ def test_process_record_no_country():
 
 
 def test_process_record_no_address_tags():
-    """Tags without addr:* produce only geo location, remaining tags in attributes."""
+    """Tags without addr:* produce only geo location, primary_category parsed into attributes."""
     db = _make_osm()
     result = {
         "rkey": "w88776655",
         "name": "Caltrain Station",
         "latitude": "37.776400",
         "longitude": "-122.394200",
-        "tags": ["railway=station"],
+        "primary_category": "railway=station",
+        "tags": {},
     }
     record = db.process_record(result)
     assert len(record["locations"]) == 1
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
-    # Should have remaining tags in attributes
+    # With MAP schema, empty tags + primary_category parsed → {"railway": "station"}
     assert record["attributes"] == {"railway": "station"}
 
 
 def test_process_record_primary_category_in_attributes():
-    """The primary category tag (tags[0]) appears in attributes."""
+    """The primary_category field is parsed and appears in attributes."""
     db = _make_osm()
     result = {
         "rkey": "n240109189",
         "name": "Tartine Manufactory",
         "latitude": "37.761200",
         "longitude": "-122.419500",
-        "tags": ["amenity=cafe", "cuisine=coffee", "addr:country=US"],
+        "primary_category": "amenity=cafe",
+        "tags": {"cuisine": "coffee", "addr:country": "US"},
     }
     record = db.process_record(result)
-    # The primary category tag ("amenity=cafe") should be represented in attributes
     attrs = record.get("attributes", {})
     assert attrs.get("amenity") == "cafe"
+    assert attrs.get("cuisine") == "coffee"
 
 
 # ---------------------------------------------------------------------------
