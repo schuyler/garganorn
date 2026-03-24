@@ -58,7 +58,8 @@ source_data="https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${lates
 
 # Create the db/ directory in the parent folder relative to this script
 # This will be the output directory for the DuckDB database
-output_dir="$(dirname "$(realpath "$0")")/../db"
+script_dir="$(dirname "$(realpath "$0")")"
+output_dir="${script_dir}/../db"
 mkdir -p "$output_dir"
 
 # Download and cache parquet files locally
@@ -92,27 +93,18 @@ for i in $(seq 0 99); do
     mv "${dest}.tmp" "$dest"
 done
 
-# Detect density file
-density_file="${output_dir}/density.parquet"
-if [ -f "$(realpath "${density_file}" 2>/dev/null || echo "")" ]; then
-    density_file="$(realpath "${density_file}")"
-    has_density=true
-else
-    has_density=false
+# Detect or auto-build density file
+density_file="${output_dir}/density-fsq.parquet"
+if [ ! -f "$density_file" ]; then
+    echo "Building FSQ density table..."
+    "${script_dir}/build-density.sh" fsq "${cache_dir}"
 fi
 
-# Detect category IDF file
-idf_file="${output_dir}/category_idf.parquet"
-if [ -f "$(realpath "${idf_file}" 2>/dev/null || echo "")" ]; then
-    idf_file="$(realpath "${idf_file}")"
-    has_idf=true
-else
-    has_idf=false
-fi
-
-if [ "$has_density" != true ] || [ "$has_idf" != true ]; then
-    echo "Error: both density.parquet and category_idf.parquet are required in ${output_dir}"
-    exit 1
+# Detect or auto-build category IDF file
+idf_file="${output_dir}/category_idf-fsq.parquet"
+if [ ! -f "$idf_file" ]; then
+    echo "Building FSQ IDF table..."
+    "${script_dir}/build-idf.sh" fsq "${cache_dir}"
 fi
 
 # Remove any existing temp file
@@ -158,7 +150,7 @@ load geography;
 .print "Computing importance scores..."
 ALTER TABLE places ADD COLUMN importance INTEGER DEFAULT 0;
 CREATE TEMP TABLE t_density AS SELECT * FROM read_parquet('${density_file}') WHERE level = 12;
-CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}') WHERE collection = 'foursquare';
+CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}');
 CREATE TEMP TABLE place_density AS
 SELECT
     p.fsq_place_id,

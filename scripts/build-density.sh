@@ -12,33 +12,81 @@ fi
 
 if [ "$1" != "fsq" ] && [ "$1" != "overture" ]; then
     echo
-    echo "Usage: $0 <source>"
+    echo "Usage: $0 <source> [source_path_or_release]"
     echo
     echo "  source: fsq or overture"
+    echo "  source_path_or_release: optional local directory path or release version string"
     echo
     exit 1
 fi
+
+source="$1"
+source_arg="$2"
 
 output_dir="$(dirname "$(realpath "$0")")/../db"
 mkdir -p "$output_dir"
 
-if [ "$1" = "fsq" ]; then
-    source_db="${output_dir}/fsq-osp.duckdb"
-else
-    source_db="${output_dir}/overture-maps.duckdb"
-fi
-
-if [ ! -f "$source_db" ]; then
-    echo "Source database not found: ${source_db}"
-    echo "Please run the appropriate import script first."
-    exit 1
-fi
-
 version="$(date +%Y-%m)"
-output_file="${output_dir}/density-${version}.parquet"
+
+if [ "$source" = "fsq" ]; then
+    output_file="${output_dir}/density-fsq-${version}.parquet"
+    output_symlink="${output_dir}/density-fsq.parquet"
+else
+    output_file="${output_dir}/density-overture-${version}.parquet"
+    output_symlink="${output_dir}/density-overture.parquet"
+fi
+
 output_file_tmp="${output_file}.tmp"
-output_symlink="${output_dir}/density.parquet"
 sql_file="${output_dir}/build-density.sql"
+
+# Determine the read_parquet(...) expression based on source and argument
+if [ "$source" = "fsq" ]; then
+    if [[ -d "$source_arg" ]]; then
+        # Local directory path
+        fsq_parquet_expr="read_parquet('${source_arg}/places-*.zstd.parquet')"
+        use_httpfs=false
+    else
+        # Release version or auto-discover
+        if [ -n "$source_arg" ]; then
+            release="$source_arg"
+        else
+            # Auto-discover latest release from S3
+            echo "Auto-discovering latest FSQ release..."
+            release=$(curl -s "https://fsq-os-places-us-east-1.s3.amazonaws.com/" |
+              grep -o "<Key>release/dt=[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}/</Key>" |
+              sed 's/<Key>release\/dt=\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)\/<\/Key>/\1/g' |
+              sort -r |
+              head -1)
+            if [ -z "$release" ]; then
+                echo "No FSQ releases found."
+                exit 1
+            fi
+        fi
+        echo "Using FSQ release: $release"
+        # Build list of 100 S3 URLs
+        url_list=""
+        for i in $(seq 0 99); do
+            url="'https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${release}/places/parquet/places-$(printf '%05d' $i).zstd.parquet'"
+            if [ -z "$url_list" ]; then
+                url_list="$url"
+            else
+                url_list="${url_list}, ${url}"
+            fi
+        done
+        fsq_parquet_expr="read_parquet([${url_list}])"
+        use_httpfs=true
+    fi
+else
+    # Overture mode
+    if [ -n "$source_arg" ]; then
+        release="$source_arg"
+    else
+        release="2025-03-19.1"
+    fi
+    echo "Using Overture release: $release"
+    overture_parquet_expr="read_parquet('https://overturemaps-us-west-2.s3.amazonaws.com/release/${release}/theme=places/type=place/*.parquet')"
+    use_httpfs=true
+fi
 
 # Generate the SQL file
 cat > "${sql_file}" <<EOF
@@ -46,15 +94,14 @@ INSTALL geography FROM community;
 LOAD geography;
 EOF
 
-if [ "$1" = "overture" ]; then
+if [ "$use_httpfs" = "true" ]; then
     cat >> "${sql_file}" <<EOF
-INSTALL spatial;
-LOAD spatial;
+INSTALL httpfs;
+LOAD httpfs;
 EOF
 fi
 
 cat >> "${sql_file}" <<EOF
-ATTACH '${source_db}' AS src (READ_ONLY);
 CREATE TABLE cell_counts (
     level    TINYINT NOT NULL,
     cell_id  UBIGINT NOT NULL,
@@ -62,7 +109,7 @@ CREATE TABLE cell_counts (
 );
 EOF
 
-if [ "$1" = "fsq" ]; then
+if [ "$source" = "fsq" ]; then
     cat >> "${sql_file}" <<EOF
 .print "Aggregating level 14 from FSQ..."
 INSERT INTO cell_counts
@@ -70,7 +117,7 @@ SELECT
     14 AS level,
     s2_cell_parent(s2_cellfromlonlat(longitude, latitude), 14) AS cell_id,
     count(*) AS pt_count
-FROM src.places
+FROM ${fsq_parquet_expr}
 WHERE longitude != 0 AND latitude != 0
 GROUP BY cell_id;
 EOF
@@ -82,13 +129,13 @@ SELECT
     14 AS level,
     s2_cell_parent(
         s2_cellfromlonlat(
-            st_x(st_centroid(geometry)),
-            st_y(st_centroid(geometry))
+            (bbox.xmin + bbox.xmax) / 2.0,
+            (bbox.ymin + bbox.ymax) / 2.0
         ), 14
     ) AS cell_id,
     count(*) AS pt_count
-FROM src.places
-WHERE geometry IS NOT NULL
+FROM ${overture_parquet_expr}
+WHERE bbox IS NOT NULL
 GROUP BY cell_id;
 EOF
 fi
