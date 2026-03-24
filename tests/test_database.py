@@ -6,81 +6,6 @@ from garganorn.database import Database, FoursquareOSP, OvertureMaps
 
 
 # ---------------------------------------------------------------------------
-# Unit tests for Database._tokenize_query
-# Instance method: call on a concrete subclass instance.
-# ---------------------------------------------------------------------------
-
-def _make_db_instance():
-    """Return a FoursquareOSP instance (no DB path needed for tokenize tests)."""
-    return FoursquareOSP(":memory:")
-
-
-def test_tokenize_simple():
-    """_tokenize_query('hello world') -> ['hello', 'world']"""
-    db = _make_db_instance()
-    result = db._tokenize_query("hello world")
-    assert result == ["hello", "world"]
-
-
-def test_tokenize_strips_short_words():
-    """Single-character words are filtered out."""
-    db = _make_db_instance()
-    result = db._tokenize_query("a hello b world")
-    assert "a" not in result
-    assert "b" not in result
-    assert "hello" in result
-    assert "world" in result
-
-
-def test_tokenize_trims_to_max():
-    """More than 7 words keeps 7 longest by length."""
-    db = _make_db_instance()
-    words = ["aa", "bbb", "cccc", "ddddd", "eeeeee", "fffffff", "gggggggg", "hhhhhhhhh"]
-    query = " ".join(words)
-    result = db._tokenize_query(query)
-    assert len(result) <= 7
-    # The shortest word should have been dropped
-    assert "aa" not in result
-
-
-def test_tokenize_whitespace():
-    """Leading, trailing, and multiple internal spaces are handled."""
-    db = _make_db_instance()
-    result = db._tokenize_query("  hello   world  ")
-    assert result == ["hello", "world"]
-
-
-def test_tokenize_empty():
-    """Empty string returns empty list."""
-    db = _make_db_instance()
-    result = db._tokenize_query("")
-    assert result == []
-
-
-# ---------------------------------------------------------------------------
-# Unit tests for Database._build_name_index_join (static method)
-# Signature: _build_name_index_join(n_tokens: int, join_key: str) -> str
-# ---------------------------------------------------------------------------
-
-def test_build_name_index_join_single_token():
-    """1 token: no JOIN in generated SQL."""
-    sql = Database._build_name_index_join(1, "fsq_place_id")
-    assert "JOIN" not in sql.upper()
-
-
-def test_build_name_index_join_two_tokens():
-    """2 tokens: exactly one JOIN in generated SQL."""
-    sql = Database._build_name_index_join(2, "fsq_place_id")
-    assert sql.upper().count("JOIN") == 1
-
-
-def test_build_name_index_join_max_tokens():
-    """7 tokens: 6 JOINs in generated SQL."""
-    sql = Database._build_name_index_join(7, "fsq_place_id")
-    assert sql.upper().count("JOIN") == 6
-
-
-# ---------------------------------------------------------------------------
 # Integration tests
 # ---------------------------------------------------------------------------
 
@@ -94,19 +19,32 @@ def test_connect_creates_connection(fsq_db_path):
     db.close()
 
 
-def test_connect_detects_name_index_absent(fsq_db_path_no_index):
-    """DB without name_index table -> connect() sets has_name_index to False."""
-    db = FoursquareOSP(fsq_db_path_no_index)
-    db.connect()
-    assert db.has_name_index is False
+def test_connect_fails_without_name_index(tmp_path):
+    """connect() should raise RuntimeError when name_index table is missing."""
+    db_path = tmp_path / "no_index.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("CREATE TABLE places (id VARCHAR)")
+    conn.close()
+
+    db = FoursquareOSP(db_path)
+    with pytest.raises(RuntimeError, match="name_index"):
+        db.connect()
     db.close()
 
 
-def test_connect_detects_name_index_present(fsq_db_path):
-    """DB with name_index table -> connect() sets has_name_index to True."""
-    db = FoursquareOSP(fsq_db_path)
-    db.connect()
-    assert db.has_name_index is True
+def test_connect_fails_without_trigram_column(tmp_path):
+    """connect() should raise RuntimeError when name_index exists but lacks trigram column."""
+    db_path = tmp_path / "no_trigram.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("CREATE TABLE places (id VARCHAR)")
+    conn.execute("CREATE TABLE name_index (token VARCHAR, id VARCHAR, importance INTEGER)")
+    conn.close()
+
+    db = FoursquareOSP(db_path)
+    with pytest.raises(RuntimeError, match="trigram"):
+        db.connect()
     db.close()
 
 
@@ -181,51 +119,3 @@ def test_compute_trigrams_max_cap():
     long_string = "abcdefghijklmnopqrstuvwxyz" * 10  # 260 chars -> 258 trigrams
     result = Database._compute_trigrams(long_string)
     assert len(result) <= Database.MAX_QUERY_TRIGRAMS
-
-
-# ---------------------------------------------------------------------------
-# Integration tests for has_trigram_index detection
-# ---------------------------------------------------------------------------
-
-def test_trigram_index_detection(tmp_path):
-    """connect() sets has_trigram_index=True when name_index has trigram column."""
-    import duckdb as _duckdb
-    db_path = tmp_path / "trigram_detect.duckdb"
-    conn = _duckdb.connect(str(db_path))
-    conn.execute("""
-        CREATE TABLE name_index (
-            trigram VARCHAR,
-            fsq_place_id VARCHAR,
-            name VARCHAR,
-            lat DOUBLE,
-            lon DOUBLE,
-            importance INTEGER
-        )
-    """)
-    conn.close()
-
-    db = FoursquareOSP(db_path)
-    db.connect()
-    assert db.has_trigram_index is True
-    db.close()
-
-
-def test_trigram_index_detection_missing(tmp_path):
-    """connect() sets has_trigram_index=False when name_index has no trigram column."""
-    import duckdb as _duckdb
-    db_path = tmp_path / "no_trigram_detect.duckdb"
-    conn = _duckdb.connect(str(db_path))
-    conn.execute("""
-        CREATE TABLE name_index (
-            dm_code VARCHAR,
-            fsq_place_id VARCHAR,
-            name VARCHAR,
-            importance INTEGER
-        )
-    """)
-    conn.close()
-
-    db = FoursquareOSP(db_path)
-    db.connect()
-    assert db.has_trigram_index is False
-    db.close()

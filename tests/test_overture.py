@@ -8,9 +8,8 @@ from garganorn.database import OvertureMaps, SearchParams
 # Unit tests — SQL generation (no DB connection needed)
 # ---------------------------------------------------------------------------
 
-def _make_ovr(db_path=None, has_name_index=False):
+def _make_ovr(db_path=None):
     db = OvertureMaps(db_path or ":memory:")
-    db.has_name_index = has_name_index
     return db
 
 
@@ -30,37 +29,10 @@ def test_query_nearest_spatial_only():
     assert "geom," not in sql and "geom)" not in sql or "geometry" in sql
 
 
-def test_query_nearest_text_only_no_name_index():
-    """Text-only path with no name_index falls back to ILIKE full scan."""
-    db = _make_ovr(has_name_index=False)
-    params: SearchParams = {"q": "coffee", "t0": "coffee", "limit": 10}
-    sql = db.query_nearest(params)
-    # Without name_index, falls back to ILIKE
-    assert "ILIKE" in sql
-
-
-def test_query_nearest_text_only_with_name_index():
-    """Text-only path with name_index uses multi-token self-join.
-
-    The phonetic branch uses the name_index (token-based) for text-only
-    searches instead of FTS. Phonetic search paths are tested separately
-    when a phonetic index is present (not tested here as it requires
-    the splink_udfs DuckDB extension).
-    """
-    db = _make_ovr(has_name_index=True)
-    params: SearchParams = {"q": "coffee", "t0": "coffee", "limit": 10}
-    sql = db.query_nearest(params)
-    assert "name_index" in sql
-    assert "$t0" in sql
-
-
-def test_query_name_index_uses_id():
-    """When name_index is used, the join key is `id` (not fsq_place_id)."""
-    db = _make_ovr(has_name_index=True)
-    params: SearchParams = {"q": "coffee", "t0": "coffee", "limit": 10}
-    sql = db._query_name_index(params)
-    assert "id" in sql
-    assert "fsq_place_id" not in sql
+def test_query_nearest_requires_centroid_or_q(overture_db):
+    """query_nearest() should require either centroid or q."""
+    with pytest.raises(AssertionError):
+        overture_db.query_nearest({"limit": 10})
 
 
 def test_process_record_with_addresses():
@@ -108,16 +80,6 @@ def test_process_record_no_addresses():
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
 
 
-def test_query_nearest_empty_produces_sql():
-    """No assert guard in OvertureMaps.query_nearest — empty params produce SQL string."""
-    db = _make_ovr()
-    params: SearchParams = {"limit": 10}
-    # Should NOT raise here (no assertion guard in OvertureMaps.query_nearest)
-    sql = db.query_nearest(params)
-    # SQL is a string (may have empty WHERE clause)
-    assert isinstance(sql, str)
-
-
 def test_text_only_result_search_columns_has_addresses():
     """search_columns() for OvertureMaps includes addresses column."""
     db = _make_ovr()
@@ -138,11 +100,7 @@ def test_nearest_spatial(overture_db):
 
 
 def test_nearest_text(overture_db):
-    """Spatial+text query finds a place by name fragment using ILIKE.
-
-    Both lat/lon and q are provided, so production code uses the spatial bbox
-    path and applies `names.primary ILIKE` on the filtered result set.
-    """
+    """Text query finds a place by name fragment via trigram search."""
     results = overture_db.nearest(latitude=37.7596, longitude=-122.4269, q="Dolores")
     names = [r["names"][0]["text"] for r in results]
     assert any("Dolores" in n for n in names)
@@ -165,7 +123,6 @@ def test_get_record(overture_db):
 def _make_ovr_trigram(db_path=None):
     """Create an OvertureMaps instance with trigram index flag set."""
     db = OvertureMaps(db_path or ":memory:")
-    db.has_name_index = True
     db.has_trigram_index = True
     return db
 
@@ -184,17 +141,17 @@ def test_overture_query_trigram_text_uses_jaccard():
 # Integration tests — Overture trigram DB
 # ---------------------------------------------------------------------------
 
-def test_overture_trigram_nearest_text(overture_trigram_db):
+def test_overture_trigram_nearest_text(overture_db):
     """Trigram text search for 'Anchor Brewing' finds it in results."""
-    results = overture_trigram_db.nearest(q="Anchor Brewing")
+    results = overture_db.nearest(q="Anchor Brewing")
     assert len(results) > 0
     names = [r["names"][0]["text"] for r in results]
     assert any("Anchor" in n for n in names)
 
 
-def test_overture_trigram_nearest_no_scoring_in_attributes(overture_trigram_db):
+def test_overture_trigram_nearest_no_scoring_in_attributes(overture_db):
     """Trigram search results do not expose score in attributes."""
-    results = overture_trigram_db.nearest(q="Anchor Brewing")
+    results = overture_db.nearest(q="Anchor Brewing")
     assert len(results) > 0
     for r in results:
         assert "score" not in r.get("attributes", {})

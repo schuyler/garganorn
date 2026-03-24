@@ -28,250 +28,6 @@ OVERTURE_PLACES = [
 ]
 
 
-def _create_fsq_db(db_path, with_name_index=True):
-    """Create a FSQ DuckDB database with test data."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            fsq_place_id VARCHAR PRIMARY KEY,
-            name VARCHAR,
-            latitude DOUBLE,
-            longitude DOUBLE,
-            geom GEOMETRY,
-            address VARCHAR,
-            locality VARCHAR,
-            postcode VARCHAR,
-            region VARCHAR,
-            admin_region VARCHAR,
-            post_town VARCHAR,
-            po_box VARCHAR,
-            country VARCHAR,
-            date_created DATE,
-            date_refreshed DATE,
-            date_closed DATE,
-            tel VARCHAR,
-            website VARCHAR,
-            email VARCHAR,
-            facebook_id VARCHAR,
-            instagram VARCHAR,
-            twitter VARCHAR,
-            fsq_category_ids VARCHAR[],
-            fsq_category_labels VARCHAR[],
-            placemaker_url VARCHAR,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance INTEGER
-        )
-    """)
-
-    fsq_importance = {
-        "fsq001": 75,
-        "fsq002": 60,
-        "fsq003": 85,
-        "fsq004": 55,
-        "fsq005": 90,
-    }
-
-    for row in FSQ_PLACES:
-        fsq_id, name, lat, lon, address, locality, postcode, region, admin_region, post_town, po_box, country = row
-        conn.execute("""
-            INSERT INTO places VALUES (
-                ?, ?, ?, ?,
-                ST_Point(?, ?),
-                ?, ?, ?, ?, ?, ?, ?,
-                ?,
-                '2021-01-01', '2022-01-01', NULL,
-                NULL, NULL, NULL, NULL, NULL, NULL,
-                ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
-                NULL,
-                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                ?
-            )
-        """, [fsq_id, name, lat, lon, lon, lat,
-              address, locality, postcode, region, admin_region, post_town, po_box,
-              country,
-              lon, lat, lon, lat,
-              fsq_importance[fsq_id]])
-
-    if with_name_index:
-        # Token-only name_index (no dm_code column) so connect() sets
-        # has_phonetic_index=False and tests exercise the token self-join path.
-        conn.execute("""
-            CREATE TABLE name_index (
-                token VARCHAR,
-                fsq_place_id VARCHAR,
-                name VARCHAR,
-                latitude VARCHAR,
-                longitude VARCHAR,
-                address VARCHAR,
-                locality VARCHAR,
-                postcode VARCHAR,
-                region VARCHAR,
-                country VARCHAR,
-                importance INTEGER
-            )
-        """)
-        for row in FSQ_PLACES:
-            fsq_id, name, lat, lon, address, locality, postcode, region, _, _, _, country = row
-            for word in name.lower().split():
-                if len(word) > 1:
-                    conn.execute("""
-                        INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, [word, fsq_id, name,
-                          f"{lat:.6f}", f"{lon:.6f}",
-                          address, locality, postcode, region, country,
-                          fsq_importance[fsq_id]])
-
-    conn.close()
-
-
-def _create_overture_db(db_path, with_name_index=True):
-    """Create an Overture DuckDB database with test data."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            id VARCHAR PRIMARY KEY,
-            geometry GEOMETRY,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            names STRUCT("primary" VARCHAR),
-            categories STRUCT("primary" VARCHAR),
-            addresses STRUCT(
-                country VARCHAR,
-                postcode VARCHAR,
-                locality VARCHAR,
-                freeform VARCHAR,
-                region VARCHAR
-            )[],
-            websites VARCHAR[],
-            socials VARCHAR[],
-            emails VARCHAR[],
-            phones VARCHAR[],
-            brand STRUCT(names STRUCT("primary" VARCHAR)),
-            confidence DOUBLE,
-            version INTEGER,
-            sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
-            importance INTEGER
-        )
-    """)
-
-    ovr_importance = {
-        "ovr001": 70,
-        "ovr002": 55,
-        "ovr003": 80,
-        "ovr004": 55,
-        "ovr005": 65,
-    }
-
-    for row in OVERTURE_PLACES:
-        ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
-        conn.execute("""
-            INSERT INTO places VALUES (
-                ?, ST_Point(?, ?),
-                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                {'primary': ?},
-                {'primary': NULL},
-                [{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}],
-                NULL, NULL, NULL, NULL,
-                NULL,
-                0.9, 1, NULL,
-                ?
-            )
-        """, [ovr_id, lon, lat,
-              lon, lat, lon, lat,
-              name,
-              country, postcode, locality, freeform, region,
-              ovr_importance[ovr_id]])
-
-    # Note: The production schema documents a RTREE index on bbox, but DuckDB
-    # requires a GEOMETRY column for RTREE. The production queries use bbox
-    # struct field range comparisons, which don't require an explicit index.
-    # We skip creating the RTREE index here.
-
-    if with_name_index:
-        # Token-only name_index (no dm_code column) so connect() sets
-        # has_phonetic_index=False and tests exercise the token self-join path.
-        conn.execute("""
-            CREATE TABLE name_index (
-                token VARCHAR,
-                id VARCHAR,
-                name VARCHAR,
-                latitude VARCHAR,
-                longitude VARCHAR,
-                importance INTEGER
-            )
-        """)
-        for row in OVERTURE_PLACES:
-            ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
-            for word in name.lower().split():
-                if len(word) > 1:
-                    conn.execute("""
-                        INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
-                    """, [word, ovr_id, name,
-                          f"{lat:.6f}", f"{lon:.6f}", ovr_importance[ovr_id]])
-
-    conn.close()
-
-
-# ---------------------------------------------------------------------------
-# Session-scoped path fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def fsq_db_path(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("fsq") / "fsq.duckdb"
-    _create_fsq_db(db_path, with_name_index=True)
-    return db_path
-
-
-@pytest.fixture(scope="session")
-def fsq_db_path_no_index(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("fsq_no_idx") / "fsq_no_idx.duckdb"
-    _create_fsq_db(db_path, with_name_index=False)
-    return db_path
-
-
-@pytest.fixture(scope="session")
-def overture_db_path(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("overture") / "overture.duckdb"
-    _create_overture_db(db_path, with_name_index=True)
-    return db_path
-
-
-# ---------------------------------------------------------------------------
-# Function-scoped DB instance fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def fsq_db(fsq_db_path):
-    db = FoursquareOSP(fsq_db_path)
-    db.connect()
-    yield db
-    db.close()
-
-
-@pytest.fixture
-def fsq_db_no_index(fsq_db_path_no_index):
-    db = FoursquareOSP(fsq_db_path_no_index)
-    db.connect()
-    yield db
-    db.close()
-
-
-@pytest.fixture
-def overture_db(overture_db_path):
-    db = OvertureMaps(overture_db_path)
-    db.connect()
-    yield db
-    db.close()
-
-
-# ---------------------------------------------------------------------------
-# Trigram index fixtures
-# ---------------------------------------------------------------------------
-
 def _generate_trigrams(name):
     """Generate distinct trigrams from a place name (lowercased full string)."""
     s = name.lower()
@@ -281,8 +37,8 @@ def _generate_trigrams(name):
     return trigrams
 
 
-def _create_fsq_trigram_db(db_path):
-    """Create a FSQ DuckDB database with trigram name_index."""
+def _create_fsq_db(db_path):
+    """Create a FSQ DuckDB database with test data and trigram name_index."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
 
@@ -362,21 +118,21 @@ def _create_fsq_trigram_db(db_path):
             importance INTEGER
         )
     """)
-
     for row in FSQ_PLACES:
         fsq_id, name, lat, lon, address, locality, postcode, region, _, _, _, country = row
         for trigram in _generate_trigrams(name):
             conn.execute("""
                 INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [trigram, fsq_id, name, f"{lat:.6f}", f"{lon:.6f}",
+            """, [trigram, fsq_id, name,
+                  f"{lat:.6f}", f"{lon:.6f}",
                   address, locality, postcode, region, country,
                   fsq_importance[fsq_id]])
 
     conn.close()
 
 
-def _create_overture_trigram_db(db_path):
-    """Create an Overture DuckDB database with trigram name_index."""
+def _create_overture_db(db_path):
+    """Create an Overture DuckDB database with test data and trigram name_index."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
 
@@ -434,6 +190,11 @@ def _create_overture_trigram_db(db_path):
               country, postcode, locality, freeform, region,
               ovr_importance[ovr_id]])
 
+    # Note: The production schema documents a RTREE index on bbox, but DuckDB
+    # requires a GEOMETRY column for RTREE. The production queries use bbox
+    # struct field range comparisons, which don't require an explicit index.
+    # We skip creating the RTREE index here.
+
     conn.execute("""
         CREATE TABLE name_index (
             trigram VARCHAR,
@@ -444,43 +205,50 @@ def _create_overture_trigram_db(db_path):
             importance INTEGER
         )
     """)
-
     for row in OVERTURE_PLACES:
         ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
         for trigram in _generate_trigrams(name):
             conn.execute("""
                 INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
-            """, [trigram, ovr_id, name, f"{lat:.6f}", f"{lon:.6f}",
-                  ovr_importance[ovr_id]])
+            """, [trigram, ovr_id, name,
+                  f"{lat:.6f}", f"{lon:.6f}", ovr_importance[ovr_id]])
 
     conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Session-scoped path fixtures
+# ---------------------------------------------------------------------------
+
 @pytest.fixture(scope="session")
-def fsq_trigram_db_path(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("fsq_trigram") / "fsq_trigram.duckdb"
-    _create_fsq_trigram_db(db_path)
+def fsq_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("fsq") / "fsq.duckdb"
+    _create_fsq_db(db_path)
     return db_path
 
 
 @pytest.fixture(scope="session")
-def overture_trigram_db_path(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("overture_trigram") / "overture_trigram.duckdb"
-    _create_overture_trigram_db(db_path)
+def overture_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("overture") / "overture.duckdb"
+    _create_overture_db(db_path)
     return db_path
 
+
+# ---------------------------------------------------------------------------
+# Function-scoped DB instance fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
-def fsq_trigram_db(fsq_trigram_db_path):
-    db = FoursquareOSP(fsq_trigram_db_path)
+def fsq_db(fsq_db_path):
+    db = FoursquareOSP(fsq_db_path)
     db.connect()
     yield db
     db.close()
 
 
 @pytest.fixture
-def overture_trigram_db(overture_trigram_db_path):
-    db = OvertureMaps(overture_trigram_db_path)
+def overture_db(overture_db_path):
+    db = OvertureMaps(overture_db_path)
     db.connect()
     yield db
     db.close()

@@ -27,9 +27,9 @@ def _generate_trigrams(name):
 # Schema type tests: importance column must be INTEGER, not DOUBLE
 # ---------------------------------------------------------------------------
 
-def test_fsq_places_importance_is_integer(fsq_trigram_db_path):
+def test_fsq_places_importance_is_integer(fsq_db_path):
     """places.importance must be INTEGER type in the FSQ database."""
-    conn = duckdb.connect(str(fsq_trigram_db_path), read_only=True)
+    conn = duckdb.connect(str(fsq_db_path), read_only=True)
     rows = conn.execute(
         "SELECT data_type FROM information_schema.columns "
         "WHERE table_name = 'places' AND column_name = 'importance'"
@@ -42,9 +42,9 @@ def test_fsq_places_importance_is_integer(fsq_trigram_db_path):
     )
 
 
-def test_overture_places_importance_is_integer(overture_trigram_db_path):
+def test_overture_places_importance_is_integer(overture_db_path):
     """places.importance must be INTEGER type in the Overture database."""
-    conn = duckdb.connect(str(overture_trigram_db_path), read_only=True)
+    conn = duckdb.connect(str(overture_db_path), read_only=True)
     rows = conn.execute(
         "SELECT data_type FROM information_schema.columns "
         "WHERE table_name = 'places' AND column_name = 'importance'"
@@ -61,9 +61,9 @@ def test_overture_places_importance_is_integer(overture_trigram_db_path):
 # Value range tests: name_index.importance must be INTEGER type with varied values
 # ---------------------------------------------------------------------------
 
-def test_fsq_name_index_importance_is_integer(fsq_trigram_db_path):
+def test_fsq_name_index_importance_is_integer(fsq_db_path):
     """name_index.importance must be INTEGER type in the FSQ database."""
-    conn = duckdb.connect(str(fsq_trigram_db_path), read_only=True)
+    conn = duckdb.connect(str(fsq_db_path), read_only=True)
     rows = conn.execute(
         "SELECT data_type FROM information_schema.columns "
         "WHERE table_name = 'name_index' AND column_name = 'importance'"
@@ -76,9 +76,9 @@ def test_fsq_name_index_importance_is_integer(fsq_trigram_db_path):
     )
 
 
-def test_fsq_name_index_importance_values_in_range(fsq_trigram_db_path):
+def test_fsq_name_index_importance_values_in_range(fsq_db_path):
     """All importance values in FSQ name_index must be in [0, 100] and not all uniform."""
-    conn = duckdb.connect(str(fsq_trigram_db_path), read_only=True)
+    conn = duckdb.connect(str(fsq_db_path), read_only=True)
     # Check range
     out_of_range = conn.execute(
         "SELECT COUNT(*) FROM name_index WHERE importance < 0 OR importance > 100"
@@ -96,9 +96,9 @@ def test_fsq_name_index_importance_values_in_range(fsq_trigram_db_path):
     )
 
 
-def test_overture_name_index_importance_is_integer(overture_trigram_db_path):
+def test_overture_name_index_importance_is_integer(overture_db_path):
     """name_index.importance must be INTEGER type in the Overture database."""
-    conn = duckdb.connect(str(overture_trigram_db_path), read_only=True)
+    conn = duckdb.connect(str(overture_db_path), read_only=True)
     rows = conn.execute(
         "SELECT data_type FROM information_schema.columns "
         "WHERE table_name = 'name_index' AND column_name = 'importance'"
@@ -111,9 +111,9 @@ def test_overture_name_index_importance_is_integer(overture_trigram_db_path):
     )
 
 
-def test_overture_name_index_importance_values_in_range(overture_trigram_db_path):
+def test_overture_name_index_importance_values_in_range(overture_db_path):
     """All importance values in Overture name_index must be in [0, 100] and not all uniform."""
-    conn = duckdb.connect(str(overture_trigram_db_path), read_only=True)
+    conn = duckdb.connect(str(overture_db_path), read_only=True)
     # Check range
     out_of_range = conn.execute(
         "SELECT COUNT(*) FROM name_index WHERE importance < 0 OR importance > 100"
