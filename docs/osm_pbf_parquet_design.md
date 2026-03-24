@@ -450,9 +450,18 @@ WHERE qw.primary_category IS NOT NULL
   coordinates out of ~9B — roughly 1% of nodes.
 - The final GROUP BY aggregation is straightforward.
 
-DuckDB should handle this in-memory for machines with 32+ GB RAM. For
-memory-constrained environments, the qualifying_ways CTE could be
+The SEMI JOIN requires DuckDB to scan the entire ~9B-row node partition
+(~28-50 GB compressed Parquet). Expect this step to take **30-90 minutes**
+depending on I/O throughput. This is acceptable if the overall pipeline
+time stays well under QuackOSM's multi-hour baseline.
+
+For memory-constrained environments, the qualifying_ways CTE could be
 materialized to a temp table first.
+
+**Edge case: unresolvable nodes.** Ways whose node references are entirely
+absent from the node partition (e.g., referencing deleted nodes) produce
+no `way_centroids` row and are dropped by the INNER JOIN. This is
+intentional — such ways have no computable location.
 
 ### Bbox filtering
 
@@ -539,21 +548,27 @@ FROM read_parquet('osm_places.geoparquet')
 WHERE geometry IS NOT NULL
 GROUP BY cell_id;
 
--- New (reads places table from osm.duckdb):
+-- New (reads places table from osm.duckdb via ATTACH):
+ATTACH '${osm_db_path}' AS osm_import (READ_ONLY);
 INSERT INTO cell_counts
 SELECT 14 AS level,
     s2_cell_parent(
         s2_cellfromlonlat(longitude, latitude), 14
     ) AS cell_id,
     count(*) AS pt_count
-FROM '<osm.duckdb>'.places
+FROM osm_import.places
 WHERE latitude IS NOT NULL AND longitude IS NOT NULL
 GROUP BY cell_id;
 ```
 
 The `source_arg` for OSM mode changes from a GeoParquet file path to the
-osm.duckdb database path. The script uses DuckDB's cross-database ATTACH
-to read from it.
+osm.duckdb database path. The script uses DuckDB's `ATTACH` to read from
+it read-only. Only the base-level INSERT (level 14) changes; the cascade
+loop that builds levels 13 down to 6 is unchanged.
+
+**Execution model**: density/IDF run as separate `duckdb` CLI invocations
+from bash, after the main import DuckDB session has closed. This avoids
+write-lock conflicts on the tmp database file.
 
 ### build-idf.sh changes (OSM mode)
 
@@ -573,14 +588,15 @@ CROSS JOIN (SELECT count(*) AS total FROM read_parquet('osm_places.geoparquet'))
 WHERE category IS NOT NULL
 GROUP BY category, N.total;
 
--- New (reads pre-computed category from places table):
+-- New (reads pre-computed category from places table via ATTACH):
+ATTACH '${osm_db_path}' AS osm_import (READ_ONLY);
 INSERT INTO category_idf
 SELECT primary_category AS category,
     count(*) AS n_places,
     ln(N.total::double / count(*)::double) AS idf_score
-FROM '<osm.duckdb>'.places
+FROM osm_import.places
 CROSS JOIN (
-    SELECT count(*) AS total FROM '<osm.duckdb>'.places
+    SELECT count(*) AS total FROM osm_import.places
 ) N
 WHERE primary_category IS NOT NULL
 GROUP BY primary_category, N.total;
@@ -663,7 +679,9 @@ fi
 # build-idf.sh osm "$output_dir/osm.duckdb.tmp"
 
 # ─── Importance scoring ──────────────────────────────────────────────────────
-# (same as current — reads density/IDF parquets, updates places.importance)
+# Same as current EXCEPT: drop the "ALTER TABLE places ADD COLUMN importance"
+# statement — the column is already declared in CREATE TABLE.
+# The UPDATE ... SET importance = ... logic is unchanged.
 
 # ─── Name index ──────────────────────────────────────────────────────────────
 # (same as current — trigram generation from places.name)
