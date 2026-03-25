@@ -19,7 +19,7 @@ def compute_importance_floor(area_km2: float, K: float = IMPORTANCE_FLOOR_K) -> 
     """Compute minimum importance threshold based on search area size."""
     if area_km2 <= 0:
         return 0
-    return min(int(4 * math.log(1 + area_km2 / K)), 100)
+    return min(int(4 * math.log(1 + area_km2 / K)), 45)
 
 # SearchParams is a type that holds parameters for spatial queries. The keys are:
 # - centroid: a POINT in WKT format (e.g., "POINT(longitude latitude)")
@@ -41,6 +41,7 @@ class Database:
     JW_THRESHOLD = 0.6
     JW_TOKEN_ALPHA = 0.5
     MAX_QUERY_TRIGRAMS = 50
+    MAX_QUERY_TOKENS = 12
 
     @staticmethod
     def _strip_accents(s: str) -> str:
@@ -234,7 +235,7 @@ class Database:
             importance_floor = compute_importance_floor(area_km2)
             params["importance_floor"] = importance_floor
             # Compute token params for token-level JW blending
-            tokens = [t for t in Database._strip_accents(q.lower()).split() if t]
+            tokens = [t for t in Database._strip_accents(q.lower()).split() if t][:Database.MAX_QUERY_TOKENS]
             for i, token in enumerate(tokens):
                 params[f"t{i}"] = token
         print(f"Searching with params: {params}")
@@ -306,7 +307,7 @@ class FoursquareOSP(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
-            top_n = params.get("limit", 50) * 20
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -399,7 +400,6 @@ class FoursquareOSP(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
-            top_n = params.get("limit", 50) * 20
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -420,7 +420,6 @@ class FoursquareOSP(Database):
                         jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
                     ORDER BY full_jw DESC
-                    LIMIT {top_n}
                 ),
                 name_tokens AS (
                     SELECT r.fsq_place_id, r.name,
@@ -607,7 +606,7 @@ class OvertureMaps(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
-            top_n = params.get("limit", 50) * 20
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -691,7 +690,6 @@ class OvertureMaps(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
-            top_n = params.get("limit", 50) * 20
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -710,7 +708,6 @@ class OvertureMaps(Database):
                         jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
                     ORDER BY full_jw DESC
-                    LIMIT {top_n}
                 ),
                 name_tokens AS (
                     SELECT r.id, r.name,
@@ -891,7 +888,7 @@ class OpenStreetMap(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
-            top_n = params.get("limit", 50) * 20
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -973,7 +970,6 @@ class OpenStreetMap(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
-            top_n = params.get("limit", 50) * 20
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -994,7 +990,6 @@ class OpenStreetMap(Database):
                         jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS full_jw
                     FROM candidates
                     ORDER BY full_jw DESC
-                    LIMIT {top_n}
                 ),
                 name_tokens AS (
                     SELECT r.rkey, r.name,
