@@ -217,3 +217,66 @@ def test_trigram_nearest_unrelated_query(fsq_db):
     """Completely unrelated query returns 0 results."""
     results = fsq_db.nearest(q="xyzqwerty")
     assert len(results) == 0
+
+
+# ---------------------------------------------------------------------------
+# Token-blending tests (Red phase — these FAIL until token blending is impl.)
+# ---------------------------------------------------------------------------
+
+def test_token_blending_text_ranking(fsq_db):
+    """Token-level JW blending ranks 'Diner North End' above 'North End Pub' for query 'North End Diner'.
+
+    Full-string JW favors 'North End Pub' because it shares the long prefix 'north end'.
+    Token-level JW correctly identifies that 'Diner North End' contains all query tokens.
+    This test FAILS until token blending is implemented.
+    """
+    results = fsq_db.nearest(q="North End Diner")
+    names = [r["names"][0]["text"] for r in results]
+    assert "Diner North End" in names, "Diner North End not found in results"
+    assert "North End Pub" in names, "North End Pub not found in results"
+    diner_idx = names.index("Diner North End")
+    pub_idx = names.index("North End Pub")
+    assert diner_idx < pub_idx, (
+        f"'Diner North End' (pos {diner_idx}) should rank above "
+        f"'North End Pub' (pos {pub_idx}) with token-level JW blending"
+    )
+
+
+def test_token_blending_spatial_ranking(fsq_db):
+    """Spatial + text: token blending ranks 'Diner North End' above 'North End Pub'.
+
+    Both places are co-located within the search bbox; distance does not break the tie.
+    Full-string JW favors 'North End Pub'. Token JW correctly favors 'Diner North End'.
+    This test FAILS until token blending is implemented.
+    """
+    results = fsq_db.nearest(
+        latitude=37.7749, longitude=-122.4351, q="North End Diner"
+    )
+    names = [r["names"][0]["text"] for r in results]
+    assert "Diner North End" in names, "Diner North End not found in results"
+    assert "North End Pub" in names, "North End Pub not found in results"
+    diner_idx = names.index("Diner North End")
+    pub_idx = names.index("North End Pub")
+    assert diner_idx < pub_idx, (
+        f"'Diner North End' (pos {diner_idx}) should rank above "
+        f"'North End Pub' (pos {pub_idx}) with token-level JW blending"
+    )
+
+
+def test_single_token_finds_existing_place(fsq_db):
+    """Single-token query 'Alcatraz' finds Alcatraz Island (regression guard, should PASS)."""
+    results = fsq_db.nearest(q="Alcatraz")
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Alcatraz" in n for n in names)
+
+
+def test_single_token_no_blending_applied(fsq_db):
+    """Single-token query returns results without token blending (regression guard, should PASS).
+
+    Single-token queries use full-string JW only per spec. Verify this path
+    still works correctly after the blending feature is added.
+    """
+    results = fsq_db.nearest(q="Ferry")
+    # "Ferry Building Marketplace" contains "ferry" and should appear
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Ferry" in n for n in names)
