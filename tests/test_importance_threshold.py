@@ -108,13 +108,7 @@ def fsq_threshold_db_path(tmp_path_factory):
             trigram VARCHAR,
             fsq_place_id VARCHAR,
             name VARCHAR,
-            latitude VARCHAR,
-            longitude VARCHAR,
-            address VARCHAR,
-            locality VARCHAR,
-            postcode VARCHAR,
-            region VARCHAR,
-            country VARCHAR,
+            norm_name VARCHAR,
             importance INTEGER
         )
     """)
@@ -122,12 +116,8 @@ def fsq_threshold_db_path(tmp_path_factory):
     for fsq_id, name, lat, lon, importance in places:
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (
-                    ?, ?, ?, ?, ?,
-                    NULL, 'San Francisco', '94103', 'CA', 'US',
-                    ?
-                )
-            """, [trigram, fsq_id, name, f"{lat:.6f}", f"{lon:.6f}", importance])
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+            """, [trigram, fsq_id, name, FoursquareOSP._strip_accents(name.lower()), importance])
 
     conn.close()
     return db_path
@@ -205,13 +195,7 @@ def fsq_all_low_importance_db_path(tmp_path_factory):
             trigram VARCHAR,
             fsq_place_id VARCHAR,
             name VARCHAR,
-            latitude VARCHAR,
-            longitude VARCHAR,
-            address VARCHAR,
-            locality VARCHAR,
-            postcode VARCHAR,
-            region VARCHAR,
-            country VARCHAR,
+            norm_name VARCHAR,
             importance INTEGER
         )
     """)
@@ -219,12 +203,8 @@ def fsq_all_low_importance_db_path(tmp_path_factory):
     for fsq_id, name, lat, lon, importance in places:
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (
-                    ?, ?, ?, ?, ?,
-                    NULL, 'San Francisco', '94103', 'CA', 'US',
-                    ?
-                )
-            """, [trigram, fsq_id, name, f"{lat:.6f}", f"{lon:.6f}", importance])
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+            """, [trigram, fsq_id, name, FoursquareOSP._strip_accents(name.lower()), importance])
 
     conn.close()
     return db_path

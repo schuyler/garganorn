@@ -300,3 +300,229 @@ def test_single_token_no_blending_applied(osm_db):
     results = osm_db.nearest(q="Dolores")
     names = [r["names"][0]["text"] for r in results]
     assert any("Dolores" in n for n in names)
+
+
+# ---------------------------------------------------------------------------
+# norm_name optimization tests (Red phase — FAIL until Optimization 2 impl.)
+# ---------------------------------------------------------------------------
+
+def test_osm_query_trigram_text_uses_norm_name():
+    """Text path uses norm_name column, not runtime lower(strip_accents(name)).
+
+    FAILS until norm_name optimization is implemented for OpenStreetMap.
+    """
+    db = _make_osm()
+    params: SearchParams = {"q": "tartine", "limit": 10, "importance_floor": 0}
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "norm_name" in sql, "SQL should reference the norm_name column"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_osm_query_trigram_text_multi_token_uses_norm_name():
+    """Multi-token text path name_tokens CTE uses norm_name, not runtime normalization.
+
+    In the multi-token branch, the name_tokens CTE splits candidate names into
+    tokens. After Optimization 2, it should split norm_name (pre-computed) rather
+    than calling lower(strip_accents(r.name)) at runtime.
+    FAILS until norm_name optimization is implemented for OpenStreetMap.
+    """
+    db = _make_osm()
+    params: SearchParams = {
+        "q": "north end diner",
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "norm_name" in sql, "name_tokens CTE should split norm_name, not lower(strip_accents(r.name))"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_osm_query_trigram_spatial_uses_norm_name():
+    """Spatial path uses norm_name column, not runtime lower(strip_accents(name)).
+
+    FAILS until norm_name optimization is implemented for OpenStreetMap.
+    """
+    db = _make_osm()
+    params: SearchParams = {
+        "q": "tartine",
+        "centroid": "POINT(-122.4195 37.7612)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+    }
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "norm_name" in sql, "SQL should reference the norm_name column"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_osm_query_trigram_spatial_multi_token_uses_norm_name():
+    """Multi-token spatial path name_tokens CTE uses norm_name, not runtime normalization.
+
+    FAILS until norm_name optimization is implemented for OpenStreetMap.
+    """
+    db = _make_osm()
+    params: SearchParams = {
+        "q": "north end diner",
+        "centroid": "POINT(-122.4195 37.7612)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "norm_name" in sql, "name_tokens CTE should split norm_name, not lower(strip_accents(r.name))"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_osm_query_trigram_text_uses_norm_q():
+    """Text path SQL references $norm_q instead of lower(strip_accents($q)).
+
+    After Optimization 2, nearest() pre-normalizes the query as norm_q and
+    the SQL references $norm_q (a pre-computed scalar) instead of computing
+    lower(strip_accents($q)) repeatedly at runtime.
+    FAILS until norm_name optimization is implemented for OpenStreetMap.
+    """
+    db = _make_osm()
+    params: SearchParams = {"q": "tartine", "limit": 10, "importance_floor": 0}
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "$norm_q" in sql, "SQL should reference $norm_q (pre-computed query string)"
+    assert "lower(strip_accents($q))" not in sql, (
+        "SQL should not call lower(strip_accents($q)) at runtime — use $norm_q instead"
+    )
+
+
+def test_osm_name_index_has_norm_name_column(osm_db):
+    """name_index table has a norm_name column (schema migration for Optimization 2).
+
+    After Optimization 2, the import script pre-computes norm_name for each row.
+    This integration test verifies the column exists in the fixture DB.
+    FAILS until the conftest fixture (and import script) add the norm_name column.
+    """
+    rows = osm_db.conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'name_index'"
+    ).fetchall()
+    column_names = [row[0] for row in rows]
+    assert "norm_name" in column_names, (
+        f"name_index is missing the 'norm_name' column. "
+        f"Found columns: {column_names}. "
+        "Add norm_name = lower(strip_accents(name)) to the import script and conftest fixture."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schema normalization tests (Optimization 4 — Red phase)
+# These tests FAIL against the current norm_name worktree code and PASS after
+# schema normalization removes display columns from name_index.
+# ---------------------------------------------------------------------------
+
+def test_osm_name_index_no_display_columns(osm_db):
+    """name_index has NO display columns after Optimization 4 schema normalization.
+
+    After Optimization 4, OSM name_index is stripped to only:
+        trigram, rkey, name, norm_name, importance
+    Display columns (latitude, longitude) are removed — text-only queries JOIN places.
+    FAILS until schema normalization is implemented.
+    """
+    rows = osm_db.conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'name_index'"
+    ).fetchall()
+    column_names = [row[0] for row in rows]
+    display_cols = ["latitude", "longitude"]
+    present = [c for c in display_cols if c in column_names]
+    assert present == [], (
+        f"OSM name_index should not contain display columns after Optimization 4. "
+        f"Found: {present}. "
+        "Remove these columns — text-only queries should JOIN places."
+    )
+    expected_cols = {"trigram", "rkey", "name", "norm_name", "importance"}
+    assert expected_cols.issubset(set(column_names)), (
+        f"OSM name_index is missing expected columns. Found: {column_names}"
+    )
+
+
+def test_osm_query_trigram_text_joins_places(osm_db):
+    """Single-token text-only query SQL contains JOIN places after Optimization 4.
+
+    After schema normalization, OSM name_index no longer has latitude/longitude.
+    The text-only path must JOIN the places table to retrieve coordinates and
+    primary_category.
+    FAILS until text-only SQL is updated to JOIN places.
+    """
+    db = osm_db
+    params: SearchParams = {
+        "q": "tartine",
+        "limit": 10,
+        "importance_floor": 0,
+        "norm_q": "tartine",
+        "g0": "tar", "g1": "art", "g2": "rti", "g3": "tin", "g4": "ine",
+    }
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
+        "Single-token OSM text-only SQL should JOIN places after schema normalization."
+    )
+
+
+def test_osm_query_trigram_text_multi_token_joins_places(osm_db):
+    """Multi-token text-only query SQL contains JOIN places after Optimization 4.
+
+    FAILS until multi-token OSM text-only SQL is updated to JOIN places.
+    """
+    db = osm_db
+    params: SearchParams = {
+        "q": "north end diner",
+        "limit": 10,
+        "importance_floor": 0,
+        "norm_q": "north end diner",
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
+        "Multi-token OSM text-only SQL should JOIN places after schema normalization."
+    )
+
+
+def test_osm_text_query_returns_primary_category(osm_db):
+    """Text-only query returns primary_category after Optimization 4.
+
+    Before Optimization 4, the OSM text-only path does not return primary_category
+    because it reads only from name_index (which doesn't store it). After schema
+    normalization, text-only queries JOIN places and return p.primary_category.
+
+    Fixture n240109189 (Tartine Manufactory) has primary_category = 'amenity=cafe'.
+    FAILS until the text-only path JOINs places and returns primary_category.
+    """
+    results = osm_db.nearest(q="Tartine Manufactory")
+    assert len(results) > 0, "Expected at least one result for 'Tartine Manufactory'"
+    tartine = next((r for r in results if "Tartine" in r["names"][0]["text"]), None)
+    assert tartine is not None, "Expected to find 'Tartine Manufactory' in results"
+    # After JOIN places, primary_category is parsed into attributes
+    attrs = tartine.get("attributes", {})
+    assert "amenity" in attrs, (
+        f"Expected 'amenity' in attributes after joining places for primary_category. "
+        f"Got attributes: {attrs}. "
+        "Text-only path must JOIN places to return primary_category."
+    )
