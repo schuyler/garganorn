@@ -231,3 +231,234 @@ def test_single_token_no_blending_applied(overture_db):
     results = overture_db.nearest(q="Lombard")
     names = [r["names"][0]["text"] for r in results]
     assert any("Lombard" in n for n in names)
+
+
+# ---------------------------------------------------------------------------
+# norm_name optimization tests (Red phase — FAIL until Optimization 2 impl.)
+# ---------------------------------------------------------------------------
+
+def test_overture_query_trigram_text_uses_norm_name():
+    """Text path uses norm_name column, not runtime lower(strip_accents(name)).
+
+    FAILS until norm_name optimization is implemented for OvertureMaps.
+    """
+    db = _make_ovr()
+    params: SearchParams = {"q": "anchor brewing", "limit": 10, "importance_floor": 0}
+    trigrams = ["anc", "nch", "cho", "hor"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "norm_name" in sql, "SQL should reference the norm_name column"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_overture_query_trigram_text_multi_token_uses_norm_name():
+    """Multi-token text path name_tokens CTE uses norm_name, not runtime normalization.
+
+    In the multi-token branch, the name_tokens CTE splits candidate names into
+    tokens. After Optimization 2, it should split norm_name (pre-computed) rather
+    than calling lower(strip_accents(r.name)) at runtime.
+    FAILS until norm_name optimization is implemented for OvertureMaps.
+    """
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "north end diner",
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "norm_name" in sql, "name_tokens CTE should split norm_name, not lower(strip_accents(r.name))"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_overture_query_trigram_spatial_uses_norm_name():
+    """Spatial path uses norm_name column, not runtime lower(strip_accents(name)).
+
+    FAILS until norm_name optimization is implemented for OvertureMaps.
+    """
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "anchor brewing",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+    }
+    trigrams = ["anc", "nch", "cho", "hor"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "norm_name" in sql, "SQL should reference the norm_name column"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_overture_query_trigram_spatial_multi_token_uses_norm_name():
+    """Multi-token spatial path name_tokens CTE uses norm_name, not runtime normalization.
+
+    FAILS until norm_name optimization is implemented for OvertureMaps.
+    """
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "north end diner",
+        "centroid": "POINT(-122.4351 37.7748)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "norm_name" in sql, "name_tokens CTE should split norm_name, not lower(strip_accents(r.name))"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_overture_query_trigram_text_uses_norm_q():
+    """Text path SQL references $norm_q instead of lower(strip_accents($q)).
+
+    After Optimization 2, nearest() pre-normalizes the query as norm_q and
+    the SQL references $norm_q (a pre-computed scalar) instead of computing
+    lower(strip_accents($q)) repeatedly at runtime.
+    FAILS until norm_name optimization is implemented for OvertureMaps.
+    """
+    db = _make_ovr()
+    params: SearchParams = {"q": "anchor brewing", "limit": 10, "importance_floor": 0}
+    trigrams = ["anc", "nch", "cho", "hor"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "$norm_q" in sql, "SQL should reference $norm_q (pre-computed query string)"
+    assert "lower(strip_accents($q))" not in sql, (
+        "SQL should not call lower(strip_accents($q)) at runtime — use $norm_q instead"
+    )
+
+
+def test_overture_name_index_has_norm_name_column(overture_db):
+    """name_index table has a norm_name column (schema migration for Optimization 2).
+
+    After Optimization 2, the import script pre-computes norm_name for each row.
+    This integration test verifies the column exists in the fixture DB.
+    FAILS until the conftest fixture (and import script) add the norm_name column.
+    """
+    rows = overture_db.conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'name_index'"
+    ).fetchall()
+    column_names = [row[0] for row in rows]
+    assert "norm_name" in column_names, (
+        f"name_index is missing the 'norm_name' column. "
+        f"Found columns: {column_names}. "
+        "Add norm_name = lower(strip_accents(name)) to the import script and conftest fixture."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schema normalization tests (Optimization 4 — Red phase)
+# These tests FAIL against the current norm_name worktree code and PASS after
+# schema normalization removes display columns from name_index.
+# ---------------------------------------------------------------------------
+
+def test_overture_name_index_no_display_columns(overture_db):
+    """name_index has NO display columns after Optimization 4 schema normalization.
+
+    After Optimization 4, Overture name_index is stripped to only:
+        trigram, id, name, norm_name, importance
+    Display columns (latitude, longitude) are removed — text-only queries JOIN places.
+    FAILS until schema normalization is implemented.
+    """
+    rows = overture_db.conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'name_index'"
+    ).fetchall()
+    column_names = [row[0] for row in rows]
+    display_cols = ["latitude", "longitude"]
+    present = [c for c in display_cols if c in column_names]
+    assert present == [], (
+        f"Overture name_index should not contain display columns after Optimization 4. "
+        f"Found: {present}. "
+        "Remove these columns — text-only queries should JOIN places."
+    )
+    expected_cols = {"trigram", "id", "name", "norm_name", "importance"}
+    assert expected_cols.issubset(set(column_names)), (
+        f"Overture name_index is missing expected columns. Found: {column_names}"
+    )
+
+
+def test_overture_query_trigram_text_joins_places(overture_db):
+    """Single-token text-only query SQL contains JOIN places after Optimization 4.
+
+    After schema normalization, Overture name_index no longer has latitude/longitude.
+    The text-only path must JOIN the places table to retrieve coordinates and addresses.
+    FAILS until text-only SQL is updated to JOIN places.
+    """
+    db = overture_db
+    params: SearchParams = {
+        "q": "anchor brewing",
+        "limit": 10,
+        "importance_floor": 0,
+        "norm_q": "anchor brewing",
+        "g0": "anc", "g1": "nch", "g2": "cho", "g3": "hor",
+    }
+    trigrams = ["anc", "nch", "cho", "hor"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
+        "Single-token Overture text-only SQL should JOIN places after schema normalization."
+    )
+
+
+def test_overture_query_trigram_text_multi_token_joins_places(overture_db):
+    """Multi-token text-only query SQL contains JOIN places after Optimization 4.
+
+    FAILS until multi-token Overture text-only SQL is updated to JOIN places.
+    """
+    db = overture_db
+    params: SearchParams = {
+        "q": "north end diner",
+        "limit": 10,
+        "importance_floor": 0,
+        "norm_q": "north end diner",
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
+        "Multi-token Overture text-only SQL should JOIN places after schema normalization."
+    )
+
+
+def test_overture_text_query_returns_addresses(overture_db):
+    """Text-only query returns real address data (not NULL) after Optimization 4.
+
+    Before Optimization 4, the Overture text-only path returns `NULL AS addresses`
+    because name_index doesn't store addresses. After schema normalization, text-only
+    queries JOIN places and return real `p.addresses`.
+
+    Fixture ovr001 (Philz Coffee) has address data in the places table.
+    FAILS until the text-only path JOINs places and returns real addresses.
+    """
+    results = overture_db.nearest(q="Philz Coffee")
+    assert len(results) > 0, "Expected at least one result for 'Philz Coffee'"
+    philz = next((r for r in results if "Philz" in r["names"][0]["text"]), None)
+    assert philz is not None, "Expected to find 'Philz Coffee' in results"
+    # After JOIN places, addresses should be populated — result should have an
+    # address-type location (not just geo)
+    assert len(philz["locations"]) >= 2, (
+        f"Expected address location in results after JOIN places. "
+        f"Got locations: {philz['locations']}. "
+        "The text-only path returns NULL AS addresses before Optimization 4."
+    )
+    addr_locations = [loc for loc in philz["locations"]
+                      if loc["$type"] == "community.lexicon.location.address"]
+    assert len(addr_locations) > 0, (
+        "Expected at least one address-type location. "
+        "Text-only path must JOIN places to return real addresses."
+    )

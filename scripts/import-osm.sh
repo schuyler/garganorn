@@ -469,27 +469,29 @@ echo "Building name index..."
 
 duckdb -bail "$output_db_tmp" <<'ENDSQL'
 CREATE TABLE IF NOT EXISTS name_index (
+    trigram          VARCHAR,
     rkey             VARCHAR,
     name             VARCHAR,
-    latitude         VARCHAR,
-    longitude        VARCHAR,
-    importance       INTEGER,
-    trigram          VARCHAR
+    norm_name        VARCHAR,
+    importance       INTEGER
 );
 
 INSERT INTO name_index
-SELECT osm_type || osm_id::VARCHAR AS rkey,
-       name,
-       latitude::decimal(10,6)::varchar AS latitude,
-       longitude::decimal(10,6)::varchar AS longitude,
-       importance,
-       lower(substr(name, pos, 3)) AS trigram
-FROM (
-    SELECT osm_type, osm_id, name, latitude, longitude, importance,
-           generate_series AS pos
-    FROM places, generate_series(1, length(name) - 2)
+WITH name_prep AS (
+    SELECT osm_type || osm_id::VARCHAR AS rkey,
+           name,
+           lower(strip_accents(name)) AS norm_name,
+           importance
+    FROM places
     WHERE name IS NOT NULL AND length(name) >= 3
-) t;
+)
+SELECT substr(np.norm_name, pos, 3) AS trigram,
+       np.rkey,
+       np.name,
+       np.norm_name,
+       np.importance
+FROM name_prep np
+CROSS JOIN generate_series(1, length(np.norm_name) - 2) AS gs(pos);
 ENDSQL
 
 if [ $? -ne 0 ]; then

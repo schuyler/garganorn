@@ -195,8 +195,6 @@ with name_prep as (
         id,
         names.primary as name,
         lower(strip_accents(names.primary)) as norm_name,
-        st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
-        st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
         coalesce(importance, 0) as importance
     from places
     where names.primary is not null and length(names.primary) > 0
@@ -206,14 +204,13 @@ trigrams as (
         substr(np.norm_name, pos, 3) as trigram,
         np.id,
         np.name,
-        np.latitude,
-        np.longitude,
+        np.norm_name,
         np.importance
     from name_prep np
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
     where length(np.norm_name) >= 3
 )
-select trigram, id, name, latitude, longitude, importance
+select trigram, id, name, norm_name, importance
 from trigrams
 order by trigram;
 EOF

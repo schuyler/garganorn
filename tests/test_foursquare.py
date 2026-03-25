@@ -388,3 +388,239 @@ def test_cutoff_survival_reordered_name(fsq_db):
         f"in results for 'Park Avenue Restaurant' when all candidates are scored. "
         f"Got: {names}"
     )
+
+
+# ---------------------------------------------------------------------------
+# norm_name optimization tests (Red phase — FAIL until Optimization 2 impl.)
+# These tests verify that pre-computed norm_name is used instead of runtime
+# lower(strip_accents(...)) calls in SQL, and that nearest() pre-computes norm_q.
+# ---------------------------------------------------------------------------
+
+def test_query_trigram_text_uses_norm_name():
+    """Single-token text path uses norm_name column, not runtime lower(strip_accents(name)).
+
+    After Optimization 2, the SQL should reference the pre-computed norm_name
+    column instead of calling lower(strip_accents(c.name)) or lower(strip_accents(name))
+    at query time.
+    FAILS until norm_name optimization is implemented.
+    """
+    db = _make_fsq()
+    params: SearchParams = {"q": "coffee", "limit": 10, "importance_floor": 0}
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "norm_name" in sql, "SQL should reference the norm_name column"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_query_trigram_text_multi_token_uses_norm_name():
+    """Multi-token text path name_tokens CTE uses norm_name, not runtime normalization.
+
+    In the multi-token branch, the name_tokens CTE splits candidate names into
+    tokens. After Optimization 2, it should split norm_name (pre-computed) rather
+    than calling lower(strip_accents(r.name)) at runtime.
+    FAILS until norm_name optimization is implemented.
+    """
+    db = _make_fsq()
+    params: SearchParams = {
+        "q": "north end diner",
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "norm_name" in sql, "name_tokens CTE should split norm_name, not lower(strip_accents(r.name))"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_query_trigram_spatial_uses_norm_name():
+    """Single-token spatial path uses norm_name column, not runtime lower(strip_accents(name)).
+
+    FAILS until norm_name optimization is implemented.
+    """
+    db = _make_fsq()
+    params: SearchParams = {
+        "q": "coffee",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+    }
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "norm_name" in sql, "SQL should reference the norm_name column"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_query_trigram_spatial_multi_token_uses_norm_name():
+    """Multi-token spatial path name_tokens CTE uses norm_name, not runtime normalization.
+
+    FAILS until norm_name optimization is implemented.
+    """
+    db = _make_fsq()
+    params: SearchParams = {
+        "q": "north end diner",
+        "centroid": "POINT(-122.4351 37.7748)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "norm_name" in sql, "name_tokens CTE should split norm_name, not lower(strip_accents(r.name))"
+    assert "lower(strip_accents(" not in sql, (
+        "SQL should not call lower(strip_accents(...)) at runtime — use norm_name instead"
+    )
+
+
+def test_query_trigram_text_uses_norm_q():
+    """Text path SQL references $norm_q instead of lower(strip_accents($q)).
+
+    After Optimization 2, nearest() pre-normalizes the query as norm_q and
+    the SQL references $norm_q (a pre-computed scalar) instead of computing
+    lower(strip_accents($q)) repeatedly at runtime.
+    FAILS until norm_name optimization is implemented.
+    """
+    db = _make_fsq()
+    params: SearchParams = {"q": "coffee", "limit": 10, "importance_floor": 0}
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "$norm_q" in sql, "SQL should reference $norm_q (pre-computed query string)"
+    assert "lower(strip_accents($q))" not in sql, (
+        "SQL should not call lower(strip_accents($q)) at runtime — use $norm_q instead"
+    )
+
+
+
+def test_name_index_has_norm_name_column(fsq_db):
+    """name_index table has a norm_name column (schema migration for Optimization 2).
+
+    After Optimization 2, the import script pre-computes norm_name for each row.
+    This integration test verifies the column exists in the fixture DB.
+    FAILS until the conftest fixture (and import script) add the norm_name column.
+    """
+    rows = fsq_db.conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'name_index'"
+    ).fetchall()
+    column_names = [row[0] for row in rows]
+    assert "norm_name" in column_names, (
+        f"name_index is missing the 'norm_name' column. "
+        f"Found columns: {column_names}. "
+        "Add norm_name = lower(strip_accents(name)) to the import script and conftest fixture."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Schema normalization tests (Optimization 4 — Red phase)
+# These tests FAIL against the current norm_name worktree code and PASS after
+# schema normalization removes display columns from name_index.
+# ---------------------------------------------------------------------------
+
+def test_name_index_no_display_columns(fsq_db):
+    """name_index has NO display columns after Optimization 4 schema normalization.
+
+    After Optimization 4, name_index is stripped to only:
+        trigram, fsq_place_id, name, norm_name, importance
+    Display columns (latitude, longitude, address, locality, postcode, region,
+    country) are removed — text-only queries JOIN places instead.
+    FAILS until schema normalization is implemented.
+    """
+    rows = fsq_db.conn.execute(
+        "SELECT column_name FROM information_schema.columns "
+        "WHERE table_name = 'name_index'"
+    ).fetchall()
+    column_names = [row[0] for row in rows]
+    display_cols = ["latitude", "longitude", "address", "locality", "postcode", "region", "country"]
+    present = [c for c in display_cols if c in column_names]
+    assert present == [], (
+        f"name_index should not contain display columns after Optimization 4. "
+        f"Found: {present}. "
+        "Remove these columns from name_index — text-only queries should JOIN places."
+    )
+    expected_cols = {"trigram", "fsq_place_id", "name", "norm_name", "importance"}
+    assert expected_cols.issubset(set(column_names)), (
+        f"name_index is missing expected columns. Found: {column_names}"
+    )
+
+
+def test_query_trigram_text_joins_places(fsq_db):
+    """Single-token text-only query SQL contains JOIN places after Optimization 4.
+
+    After schema normalization, name_index no longer has display columns.
+    The text-only path must JOIN the places table to retrieve latitude, longitude,
+    address, etc. for the result set.
+    FAILS until text-only SQL is updated to JOIN places.
+    """
+    db = fsq_db
+    params: SearchParams = {
+        "q": "coffee",
+        "limit": 10,
+        "importance_floor": 0,
+        "norm_q": "coffee",
+        "g0": "cof", "g1": "off", "g2": "ffe", "g3": "fee",
+    }
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
+        "Single-token text-only SQL should JOIN places after schema normalization. "
+        "name_index no longer has display columns."
+    )
+
+
+def test_query_trigram_text_multi_token_joins_places(fsq_db):
+    """Multi-token text-only query SQL contains JOIN places after Optimization 4.
+
+    Same requirement as single-token, but for the multi-token CTE branch.
+    FAILS until multi-token text-only SQL is updated to JOIN places.
+    """
+    db = fsq_db
+    params: SearchParams = {
+        "q": "north end diner",
+        "limit": 10,
+        "importance_floor": 0,
+        "norm_q": "north end diner",
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
+        "Multi-token text-only SQL should JOIN places after schema normalization. "
+        "name_index no longer has display columns."
+    )
+
+
+def test_query_trigram_spatial_no_name_index_display_cols():
+    """Spatial query SQL does not reference n.latitude, n.longitude, n.address.
+
+    Spatial paths already JOIN places; this verifies they don't reference
+    display columns via the name_index alias (n.*). Guards against regression.
+    Should PASS both before and after Optimization 4.
+    """
+    db = _make_fsq()
+    params: SearchParams = {
+        "q": "coffee",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+    }
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    # Spatial paths get display cols from p.* (places), not n.* (name_index)
+    assert "n.latitude" not in sql, "Spatial SQL should not reference n.latitude (use places instead)"
+    assert "n.longitude" not in sql, "Spatial SQL should not reference n.longitude (use places instead)"
+    assert "n.address" not in sql, "Spatial SQL should not reference n.address (use places instead)"
