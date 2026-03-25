@@ -47,7 +47,7 @@ else
     # Auto-discover latest Overture release from S3
     echo "Auto-discovering latest Overture release..."
     latest_release=$(curl -s "https://overturemaps-us-west-2.s3.amazonaws.com/?list-type=2&prefix=release/&delimiter=/" |
-      grep -o '<Prefix>release/[^<]*</Prefix>' |
+      grep -o '<Prefix>release/[0-9][^<]*/</Prefix>' |
       sed 's/<Prefix>release\/\(.*\)\/<\/Prefix>/\1/' |
       sort -r |
       head -1)
