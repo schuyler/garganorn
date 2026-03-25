@@ -411,29 +411,55 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+density_parquet="${output_dir}/density-osm.parquet"
+idf_parquet="${output_dir}/category_idf-osm.parquet"
+
 # ─── Importance scoring ───────────────────────────────────────────────────────
 
 echo
 echo "Computing importance scores..."
 
-duckdb -bail "$output_db_tmp" <<'ENDSQL'
+duckdb -bail "$output_db_tmp" <<ENDSQL
 INSTALL geography FROM community;
 LOAD geography;
 
-CREATE TEMP TABLE density_tmp AS
-SELECT * FROM read_parquet('db/density-osm.parquet');
+CREATE TEMP TABLE t_density AS
+SELECT * FROM read_parquet('${density_parquet}') WHERE level = 14;
 
-UPDATE places
-SET importance = COALESCE((
-    SELECT CAST(ROUND(
-        100.0 * pt_count / (SELECT MAX(pt_count) FROM density_tmp WHERE level = 14)
-    ) AS INTEGER)
-    FROM density_tmp
-    WHERE level = 14
-      AND cell_id = s2_cell_parent(
-              s2_cellfromlonlat(longitude, latitude), 14
-          )::UBIGINT
-), 0);
+CREATE TEMP TABLE t_idf AS
+SELECT * FROM read_parquet('${idf_parquet}');
+
+CREATE TEMP TABLE place_density AS
+SELECT
+    osm_type || osm_id::VARCHAR AS rkey,
+    coalesce(ln(1 + c.pt_count), 0) AS density_score
+FROM places p
+LEFT JOIN t_density c
+    ON c.cell_id = s2_cell_parent(
+        s2_cellfromlonlat(p.longitude, p.latitude), 14
+    )::UBIGINT;
+
+CREATE TEMP TABLE place_idf AS
+SELECT
+    osm_type || osm_id::VARCHAR AS rkey,
+    coalesce(max(idf.idf_score), 0) AS idf_score
+FROM places p
+LEFT JOIN t_idf idf ON idf.category = p.primary_category
+WHERE p.primary_category IS NOT NULL
+GROUP BY osm_type || osm_id::VARCHAR;
+
+UPDATE places SET importance = round(
+    60 * least(d.density_score / 10.0, 1.0)
+  + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
+)::INTEGER
+FROM place_density d
+LEFT JOIN place_idf i USING (rkey)
+WHERE places.osm_type || places.osm_id::VARCHAR = d.rkey;
+
+DROP TABLE place_density;
+DROP TABLE place_idf;
+DROP TABLE t_density;
+DROP TABLE t_idf;
 ENDSQL
 
 # ─── Name index ───────────────────────────────────────────────────────────────
@@ -443,30 +469,34 @@ echo "Building name index..."
 
 duckdb -bail "$output_db_tmp" <<'ENDSQL'
 CREATE TABLE IF NOT EXISTS name_index (
-    osm_type         VARCHAR,
-    osm_id           BIGINT,
+    rkey             VARCHAR,
+    name             VARCHAR,
+    latitude         VARCHAR,
+    longitude        VARCHAR,
+    importance       INTEGER,
     trigram          VARCHAR
 );
 
 INSERT INTO name_index
-SELECT
-    osm_type,
-    osm_id,
-    trigram
+SELECT osm_type || osm_id::VARCHAR AS rkey,
+       name,
+       latitude::decimal(10,6)::varchar AS latitude,
+       longitude::decimal(10,6)::varchar AS longitude,
+       importance,
+       lower(substr(name, pos, 3)) AS trigram
 FROM (
-    SELECT
-        osm_type,
-        osm_id,
-        name,
-        generate_series AS pos
+    SELECT osm_type, osm_id, name, latitude, longitude, importance,
+           generate_series AS pos
     FROM places, generate_series(1, length(name) - 2)
     WHERE name IS NOT NULL AND length(name) >= 3
-)
-SELECT
-    osm_type,
-    osm_id,
-    lower(substr(name, pos, 3)) AS trigram;
+) t;
 ENDSQL
+
+if [ $? -ne 0 ]; then
+    echo "Name index build failed."
+    rm -f "$output_db_tmp"
+    exit 1
+fi
 
 # ─── Finalize ─────────────────────────────────────────────────────────────────
 
