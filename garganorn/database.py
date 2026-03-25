@@ -39,44 +39,17 @@ class Database:
     collection: str = "org.atgeo"
 
     JW_THRESHOLD = 0.6
-    MAX_QUERY_TRIGRAMS = 50
     JW_TOKEN_ALPHA = 0.5
+    MAX_QUERY_TRIGRAMS = 50
     MAX_QUERY_TOKENS = 12
 
     @staticmethod
     def _strip_accents(s: str) -> str:
-        """Remove accent marks from a string using NFD normalization.
-
-        Note: Both Python (NFD + strip Mn category) and DuckDB (ICU) strip_accents
-        are used. They are equivalent for Latin scripts. Python handles trigram and
-        token preparation; SQL handles JW comparison during query execution.
-        """
+        """Remove accent marks from a string using NFD normalization."""
         return "".join(
             c for c in unicodedata.normalize("NFD", s)
             if unicodedata.category(c) != "Mn"
         )
-
-    @staticmethod
-    def _token_jw_subquery(tokens: list) -> str:
-        """Generate a SQL subquery for token-level Jaro-Winkler scoring.
-
-        Accepts a list of token parameter names (e.g., ["$t0", "$t1"]).
-        Returns a SQL expression computing avg(best_match_per_query_token),
-        where each query token's best match is max JW similarity across all
-        name tokens. References c.name from the outer candidates CTE.
-        Returns "NULL" if tokens list is empty.
-        """
-        if not tokens:
-            return "NULL"
-        token_values = ", ".join(f"({t})" for t in tokens)
-        return f"""(
-            SELECT avg(best_match) FROM (
-                SELECT max(jaro_winkler_similarity(lower(strip_accents(qt.token)), lower(strip_accents(nt.token)))) AS best_match
-                FROM (VALUES {token_values}) AS qt(token)
-                CROSS JOIN (SELECT unnest(list_filter(string_split(lower(strip_accents(c.name)), ' '), x -> x != '')) AS token) AS nt
-                GROUP BY qt.token
-            )
-        )"""
 
     @staticmethod
     def _compute_trigrams(q: str) -> list:
@@ -213,7 +186,7 @@ class Database:
         records = self.execute(self.query_record(), {"rkey": rkey})
         return self.process_record(records[0]) if records else None
 
-    def query_nearest(self, _params: SearchParams, trigrams=None, tokens=None):
+    def query_nearest(self, _params: SearchParams, trigrams=None):
         raise NotImplementedError
 
     def process_nearest(self, result):
@@ -253,22 +226,21 @@ class Database:
         else:
             area_km2 = GLOBE_AREA_KM2
         trigrams = None
-        tokens = None
         if q:
             params["q"] = q
             # Compute trigrams for trigram index path
             trigrams = self._compute_trigrams(q)
             for i, tri in enumerate(trigrams):
                 params[f"g{i}"] = tri
-            # Compute tokens for token-level JW blending
+            importance_floor = compute_importance_floor(area_km2)
+            params["importance_floor"] = importance_floor
+            # Compute token params for token-level JW blending
             tokens = [t for t in Database._strip_accents(q.lower()).split() if t][:Database.MAX_QUERY_TOKENS]
             for i, token in enumerate(tokens):
                 params[f"t{i}"] = token
-            importance_floor = compute_importance_floor(area_km2)
-            params["importance_floor"] = importance_floor
         print(f"Searching with params: {params}")
         result = self.execute(
-            self.query_nearest(params, trigrams=trigrams, tokens=tokens), params
+            self.query_nearest(params, trigrams=trigrams), params
         )
         return [self.process_nearest(item) for item in result]
 
@@ -326,17 +298,18 @@ class FoursquareOSP(Database):
             where fsq_place_id = $rkey
         """
 
-    def _query_trigram_text(self, params: SearchParams, trigrams: list, tokens: list = None) -> str:
+    def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
         Text-only trigram search using Jaro-Winkler similarity.
         Candidates are retrieved via trigram pre-filter; JW scores the outer query.
-        When len(tokens) >= 2, blends full-string JW with token-level JW.
+        Multi-token queries use a top-N CTE chain for token-level blending.
         """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
-        alpha = self.JW_TOKEN_ALPHA
-        if tokens and len(tokens) >= 2:
-            token_params = [f"$t{i}" for i in range(len(tokens))]
-            token_subquery = Database._token_jw_subquery(token_params)
+        token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
+        if token_count > 1:
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
+            token_values = ", ".join(f"($t{i})" for i in range(token_count))
+            alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT fsq_place_id, name, latitude, longitude,
@@ -345,12 +318,35 @@ class FoursquareOSP(Database):
                     WHERE trigram IN ({placeholders})
                       AND importance >= $importance_floor
                 ),
-                scored AS (
-                    SELECT
-                        c.*,
-                        {alpha} * jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name)))
-                        + {1 - alpha} * {token_subquery} AS score
+                ranked AS (
+                    SELECT c.*,
+                        jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
+                    ORDER BY full_jw DESC
+                    LIMIT {top_n}
+                ),
+                name_tokens AS (
+                    SELECT r.fsq_place_id, r.name,
+                        unnest(list_filter(string_split(lower(strip_accents(r.name)), ' '), x -> x != '')) AS nt
+                    FROM ranked r
+                ),
+                token_scores AS (
+                    SELECT nt.fsq_place_id, nt.name, q.qt,
+                        max(jaro_winkler_similarity(q.qt, nt.nt)) AS best
+                    FROM name_tokens nt
+                    CROSS JOIN (VALUES {token_values}) AS q(qt)
+                    GROUP BY nt.fsq_place_id, nt.name, q.qt
+                ),
+                token_avg AS (
+                    SELECT fsq_place_id, name, avg(best) AS token_jw
+                    FROM token_scores
+                    GROUP BY fsq_place_id, name
+                ),
+                scored AS (
+                    SELECT r.*,
+                        {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
+                    FROM ranked r
+                    LEFT JOIN token_avg t ON r.fsq_place_id = t.fsq_place_id AND r.name = t.name
                 )
                 SELECT
                     fsq_place_id AS rkey,
@@ -369,44 +365,43 @@ class FoursquareOSP(Database):
                 ORDER BY score DESC, importance DESC
                 LIMIT $limit
             """
-        else:
-            return f"""
-                WITH candidates AS (
-                    SELECT DISTINCT fsq_place_id, name, latitude, longitude,
-                        address, locality, postcode, region, country, importance
-                    FROM name_index
-                    WHERE trigram IN ({placeholders})
-                      AND importance >= $importance_floor
-                )
-                SELECT
-                    fsq_place_id AS rkey,
-                    name,
-                    latitude,
-                    longitude,
-                    address,
-                    locality,
-                    postcode,
-                    region,
-                    country,
-                    0 AS distance_m,
-                    jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
-                FROM candidates
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, importance DESC
-                LIMIT $limit
-            """
+        return f"""
+            WITH candidates AS (
+                SELECT DISTINCT fsq_place_id, name, latitude, longitude,
+                    address, locality, postcode, region, country, importance
+                FROM name_index
+                WHERE trigram IN ({placeholders})
+                  AND importance >= $importance_floor
+            )
+            SELECT
+                fsq_place_id AS rkey,
+                name,
+                latitude,
+                longitude,
+                address,
+                locality,
+                postcode,
+                region,
+                country,
+                0 AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, importance DESC
+            LIMIT $limit
+        """
 
-    def _query_trigram_spatial(self, params: SearchParams, trigrams: list, tokens: list = None) -> str:
+    def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
         Spatial + text trigram search using Jaro-Winkler similarity.
         Joins places to name_index with bbox + trigram IN filters.
-        When len(tokens) >= 2, blends full-string JW with token-level JW.
+        Multi-token queries use a top-N CTE chain for token-level blending.
         """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
-        alpha = self.JW_TOKEN_ALPHA
-        if tokens and len(tokens) >= 2:
-            token_params = [f"$t{i}" for i in range(len(tokens))]
-            token_subquery = Database._token_jw_subquery(token_params)
+        token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
+        if token_count > 1:
+            token_values = ", ".join(f"($t{i})" for i in range(token_count))
+            alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT p.fsq_place_id, p.name,
@@ -420,12 +415,34 @@ class FoursquareOSP(Database):
                       AND n.trigram IN ({placeholders})
                       AND n.importance >= $importance_floor
                 ),
-                scored AS (
-                    SELECT
-                        c.*,
-                        {alpha} * jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name)))
-                        + {1 - alpha} * {token_subquery} AS score
+                ranked AS (
+                    SELECT c.*,
+                        jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
+                    ORDER BY full_jw DESC
+                ),
+                name_tokens AS (
+                    SELECT r.fsq_place_id, r.name,
+                        unnest(list_filter(string_split(lower(strip_accents(r.name)), ' '), x -> x != '')) AS nt
+                    FROM ranked r
+                ),
+                token_scores AS (
+                    SELECT nt.fsq_place_id, nt.name, q.qt,
+                        max(jaro_winkler_similarity(q.qt, nt.nt)) AS best
+                    FROM name_tokens nt
+                    CROSS JOIN (VALUES {token_values}) AS q(qt)
+                    GROUP BY nt.fsq_place_id, nt.name, q.qt
+                ),
+                token_avg AS (
+                    SELECT fsq_place_id, name, avg(best) AS token_jw
+                    FROM token_scores
+                    GROUP BY fsq_place_id, name
+                ),
+                scored AS (
+                    SELECT r.*,
+                        {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
+                    FROM ranked r
+                    LEFT JOIN token_avg t ON r.fsq_place_id = t.fsq_place_id AND r.name = t.name
                 )
                 SELECT
                     fsq_place_id AS rkey,
@@ -444,48 +461,47 @@ class FoursquareOSP(Database):
                 ORDER BY score DESC, distance_m
                 LIMIT $limit
             """
-        else:
-            return f"""
-                WITH candidates AS (
-                    SELECT DISTINCT p.fsq_place_id, p.name,
-                        p.latitude, p.longitude,
-                        p.address, p.locality, p.postcode, p.region, p.country,
-                        p.geom, n.importance
-                    FROM places p
-                    JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
-                    WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
-                      AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-                      AND n.trigram IN ({placeholders})
-                      AND n.importance >= $importance_floor
-                )
-                SELECT
-                    fsq_place_id AS rkey,
-                    name,
-                    latitude::decimal(10,6)::varchar AS latitude,
-                    longitude::decimal(10,6)::varchar AS longitude,
-                    address,
-                    locality,
-                    postcode,
-                    region,
-                    country,
-                    ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                    jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
-                FROM candidates
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, distance_m
-                LIMIT $limit
-            """
+        return f"""
+            WITH candidates AS (
+                SELECT DISTINCT p.fsq_place_id, p.name,
+                    p.latitude, p.longitude,
+                    p.address, p.locality, p.postcode, p.region, p.country,
+                    p.geom, n.importance
+                FROM places p
+                JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
+                WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+                  AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+                  AND n.trigram IN ({placeholders})
+                  AND n.importance >= $importance_floor
+            )
+            SELECT
+                fsq_place_id AS rkey,
+                name,
+                latitude::decimal(10,6)::varchar AS latitude,
+                longitude::decimal(10,6)::varchar AS longitude,
+                address,
+                locality,
+                postcode,
+                region,
+                country,
+                ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, distance_m
+            LIMIT $limit
+        """
 
-    def query_nearest(self, params: SearchParams, trigrams=None, tokens=None):
+    def query_nearest(self, params: SearchParams, trigrams=None):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided"
 
         has_spatial = "centroid" in params
         has_text = "q" in params
 
         if has_text and has_spatial:
-            return self._query_trigram_spatial(params, trigrams, tokens)
+            return self._query_trigram_spatial(params, trigrams)
         elif has_text:
-            return self._query_trigram_text(params, trigrams, tokens)
+            return self._query_trigram_text(params, trigrams)
         else:
             # Spatial-only
             columns = self.search_columns()
@@ -581,17 +597,18 @@ class OvertureMaps(Database):
             where id = $rkey
         """
 
-    def _query_trigram_text(self, params: SearchParams, trigrams: list, tokens: list = None) -> str:
+    def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
         Text-only trigram search using Jaro-Winkler similarity.
         Candidates are retrieved via trigram pre-filter; JW scores the outer query.
-        When len(tokens) >= 2, blends full-string JW with token-level JW.
+        Multi-token queries use a top-N CTE chain for token-level blending.
         """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
-        alpha = self.JW_TOKEN_ALPHA
-        if tokens and len(tokens) >= 2:
-            token_params = [f"$t{i}" for i in range(len(tokens))]
-            token_subquery = Database._token_jw_subquery(token_params)
+        token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
+        if token_count > 1:
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
+            token_values = ", ".join(f"($t{i})" for i in range(token_count))
+            alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT id, name, latitude, longitude, importance
@@ -599,12 +616,35 @@ class OvertureMaps(Database):
                     WHERE trigram IN ({placeholders})
                       AND importance >= $importance_floor
                 ),
-                scored AS (
-                    SELECT
-                        c.*,
-                        {alpha} * jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name)))
-                        + {1 - alpha} * {token_subquery} AS score
+                ranked AS (
+                    SELECT c.*,
+                        jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
+                    ORDER BY full_jw DESC
+                    LIMIT {top_n}
+                ),
+                name_tokens AS (
+                    SELECT r.id, r.name,
+                        unnest(list_filter(string_split(lower(strip_accents(r.name)), ' '), x -> x != '')) AS nt
+                    FROM ranked r
+                ),
+                token_scores AS (
+                    SELECT nt.id, nt.name, q.qt,
+                        max(jaro_winkler_similarity(q.qt, nt.nt)) AS best
+                    FROM name_tokens nt
+                    CROSS JOIN (VALUES {token_values}) AS q(qt)
+                    GROUP BY nt.id, nt.name, q.qt
+                ),
+                token_avg AS (
+                    SELECT id, name, avg(best) AS token_jw
+                    FROM token_scores
+                    GROUP BY id, name
+                ),
+                scored AS (
+                    SELECT r.*,
+                        {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
+                    FROM ranked r
+                    LEFT JOIN token_avg t ON r.id = t.id AND r.name = t.name
                 )
                 SELECT
                     id AS rkey,
@@ -619,40 +659,39 @@ class OvertureMaps(Database):
                 ORDER BY score DESC, importance DESC
                 LIMIT $limit
             """
-        else:
-            return f"""
-                WITH candidates AS (
-                    SELECT DISTINCT id, name, latitude, longitude, importance
-                    FROM name_index
-                    WHERE trigram IN ({placeholders})
-                      AND importance >= $importance_floor
-                )
-                SELECT
-                    id AS rkey,
-                    name,
-                    latitude,
-                    longitude,
-                    NULL AS addresses,
-                    0 AS distance_m,
-                    jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
-                FROM candidates
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, importance DESC
-                LIMIT $limit
-            """
+        return f"""
+            WITH candidates AS (
+                SELECT DISTINCT id, name, latitude, longitude, importance
+                FROM name_index
+                WHERE trigram IN ({placeholders})
+                  AND importance >= $importance_floor
+            )
+            SELECT
+                id AS rkey,
+                name,
+                latitude,
+                longitude,
+                NULL AS addresses,
+                0 AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, importance DESC
+            LIMIT $limit
+        """
 
-    def _query_trigram_spatial(self, params: SearchParams, trigrams: list, tokens: list = None) -> str:
+    def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
         Spatial + text trigram search using Jaro-Winkler similarity.
         Joins places to name_index with bbox + trigram IN filters.
         JW threshold applied to filter weak matches.
-        When len(tokens) >= 2, blends full-string JW with token-level JW.
+        Multi-token queries use a top-N CTE chain for token-level blending.
         """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
-        alpha = self.JW_TOKEN_ALPHA
-        if tokens and len(tokens) >= 2:
-            token_params = [f"$t{i}" for i in range(len(tokens))]
-            token_subquery = Database._token_jw_subquery(token_params)
+        token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
+        if token_count > 1:
+            token_values = ", ".join(f"($t{i})" for i in range(token_count))
+            alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT p.id, p.names.primary AS name,
@@ -664,12 +703,34 @@ class OvertureMaps(Database):
                       AND n.trigram IN ({placeholders})
                       AND n.importance >= $importance_floor
                 ),
-                scored AS (
-                    SELECT
-                        c.*,
-                        {alpha} * jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name)))
-                        + {1 - alpha} * {token_subquery} AS score
+                ranked AS (
+                    SELECT c.*,
+                        jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
+                    ORDER BY full_jw DESC
+                ),
+                name_tokens AS (
+                    SELECT r.id, r.name,
+                        unnest(list_filter(string_split(lower(strip_accents(r.name)), ' '), x -> x != '')) AS nt
+                    FROM ranked r
+                ),
+                token_scores AS (
+                    SELECT nt.id, nt.name, q.qt,
+                        max(jaro_winkler_similarity(q.qt, nt.nt)) AS best
+                    FROM name_tokens nt
+                    CROSS JOIN (VALUES {token_values}) AS q(qt)
+                    GROUP BY nt.id, nt.name, q.qt
+                ),
+                token_avg AS (
+                    SELECT id, name, avg(best) AS token_jw
+                    FROM token_scores
+                    GROUP BY id, name
+                ),
+                scored AS (
+                    SELECT r.*,
+                        {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
+                    FROM ranked r
+                    LEFT JOIN token_avg t ON r.id = t.id AND r.name = t.name
                 )
                 SELECT
                     id AS rkey,
@@ -684,42 +745,41 @@ class OvertureMaps(Database):
                 ORDER BY score DESC, distance_m
                 LIMIT $limit
             """
-        else:
-            return f"""
-                WITH candidates AS (
-                    SELECT DISTINCT p.id, p.names.primary AS name,
-                        p.geometry, p.addresses, n.importance
-                    FROM places p
-                    JOIN name_index n ON p.id = n.id
-                    WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
-                      AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-                      AND n.trigram IN ({placeholders})
-                      AND n.importance >= $importance_floor
-                )
-                SELECT
-                    id AS rkey,
-                    name,
-                    st_y(st_centroid(geometry))::decimal(10,6)::varchar AS latitude,
-                    st_x(st_centroid(geometry))::decimal(10,6)::varchar AS longitude,
-                    addresses,
-                    ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
-                    jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
-                FROM candidates
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, distance_m
-                LIMIT $limit
-            """
+        return f"""
+            WITH candidates AS (
+                SELECT DISTINCT p.id, p.names.primary AS name,
+                    p.geometry, p.addresses, n.importance
+                FROM places p
+                JOIN name_index n ON p.id = n.id
+                WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+                  AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+                  AND n.trigram IN ({placeholders})
+                  AND n.importance >= $importance_floor
+            )
+            SELECT
+                id AS rkey,
+                name,
+                st_y(st_centroid(geometry))::decimal(10,6)::varchar AS latitude,
+                st_x(st_centroid(geometry))::decimal(10,6)::varchar AS longitude,
+                addresses,
+                ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, distance_m
+            LIMIT $limit
+        """
 
-    def query_nearest(self, params: SearchParams, trigrams=None, tokens=None):
+    def query_nearest(self, params: SearchParams, trigrams=None):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided"
 
         has_spatial = "centroid" in params
         has_text = "q" in params
 
         if has_text and has_spatial:
-            return self._query_trigram_spatial(params, trigrams, tokens)
+            return self._query_trigram_spatial(params, trigrams)
         elif has_text:
-            return self._query_trigram_text(params, trigrams, tokens)
+            return self._query_trigram_text(params, trigrams)
         else:
             # Spatial-only
             columns = self.search_columns()
@@ -819,17 +879,18 @@ class OpenStreetMap(Database):
               and osm_id = substr($rkey, 2)::BIGINT
         """
 
-    def _query_trigram_text(self, params: SearchParams, trigrams: list, tokens: list = None) -> str:
+    def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
         Text-only trigram search using Jaro-Winkler similarity.
         Candidates are retrieved via trigram pre-filter; JW scores the outer query.
-        When len(tokens) >= 2, blends full-string JW with token-level JW.
+        Multi-token queries use a top-N CTE chain for token-level blending.
         """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
-        alpha = self.JW_TOKEN_ALPHA
-        if tokens and len(tokens) >= 2:
-            token_params = [f"$t{i}" for i in range(len(tokens))]
-            token_subquery = Database._token_jw_subquery(token_params)
+        token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
+        if token_count > 1:
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
+            token_values = ", ".join(f"($t{i})" for i in range(token_count))
+            alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT rkey, name, latitude, longitude, importance
@@ -837,12 +898,35 @@ class OpenStreetMap(Database):
                     WHERE trigram IN ({placeholders})
                       AND importance >= $importance_floor
                 ),
-                scored AS (
-                    SELECT
-                        c.*,
-                        {alpha} * jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name)))
-                        + {1 - alpha} * {token_subquery} AS score
+                ranked AS (
+                    SELECT c.*,
+                        jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name))) AS full_jw
                     FROM candidates c
+                    ORDER BY full_jw DESC
+                    LIMIT {top_n}
+                ),
+                name_tokens AS (
+                    SELECT r.rkey, r.name,
+                        unnest(list_filter(string_split(lower(strip_accents(r.name)), ' '), x -> x != '')) AS nt
+                    FROM ranked r
+                ),
+                token_scores AS (
+                    SELECT nt.rkey, nt.name, q.qt,
+                        max(jaro_winkler_similarity(q.qt, nt.nt)) AS best
+                    FROM name_tokens nt
+                    CROSS JOIN (VALUES {token_values}) AS q(qt)
+                    GROUP BY nt.rkey, nt.name, q.qt
+                ),
+                token_avg AS (
+                    SELECT rkey, name, avg(best) AS token_jw
+                    FROM token_scores
+                    GROUP BY rkey, name
+                ),
+                scored AS (
+                    SELECT r.*,
+                        {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
+                    FROM ranked r
+                    LEFT JOIN token_avg t ON r.rkey = t.rkey AND r.name = t.name
                 )
                 SELECT
                     rkey,
@@ -856,39 +940,38 @@ class OpenStreetMap(Database):
                 ORDER BY score DESC, importance DESC
                 LIMIT $limit
             """
-        else:
-            return f"""
-                WITH candidates AS (
-                    SELECT DISTINCT rkey, name, latitude, longitude, importance
-                    FROM name_index
-                    WHERE trigram IN ({placeholders})
-                      AND importance >= $importance_floor
-                )
-                SELECT
-                    rkey,
-                    name,
-                    latitude,
-                    longitude,
-                    0 AS distance_m,
-                    jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
-                FROM candidates
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, importance DESC
-                LIMIT $limit
-            """
+        return f"""
+            WITH candidates AS (
+                SELECT DISTINCT rkey, name, latitude, longitude, importance
+                FROM name_index
+                WHERE trigram IN ({placeholders})
+                  AND importance >= $importance_floor
+            )
+            SELECT
+                rkey,
+                name,
+                latitude,
+                longitude,
+                0 AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, importance DESC
+            LIMIT $limit
+        """
 
-    def _query_trigram_spatial(self, params: SearchParams, trigrams: list, tokens: list = None) -> str:
+    def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
         Spatial + text trigram search using Jaro-Winkler similarity.
         Joins places to name_index with bbox + trigram IN filters.
         JW threshold applied to filter weak matches.
-        When len(tokens) >= 2, blends full-string JW with token-level JW.
+        Multi-token queries use a top-N CTE chain for token-level blending.
         """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
-        alpha = self.JW_TOKEN_ALPHA
-        if tokens and len(tokens) >= 2:
-            token_params = [f"$t{i}" for i in range(len(tokens))]
-            token_subquery = Database._token_jw_subquery(token_params)
+        token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
+        if token_count > 1:
+            token_values = ", ".join(f"($t{i})" for i in range(token_count))
+            alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT p.osm_type, p.osm_id, p.name,
@@ -900,15 +983,39 @@ class OpenStreetMap(Database):
                       AND n.trigram IN ({placeholders})
                       AND n.importance >= $importance_floor
                 ),
-                scored AS (
+                ranked AS (
                     SELECT
-                        c.*,
-                        {alpha} * jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(c.name)))
-                        + {1 - alpha} * {token_subquery} AS score
-                    FROM candidates c
+                        osm_type || osm_id::VARCHAR AS rkey,
+                        name, latitude, longitude, geom, importance,
+                        jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS full_jw
+                    FROM candidates
+                    ORDER BY full_jw DESC
+                ),
+                name_tokens AS (
+                    SELECT r.rkey, r.name,
+                        unnest(list_filter(string_split(lower(strip_accents(r.name)), ' '), x -> x != '')) AS nt
+                    FROM ranked r
+                ),
+                token_scores AS (
+                    SELECT nt.rkey, nt.name, q.qt,
+                        max(jaro_winkler_similarity(q.qt, nt.nt)) AS best
+                    FROM name_tokens nt
+                    CROSS JOIN (VALUES {token_values}) AS q(qt)
+                    GROUP BY nt.rkey, nt.name, q.qt
+                ),
+                token_avg AS (
+                    SELECT rkey, name, avg(best) AS token_jw
+                    FROM token_scores
+                    GROUP BY rkey, name
+                ),
+                scored AS (
+                    SELECT r.*,
+                        {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
+                    FROM ranked r
+                    LEFT JOIN token_avg t ON r.rkey = t.rkey AND r.name = t.name
                 )
                 SELECT
-                    osm_type || osm_id::VARCHAR AS rkey,
+                    rkey,
                     name,
                     latitude::decimal(10,6)::varchar AS latitude,
                     longitude::decimal(10,6)::varchar AS longitude,
@@ -919,41 +1026,40 @@ class OpenStreetMap(Database):
                 ORDER BY score DESC, distance_m
                 LIMIT $limit
             """
-        else:
-            return f"""
-                WITH candidates AS (
-                    SELECT DISTINCT p.osm_type, p.osm_id, p.name,
-                        p.latitude, p.longitude, p.geom, n.importance
-                    FROM places p
-                    JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
-                    WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
-                      AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-                      AND n.trigram IN ({placeholders})
-                      AND n.importance >= $importance_floor
-                )
-                SELECT
-                    osm_type || osm_id::VARCHAR AS rkey,
-                    name,
-                    latitude::decimal(10,6)::varchar AS latitude,
-                    longitude::decimal(10,6)::varchar AS longitude,
-                    ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                    jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
-                FROM candidates
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, distance_m
-                LIMIT $limit
-            """
+        return f"""
+            WITH candidates AS (
+                SELECT DISTINCT p.osm_type, p.osm_id, p.name,
+                    p.latitude, p.longitude, p.geom, n.importance
+                FROM places p
+                JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
+                WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+                  AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+                  AND n.trigram IN ({placeholders})
+                  AND n.importance >= $importance_floor
+            )
+            SELECT
+                osm_type || osm_id::VARCHAR AS rkey,
+                name,
+                latitude::decimal(10,6)::varchar AS latitude,
+                longitude::decimal(10,6)::varchar AS longitude,
+                ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, distance_m
+            LIMIT $limit
+        """
 
-    def query_nearest(self, params: SearchParams, trigrams=None, tokens=None):
+    def query_nearest(self, params: SearchParams, trigrams=None):
         assert "centroid" in params or "q" in params, "Either centroid or q must be provided"
 
         has_spatial = "centroid" in params
         has_text = "q" in params
 
         if has_text and has_spatial:
-            return self._query_trigram_spatial(params, trigrams, tokens)
+            return self._query_trigram_spatial(params, trigrams)
         elif has_text:
-            return self._query_trigram_text(params, trigrams, tokens)
+            return self._query_trigram_text(params, trigrams)
         else:
             columns = self.search_columns()
             return f"""
