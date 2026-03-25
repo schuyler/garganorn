@@ -73,7 +73,7 @@ class Database:
             SELECT avg(best_match) FROM (
                 SELECT max(jaro_winkler_similarity(lower(strip_accents(qt.token)), lower(strip_accents(nt.token)))) AS best_match
                 FROM (VALUES {token_values}) AS qt(token)
-                CROSS JOIN (SELECT unnest(string_split(c.name, ' ')) AS token) AS nt
+                CROSS JOIN (SELECT unnest(list_filter(string_split(lower(strip_accents(c.name)), ' '), x -> x != '')) AS token) AS nt
                 GROUP BY qt.token
             )
         )"""
