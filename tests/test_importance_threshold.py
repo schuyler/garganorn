@@ -79,7 +79,7 @@ def fsq_threshold_db_path(tmp_path_factory):
     """)
 
     # Three places: same name, different importance
-    # th001=80 (above global floor 45), th002=10 (below all floors), th003=60 (above floor 45)
+    # th001=80 (above global floor 50), th002=10 (below all floors), th003=60 (above floor 50)
     places = [
         ("th001", "Test Coffee", 37.7749, -122.4194, 80),
         ("th002", "Test Coffee", 37.7750, -122.4195, 10),
@@ -124,7 +124,7 @@ def fsq_threshold_db_path(tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------
-# Custom fixture: all-low-importance places (none above global floor 45)
+# Custom fixture: all-low-importance places (none above global floor 50)
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -166,7 +166,7 @@ def fsq_all_low_importance_db_path(tmp_path_factory):
         )
     """)
 
-    # All places have importance < 45 (below global floor)
+    # All places have importance < 50 (below global floor)
     places = [
         ("lo001", "Test Coffee", 37.7749, -122.4194, 5),
         ("lo002", "Test Coffee", 37.7750, -122.4195, 10),
@@ -241,9 +241,9 @@ class TestComputeImportanceFloor:
         assert compute_importance_floor(70000) == 17
 
     def test_compute_floor_globe(self):
-        """Full-globe area → floor capped at 45."""
+        """Full-globe area → floor capped at 50."""
         self._require()
-        assert compute_importance_floor(510_000_000) == 45
+        assert compute_importance_floor(510_000_000) == 50
 
     def test_compute_floor_zero_area(self):
         """Zero area → floor 0."""
@@ -255,10 +255,10 @@ class TestComputeImportanceFloor:
         self._require()
         assert compute_importance_floor(-100) == 0
 
-    def test_compute_floor_capped_at_45(self):
-        """Astronomically large area → floor capped at 45."""
+    def test_compute_floor_capped_at_50(self):
+        """Astronomically large area → floor capped at 50."""
         self._require()
-        assert compute_importance_floor(1e30) == 45
+        assert compute_importance_floor(1e30) == 50
 
 
 # ---------------------------------------------------------------------------
@@ -266,10 +266,10 @@ class TestComputeImportanceFloor:
 # ---------------------------------------------------------------------------
 
 class TestTextOnlyImportanceFloor:
-    """Text-only (no lat/lon) queries use global area ≈ 510M km² → floor 45."""
+    """Text-only (no lat/lon) queries use global area ≈ 510M km² → floor 50."""
 
     def test_text_only_applies_importance_floor(self, fsq_threshold_db_path):
-        """Text-only nearest() should exclude places with importance < 45.
+        """Text-only nearest() should exclude places with importance < 50.
 
         th001=80 and th003=60 qualify; th002=10 must NOT appear.
         """
@@ -284,7 +284,7 @@ class TestTextOnlyImportanceFloor:
         assert "th001" in rkeys, "th001 (importance=80) should be in results"
         assert "th003" in rkeys, "th003 (importance=60) should be in results"
         assert "th002" not in rkeys, (
-            "th002 (importance=10) should be excluded by importance floor 45"
+            "th002 (importance=10) should be excluded by importance floor 50"
         )
 
 
@@ -320,7 +320,7 @@ class TestSpatialQueryImportanceFloor:
         """500km spatial query → area ≈ 1M km² → floor 27 → th002 (importance=10) excluded.
 
         expand_m=500000 at SF lat ≈ 1,000,000 km²,
-        floor = min(int(4*ln(1 + 1000000/1000)), 45) = min(27, 45) = 27.
+        floor = min(int(4*ln(1 + 1000000/1000)), 50) = min(27, 50) = 27.
         th002 (importance=10) is below 27 and must be excluded.
         th001 (importance=80) and th003 (importance=60) are above 27 and must appear.
         """
@@ -351,7 +351,7 @@ class TestNoResultsWhenAllBelowFloor:
     """When all places have importance < global floor, text-only query returns empty."""
 
     def test_no_results_when_all_below_floor(self, fsq_all_low_importance_db_path):
-        """Text-only query with all places below floor 45 → empty result list."""
+        """Text-only query with all places below floor 50 → empty result list."""
         db = FoursquareOSP(fsq_all_low_importance_db_path)
         db.connect()
         try:
@@ -360,5 +360,5 @@ class TestNoResultsWhenAllBelowFloor:
             db.close()
 
         assert results == [], (
-            f"Expected no results when all importances < 45, got {[r['rkey'] for r in results]}"
+            f"Expected no results when all importances < 50, got {[r['rkey'] for r in results]}"
         )
