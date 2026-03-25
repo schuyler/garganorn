@@ -19,7 +19,7 @@ def compute_importance_floor(area_km2: float, K: float = IMPORTANCE_FLOOR_K) -> 
     """Compute minimum importance threshold based on search area size."""
     if area_km2 <= 0:
         return 0
-    return min(int(4 * math.log(1 + area_km2 / K)), 100)
+    return min(int(4 * math.log(1 + area_km2 / K)), 45)
 
 # SearchParams is a type that holds parameters for spatial queries. The keys are:
 # - centroid: a POINT in WKT format (e.g., "POINT(longitude latitude)")
