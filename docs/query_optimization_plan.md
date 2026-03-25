@@ -3,6 +3,23 @@
 Captures the concrete optimization plan for the next implementation session.
 Written against commit d99d637 (Jaro-Winkler scoring, main branch).
 
+## Implementation Status
+
+**Completed (this pass):**
+- Optimization 2 (norm_name): Pre-computed `lower(strip_accents(name))` stored in `name_index`. All query paths use `norm_name`/`$norm_q` instead of runtime normalization. OSM trigram generation bug fixed (missing `strip_accents`).
+- Optimization 4 (schema normalization): Display columns stripped from `name_index` (now 5 columns: trigram, id, name, norm_name, importance). Text-only query paths JOIN `places` after scoring. Overture text results now return real addresses. OSM text results now return primary_category.
+
+**Deferred:**
+- Optimization 1 (min_trigram_hits): Threshold formula needs empirical validation against production queries.
+
+**Skipped:**
+- Optimization 3 (ART index): Zonemaps on sorted column are sufficient; selectivity threshold prevents use on multi-trigram queries.
+
+**Remaining:**
+- Optimization 5 (trigram IDF selection): Depends on 1-4 being stable.
+
+---
+
 ## Performance Baseline
 
 Server: garganorn-1, 4 cores, 64 GB RAM, DuckDB. FSQ: 38.7M places, ~616M trigram rows.
@@ -26,7 +43,7 @@ The spatial path is fast because the bbox filter prunes candidates aggressively 
 
 ## Implementation Scope — Current Pass
 
-This pass implements **Optimization 2 (norm_name)** only.
+This pass implements **Optimization 2 (norm_name)** and **Optimization 4 (schema normalization)**.
 
 **Optimization 1 (min_trigram_hits) is deferred.** The threshold formula `max(1, len(trigrams) // 3)` requires empirical validation against production data before committing. Abbreviations, partial matches, and queries where trigram overlap is inherently low (e.g., short tokens, non-Latin scripts) may produce valid JW matches that this filter would silently drop. The formula needs to be tested against a representative sample of production queries before it is safe to use as a hard cut.
 
