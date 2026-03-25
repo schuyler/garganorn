@@ -62,6 +62,16 @@ QUERIES = {
         {"q": "Shell Gas Station"},
         {"q": "Community Center"},
     ],
+    # --- Long queries (4-6 tokens) ---
+    "long_query": [
+        {"q": "University of California Berkeley"},            # 4 tokens
+        {"q": "Oakland Museum of California"},                 # 4 tokens
+        {"q": "Bay Area Discovery Museum Sausalito"},          # 5 tokens
+        {"q": "Golden Gate National Recreation Area"},          # 5 tokens
+        {"q": "San Francisco International Airport Terminal"},  # 5 tokens
+        {"q": "University of California San Francisco Medical"}, # 6 tokens
+        {"q": "First United Methodist Church San Francisco"},  # 6 tokens
+    ],
     # --- Spatial + text (near downtown SF) ---
     "spatial_text": [
         {"q": "coffee", "latitude": 37.7749, "longitude": -122.4194},
