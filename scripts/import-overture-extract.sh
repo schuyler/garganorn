@@ -44,9 +44,18 @@ if [ -n "$release" ]; then
     latest_release=$release
     echo "Using specified Overture release: $latest_release"
 else
-    # Use a known recent release as default
-    latest_release="2025-03-19.1"
-    echo "Using default Overture release: $latest_release (specify a release as 5th parameter to override)"
+    # Auto-discover latest Overture release from S3
+    echo "Auto-discovering latest Overture release..."
+    latest_release=$(curl -s "https://overturemaps-us-west-2.s3.amazonaws.com/?list-type=2&prefix=release/&delimiter=/" |
+      grep -o '<Prefix>release/[^<]*</Prefix>' |
+      sed 's/<Prefix>release\/\(.*\)\/<\/Prefix>/\1/' |
+      sort -r |
+      head -1)
+    if [ -z "$latest_release" ]; then
+        echo "No Overture releases found on S3."
+        exit 1
+    fi
+    echo "Using latest Overture release: $latest_release"
 fi
 
 # Create the db/ directory in the parent folder relative to this script
