@@ -227,7 +227,7 @@ def fsq_tiebreak_db_path(tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 def test_trigram_tiebreaking_by_importance(fsq_tiebreak_db_path):
-    """When two places have identical names (equal Jaccard score),
+    """When two places have identical names (equal JW score),
     the one with higher importance must appear first in results."""
     db = FoursquareOSP(fsq_tiebreak_db_path)
     db.connect()

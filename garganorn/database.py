@@ -38,7 +38,7 @@ class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
     collection: str = "org.atgeo"
 
-    JACCARD_THRESHOLD = 0.1
+    JW_THRESHOLD = 0.6
     MAX_QUERY_TRIGRAMS = 50
 
     @staticmethod
@@ -294,12 +294,18 @@ class FoursquareOSP(Database):
 
     def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
-        Text-only trigram search using trigram Jaccard similarity.
-        Computes intersection/union directly from name_index rows.
+        Text-only trigram search using Jaro-Winkler similarity.
+        Candidates are retrieved via trigram pre-filter; JW scores the outer query.
         """
-        n_query = len(trigrams)
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
+            WITH candidates AS (
+                SELECT DISTINCT fsq_place_id, name, latitude, longitude,
+                    address, locality, postcode, region, country, importance
+                FROM name_index
+                WHERE trigram IN ({placeholders})
+                  AND importance >= $importance_floor
+            )
             SELECT
                 fsq_place_id AS rkey,
                 name,
@@ -311,52 +317,46 @@ class FoursquareOSP(Database):
                 region,
                 country,
                 0 AS distance_m,
-                count(DISTINCT trigram)::float
-                    / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
-                       - count(DISTINCT trigram))::float AS score
-            FROM name_index
-            WHERE trigram IN ({placeholders})
-              AND importance >= $importance_floor
-            GROUP BY fsq_place_id, name, latitude, longitude,
-                     address, locality, postcode, region, country
-            HAVING count(DISTINCT trigram)::float
-                / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
-                   - count(DISTINCT trigram))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY score DESC, max(importance) DESC
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, importance DESC
             LIMIT $limit
         """
 
     def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
-        Spatial + text trigram search using trigram Jaccard similarity.
+        Spatial + text trigram search using Jaro-Winkler similarity.
         Joins places to name_index with bbox + trigram IN filters.
-        No Jaccard threshold — bbox constrains the result set.
         """
-        n_query = len(trigrams)
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
+            WITH candidates AS (
+                SELECT DISTINCT p.fsq_place_id, p.name,
+                    p.latitude, p.longitude,
+                    p.address, p.locality, p.postcode, p.region, p.country,
+                    p.geom, n.importance
+                FROM places p
+                JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
+                WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+                  AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+                  AND n.trigram IN ({placeholders})
+                  AND n.importance >= $importance_floor
+            )
             SELECT
-                p.fsq_place_id AS rkey,
-                p.name,
-                p.latitude::decimal(10,6)::varchar AS latitude,
-                p.longitude::decimal(10,6)::varchar AS longitude,
-                p.address,
-                p.locality,
-                p.postcode,
-                p.region,
-                p.country,
-                min(ST_Distance_Sphere(p.geom, ST_GeomFromText($centroid))::integer) AS distance_m,
-                count(DISTINCT n.trigram)::float
-                    / (greatest(length(lower(strip_accents(p.name))) - 2, 1) + {n_query}
-                       - count(DISTINCT n.trigram))::float AS score
-            FROM places p
-            JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
-            WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
-              AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-              AND n.trigram IN ({placeholders})
-              AND n.importance >= $importance_floor
-            GROUP BY p.fsq_place_id, p.name, p.latitude, p.longitude,
-                     p.address, p.locality, p.postcode, p.region, p.country, p.geom
+                fsq_place_id AS rkey,
+                name,
+                latitude::decimal(10,6)::varchar AS latitude,
+                longitude::decimal(10,6)::varchar AS longitude,
+                address,
+                locality,
+                postcode,
+                region,
+                country,
+                ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
             ORDER BY score DESC, distance_m
             LIMIT $limit
         """
@@ -468,12 +468,17 @@ class OvertureMaps(Database):
 
     def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
         """
-        Text-only trigram search using trigram Jaccard similarity.
-        Computes intersection/union directly from name_index rows.
+        Text-only trigram search using Jaro-Winkler similarity.
+        Candidates are retrieved via trigram pre-filter; JW scores the outer query.
         """
-        n_query = len(trigrams)
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
+            WITH candidates AS (
+                SELECT DISTINCT id, name, latitude, longitude, importance
+                FROM name_index
+                WHERE trigram IN ({placeholders})
+                  AND importance >= $importance_floor
+            )
             SELECT
                 id AS rkey,
                 name,
@@ -481,46 +486,41 @@ class OvertureMaps(Database):
                 longitude,
                 NULL AS addresses,
                 0 AS distance_m,
-                count(DISTINCT trigram)::float
-                    / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
-                       - count(DISTINCT trigram))::float AS score
-            FROM name_index
-            WHERE trigram IN ({placeholders})
-              AND importance >= $importance_floor
-            GROUP BY id, name, latitude, longitude
-            HAVING count(DISTINCT trigram)::float
-                / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
-                   - count(DISTINCT trigram))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY score DESC, max(importance) DESC
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, importance DESC
             LIMIT $limit
         """
 
     def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
         """
-        Spatial + text trigram search using trigram Jaccard similarity.
+        Spatial + text trigram search using Jaro-Winkler similarity.
         Joins places to name_index with bbox + trigram IN filters.
-        No Jaccard threshold — bbox constrains the result set.
+        JW threshold applied to filter weak matches.
         """
-        n_query = len(trigrams)
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
+            WITH candidates AS (
+                SELECT DISTINCT p.id, p.names.primary AS name,
+                    p.geometry, p.addresses, n.importance
+                FROM places p
+                JOIN name_index n ON p.id = n.id
+                WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+                  AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+                  AND n.trigram IN ({placeholders})
+                  AND n.importance >= $importance_floor
+            )
             SELECT
-                p.id AS rkey,
-                p.names.primary AS name,
-                st_y(st_centroid(p.geometry))::decimal(10,6)::varchar AS latitude,
-                st_x(st_centroid(p.geometry))::decimal(10,6)::varchar AS longitude,
-                p.addresses,
-                min(ST_Distance_Sphere(p.geometry, ST_GeomFromText($centroid))::integer) AS distance_m,
-                count(DISTINCT n.trigram)::float
-                    / (greatest(length(lower(strip_accents(p.names.primary))) - 2, 1) + {n_query}
-                       - count(DISTINCT n.trigram))::float AS score
-            FROM places p
-            JOIN name_index n ON p.id = n.id
-            WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
-              AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-              AND n.trigram IN ({placeholders})
-              AND n.importance >= $importance_floor
-            GROUP BY p.id, p.names, p.geometry, p.addresses
+                id AS rkey,
+                name,
+                st_y(st_centroid(geometry))::decimal(10,6)::varchar AS latitude,
+                st_x(st_centroid(geometry))::decimal(10,6)::varchar AS longitude,
+                addresses,
+                ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
             ORDER BY score DESC, distance_m
             LIMIT $limit
         """
@@ -635,49 +635,58 @@ class OpenStreetMap(Database):
         """
 
     def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
-        n_query = len(trigrams)
+        """
+        Text-only trigram search using Jaro-Winkler similarity.
+        Candidates are retrieved via trigram pre-filter; JW scores the outer query.
+        """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
+            WITH candidates AS (
+                SELECT DISTINCT rkey, name, latitude, longitude, importance
+                FROM name_index
+                WHERE trigram IN ({placeholders})
+                  AND importance >= $importance_floor
+            )
             SELECT
                 rkey,
                 name,
                 latitude,
                 longitude,
                 0 AS distance_m,
-                count(DISTINCT trigram)::float
-                    / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
-                       - count(DISTINCT trigram))::float AS score
-            FROM name_index
-            WHERE trigram IN ({placeholders})
-              AND importance >= $importance_floor
-            GROUP BY rkey, name, latitude, longitude
-            HAVING count(DISTINCT trigram)::float
-                / (greatest(length(lower(strip_accents(name))) - 2, 1) + {n_query}
-                   - count(DISTINCT trigram))::float >= {self.JACCARD_THRESHOLD}
-            ORDER BY score DESC, max(importance) DESC
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
+            ORDER BY score DESC, importance DESC
             LIMIT $limit
         """
 
     def _query_trigram_spatial(self, params: SearchParams, trigrams: list) -> str:
-        n_query = len(trigrams)
+        """
+        Spatial + text trigram search using Jaro-Winkler similarity.
+        Joins places to name_index with bbox + trigram IN filters.
+        JW threshold applied to filter weak matches.
+        """
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         return f"""
+            WITH candidates AS (
+                SELECT DISTINCT p.osm_type, p.osm_id, p.name,
+                    p.latitude, p.longitude, p.geom, n.importance
+                FROM places p
+                JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
+                WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
+                  AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
+                  AND n.trigram IN ({placeholders})
+                  AND n.importance >= $importance_floor
+            )
             SELECT
-                p.osm_type || p.osm_id::VARCHAR AS rkey,
-                p.name,
-                p.latitude::decimal(10,6)::varchar AS latitude,
-                p.longitude::decimal(10,6)::varchar AS longitude,
-                min(ST_Distance_Sphere(p.geom, ST_GeomFromText($centroid))::integer) AS distance_m,
-                count(DISTINCT n.trigram)::float
-                    / (greatest(length(lower(strip_accents(p.name))) - 2, 1) + {n_query}
-                       - count(DISTINCT n.trigram))::float AS score
-            FROM places p
-            JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
-            WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
-              AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
-              AND n.trigram IN ({placeholders})
-              AND n.importance >= $importance_floor
-            GROUP BY p.osm_type, p.osm_id, p.name, p.latitude, p.longitude, p.geom
+                osm_type || osm_id::VARCHAR AS rkey,
+                name,
+                latitude::decimal(10,6)::varchar AS latitude,
+                longitude::decimal(10,6)::varchar AS longitude,
+                ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
+                jaro_winkler_similarity(lower(strip_accents($q)), lower(strip_accents(name))) AS score
+            FROM candidates
+            WHERE score >= {self.JW_THRESHOLD}
             ORDER BY score DESC, distance_m
             LIMIT $limit
         """

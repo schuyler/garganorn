@@ -38,20 +38,21 @@ def test_query_nearest_requires_centroid_or_q():
         db.query_nearest(params)
 
 
-def test_query_trigram_text_uses_jaccard():
-    """_query_trigram_text SQL uses trigram Jaccard scoring with rkey join."""
+def test_query_trigram_text_uses_jw():
+    """_query_trigram_text SQL uses Jaro-Winkler scoring with rkey."""
     db = _make_osm()
     params: SearchParams = {"q": "tartine", "limit": 10}
     trigrams = ["tar", "art", "rti", "tin", "ine"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "count(DISTINCT trigram)" in sql
-    assert "trigram IN" in sql or "trigram in" in sql.lower()
-    assert "AS score" in sql or "as score" in sql.lower()
+    assert "jaro_winkler_similarity" in sql
+    assert "count(DISTINCT trigram)" not in sql
+    assert "GROUP BY" not in sql
+    assert "with candidates" in sql.lower()
     assert "rkey" in sql
 
 
-def test_query_trigram_spatial_uses_jaccard():
-    """_query_trigram_spatial SQL uses trigram Jaccard, ST_Distance_Sphere."""
+def test_query_trigram_spatial_uses_jw():
+    """_query_trigram_spatial SQL uses Jaro-Winkler, ST_Distance_Sphere."""
     db = _make_osm()
     params: SearchParams = {
         "q": "tartine",
@@ -61,9 +62,12 @@ def test_query_trigram_spatial_uses_jaccard():
     }
     trigrams = ["tar", "art", "rti", "tin", "ine"]
     sql = db._query_trigram_spatial(params, trigrams)
-    assert "count(DISTINCT" in sql
-    assert "trigram IN" in sql or "trigram in" in sql.lower()
+    assert "jaro_winkler_similarity" in sql
+    assert "count(DISTINCT trigram)" not in sql
+    assert "GROUP BY" not in sql
+    assert "with candidates" in sql.lower()
     assert "ST_Distance_Sphere" in sql
+    assert "score >= 0.6" in sql
 
 
 def test_query_record_parses_rkey():

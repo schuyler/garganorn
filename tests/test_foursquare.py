@@ -143,15 +143,16 @@ def test_get_record_not_found(fsq_db):
 # Unit tests — trigram SQL generation (no DB connection needed)
 # ---------------------------------------------------------------------------
 
-def test_query_trigram_text_uses_jaccard():
-    """_query_trigram_text SQL uses trigram Jaccard scoring."""
+def test_query_trigram_text_uses_jw():
+    """_query_trigram_text SQL uses Jaro-Winkler scoring."""
     db = _make_fsq()
     params: SearchParams = {"q": "coffee", "limit": 10}
     trigrams = ["cof", "off", "ffe", "fee"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "count(DISTINCT trigram)" in sql
-    assert "trigram IN" in sql or "trigram in" in sql.lower()
-    assert "AS score" in sql or "as score" in sql.lower()
+    assert "jaro_winkler_similarity" in sql
+    assert "count(DISTINCT trigram)" not in sql
+    assert "GROUP BY" not in sql
+    assert "with candidates" in sql.lower()
 
 
 def test_query_trigram_text_no_limit_5000():
@@ -163,8 +164,8 @@ def test_query_trigram_text_no_limit_5000():
     assert "5000" not in sql
 
 
-def test_query_trigram_spatial_uses_jaccard():
-    """_query_trigram_spatial SQL uses trigram Jaccard, trigram IN, ST_Distance_Sphere."""
+def test_query_trigram_spatial_uses_jw():
+    """_query_trigram_spatial SQL uses Jaro-Winkler, trigram IN, ST_Distance_Sphere."""
     db = _make_fsq()
     params: SearchParams = {
         "q": "coffee",
@@ -174,9 +175,12 @@ def test_query_trigram_spatial_uses_jaccard():
     }
     trigrams = ["cof", "off", "ffe", "fee"]
     sql = db._query_trigram_spatial(params, trigrams)
-    assert "count(DISTINCT" in sql
-    assert "trigram IN" in sql or "trigram in" in sql.lower()
+    assert "jaro_winkler_similarity" in sql
+    assert "count(DISTINCT trigram)" not in sql
+    assert "GROUP BY" not in sql
+    assert "with candidates" in sql.lower()
     assert "ST_Distance_Sphere" in sql
+    assert "score >= 0.6" in sql
 
 
 # ---------------------------------------------------------------------------
@@ -202,10 +206,9 @@ def test_trigram_nearest_text_no_scoring_in_attributes(fsq_db):
 
 def test_trigram_nearest_spatial_with_text(fsq_db):
     """Spatial + text trigram search returns results with distance_m."""
-    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194, q="coffee")
+    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194, q="Blue Bottle Coffee")
     assert len(results) > 0
     assert all(r["distance_m"] >= 0 for r in results)
-    # Verify the result has the expected name (Blue Bottle Coffee has "coffee" trigrams)
     names = [r["names"][0]["text"] for r in results]
     assert any("Coffee" in n for n in names)
 

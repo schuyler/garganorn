@@ -120,14 +120,35 @@ def test_get_record(overture_db):
 # Unit tests — Overture trigram SQL generation
 # ---------------------------------------------------------------------------
 
-def test_overture_query_trigram_text_uses_jaccard():
-    """_query_trigram_text SQL uses trigram Jaccard scoring."""
+def test_overture_query_trigram_text_uses_jw():
+    """_query_trigram_text SQL uses Jaro-Winkler scoring."""
     db = _make_ovr()
     params: SearchParams = {"q": "anchor brewing", "limit": 10}
     trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "count(DISTINCT trigram)" in sql
-    assert "trigram IN" in sql or "trigram in" in sql.lower()
+    assert "jaro_winkler_similarity" in sql
+    assert "count(DISTINCT trigram)" not in sql
+    assert "GROUP BY" not in sql
+    assert "with candidates" in sql.lower()
+
+
+def test_overture_query_trigram_spatial_uses_jw():
+    """_query_trigram_spatial SQL uses Jaro-Winkler, trigram IN, ST_Distance_Sphere."""
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "anchor brewing",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "jaro_winkler_similarity" in sql
+    assert "count(DISTINCT trigram)" not in sql
+    assert "GROUP BY" not in sql
+    assert "with candidates" in sql.lower()
+    assert "ST_Distance_Sphere" in sql
+    assert "score >= 0.6" in sql
 
 
 # ---------------------------------------------------------------------------
