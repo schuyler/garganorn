@@ -16,6 +16,44 @@ FSQ_PLACES = [
     ("fsq003", "Ferry Building Marketplace", 37.7955, -122.3937, "1 Ferry Building", "San Francisco", "94111", "CA", "CA", None, None, "US"),
     ("fsq004", "Tartine Bakery", 37.7612, -122.4242, "600 Guerrero St", "San Francisco", "94110", "CA", "CA", None, None, "US"),
     ("fsq005", "Alcatraz Island", 37.8270, -122.4230, None, "San Francisco", "94133", "CA", "CA", None, None, "US"),
+    # Token-blending test fixtures:
+    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
+    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
+    ("fsq006", "Diner North End", 37.7749, -122.4350, "1 North End Ave", "San Francisco", "94129", "CA", "CA", None, None, "US"),
+    ("fsq007", "North End Pub", 37.7748, -122.4351, "2 North End Ave", "San Francisco", "94129", "CA", "CA", None, None, "US"),
+    # Multi-token scaling test fixtures (Strategy E):
+    # 5-token names for verifying blending at higher token counts
+    ("fsq008", "San Francisco International Airport Terminal", 37.6213, -122.3790, "International Terminal", "San Francisco", "94128", "CA", "CA", None, None, "US"),
+    ("fsq009", "University Medical Center", 37.7629, -122.4577, "505 Parnassus Ave", "San Francisco", "94143", "CA", "CA", None, None, "US"),
+    ("fsq010", "North Beach Community Garden Center", 37.8008, -122.4105, "1 Garden Ln", "San Francisco", "94133", "CA", "CA", None, None, "US"),
+    # Cutoff survival test fixtures (Strategy E):
+    # "Restaurant Park Avenue" has low full_jw but high token_jw for query "Park Avenue Restaurant".
+    # The 25 "Park Avenue ..." variants compete via full_jw; the reordered name must survive any top-N cutoff.
+    ("fsq011", "Restaurant Park Avenue", 37.7500, -122.4100, "1 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq012", "Park Avenue Cafe", 37.7501, -122.4101, "2 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq013", "Park Avenue Bar", 37.7502, -122.4102, "3 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq014", "Park Avenue Grill", 37.7503, -122.4103, "4 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq015", "Park Avenue Bistro", 37.7504, -122.4104, "5 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq016", "Park Avenue Bakery", 37.7505, -122.4105, "6 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq017", "Park Avenue Diner", 37.7506, -122.4106, "7 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq018", "Park Avenue Lounge", 37.7507, -122.4107, "8 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq019", "Park Avenue Tavern", 37.7508, -122.4108, "9 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq020", "Park Avenue Kitchen", 37.7509, -122.4109, "10 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq021", "Park Avenue Deli", 37.7510, -122.4110, "11 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq022", "Park Avenue Pizza", 37.7511, -122.4111, "12 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq023", "Park Avenue Sushi", 37.7512, -122.4112, "13 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq024", "Park Avenue Noodles", 37.7513, -122.4113, "14 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq025", "Park Avenue Burgers", 37.7514, -122.4114, "15 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq026", "Park Avenue Tacos", 37.7515, -122.4115, "16 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq027", "Park Avenue Steakhouse", 37.7516, -122.4116, "17 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq028", "Park Avenue Ramen", 37.7517, -122.4117, "18 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq029", "Park Avenue Tapas", 37.7518, -122.4118, "19 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq030", "Park Avenue Curry", 37.7519, -122.4119, "20 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq031", "Park Avenue Wok", 37.7520, -122.4120, "21 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq032", "Park Avenue Smokehouse", 37.7521, -122.4121, "22 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq033", "Park Avenue Seafood", 37.7522, -122.4122, "23 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq034", "Park Avenue Brunch", 37.7523, -122.4123, "24 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
+    ("fsq035", "Park Avenue Patisserie", 37.7524, -122.4124, "25 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
 ]
 
 OVERTURE_PLACES = [
@@ -25,6 +63,11 @@ OVERTURE_PLACES = [
     ("ovr003", "Coit Tower", 37.8024, -122.4058, "1 Telegraph Hill Blvd", "San Francisco", "94133", "US-CA", "US"),
     ("ovr004", "Anchor Brewing", 37.7688, -122.4125, "1705 Mariposa St", "San Francisco", "94107", "US-CA", "US"),
     ("ovr005", "Lombard Street", 37.8021, -122.4187, "Lombard St", "San Francisco", "94133", "US-CA", "US"),
+    # Token-blending test fixtures:
+    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
+    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
+    ("ovr006", "Diner North End", 37.7749, -122.4350, "1 North End Ave", "San Francisco", "94129", "US-CA", "US"),
+    ("ovr007", "North End Pub", 37.7748, -122.4351, "2 North End Ave", "San Francisco", "94129", "US-CA", "US"),
 ]
 
 
@@ -80,6 +123,38 @@ def _create_fsq_db(db_path):
         "fsq003": 85,
         "fsq004": 55,
         "fsq005": 90,
+        "fsq006": 70,
+        "fsq007": 70,
+        # Multi-token scaling fixtures
+        "fsq008": 70,
+        "fsq009": 70,
+        "fsq010": 70,
+        # Cutoff survival fixtures
+        "fsq011": 70,
+        "fsq012": 70,
+        "fsq013": 70,
+        "fsq014": 70,
+        "fsq015": 70,
+        "fsq016": 70,
+        "fsq017": 70,
+        "fsq018": 70,
+        "fsq019": 70,
+        "fsq020": 70,
+        "fsq021": 70,
+        "fsq022": 70,
+        "fsq023": 70,
+        "fsq024": 70,
+        "fsq025": 70,
+        "fsq026": 70,
+        "fsq027": 70,
+        "fsq028": 70,
+        "fsq029": 70,
+        "fsq030": 70,
+        "fsq031": 70,
+        "fsq032": 70,
+        "fsq033": 70,
+        "fsq034": 70,
+        "fsq035": 70,
     }
 
     for row in FSQ_PLACES:
@@ -168,6 +243,8 @@ def _create_overture_db(db_path):
         "ovr003": 80,
         "ovr004": 55,
         "ovr005": 65,
+        "ovr006": 70,
+        "ovr007": 70,
     }
 
     for row in OVERTURE_PLACES:
@@ -278,6 +355,15 @@ OSM_PLACES = [
     ("w", 88776655, "Caltrain Station", 37.7764, -122.3942,
      "railway=station",
      {}),
+    # Token-blending test fixtures:
+    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
+    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
+    ("n", 11110001, "Diner North End", 37.7749, -122.4350,
+     "amenity=restaurant",
+     {}),
+    ("n", 11110002, "North End Pub", 37.7748, -122.4351,
+     "amenity=pub",
+     {}),
 ]
 
 OSM_IMPORTANCE = {
@@ -286,6 +372,8 @@ OSM_IMPORTANCE = {
     "w50637691": 55,
     "n9876543": 60,
     "w88776655": 70,
+    "n11110001": 70,
+    "n11110002": 70,
 }
 
 

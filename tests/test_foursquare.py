@@ -220,55 +220,171 @@ def test_trigram_nearest_unrelated_query(fsq_db):
 
 
 # ---------------------------------------------------------------------------
-# Token-level JW blending tests
+# Token-blending tests (Red phase — these FAIL until token blending is impl.)
 # ---------------------------------------------------------------------------
 
-def test_query_trigram_text_multi_token_uses_ranked_cte():
-    """Multi-token query generates ranked, token_avg, and scored CTEs."""
-    db = _make_fsq()
-    params: SearchParams = {"q": "blue bottle", "limit": 10, "t0": "blue", "t1": "bottle", "importance_floor": 0}
-    trigrams = ["blu", "lue", "ue ", "e b", " bo", "bot", "ott", "ttl", "tle"]
-    sql = db._query_trigram_text(params, trigrams)
-    assert "ranked" in sql
-    assert "name_tokens" in sql
-    assert "token_scores" in sql
-    assert "token_avg" in sql
-    assert "scored" in sql
-    assert "CROSS JOIN" in sql
+def test_token_blending_text_ranking(fsq_db):
+    """Token-level JW blending ranks 'Diner North End' above 'North End Pub' for query 'North End Diner'.
 
-
-def test_query_trigram_text_single_token_no_ranked_cte():
-    """Single-token query uses simple JW without ranked/token CTEs."""
-    db = _make_fsq()
-    params: SearchParams = {"q": "coffee", "limit": 10, "t0": "coffee", "importance_floor": 0}
-    trigrams = ["cof", "off", "ffe", "fee"]
-    sql = db._query_trigram_text(params, trigrams)
-    assert "ranked" not in sql
-    assert "token_avg" not in sql
-    assert "jaro_winkler_similarity" in sql
-
-
-def test_query_trigram_spatial_multi_token_uses_ranked_cte():
-    """Multi-token spatial query generates ranked, token_avg, and scored CTEs."""
-    db = _make_fsq()
-    params: SearchParams = {
-        "q": "blue bottle", "limit": 10,
-        "t0": "blue", "t1": "bottle", "importance_floor": 0,
-        "centroid": "POINT(-122.4194 37.7749)",
-        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
-    }
-    trigrams = ["blu", "lue", "ue ", "e b", " bo", "bot", "ott", "ttl", "tle"]
-    sql = db._query_trigram_spatial(params, trigrams)
-    assert "ranked" in sql
-    assert "token_avg" in sql
-    assert "scored" in sql
-    assert "CROSS JOIN" in sql
-    assert "ST_Distance_Sphere" in sql
-
-
-def test_multi_token_nearest_text_returns_results(fsq_db):
-    """Multi-word text query triggers token blending and returns results."""
-    results = fsq_db.nearest(q="Blue Bottle Coffee")
-    assert len(results) > 0
+    Full-string JW favors 'North End Pub' because it shares the long prefix 'north end'.
+    Token-level JW correctly identifies that 'Diner North End' contains all query tokens.
+    This test FAILS until token blending is implemented.
+    """
+    results = fsq_db.nearest(q="North End Diner")
     names = [r["names"][0]["text"] for r in results]
-    assert any("Blue Bottle Coffee" in n for n in names)
+    assert "Diner North End" in names, "Diner North End not found in results"
+    assert "North End Pub" in names, "North End Pub not found in results"
+    diner_idx = names.index("Diner North End")
+    pub_idx = names.index("North End Pub")
+    assert diner_idx < pub_idx, (
+        f"'Diner North End' (pos {diner_idx}) should rank above "
+        f"'North End Pub' (pos {pub_idx}) with token-level JW blending"
+    )
+
+
+def test_token_blending_spatial_ranking(fsq_db):
+    """Spatial + text: token blending ranks 'Diner North End' above 'North End Pub'.
+
+    Both places are co-located within the search bbox; distance does not break the tie.
+    Full-string JW favors 'North End Pub'. Token JW correctly favors 'Diner North End'.
+    This test FAILS until token blending is implemented.
+    """
+    results = fsq_db.nearest(
+        latitude=37.7749, longitude=-122.4351, q="North End Diner"
+    )
+    names = [r["names"][0]["text"] for r in results]
+    assert "Diner North End" in names, "Diner North End not found in results"
+    assert "North End Pub" in names, "North End Pub not found in results"
+    diner_idx = names.index("Diner North End")
+    pub_idx = names.index("North End Pub")
+    assert diner_idx < pub_idx, (
+        f"'Diner North End' (pos {diner_idx}) should rank above "
+        f"'North End Pub' (pos {pub_idx}) with token-level JW blending"
+    )
+
+
+def test_single_token_finds_existing_place(fsq_db):
+    """Single-token query 'Alcatraz' finds Alcatraz Island (regression guard, should PASS)."""
+    results = fsq_db.nearest(q="Alcatraz")
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Alcatraz" in n for n in names)
+
+
+def test_single_token_no_blending_applied(fsq_db):
+    """Single-token query returns results without token blending (regression guard, should PASS).
+
+    Single-token queries use full-string JW only per spec. Verify this path
+    still works correctly after the blending feature is added.
+    """
+    results = fsq_db.nearest(q="Ferry")
+    # "Ferry Building Marketplace" contains "ferry" and should appear
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Ferry" in n for n in names)
+
+
+# ---------------------------------------------------------------------------
+# Multi-token scaling tests (Strategy E — Red phase)
+# These test that token blending works correctly at higher token counts (4-6).
+# ---------------------------------------------------------------------------
+
+def test_four_token_query_finds_correct_place(fsq_db):
+    """4-token query 'North Beach Community Garden' finds 'North Beach Community Garden Center'.
+
+    Verifies that blending works at 4 query tokens. The target place (5 tokens)
+    contains all 4 query tokens and should appear in results.
+    """
+    results = fsq_db.nearest(q="North Beach Community Garden")
+    names = [r["names"][0]["text"] for r in results]
+    assert "North Beach Community Garden Center" in names, (
+        "4-token query should find 'North Beach Community Garden Center'"
+    )
+
+
+def test_four_token_query_ranks_best_match_first(fsq_db):
+    """4-token query 'North Beach Community Garden' ranks the 5-token fixture first.
+
+    'North Beach Community Garden Center' has all 4 query tokens. Any partial
+    match (e.g., 2-token overlap) should rank lower.
+    """
+    results = fsq_db.nearest(q="North Beach Community Garden")
+    names = [r["names"][0]["text"] for r in results]
+    assert len(names) > 0
+    assert names[0] == "North Beach Community Garden Center", (
+        f"Expected 'North Beach Community Garden Center' first, got '{names[0]}'"
+    )
+
+
+def test_five_token_query_finds_airport(fsq_db):
+    """5-token query finds 'San Francisco International Airport Terminal'.
+
+    Verifies blending works at 5 query tokens — matches the fixture exactly.
+    """
+    results = fsq_db.nearest(q="San Francisco International Airport Terminal")
+    names = [r["names"][0]["text"] for r in results]
+    assert "San Francisco International Airport Terminal" in names, (
+        "5-token query should find 'San Francisco International Airport Terminal'"
+    )
+
+
+def test_five_token_query_ranks_exact_match_first(fsq_db):
+    """5-token query 'San Francisco International Airport Terminal' ranks exact match first."""
+    results = fsq_db.nearest(q="San Francisco International Airport Terminal")
+    names = [r["names"][0]["text"] for r in results]
+    assert len(names) > 0
+    assert names[0] == "San Francisco International Airport Terminal", (
+        f"Expected exact match first, got '{names[0]}'"
+    )
+
+
+def test_six_token_query_finds_best_match(fsq_db):
+    """6-token query matches available fixtures via token blending.
+
+    Query 'North Beach Community Garden Center Park' has 6 tokens.
+    The best candidate is 'North Beach Community Garden Center' (5/6 token overlap).
+    Verifies blending doesn't break at 6 tokens.
+    """
+    results = fsq_db.nearest(q="North Beach Community Garden Center Park")
+    names = [r["names"][0]["text"] for r in results]
+    assert "North Beach Community Garden Center" in names, (
+        "6-token query should find 'North Beach Community Garden Center' via token blending"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Top-N cutoff survival test (Strategy E — Red phase)
+# Strategy E introduces a LIMIT in a CTE to cap candidates before the
+# expensive token JW scoring step. This test would catch a too-small cutoff.
+# ---------------------------------------------------------------------------
+
+def test_cutoff_survival_reordered_name(fsq_db):
+    """Reordered name 'Restaurant Park Avenue' appears in results for 'Park Avenue Restaurant'.
+
+    Setup: 25 places named 'Park Avenue <X>' (high full_jw for 'Park Avenue Restaurant')
+    + 1 place named 'Restaurant Park Avenue' (low full_jw, perfect token_jw).
+
+    Strategy E optimization: before expensive token scoring, pre-sort candidates by
+    full_jw and keep only the top (N * limit) candidates. 'Restaurant Park Avenue'
+    has the lowest full_jw of all 26 candidates (reordered words → weak prefix match),
+    so it is the first to be dropped by an aggressive cutoff.
+
+    With limit=26 and a 20x cutoff (20*26=520), all 26 candidates survive.
+    With a 1x cutoff (1*26=26), the exact boundary — pre-sort order determines
+    whether 'Restaurant Park Avenue' survives.
+    With a cutoff smaller than 26, 'Restaurant Park Avenue' is dropped.
+
+    This test uses limit=26 so 'Restaurant Park Avenue' can appear in the final
+    results when all candidates are scored. It has perfect token_jw (1.0) vs
+    partial token_jw for 'Park Avenue X' variants (missing 'restaurant' token),
+    so the blended score pushes it into the top results.
+
+    Passes against: current correlated subquery (no cutoff) and Strategy E (20x cutoff).
+    Would fail against: a cutoff of ~1x or smaller that drops the reordered candidate
+    before token scoring can surface it.
+    """
+    results = fsq_db.nearest(q="Park Avenue Restaurant", limit=26)
+    names = [r["names"][0]["text"] for r in results]
+    assert "Restaurant Park Avenue" in names, (
+        f"'Restaurant Park Avenue' (perfect token match, low full_jw) should appear "
+        f"in results for 'Park Avenue Restaurant' when all candidates are scored. "
+        f"Got: {names}"
+    )

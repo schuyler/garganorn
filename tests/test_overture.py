@@ -172,55 +172,62 @@ def test_overture_trigram_nearest_no_scoring_in_attributes(overture_db):
 
 
 # ---------------------------------------------------------------------------
-# Token-level JW blending tests
+# Token-blending tests (Red phase — these FAIL until token blending is impl.)
 # ---------------------------------------------------------------------------
 
-def test_overture_query_trigram_text_multi_token_uses_ranked_cte():
-    """Multi-token query generates ranked, token_avg, and scored CTEs."""
-    db = _make_ovr()
-    params: SearchParams = {"q": "anchor brewing", "limit": 10, "t0": "anchor", "t1": "brewing", "importance_floor": 0}
-    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
-    sql = db._query_trigram_text(params, trigrams)
-    assert "ranked" in sql
-    assert "name_tokens" in sql
-    assert "token_scores" in sql
-    assert "token_avg" in sql
-    assert "scored" in sql
-    assert "CROSS JOIN" in sql
+def test_token_blending_text_ranking(overture_db):
+    """Token-level JW blending ranks 'Diner North End' above 'North End Pub' for query 'North End Diner'.
 
-
-def test_overture_query_trigram_text_single_token_no_ranked_cte():
-    """Single-token query uses simple JW without ranked/token CTEs."""
-    db = _make_ovr()
-    params: SearchParams = {"q": "coffee", "limit": 10, "t0": "coffee", "importance_floor": 0}
-    trigrams = ["cof", "off", "ffe", "fee"]
-    sql = db._query_trigram_text(params, trigrams)
-    assert "ranked" not in sql
-    assert "token_avg" not in sql
-    assert "jaro_winkler_similarity" in sql
-
-
-def test_overture_query_trigram_spatial_multi_token_uses_ranked_cte():
-    """Multi-token spatial query generates ranked, token_avg, and scored CTEs."""
-    db = _make_ovr()
-    params: SearchParams = {
-        "q": "anchor brewing", "limit": 10,
-        "t0": "anchor", "t1": "brewing", "importance_floor": 0,
-        "centroid": "POINT(-122.4125 37.7688)",
-        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
-    }
-    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
-    sql = db._query_trigram_spatial(params, trigrams)
-    assert "ranked" in sql
-    assert "token_avg" in sql
-    assert "scored" in sql
-    assert "CROSS JOIN" in sql
-    assert "ST_Distance_Sphere" in sql
-
-
-def test_overture_multi_token_nearest_text_returns_results(overture_db):
-    """Multi-word text query triggers token blending and returns results."""
-    results = overture_db.nearest(q="Anchor Brewing")
-    assert len(results) > 0
+    Full-string JW favors 'North End Pub' because it shares the long prefix 'north end'.
+    Token-level JW correctly identifies that 'Diner North End' contains all query tokens.
+    This test FAILS until token blending is implemented.
+    """
+    results = overture_db.nearest(q="North End Diner")
     names = [r["names"][0]["text"] for r in results]
-    assert any("Anchor" in n for n in names)
+    assert "Diner North End" in names, "Diner North End not found in results"
+    assert "North End Pub" in names, "North End Pub not found in results"
+    diner_idx = names.index("Diner North End")
+    pub_idx = names.index("North End Pub")
+    assert diner_idx < pub_idx, (
+        f"'Diner North End' (pos {diner_idx}) should rank above "
+        f"'North End Pub' (pos {pub_idx}) with token-level JW blending"
+    )
+
+
+def test_token_blending_spatial_ranking(overture_db):
+    """Spatial + text: token blending ranks 'Diner North End' above 'North End Pub'.
+
+    Both places are co-located within the search bbox; distance does not break the tie.
+    Full-string JW favors 'North End Pub'. Token JW correctly favors 'Diner North End'.
+    This test FAILS until token blending is implemented.
+    """
+    results = overture_db.nearest(
+        latitude=37.7749, longitude=-122.4351, q="North End Diner"
+    )
+    names = [r["names"][0]["text"] for r in results]
+    assert "Diner North End" in names, "Diner North End not found in results"
+    assert "North End Pub" in names, "North End Pub not found in results"
+    diner_idx = names.index("Diner North End")
+    pub_idx = names.index("North End Pub")
+    assert diner_idx < pub_idx, (
+        f"'Diner North End' (pos {diner_idx}) should rank above "
+        f"'North End Pub' (pos {pub_idx}) with token-level JW blending"
+    )
+
+
+def test_single_token_finds_existing_place(overture_db):
+    """Single-token query 'Coit' finds Coit Tower (regression guard, should PASS)."""
+    results = overture_db.nearest(q="Coit")
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Coit" in n for n in names)
+
+
+def test_single_token_no_blending_applied(overture_db):
+    """Single-token query returns results without token blending (regression guard, should PASS).
+
+    Single-token queries use full-string JW only per spec. Verify this path
+    still works correctly after the blending feature is added.
+    """
+    results = overture_db.nearest(q="Lombard")
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Lombard" in n for n in names)

@@ -261,11 +261,9 @@ class TestComputeImportanceFloor:
         assert compute_importance_floor(70000) == 17
 
     def test_compute_floor_globe(self):
-        """Full-globe area → floor 52."""
+        """Full-globe area → floor capped at 45."""
         self._require()
-        expected = min(int(4 * math.log(1 + 510_000_000 / 1000)), 100)
-        assert expected == 52, f"Pre-condition: expected 52, got {expected}"
-        assert compute_importance_floor(510_000_000) == 52
+        assert compute_importance_floor(510_000_000) == 45
 
     def test_compute_floor_zero_area(self):
         """Zero area → floor 0."""
@@ -277,10 +275,10 @@ class TestComputeImportanceFloor:
         self._require()
         assert compute_importance_floor(-100) == 0
 
-    def test_compute_floor_capped_at_100(self):
-        """Astronomically large area → floor capped at 100."""
+    def test_compute_floor_capped_at_45(self):
+        """Astronomically large area → floor capped at 45."""
         self._require()
-        assert compute_importance_floor(1e30) == 100
+        assert compute_importance_floor(1e30) == 45
 
 
 # ---------------------------------------------------------------------------
