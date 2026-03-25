@@ -280,3 +280,111 @@ def test_single_token_no_blending_applied(fsq_db):
     # "Ferry Building Marketplace" contains "ferry" and should appear
     names = [r["names"][0]["text"] for r in results]
     assert any("Ferry" in n for n in names)
+
+
+# ---------------------------------------------------------------------------
+# Multi-token scaling tests (Strategy E — Red phase)
+# These test that token blending works correctly at higher token counts (4-6).
+# ---------------------------------------------------------------------------
+
+def test_four_token_query_finds_correct_place(fsq_db):
+    """4-token query 'North Beach Community Garden' finds 'North Beach Community Garden Center'.
+
+    Verifies that blending works at 4 query tokens. The target place (5 tokens)
+    contains all 4 query tokens and should appear in results.
+    """
+    results = fsq_db.nearest(q="North Beach Community Garden")
+    names = [r["names"][0]["text"] for r in results]
+    assert "North Beach Community Garden Center" in names, (
+        "4-token query should find 'North Beach Community Garden Center'"
+    )
+
+
+def test_four_token_query_ranks_best_match_first(fsq_db):
+    """4-token query 'North Beach Community Garden' ranks the 5-token fixture first.
+
+    'North Beach Community Garden Center' has all 4 query tokens. Any partial
+    match (e.g., 2-token overlap) should rank lower.
+    """
+    results = fsq_db.nearest(q="North Beach Community Garden")
+    names = [r["names"][0]["text"] for r in results]
+    assert len(names) > 0
+    assert names[0] == "North Beach Community Garden Center", (
+        f"Expected 'North Beach Community Garden Center' first, got '{names[0]}'"
+    )
+
+
+def test_five_token_query_finds_airport(fsq_db):
+    """5-token query finds 'San Francisco International Airport Terminal'.
+
+    Verifies blending works at 5 query tokens — matches the fixture exactly.
+    """
+    results = fsq_db.nearest(q="San Francisco International Airport Terminal")
+    names = [r["names"][0]["text"] for r in results]
+    assert "San Francisco International Airport Terminal" in names, (
+        "5-token query should find 'San Francisco International Airport Terminal'"
+    )
+
+
+def test_five_token_query_ranks_exact_match_first(fsq_db):
+    """5-token query 'San Francisco International Airport Terminal' ranks exact match first."""
+    results = fsq_db.nearest(q="San Francisco International Airport Terminal")
+    names = [r["names"][0]["text"] for r in results]
+    assert len(names) > 0
+    assert names[0] == "San Francisco International Airport Terminal", (
+        f"Expected exact match first, got '{names[0]}'"
+    )
+
+
+def test_six_token_query_finds_best_match(fsq_db):
+    """6-token query matches available fixtures via token blending.
+
+    Query 'North Beach Community Garden Center Park' has 6 tokens.
+    The best candidate is 'North Beach Community Garden Center' (5/6 token overlap).
+    Verifies blending doesn't break at 6 tokens.
+    """
+    results = fsq_db.nearest(q="North Beach Community Garden Center Park")
+    names = [r["names"][0]["text"] for r in results]
+    assert "North Beach Community Garden Center" in names, (
+        "6-token query should find 'North Beach Community Garden Center' via token blending"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Top-N cutoff survival test (Strategy E — Red phase)
+# Strategy E introduces a LIMIT in a CTE to cap candidates before the
+# expensive token JW scoring step. This test would catch a too-small cutoff.
+# ---------------------------------------------------------------------------
+
+def test_cutoff_survival_reordered_name(fsq_db):
+    """Reordered name 'Restaurant Park Avenue' appears in results for 'Park Avenue Restaurant'.
+
+    Setup: 25 places named 'Park Avenue <X>' (high full_jw for 'Park Avenue Restaurant')
+    + 1 place named 'Restaurant Park Avenue' (low full_jw, perfect token_jw).
+
+    Strategy E optimization: before expensive token scoring, pre-sort candidates by
+    full_jw and keep only the top (N * limit) candidates. 'Restaurant Park Avenue'
+    has the lowest full_jw of all 26 candidates (reordered words → weak prefix match),
+    so it is the first to be dropped by an aggressive cutoff.
+
+    With limit=26 and a 20x cutoff (20*26=520), all 26 candidates survive.
+    With a 1x cutoff (1*26=26), the exact boundary — pre-sort order determines
+    whether 'Restaurant Park Avenue' survives.
+    With a cutoff smaller than 26, 'Restaurant Park Avenue' is dropped.
+
+    This test uses limit=26 so 'Restaurant Park Avenue' can appear in the final
+    results when all candidates are scored. It has perfect token_jw (1.0) vs
+    partial token_jw for 'Park Avenue X' variants (missing 'restaurant' token),
+    so the blended score pushes it into the top results.
+
+    Passes against: current correlated subquery (no cutoff) and Strategy E (20x cutoff).
+    Would fail against: a cutoff of ~1x or smaller that drops the reordered candidate
+    before token scoring can surface it.
+    """
+    results = fsq_db.nearest(q="Park Avenue Restaurant", limit=26)
+    names = [r["names"][0]["text"] for r in results]
+    assert "Restaurant Park Avenue" in names, (
+        f"'Restaurant Park Avenue' (perfect token match, low full_jw) should appear "
+        f"in results for 'Park Avenue Restaurant' when all candidates are scored. "
+        f"Got: {names}"
+    )
