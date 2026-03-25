@@ -238,3 +238,58 @@ def test_trigram_no_scoring_in_attributes(osm_db):
     for r in results:
         assert "score" not in r.get("attributes", {})
         assert "jaccard" not in r.get("attributes", {})
+
+
+# ---------------------------------------------------------------------------
+# Token-level JW blending tests
+# ---------------------------------------------------------------------------
+
+def test_osm_query_trigram_text_multi_token_uses_ranked_cte():
+    """Multi-token query generates ranked, token_avg, and scored CTEs."""
+    db = _make_osm()
+    params: SearchParams = {"q": "tartine manufactory", "limit": 10, "t0": "tartine", "t1": "manufactory", "importance_floor": 0}
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "ranked" in sql
+    assert "name_tokens" in sql
+    assert "token_scores" in sql
+    assert "token_avg" in sql
+    assert "scored" in sql
+    assert "CROSS JOIN" in sql
+
+
+def test_osm_query_trigram_text_single_token_no_ranked_cte():
+    """Single-token query uses simple JW without ranked/token CTEs."""
+    db = _make_osm()
+    params: SearchParams = {"q": "tartine", "limit": 10, "t0": "tartine", "importance_floor": 0}
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "ranked" not in sql
+    assert "token_avg" not in sql
+    assert "jaro_winkler_similarity" in sql
+
+
+def test_osm_query_trigram_spatial_multi_token_uses_ranked_cte():
+    """Multi-token spatial query generates ranked, token_avg, and scored CTEs."""
+    db = _make_osm()
+    params: SearchParams = {
+        "q": "tartine manufactory", "limit": 10,
+        "t0": "tartine", "t1": "manufactory", "importance_floor": 0,
+        "centroid": "POINT(-122.4195 37.7612)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+    }
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "ranked" in sql
+    assert "token_avg" in sql
+    assert "scored" in sql
+    assert "CROSS JOIN" in sql
+    assert "ST_Distance_Sphere" in sql
+
+
+def test_osm_multi_token_nearest_text_returns_results(osm_db):
+    """Multi-word text query triggers token blending and returns results."""
+    results = osm_db.nearest(q="Tartine Manufactory")
+    assert len(results) > 0
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Tartine" in n for n in names)

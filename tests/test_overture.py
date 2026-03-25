@@ -169,3 +169,58 @@ def test_overture_trigram_nearest_no_scoring_in_attributes(overture_db):
     assert len(results) > 0
     for r in results:
         assert "score" not in r.get("attributes", {})
+
+
+# ---------------------------------------------------------------------------
+# Token-level JW blending tests
+# ---------------------------------------------------------------------------
+
+def test_overture_query_trigram_text_multi_token_uses_ranked_cte():
+    """Multi-token query generates ranked, token_avg, and scored CTEs."""
+    db = _make_ovr()
+    params: SearchParams = {"q": "anchor brewing", "limit": 10, "t0": "anchor", "t1": "brewing", "importance_floor": 0}
+    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "ranked" in sql
+    assert "name_tokens" in sql
+    assert "token_scores" in sql
+    assert "token_avg" in sql
+    assert "scored" in sql
+    assert "CROSS JOIN" in sql
+
+
+def test_overture_query_trigram_text_single_token_no_ranked_cte():
+    """Single-token query uses simple JW without ranked/token CTEs."""
+    db = _make_ovr()
+    params: SearchParams = {"q": "coffee", "limit": 10, "t0": "coffee", "importance_floor": 0}
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_text(params, trigrams)
+    assert "ranked" not in sql
+    assert "token_avg" not in sql
+    assert "jaro_winkler_similarity" in sql
+
+
+def test_overture_query_trigram_spatial_multi_token_uses_ranked_cte():
+    """Multi-token spatial query generates ranked, token_avg, and scored CTEs."""
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "anchor brewing", "limit": 10,
+        "t0": "anchor", "t1": "brewing", "importance_floor": 0,
+        "centroid": "POINT(-122.4125 37.7688)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+    }
+    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "ranked" in sql
+    assert "token_avg" in sql
+    assert "scored" in sql
+    assert "CROSS JOIN" in sql
+    assert "ST_Distance_Sphere" in sql
+
+
+def test_overture_multi_token_nearest_text_returns_results(overture_db):
+    """Multi-word text query triggers token blending and returns results."""
+    results = overture_db.nearest(q="Anchor Brewing")
+    assert len(results) > 0
+    names = [r["names"][0]["text"] for r in results]
+    assert any("Anchor" in n for n in names)
