@@ -199,9 +199,6 @@ with name_prep as (
         fsq_place_id,
         name,
         lower(strip_accents(name)) as norm_name,
-        latitude::decimal(10,6)::varchar as latitude,
-        longitude::decimal(10,6)::varchar as longitude,
-        address, locality, postcode, region, country,
         coalesce(importance, 0) as importance
     from places
     where name is not null and length(name) > 0
@@ -211,13 +208,7 @@ trigrams as (
         substr(np.norm_name, pos, 3) as trigram,
         np.fsq_place_id,
         np.name,
-        np.latitude,
-        np.longitude,
-        np.address,
-        np.locality,
-        np.postcode,
-        np.region,
-        np.country,
+        np.norm_name,
         np.importance
     from name_prep np
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
@@ -227,13 +218,7 @@ select
     trigram,
     fsq_place_id,
     name,
-    latitude,
-    longitude,
-    address,
-    locality,
-    postcode,
-    region,
-    country,
+    norm_name,
     importance
 from trigrams
 order by trigram;

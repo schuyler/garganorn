@@ -3,6 +3,23 @@
 Captures the concrete optimization plan for the next implementation session.
 Written against commit d99d637 (Jaro-Winkler scoring, main branch).
 
+## Implementation Status
+
+**Completed (this pass):**
+- Optimization 2 (norm_name): Pre-computed `lower(strip_accents(name))` stored in `name_index`. All query paths use `norm_name`/`$norm_q` instead of runtime normalization. OSM trigram generation bug fixed (missing `strip_accents`).
+- Optimization 4 (schema normalization): Display columns stripped from `name_index` (now 5 columns: trigram, id, name, norm_name, importance). Text-only query paths JOIN `places` after scoring. Overture text results now return real addresses. OSM text results now return primary_category.
+
+**Deferred:**
+- Optimization 1 (min_trigram_hits): Threshold formula needs empirical validation against production queries.
+
+**Skipped:**
+- Optimization 3 (ART index): Zonemaps on sorted column are sufficient; selectivity threshold prevents use on multi-trigram queries.
+
+**Remaining:**
+- Optimization 5 (trigram IDF selection): Depends on 1-4 being stable.
+
+---
+
 ## Performance Baseline
 
 Server: garganorn-1, 4 cores, 64 GB RAM, DuckDB. FSQ: 38.7M places, ~616M trigram rows.
@@ -21,6 +38,16 @@ Server: garganorn-1, 4 cores, 64 GB RAM, DuckDB. FSQ: 38.7M places, ~616M trigra
 | Spatial + 1-token | 1 | 83 |
 
 The spatial path is fast because the bbox filter prunes candidates aggressively before the trigram scan. The text-only path has no spatial pre-filter; the trigram `IN` clause is the only gate, which produces enormous candidate sets on common trigrams.
+
+---
+
+## Implementation Scope — Current Pass
+
+This pass implements **Optimization 2 (norm_name)** and **Optimization 4 (schema normalization)**.
+
+**Optimization 1 (min_trigram_hits) is deferred.** The threshold formula `max(1, len(trigrams) // 3)` requires empirical validation against production data before committing. Abbreviations, partial matches, and queries where trigram overlap is inherently low (e.g., short tokens, non-Latin scripts) may produce valid JW matches that this filter would silently drop. The formula needs to be tested against a representative sample of production queries before it is safe to use as a hard cut.
+
+The **OSM trigram bug fix** (missing `strip_accents` in trigram generation) is included in this pass as part of the import script changes for Optimization 2.
 
 ---
 
@@ -217,44 +244,36 @@ The `candidates` CTE SELECT must include `norm_name` for downstream CTEs to refe
 - `scripts/import-fsq-extract.sh`
 - `scripts/import-overture-extract.sh`
 - `scripts/import-osm.sh`
+- `tests/conftest.py` — test fixtures must include the `norm_name` column
 
 ### Expected impact
 
-Modest CPU reduction per candidate row. Combined with optimization 1, the absolute savings are larger because fewer rows survive the candidates filter.
+Modest CPU reduction per candidate row. When eventually combined with optimization 1, the absolute savings will be larger because fewer rows survive the candidates filter.
 
 ---
 
-## Implementation order for 1 + 2
+## Implementation order — current pass (Optimization 2 only)
 
-These are complementary and touch the same files. Implement together:
-
-1. Add `norm_name` to all 3 import scripts (import change).
-2. Add `min_trigram_hits` computation to `nearest()`.
-3. Update all 6 query methods: replace `SELECT DISTINCT` with `GROUP BY`/`HAVING`, use `norm_name`, reference `$norm_q`.
-4. Re-run import scripts to rebuild databases with `norm_name` column.
-5. Benchmark against baseline table above.
+1. Add `norm_name` to all 3 import scripts (FSQ and Overture: add to trigrams CTE and final SELECT; OSM: add column to `CREATE TABLE` DDL and compute in INSERT).
+2. Fix OSM trigram generation to use `strip_accents` (in the same import script change).
+3. Update all 6 query methods in `database.py` to use `norm_name`/`$norm_q` instead of computing `lower(strip_accents(...))` at query time.
+4. Update test fixtures in `tests/conftest.py` to include the `norm_name` column.
+5. Re-run import scripts to rebuild databases with `norm_name` column.
+6. Benchmark against baseline table above.
 
 ---
 
 ## Optimization 3: ART Index on `trigram` Column
 
-### Change
+### Status: Skipped
 
-One line appended after name_index creation in each import script:
+**Zonemaps are sufficient.** `name_index` is `ORDER BY trigram`, so DuckDB's zonemaps (min/max per row group) identify the exact row groups containing each trigram. With ~40K distinct trigrams across ~5,000 row groups, each trigram's rows are contiguous within 1–2 row groups. The ART index would add row-level precision, but DuckDB's vectorized scan is already efficient at filtering within a row group.
 
-```sql
-CREATE INDEX idx_trigram ON name_index(trigram);
-```
+**Selectivity threshold.** DuckDB uses an ART index scan only when estimated matches fall below `max(2048, 0.001 × table_cardinality)`. For 616M rows, the threshold is 616K. A multi-trigram `IN (...)` query with 40 trigrams estimates ~616K matches — at or above the threshold. The queries that most need optimization are exactly the ones where the planner would not use the index.
 
-**FSQ** (`scripts/import-fsq-extract.sh`): add after line 239 (after `order by trigram;` in the name_index CREATE TABLE AS).
+**Memory overhead.** ART indexes on 616M rows are not buffer-managed — they must fit entirely in RAM and are not subject to DuckDB's eviction policy. The production server has 64 GB; uncontrolled memory commitment at this scale is a liability.
 
-**Overture** (`scripts/import-overture-extract.sh`): add after line 209.
-
-**OSM** (`scripts/import-osm.sh`): add after the INSERT INTO name_index block (after line 492), before the `ENDSQL` terminator.
-
-### Note
-
-`name_index` is already `ORDER BY trigram`, so DuckDB's zonemaps provide pruning on the trigram column. The ART index may or may not help beyond that. Low risk (index build adds a few minutes to import; query planner can ignore it). Benchmark separately from 1+2.
+**Wrong bottleneck.** The slow path is candidate set size and per-row JW scoring, not the trigram scan itself. Optimizations 1, 2, and 4 address those directly.
 
 ---
 
@@ -376,9 +395,13 @@ Implement after 1–4 are stable. The IDF table adds import time and memory at s
 
 | Step | Optimizations | Files | Gate |
 |------|--------------|-------|------|
-| 1 | #1 + #2 together | `database.py` (6 methods + `nearest()`), 3 import scripts | Rebuild DBs, benchmark |
-| 2 | #3 (ART index) | 3 import scripts | Rebuild, benchmark vs step 1 |
-| 3 | #4 (normalize schema) | 3 import scripts, `database.py` (6 methods) | Requires step 1 stable |
-| 4 | #5 (IDF selection) | 3 import scripts, `database.py` | After 1–4 stable |
+| 1 | #2 (norm_name) + OSM trigram bug fix | `database.py` (6 methods + `nearest()`), 3 import scripts, `tests/conftest.py` | Rebuild DBs, benchmark |
+| 2 | #1 (min_trigram_hits) | `database.py` (`nearest()` + 6 methods) | Empirical threshold validation against production data |
+| 3 | #4 (normalize schema) | 3 import scripts, `database.py` (6 methods) | Requires steps 1–2 stable |
+| 4 | #5 (IDF selection) | 3 import scripts, `database.py` | After steps 1–3 stable |
 
-Do not proceed to step 3 (schema normalization) without confirming step 1 is correct and the speedup is validated. Schema normalization requires a full re-import on all data sources.
+Note: Optimization 3 (ART index) is skipped — see that section for rationale.
+
+Do not proceed to step 3 (schema normalization) without confirming steps 1–2 are correct and the speedup is validated. Schema normalization requires a full re-import on all data sources.
+
+Do not implement step 2 (min_trigram_hits) without first running the threshold formula against a representative sample of production queries to confirm it does not produce false negatives on abbreviations or partial matches.

@@ -183,13 +183,7 @@ def _create_fsq_db(db_path):
             trigram VARCHAR,
             fsq_place_id VARCHAR,
             name VARCHAR,
-            latitude VARCHAR,
-            longitude VARCHAR,
-            address VARCHAR,
-            locality VARCHAR,
-            postcode VARCHAR,
-            region VARCHAR,
-            country VARCHAR,
+            norm_name VARCHAR,
             importance INTEGER
         )
     """)
@@ -197,10 +191,8 @@ def _create_fsq_db(db_path):
         fsq_id, name, lat, lon, address, locality, postcode, region, _, _, _, country = row
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, [trigram, fsq_id, name,
-                  f"{lat:.6f}", f"{lon:.6f}",
-                  address, locality, postcode, region, country,
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+            """, [trigram, fsq_id, name, FoursquareOSP._strip_accents(name.lower()),
                   fsq_importance[fsq_id]])
 
     conn.close()
@@ -277,8 +269,7 @@ def _create_overture_db(db_path):
             trigram VARCHAR,
             id VARCHAR,
             name VARCHAR,
-            latitude VARCHAR,
-            longitude VARCHAR,
+            norm_name VARCHAR,
             importance INTEGER
         )
     """)
@@ -286,9 +277,9 @@ def _create_overture_db(db_path):
         ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
-            """, [trigram, ovr_id, name,
-                  f"{lat:.6f}", f"{lon:.6f}", ovr_importance[ovr_id]])
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+            """, [trigram, ovr_id, name, OvertureMaps._strip_accents(name.lower()),
+                  ovr_importance[ovr_id]])
 
     conn.close()
 
@@ -426,8 +417,7 @@ def _create_osm_db(db_path):
             trigram VARCHAR,
             rkey VARCHAR,
             name VARCHAR,
-            latitude VARCHAR,
-            longitude VARCHAR,
+            norm_name VARCHAR,
             importance INTEGER
         )
     """)
@@ -437,9 +427,9 @@ def _create_osm_db(db_path):
         importance = OSM_IMPORTANCE[rkey]
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
-            """, [trigram, rkey, name,
-                  f"{lat:.6f}", f"{lon:.6f}", importance])
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+            """, [trigram, rkey, name, OpenStreetMap._strip_accents(name.lower()),
+                  importance])
 
     conn.close()
 
