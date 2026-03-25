@@ -16,6 +16,11 @@ FSQ_PLACES = [
     ("fsq003", "Ferry Building Marketplace", 37.7955, -122.3937, "1 Ferry Building", "San Francisco", "94111", "CA", "CA", None, None, "US"),
     ("fsq004", "Tartine Bakery", 37.7612, -122.4242, "600 Guerrero St", "San Francisco", "94110", "CA", "CA", None, None, "US"),
     ("fsq005", "Alcatraz Island", 37.8270, -122.4230, None, "San Francisco", "94133", "CA", "CA", None, None, "US"),
+    # Token-blending test fixtures:
+    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
+    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
+    ("fsq006", "Diner North End", 37.7749, -122.4350, "1 North End Ave", "San Francisco", "94129", "CA", "CA", None, None, "US"),
+    ("fsq007", "North End Pub", 37.7748, -122.4351, "2 North End Ave", "San Francisco", "94129", "CA", "CA", None, None, "US"),
 ]
 
 OVERTURE_PLACES = [
@@ -25,6 +30,11 @@ OVERTURE_PLACES = [
     ("ovr003", "Coit Tower", 37.8024, -122.4058, "1 Telegraph Hill Blvd", "San Francisco", "94133", "US-CA", "US"),
     ("ovr004", "Anchor Brewing", 37.7688, -122.4125, "1705 Mariposa St", "San Francisco", "94107", "US-CA", "US"),
     ("ovr005", "Lombard Street", 37.8021, -122.4187, "Lombard St", "San Francisco", "94133", "US-CA", "US"),
+    # Token-blending test fixtures:
+    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
+    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
+    ("ovr006", "Diner North End", 37.7749, -122.4350, "1 North End Ave", "San Francisco", "94129", "US-CA", "US"),
+    ("ovr007", "North End Pub", 37.7748, -122.4351, "2 North End Ave", "San Francisco", "94129", "US-CA", "US"),
 ]
 
 
@@ -80,6 +90,8 @@ def _create_fsq_db(db_path):
         "fsq003": 85,
         "fsq004": 55,
         "fsq005": 90,
+        "fsq006": 70,
+        "fsq007": 70,
     }
 
     for row in FSQ_PLACES:
@@ -168,6 +180,8 @@ def _create_overture_db(db_path):
         "ovr003": 80,
         "ovr004": 55,
         "ovr005": 65,
+        "ovr006": 70,
+        "ovr007": 70,
     }
 
     for row in OVERTURE_PLACES:
@@ -278,6 +292,15 @@ OSM_PLACES = [
     ("w", 88776655, "Caltrain Station", 37.7764, -122.3942,
      "railway=station",
      {}),
+    # Token-blending test fixtures:
+    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
+    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
+    ("n", 11110001, "Diner North End", 37.7749, -122.4350,
+     "amenity=restaurant",
+     {}),
+    ("n", 11110002, "North End Pub", 37.7748, -122.4351,
+     "amenity=pub",
+     {}),
 ]
 
 OSM_IMPORTANCE = {
@@ -286,6 +309,8 @@ OSM_IMPORTANCE = {
     "w50637691": 55,
     "n9876543": 60,
     "w88776655": 70,
+    "n11110001": 70,
+    "n11110002": 70,
 }
 
 
