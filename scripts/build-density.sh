@@ -10,12 +10,14 @@ if ! command -v duckdb &> /dev/null; then
     exit 1
 fi
 
-if [ "$1" != "fsq" ] && [ "$1" != "overture" ]; then
+if [ "$1" != "fsq" ] && [ "$1" != "overture" ] && [ "$1" != "osm" ]; then
     echo
     echo "Usage: $0 <source> [source_path_or_release]"
     echo
-    echo "  source: fsq or overture"
-    echo "  source_path_or_release: optional local directory path or release version string"
+    echo "  source: fsq, overture, or osm"
+    echo "  source_path_or_release:"
+    echo "    fsq/overture: optional local directory path or release version string"
+    echo "    osm: path to osm.duckdb (or osm.duckdb.tmp) database file"
     echo
     exit 1
 fi
@@ -31,6 +33,9 @@ version="$(date +%Y-%m)"
 if [ "$source" = "fsq" ]; then
     output_file="${output_dir}/density-fsq-${version}.parquet"
     output_symlink="${output_dir}/density-fsq.parquet"
+elif [ "$source" = "osm" ]; then
+    output_file="${output_dir}/density-osm-${version}.parquet"
+    output_symlink="${output_dir}/density-osm.parquet"
 else
     output_file="${output_dir}/density-overture-${version}.parquet"
     output_symlink="${output_dir}/density-overture.parquet"
@@ -40,7 +45,19 @@ output_file_tmp="${output_file}.tmp"
 sql_file="${output_dir}/build-density.sql"
 
 # Determine the read_parquet(...) expression based on source and argument
-if [ "$source" = "fsq" ]; then
+if [ "$source" = "osm" ]; then
+    # OSM mode: source_arg is path to osm.duckdb (or osm.duckdb.tmp)
+    osm_db_path="$source_arg"
+    if [ -z "$osm_db_path" ]; then
+        echo "OSM mode requires a path to the osm.duckdb database file."
+        exit 1
+    fi
+    if [ ! -f "$osm_db_path" ]; then
+        echo "OSM database file not found: $osm_db_path"
+        exit 1
+    fi
+    use_httpfs=false
+elif [ "$source" = "fsq" ]; then
     if [[ -d "$source_arg" ]]; then
         # Local directory path
         fsq_parquet_expr="read_parquet('${source_arg}/places-*.zstd.parquet')"
@@ -109,7 +126,21 @@ CREATE TABLE cell_counts (
 );
 EOF
 
-if [ "$source" = "fsq" ]; then
+if [ "$source" = "osm" ]; then
+    cat >> "${sql_file}" <<EOF
+ATTACH '${osm_db_path}' AS osm_import (READ_ONLY);
+.print "Aggregating level 14 from OSM..."
+INSERT INTO cell_counts
+SELECT 14 AS level,
+    s2_cell_parent(
+        s2_cellfromlonlat(longitude, latitude), 14
+    ) AS cell_id,
+    count(*) AS pt_count
+FROM osm_import.places
+WHERE latitude IS NOT NULL AND longitude IS NOT NULL
+GROUP BY cell_id;
+EOF
+elif [ "$source" = "fsq" ]; then
     cat >> "${sql_file}" <<EOF
 .print "Aggregating level 14 from FSQ..."
 INSERT INTO cell_counts

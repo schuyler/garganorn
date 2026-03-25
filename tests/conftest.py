@@ -2,7 +2,7 @@
 import pytest
 import duckdb
 
-from garganorn.database import FoursquareOSP, OvertureMaps
+from garganorn.database import FoursquareOSP, OvertureMaps, OpenStreetMap
 
 
 # ---------------------------------------------------------------------------
@@ -249,6 +249,131 @@ def fsq_db(fsq_db_path):
 @pytest.fixture
 def overture_db(overture_db_path):
     db = OvertureMaps(overture_db_path)
+    db.connect()
+    yield db
+    db.close()
+
+
+# ---------------------------------------------------------------------------
+# OSM test data
+# ---------------------------------------------------------------------------
+
+OSM_PLACES = [
+    # osm_type, osm_id, name, latitude, longitude, primary_category, tags (dict)
+    ("n", 240109189, "Tartine Manufactory", 37.7612, -122.4195,
+     "amenity=cafe",
+     {"cuisine": "coffee", "addr:street": "Alabama St", "addr:housenumber": "595",
+      "addr:city": "San Francisco", "addr:postcode": "94110", "addr:country": "US"}),
+    ("n", 1234567, "UCSF Medical Center", 37.7631, -122.4576,
+     "amenity=hospital",
+     {"healthcare": "hospital", "addr:street": "Parnassus Ave", "addr:housenumber": "505",
+      "addr:city": "San Francisco", "addr:country": "US"}),
+    ("w", 50637691, "Dolores Park", 37.7596, -122.4269,
+     "leisure=park",
+     {}),
+    ("n", 9876543, "Bi-Rite Market", 37.7614, -122.4253,
+     "shop=supermarket",
+     {"addr:street": "18th St", "addr:housenumber": "3639",
+      "addr:city": "San Francisco", "addr:postcode": "94110", "addr:country": "US"}),
+    ("w", 88776655, "Caltrain Station", 37.7764, -122.3942,
+     "railway=station",
+     {}),
+]
+
+OSM_IMPORTANCE = {
+    "n240109189": 65,
+    "n1234567": 80,
+    "w50637691": 55,
+    "n9876543": 60,
+    "w88776655": 70,
+}
+
+
+def _create_osm_db(db_path):
+    """Create an OSM DuckDB database with test data and trigram name_index."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE places (
+            osm_type VARCHAR,
+            osm_id BIGINT,
+            name VARCHAR,
+            latitude DOUBLE,
+            longitude DOUBLE,
+            geom GEOMETRY,
+            primary_category VARCHAR,
+            tags MAP(VARCHAR, VARCHAR),
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            importance INTEGER
+        )
+    """)
+
+    for row in OSM_PLACES:
+        osm_type, osm_id, name, lat, lon, primary_category, tags = row
+        rkey = osm_type + str(osm_id)
+        importance = OSM_IMPORTANCE[rkey]
+        # Build MAP literal: MAP {'key1': 'val1', 'key2': 'val2'}
+        if tags:
+            map_entries = ", ".join(f"'{k}': '{v}'" for k, v in tags.items())
+            map_literal = f"MAP {{{map_entries}}}"
+        else:
+            map_literal = "MAP()::MAP(VARCHAR, VARCHAR)"
+        conn.execute(f"""
+            INSERT INTO places VALUES (
+                ?, ?, ?, ?, ?,
+                ST_Point(?, ?),
+                ?,
+                {map_literal},
+                {{'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}},
+                ?
+            )
+        """, [osm_type, osm_id, name, lat, lon, lon, lat,
+              primary_category,
+              lon, lat, lon, lat,
+              importance])
+
+    conn.execute("""
+        CREATE TABLE name_index (
+            trigram VARCHAR,
+            rkey VARCHAR,
+            name VARCHAR,
+            latitude VARCHAR,
+            longitude VARCHAR,
+            importance INTEGER
+        )
+    """)
+    for row in OSM_PLACES:
+        osm_type, osm_id, name, lat, lon, primary_category, tags = row
+        rkey = osm_type + str(osm_id)
+        importance = OSM_IMPORTANCE[rkey]
+        for trigram in _generate_trigrams(name):
+            conn.execute("""
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, ?)
+            """, [trigram, rkey, name,
+                  f"{lat:.6f}", f"{lon:.6f}", importance])
+
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# OSM session-scoped path fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def osm_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("osm") / "osm.duckdb"
+    _create_osm_db(db_path)
+    return db_path
+
+
+# ---------------------------------------------------------------------------
+# OSM function-scoped DB instance fixture
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def osm_db(osm_db_path):
+    db = OpenStreetMap(osm_db_path)
     db.connect()
     yield db
     db.close()
