@@ -419,6 +419,7 @@ class FoursquareOSP(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -439,6 +440,7 @@ class FoursquareOSP(Database):
                         jaro_winkler_similarity($norm_q, c.norm_name) AS full_jw
                     FROM candidates c
                     ORDER BY full_jw DESC
+                    LIMIT {top_n}
                 ),
                 name_tokens AS (
                     SELECT r.fsq_place_id, r.name,
@@ -716,6 +718,7 @@ class OvertureMaps(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -734,6 +737,7 @@ class OvertureMaps(Database):
                         jaro_winkler_similarity($norm_q, c.norm_name) AS full_jw
                     FROM candidates c
                     ORDER BY full_jw DESC
+                    LIMIT {top_n}
                 ),
                 name_tokens AS (
                     SELECT r.id, r.name,
@@ -1011,6 +1015,7 @@ class OpenStreetMap(Database):
         placeholders = ", ".join(f"$g{i}" for i in range(len(trigrams)))
         token_count = sum(1 for k in params if k.startswith('t') and k[1:].isdigit())
         if token_count > 1:
+            top_n = min(max(params.get("limit", 50) * 20, 200), 2000)
             token_values = ", ".join(f"($t{i})" for i in range(token_count))
             alpha = self.JW_TOKEN_ALPHA
             return f"""
@@ -1031,6 +1036,7 @@ class OpenStreetMap(Database):
                         jaro_winkler_similarity($norm_q, norm_name) AS full_jw
                     FROM candidates
                     ORDER BY full_jw DESC
+                    LIMIT {top_n}
                 ),
                 name_tokens AS (
                     SELECT r.rkey, r.name,
