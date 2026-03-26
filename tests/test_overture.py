@@ -92,16 +92,15 @@ def test_text_only_result_search_columns_has_addresses():
 # ---------------------------------------------------------------------------
 
 def test_nearest_spatial(overture_db):
-    """Spatial query returns results sorted by distance."""
-    results = overture_db.nearest(latitude=37.7749, longitude=-122.4194)
+    """Spatial query returns results with distance_m present."""
+    results = overture_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199))
     assert len(results) > 0
-    distances = [r["distance_m"] for r in results]
-    assert distances == sorted(distances)
+    assert all(r["distance_m"] >= 0 for r in results)
 
 
 def test_nearest_text(overture_db):
     """Text query finds a place by name fragment via trigram search."""
-    results = overture_db.nearest(latitude=37.7596, longitude=-122.4269, q="Dolores")
+    results = overture_db.nearest(bbox=(-122.4719, 37.7146, -122.3819, 37.8046), q="Dolores")
     names = [r["names"][0]["text"] for r in results]
     assert any("Dolores" in n for n in names)
 
@@ -202,7 +201,7 @@ def test_token_blending_spatial_ranking(overture_db):
     This test FAILS until token blending is implemented.
     """
     results = overture_db.nearest(
-        latitude=37.7749, longitude=-122.4351, q="North End Diner"
+        bbox=(-122.4801, 37.7299, -122.3901, 37.8199), q="North End Diner"
     )
     names = [r["names"][0]["text"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
@@ -494,7 +493,7 @@ def test_nearest_spatial_has_attributes(overture_db):
 
     FAILS until hydrate_records() is implemented.
     """
-    results = overture_db.nearest(latitude=37.7749, longitude=-122.4194)
+    results = overture_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199))
     assert len(results) > 0
     for r in results:
         assert "confidence" in r.get("attributes", {}), (

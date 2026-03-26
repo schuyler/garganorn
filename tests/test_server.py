@@ -137,3 +137,80 @@ def test_search_records_returns_records():
     )
     assert "records" in result
     assert "_query" in result
+
+
+def test_search_records_with_bbox():
+    """search_records accepts bbox parameter and passes bbox tuple to nearest()."""
+    nearest_results = [dict(SAMPLE_RECORD)]
+    server = _make_server(nearest_results=nearest_results)
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION, bbox="-122.5,37.7,-122.3,37.8"
+    )
+    assert "records" in result
+    assert "_query" in result
+    # Verify nearest was called with bbox tuple, not lat/lon
+    mock_db = server.db[FSQ_COLLECTION]
+    call_kwargs = mock_db.nearest.call_args
+    assert "bbox" in call_kwargs.kwargs or (call_kwargs.args and isinstance(call_kwargs.args[0], tuple))
+
+
+def test_search_records_invalid_bbox_format():
+    """Malformed bbox raises InvalidBbox."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records({}, collection=FSQ_COLLECTION, bbox="not,valid,bbox")
+    assert exc_info.value.name == "InvalidBbox"
+
+
+def test_search_records_invalid_bbox_order():
+    """bbox with xmin >= xmax raises InvalidBbox."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records({}, collection=FSQ_COLLECTION, bbox="-122.3,37.7,-122.5,37.8")
+    assert exc_info.value.name == "InvalidBbox"
+
+
+def test_search_records_bbox_overrides_latlon():
+    """When both bbox and lat/lon are provided, bbox is used."""
+    nearest_results = [dict(SAMPLE_RECORD)]
+    server = _make_server(nearest_results=nearest_results)
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION,
+        bbox="-122.5,37.7,-122.3,37.8",
+        latitude="0.0", longitude="0.0"
+    )
+    assert "records" in result
+    # lat/lon should be ignored; bbox should be passed through
+    mock_db = server.db[FSQ_COLLECTION]
+    call_kwargs = mock_db.nearest.call_args.kwargs
+    bbox = call_kwargs.get("bbox")
+    assert bbox is not None
+    assert bbox[0] == pytest.approx(-122.5)
+
+
+def test_search_records_bbox_nan():
+    """NaN bbox values raise InvalidBbox."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records({}, collection=FSQ_COLLECTION, bbox="nan,nan,nan,nan")
+    assert exc_info.value.name == "InvalidBbox"
+
+
+def test_search_records_bbox_inf():
+    """Inf bbox values raise InvalidBbox."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records({}, collection=FSQ_COLLECTION, bbox="-inf,0,inf,1")
+    assert exc_info.value.name == "InvalidBbox"
+
+
+def test_search_records_bbox_in_query_response():
+    """_query.parameters includes bbox and q."""
+    nearest_results = [dict(SAMPLE_RECORD)]
+    server = _make_server(nearest_results=nearest_results)
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION, bbox="-122.5,37.7,-122.3,37.8", q="coffee"
+    )
+    params = result["_query"]["parameters"]
+    assert "bbox" in params
+    assert "q" in params

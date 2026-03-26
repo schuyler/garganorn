@@ -180,11 +180,10 @@ def test_process_record_primary_category_in_attributes():
 # ---------------------------------------------------------------------------
 
 def test_nearest_spatial(osm_db):
-    """Spatial query returns results sorted by distance."""
-    results = osm_db.nearest(latitude=37.7612, longitude=-122.4195)
+    """Spatial query returns results with distance_m present."""
+    results = osm_db.nearest(bbox=(-122.4645, 37.7162, -122.3745, 37.8062))
     assert len(results) > 0
-    distances = [r["distance_m"] for r in results]
-    assert distances == sorted(distances)
+    assert all(r["distance_m"] >= 0 for r in results)
 
 
 def test_nearest_text(osm_db):
@@ -196,7 +195,7 @@ def test_nearest_text(osm_db):
 
 def test_nearest_spatial_text(osm_db):
     """Spatial + text query returns results with distance."""
-    results = osm_db.nearest(latitude=37.7612, longitude=-122.4195, q="tartine")
+    results = osm_db.nearest(bbox=(-122.4645, 37.7162, -122.3745, 37.8062), q="tartine")
     assert len(results) > 0
     assert all(r["distance_m"] >= 0 for r in results)
     names = [r["names"][0]["text"] for r in results]
@@ -271,7 +270,7 @@ def test_token_blending_spatial_ranking(osm_db):
     This test FAILS until token blending is implemented.
     """
     results = osm_db.nearest(
-        latitude=37.7749, longitude=-122.4351, q="North End Diner"
+        bbox=(-122.4801, 37.7299, -122.3901, 37.8199), q="North End Diner"
     )
     names = [r["names"][0]["text"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
@@ -567,7 +566,7 @@ def test_nearest_spatial_has_attributes(osm_db):
     FAILS until hydrate_records() is implemented.
     """
     # Search near Tartine Manufactory (has cuisine tag)
-    results = osm_db.nearest(latitude=37.7612, longitude=-122.4195)
+    results = osm_db.nearest(bbox=(-122.4645, 37.7162, -122.3745, 37.8062))
     assert len(results) > 0
     tartine = next(
         (r for r in results if "Tartine" in r["names"][0]["text"]), None

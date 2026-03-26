@@ -1,5 +1,5 @@
 """Garganorn package for serving ATProtocol XRPC for org.atgeo."""
-import json, time, logging
+import json, math, time, logging
 from importlib.resources import files
 
 import lexrpc
@@ -70,23 +70,48 @@ class Server:
             }
         }
 
-    def search_records(self, _, collection: str, latitude: str = "", longitude: str = "", q: str = "", limit: str = "50"):
-        self.logger.info(f"Searching records in {collection} with latitude={latitude}, longitude={longitude}, q={q}, limit={limit}")
+    def _parse_bbox(self, bbox_str):
+        """Parse and validate bbox string 'xmin,ymin,xmax,ymax'. Returns tuple or raises XrpcError."""
+        parts = bbox_str.split(",")
+        if len(parts) != 4:
+            raise XrpcError("bbox must be four comma-separated numbers: xmin,ymin,xmax,ymax", "InvalidBbox")
+        try:
+            xmin, ymin, xmax, ymax = (float(p) for p in parts)
+        except ValueError:
+            raise XrpcError("bbox values must be valid numbers", "InvalidBbox")
+        if any(math.isnan(v) or math.isinf(v) for v in (xmin, ymin, xmax, ymax)):
+            raise XrpcError("bbox values must be finite numbers", "InvalidBbox")
+        if xmin >= xmax or ymin >= ymax:
+            raise XrpcError("bbox requires xmin < xmax and ymin < ymax", "InvalidBbox")
+        return (xmin, ymin, xmax, ymax)
+
+    def search_records(self, _, collection: str, latitude: str = "", longitude: str = "",
+                       q: str = "", limit: str = "50", bbox: str = ""):
+        self.logger.info(f"Searching records in {collection} with bbox={bbox}, latitude={latitude}, longitude={longitude}, q={q}, limit={limit}")
         if collection not in self.db:
             raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
-        """Find the nearest location to a given latitude and longitude."""
-        if (not latitude or not longitude) and not q:
-            raise XrpcError("Either q or latitude/longitude must be provided", "InvalidQuery")
-        lat = lon = None
-        if latitude and longitude:
-            try: 
+        parsed_bbox = None
+        if bbox:
+            parsed_bbox = self._parse_bbox(bbox)
+        elif latitude and longitude:
+            try:
                 lat = float(latitude)
                 lon = float(longitude)
             except ValueError:
                 raise XrpcError("Latitude and longitude coordinates must be valid numbers", "InvalidCoordinates")
+            expand_m = 5000
+            expand_lat = expand_m / 111194.927
+            expand_lon = expand_lat / math.cos(lat * math.pi / 180) if abs(lat) < 90 else expand_lat
+            parsed_bbox = (
+                max(lon - expand_lon, -180),
+                max(lat - expand_lat, -90),
+                min(lon + expand_lon, 180),
+                min(lat + expand_lat, 90),
+            )
+        if parsed_bbox is None and not q:
+            raise XrpcError("Either q, bbox, or latitude/longitude must be provided", "InvalidQuery")
         start_time = time.perf_counter()
-        #assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
-        result = self.db[collection].nearest(lat, lon, q, limit=int(limit))
+        result = self.db[collection].nearest(bbox=parsed_bbox, q=q or None, limit=int(limit))
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "records": [
@@ -101,6 +126,8 @@ class Server:
                 "parameters": {
                     "repo": self.repo,
                     "collection": collection,
+                    "bbox": bbox,
+                    "q": q,
                     "latitude": latitude,
                     "longitude": longitude,
                     "limit": limit

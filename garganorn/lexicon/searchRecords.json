@@ -4,7 +4,7 @@
     "defs": {
         "main": {
             "type": "query",
-            "description": "Search for records near a given latitude and longitude",
+            "description": "Search for records within a bounding box, near a point, or matching a text query",
             "parameters": {
                 "type": "params",
                 "properties": {
@@ -24,6 +24,10 @@
                     "longitude": {
                         "type": "string",
                         "description": "The longitude of the search centroid"
+                    },
+                    "bbox": {
+                        "type": "string",
+                        "description": "Bounding box as xmin,ymin,xmax,ymax in WGS84 decimal degrees"
                     },
                     "limit": {
                         "type": "integer",
@@ -61,7 +65,8 @@
                 }
             },
             "errors": [
-                {"name": "InvalidQuery", "description": "Either q or latitude/longitude must be provided"},
+                {"name": "InvalidQuery", "description": "Either q, bbox, or latitude/longitude must be provided"},
+                {"name": "InvalidBbox", "description": "The bbox parameter must be four comma-separated numbers with xmin < xmax and ymin < ymax"},
                 {"name": "InvalidCoordinates", "description": "Latitude and/or longitude coordinates are invalid"},
                 {"name": "InvalidLimit", "description": "The limit parameter must be a positive integer"},
                 {"name": "InvalidCursor", "description": "The cursor parameter is invalid or expired"},

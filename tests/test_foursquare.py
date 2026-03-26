@@ -110,12 +110,20 @@ def test_process_record_partial_address():
 # ---------------------------------------------------------------------------
 
 def test_nearest_spatial(fsq_db):
-    """Spatial query returns results sorted by distance."""
-    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194)
+    """Spatial query returns results with distance_m present."""
+    results = fsq_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199))
     assert len(results) > 0
-    # Verify distance_m present and sorted ascending
-    distances = [r["distance_m"] for r in results]
-    assert distances == sorted(distances)
+    # Verify distance_m present and non-negative
+    assert all(r["distance_m"] >= 0 for r in results)
+
+
+def test_spatial_only_ordered_by_importance(fsq_db):
+    """Bbox-only results are ordered by importance DESC, then distance_m ASC."""
+    # bbox excludes fsq005 (Alcatraz, ymax=37.828 > 37.82) so fsq003
+    # (Ferry Building, importance=85) is the highest-importance place in range.
+    results = fsq_db.nearest(bbox=(-122.50, 37.70, -122.35, 37.82))
+    assert len(results) > 1
+    assert results[0]["rkey"] == "fsq003"  # importance=85, highest in bbox
 
 
 def test_nearest_text(fsq_db):
@@ -206,7 +214,7 @@ def test_trigram_nearest_text_no_scoring_in_attributes(fsq_db):
 
 def test_trigram_nearest_spatial_with_text(fsq_db):
     """Spatial + text trigram search returns results with distance_m."""
-    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194, q="Blue Bottle Coffee")
+    results = fsq_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199), q="Blue Bottle Coffee")
     assert len(results) > 0
     assert all(r["distance_m"] >= 0 for r in results)
     names = [r["names"][0]["text"] for r in results]
@@ -250,7 +258,7 @@ def test_token_blending_spatial_ranking(fsq_db):
     This test FAILS until token blending is implemented.
     """
     results = fsq_db.nearest(
-        latitude=37.7749, longitude=-122.4351, q="North End Diner"
+        bbox=(-122.4801, 37.7299, -122.3901, 37.8199), q="North End Diner"
     )
     names = [r["names"][0]["text"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
@@ -655,7 +663,7 @@ def test_nearest_spatial_has_attributes(fsq_db):
 
     FAILS until hydrate_records() is implemented.
     """
-    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194)
+    results = fsq_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199))
     assert len(results) > 0
     for r in results:
         assert "fsq_place_id" in r.get("attributes", {}), (
@@ -670,7 +678,7 @@ def test_nearest_spatial_text_has_attributes(fsq_db):
 
     FAILS until hydrate_records() is implemented.
     """
-    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194, q="Blue Bottle Coffee")
+    results = fsq_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199), q="Blue Bottle Coffee")
     assert len(results) > 0
     for r in results:
         assert "fsq_place_id" in r.get("attributes", {}), (
