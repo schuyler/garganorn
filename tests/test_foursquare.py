@@ -618,51 +618,81 @@ def test_name_index_no_display_columns(fsq_db):
     )
 
 
-def test_query_trigram_text_joins_places(fsq_db):
-    """Single-token text-only query SQL contains JOIN places after Optimization 4.
+def test_text_query_no_join_places():
+    """Text-only query SQL should NOT contain JOIN places after eliminating places scan.
 
-    After schema normalization, name_index no longer has display columns.
-    The text-only path must JOIN the places table to retrieve latitude, longitude,
-    address, etc. for the result set.
-    FAILS until text-only SQL is updated to JOIN places.
+    The plan removes JOIN places from text-only queries. Text search returns
+    only minimal columns (rkey, name, score) from name_index CTEs.
+    Display columns are filled in by hydration via ART-indexed lookup.
+    FAILS until JOIN places is removed from _query_trigram_text.
     """
-    db = fsq_db
-    params: SearchParams = {
-        "q": "coffee",
-        "limit": 10,
-        "importance_floor": 0,
-        "norm_q": "coffee",
-        "g0": "cof", "g1": "off", "g2": "ffe", "g3": "fee",
-    }
+    db = _make_fsq()
+    params: SearchParams = {"q": "coffee", "limit": 10}
     trigrams = ["cof", "off", "ffe", "fee"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
-        "Single-token text-only SQL should JOIN places after schema normalization. "
-        "name_index no longer has display columns."
+    assert "JOIN PLACES" not in sql.upper().replace("\n", " "), (
+        "Text-only SQL should NOT join places — hydration fills in display columns"
     )
 
 
-def test_query_trigram_text_multi_token_joins_places(fsq_db):
-    """Multi-token text-only query SQL contains JOIN places after Optimization 4.
+def test_text_query_multi_token_no_join_places():
+    """Multi-token text-only query SQL should NOT contain JOIN places.
 
-    Same requirement as single-token, but for the multi-token CTE branch.
-    FAILS until multi-token text-only SQL is updated to JOIN places.
+    The plan removes JOIN places from text-only queries (both single-token and
+    multi-token paths). Hydration fills in display columns via ART-indexed lookup.
+    FAILS until JOIN places is removed from the multi-token _query_trigram_text path.
     """
-    db = fsq_db
+    db = _make_fsq()
     params: SearchParams = {
         "q": "north end diner",
         "limit": 10,
-        "importance_floor": 0,
-        "norm_q": "north end diner",
         "t0": "north",
         "t1": "end",
         "t2": "diner",
     }
     trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
-        "Multi-token text-only SQL should JOIN places after schema normalization. "
-        "name_index no longer has display columns."
+    assert "JOIN PLACES" not in sql.upper().replace("\n", " "), (
+        "Multi-token text-only SQL should NOT join places — hydration fills in display columns"
+    )
+
+
+def test_search_columns_removed():
+    """search_columns() method should not exist after eliminating places scan.
+
+    FAILS until search_columns is removed from FoursquareOSP.
+    """
+    db = _make_fsq()
+    assert not hasattr(db, 'search_columns'), (
+        "search_columns() should be removed — text/spatial+text paths return "
+        "minimal columns; spatial-only uses record_columns() directly"
+    )
+
+
+def test_spatial_only_returns_record_columns():
+    """The spatial-only branch of query_nearest() should select record_columns() fields.
+
+    After the plan is implemented, the spatial-only path selects full record_columns()
+    fields directly (no separate hydration needed for spatial). Key record_columns fields
+    like fsq_place_id, address, locality should appear in the spatial-only SQL.
+    FAILS until query_nearest selects record_columns() for the spatial-only branch.
+    """
+    db = _make_fsq()
+    params: SearchParams = {
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    sql = db.query_nearest(params)
+    sql_lower = sql.lower()
+    assert "fsq_place_id" in sql_lower, (
+        "Spatial-only SQL should select fsq_place_id (from record_columns)"
+    )
+    assert "address" in sql_lower, (
+        "Spatial-only SQL should select address (from record_columns)"
+    )
+    assert "locality" in sql_lower, (
+        "Spatial-only SQL should select locality (from record_columns)"
     )
 
 

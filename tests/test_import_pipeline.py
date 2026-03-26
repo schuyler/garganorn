@@ -1368,3 +1368,101 @@ class TestImportOsmScript:
             "ANALYZE appears after the finalization mv. "
             "It must come before the database is renamed to its final path."
         )
+
+    def test_art_index_on_rkey(self):
+        """import-osm.sh must create an ART index on places(rkey).
+
+        The 'eliminate places scan' plan requires each import script to create
+        an ART index on the primary key column so that point lookups during
+        hydration are O(1) rather than full table scans.
+        FAILS until CREATE INDEX idx_rkey ON places(rkey) is added.
+        """
+        content = self._read_script()
+        assert "CREATE INDEX idx_rkey ON places(rkey)" in content.lower().replace("\n", " "), (
+            "import-osm.sh is missing 'CREATE INDEX idx_rkey ON places(rkey)'. "
+            "Add this ART index so that hydration lookups by rkey are O(1)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: import-fsq-extract.sh existence and structure
+# ---------------------------------------------------------------------------
+
+class TestImportFsqScript:
+    """
+    import-fsq-extract.sh must exist on the filesystem and create an ART
+    index on the primary key column (fsq_place_id) for efficient hydration.
+    """
+
+    SCRIPT_PATH = os.path.join(
+        os.path.dirname(__file__), "..", "scripts", "import-fsq-extract.sh"
+    )
+
+    def test_script_exists(self):
+        """import-fsq-extract.sh must exist in scripts/."""
+        assert os.path.isfile(self.SCRIPT_PATH), (
+            "scripts/import-fsq-extract.sh does not exist"
+        )
+
+    def _read_script(self):
+        """Read the script contents, skipping if the file doesn't exist yet."""
+        if not os.path.isfile(self.SCRIPT_PATH):
+            pytest.skip("scripts/import-fsq-extract.sh not yet implemented")
+        with open(self.SCRIPT_PATH) as f:
+            return f.read()
+
+    def test_art_index_on_fsq_place_id(self):
+        """import-fsq-extract.sh must create an ART index on places(fsq_place_id).
+
+        The 'eliminate places scan' plan requires each import script to create
+        an ART index on the primary key column so that point lookups during
+        hydration are O(1) rather than full table scans.
+        FAILS until CREATE INDEX idx_fsq_place_id ON places(fsq_place_id) is added.
+        """
+        content = self._read_script()
+        assert "create index idx_fsq_place_id on places(fsq_place_id)" in content.lower().replace("\n", " "), (
+            "import-fsq-extract.sh is missing 'CREATE INDEX idx_fsq_place_id ON places(fsq_place_id)'. "
+            "Add this ART index so that hydration lookups by fsq_place_id are O(1)."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Test: import-overture-extract.sh existence and structure
+# ---------------------------------------------------------------------------
+
+class TestImportOvertureScript:
+    """
+    import-overture-extract.sh must exist on the filesystem and create an ART
+    index on the primary key column (id) for efficient hydration.
+    """
+
+    SCRIPT_PATH = os.path.join(
+        os.path.dirname(__file__), "..", "scripts", "import-overture-extract.sh"
+    )
+
+    def test_script_exists(self):
+        """import-overture-extract.sh must exist in scripts/."""
+        assert os.path.isfile(self.SCRIPT_PATH), (
+            "scripts/import-overture-extract.sh does not exist"
+        )
+
+    def _read_script(self):
+        """Read the script contents, skipping if the file doesn't exist yet."""
+        if not os.path.isfile(self.SCRIPT_PATH):
+            pytest.skip("scripts/import-overture-extract.sh not yet implemented")
+        with open(self.SCRIPT_PATH) as f:
+            return f.read()
+
+    def test_art_index_on_id(self):
+        """import-overture-extract.sh must create an ART index on places(id).
+
+        The 'eliminate places scan' plan requires each import script to create
+        an ART index on the primary key column so that point lookups during
+        hydration are O(1) rather than full table scans.
+        FAILS until CREATE INDEX idx_id ON places(id) is added.
+        """
+        content = self._read_script()
+        assert "create index idx_id on places(id)" in content.lower().replace("\n", " "), (
+            "import-overture-extract.sh is missing 'CREATE INDEX idx_id ON places(id)'. "
+            "Add this ART index so that hydration lookups by id are O(1)."
+        )
