@@ -110,12 +110,20 @@ def test_process_record_partial_address():
 # ---------------------------------------------------------------------------
 
 def test_nearest_spatial(fsq_db):
-    """Spatial query returns results sorted by distance."""
+    """Spatial query returns results with distance_m present."""
     results = fsq_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199))
     assert len(results) > 0
-    # Verify distance_m present and sorted ascending
-    distances = [r["distance_m"] for r in results]
-    assert distances == sorted(distances)
+    # Verify distance_m present and non-negative
+    assert all(r["distance_m"] >= 0 for r in results)
+
+
+def test_spatial_only_ordered_by_importance(fsq_db):
+    """Bbox-only results are ordered by importance DESC, then distance_m ASC."""
+    # bbox excludes fsq005 (Alcatraz, ymax=37.828 > 37.82) so fsq003
+    # (Ferry Building, importance=85) is the highest-importance place in range.
+    results = fsq_db.nearest(bbox=(-122.50, 37.70, -122.35, 37.82))
+    assert len(results) > 1
+    assert results[0]["rkey"] == "fsq003"  # importance=85, highest in bbox
 
 
 def test_nearest_text(fsq_db):

@@ -531,7 +531,7 @@ class FoursquareOSP(Database):
                 from places
                 where bbox.xmin > $xmin and bbox.ymin > $ymin
                   and bbox.xmax < $xmax and bbox.ymax < $ymax
-                order by distance_m
+                order by importance desc, distance_m
                 limit $limit;
             """
 
@@ -816,7 +816,7 @@ class OvertureMaps(Database):
                 from places
                 where bbox.xmin > $xmin and bbox.ymin > $ymin
                   and bbox.xmax < $xmax and bbox.ymax < $ymax
-                order by distance_m
+                order by importance desc, distance_m
                 limit $limit;
             """
 
@@ -1110,7 +1110,7 @@ class OpenStreetMap(Database):
                 from places
                 where bbox.xmin > $xmin and bbox.ymin > $ymin
                   and bbox.xmax < $xmax and bbox.ymax < $ymax
-                order by distance_m
+                order by importance desc, distance_m
                 limit $limit;
             """
 
