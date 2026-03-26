@@ -32,15 +32,16 @@ When lat/lon is provided without bbox, the server converts to a bbox by expandin
 4. Derive centroid as bbox midpoint: `((xmin+xmax)/2, (ymin+ymax)/2)`.
 5. Call `nearest(bbox, q, limit)` — no more lat/lon args.
 6. Include bbox in `_query.parameters` response.
+7. Include `q` in `_query.parameters` response (currently missing).
 
 ### database.py (`Database.nearest`)
 
-Change signature from `(latitude, longitude, q, expand_m, limit)` to `(bbox, q, limit)`.
+Change signature from `(latitude=None, longitude=None, q=None, expand_m=5000, limit=50)` to `(bbox=None, q=None, limit=50)`. The `expand_m` parameter moves to `server.py` where lat/lon→bbox conversion happens.
 
 - `bbox` is a `(xmin, ymin, xmax, ymax)` tuple, or None for text-only.
 - Centroid derived internally as bbox midpoint.
 - Area calculation for importance floor uses bbox dimensions (existing math).
-- All downstream query construction unchanged — already consumes `xmin`, `ymin`, `xmax`, `ymax`, `centroid` params.
+- Downstream query construction is mostly unchanged — the three backends' `query_nearest()` already consume `xmin`, `ymin`, `xmax`, `ymax`, `centroid` params. However, the spatial-only path (bbox without q) currently orders by `distance_m`. This changes to `importance DESC, distance_m ASC` for bbox-only queries, requiring a new query variant in each backend.
 
 ### Lexicon (searchRecords.json)
 
@@ -67,9 +68,11 @@ Update description and `InvalidQuery` to mention bbox as an alternative spatial 
 - Invalid bbox formats raise `InvalidBbox`
 - bbox with xmin >= xmax raises error
 - Existing lat/lon tests continue to pass (converted to bbox internally)
+- All direct callers of `nearest()` in tests updated to pass bbox tuples instead of lat/lon kwargs
 
 ## Out of Scope
 
 - No bbox size constraints beyond xmin < xmax, ymin < ymax.
 - No changes to pagination/cursor behavior.
 - No changes to the three collection backends' `query_nearest()` SQL.
+- Antimeridian-crossing bboxes (e.g. `170,-10,-170,10`) are not supported. This is a pre-existing limitation.
