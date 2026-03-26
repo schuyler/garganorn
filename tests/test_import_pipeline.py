@@ -1425,6 +1425,20 @@ class TestImportFsqScript:
             "Add this ART index so that hydration lookups by fsq_place_id are O(1)."
         )
 
+    def test_name_index_sorted_by_trigram(self):
+        """import-fsq-extract.sh must sort name_index by trigram for DuckDB zone map efficiency.
+
+        Without ORDER BY trigram in the name_index CTAS, DuckDB zone maps are
+        ineffective for 'trigram IN (...)' queries, causing full table scans.
+        FAILS until 'ORDER BY trigram' is added to the name_index creation.
+        """
+        content = self._read_script()
+        flat = content.lower().replace("\n", " ")
+        assert "order by trigram" in flat, (
+            "import-fsq-extract.sh name_index creation is missing 'ORDER BY trigram'. "
+            "Add ORDER BY trigram to the CTAS so DuckDB zone maps are effective."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Test: import-overture-extract.sh existence and structure
@@ -1465,4 +1479,39 @@ class TestImportOvertureScript:
         assert "create index idx_id on places(id)" in content.lower().replace("\n", " "), (
             "import-overture-extract.sh is missing 'CREATE INDEX idx_id ON places(id)'. "
             "Add this ART index so that hydration lookups by id are O(1)."
+        )
+
+    def test_name_index_sorted_by_trigram(self):
+        """import-overture-extract.sh must sort name_index by trigram for DuckDB zone map efficiency.
+
+        The Overture import builds name_index via batched INSERTs. Without a
+        sort-and-rename step after the inserts, DuckDB zone maps are ineffective
+        for 'trigram IN (...)' queries, causing full table scans.
+        FAILS until the sort-and-rename step is added after the batch inserts.
+        """
+        content = self._read_script()
+        flat = content.lower().replace("\n", " ")
+
+        assert "create table name_index_sorted" in flat and "order by trigram" in flat, (
+            "import-overture-extract.sh is missing 'CREATE TABLE name_index_sorted ... ORDER BY trigram'. "
+            "Add a CTAS that reads from name_index and orders by trigram."
+        )
+        assert "drop table name_index;" in flat, (
+            "import-overture-extract.sh is missing 'DROP TABLE name_index;'. "
+            "After creating name_index_sorted, drop the unsorted table."
+        )
+        assert "alter table name_index_sorted rename to name_index" in flat, (
+            "import-overture-extract.sh is missing 'ALTER TABLE name_index_sorted RENAME TO name_index'. "
+            "After dropping the unsorted table, rename name_index_sorted to name_index."
+        )
+
+        # Verify ordering: CREATE TABLE name_index_sorted → DROP TABLE name_index →
+        # ALTER TABLE name_index_sorted RENAME TO name_index
+        create_pos = flat.index("create table name_index_sorted")
+        drop_pos = flat.index("drop table name_index;")
+        rename_pos = flat.index("alter table name_index_sorted rename to name_index")
+        assert create_pos < drop_pos < rename_pos, (
+            "import-overture-extract.sh sort-and-rename steps are out of order. "
+            "Expected: CREATE TABLE name_index_sorted → DROP TABLE name_index → "
+            "ALTER TABLE name_index_sorted RENAME TO name_index"
         )

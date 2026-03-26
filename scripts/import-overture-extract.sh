@@ -251,6 +251,13 @@ EOF
 done
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "Sorting name index by trigram..."
+CREATE TABLE name_index_sorted AS SELECT * FROM name_index ORDER BY trigram;
+DROP TABLE name_index;
+ALTER TABLE name_index_sorted RENAME TO name_index;
+EOF
+
+cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Analyzing..."
 analyze;
 EOF

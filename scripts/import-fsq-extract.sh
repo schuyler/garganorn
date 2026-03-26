@@ -221,7 +221,8 @@ select
     name,
     norm_name,
     importance
-from trigrams;
+from trigrams
+order by trigram;
 EOF
 
 cat >> "${output_dir}/import.sql" <<EOF
