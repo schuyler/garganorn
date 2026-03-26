@@ -63,11 +63,15 @@ script_dir="$(dirname "$(realpath "$0")")"
 output_dir="${script_dir}/../db"
 mkdir -p "$output_dir"
 
+# Download and cache parquet files locally
+cache_dir="${output_dir}/cache/overture/${latest_release}"
+mkdir -p "$cache_dir"
+
 # Detect or auto-build density file
 density_file="${output_dir}/density-overture.parquet"
 if [ ! -f "$density_file" ]; then
     echo "Building Overture density table..."
-    "${script_dir}/build-density.sh" overture "${latest_release}" || { echo "Failed to build density table."; exit 1; }
+    "${script_dir}/build-density.sh" overture "${cache_dir}" || { echo "Failed to build density table."; exit 1; }
     if [ ! -f "$density_file" ]; then
         echo "Density file not found after build: ${density_file}"
         exit 1
@@ -78,7 +82,7 @@ fi
 idf_file="${output_dir}/category_idf-overture.parquet"
 if [ ! -f "$idf_file" ]; then
     echo "Building Overture IDF table..."
-    "${script_dir}/build-idf.sh" overture "${latest_release}" || { echo "Failed to build IDF table."; exit 1; }
+    "${script_dir}/build-idf.sh" overture "${cache_dir}" || { echo "Failed to build IDF table."; exit 1; }
     if [ ! -f "$idf_file" ]; then
         echo "IDF file not found after build: ${idf_file}"
         exit 1
@@ -90,23 +94,49 @@ rm -f "${output_dir}/${db_filename}.tmp"
 
 # Get the list of available parquet files for places
 echo "Finding available place parquet files..."
-parquet_files=$(curl -s "https://overturemaps-us-west-2.s3.amazonaws.com/?list-type=2&prefix=release/${latest_release}/theme=places/type=place/" |
+source_base="https://overturemaps-us-west-2.s3.amazonaws.com"
+parquet_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=places/type=place/" |
   grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
   sed 's/>\(.*\)</\1/g' |
   sort)
 
-# For debugging if needed
 if [ -z "$parquet_files" ]; then
   echo "No parquet files found. Please check the release date and URL format."
   echo "Showing sample of XML response:"
-  curl -s "https://overturemaps-us-west-2.s3.amazonaws.com/?list-type=2&prefix=release/${latest_release}/theme=places/type=place/" | head -50
+  curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=places/type=place/" | head -50
   exit 1
 fi
 
-# Take the first file to initialize the structure
-first_file=$(echo "$parquet_files" | head -1)
-source_base="https://overturemaps-us-west-2.s3.amazonaws.com"
-first_file_url="${source_base}/${first_file}"
+# Count already-cached files
+file_count=$(echo "$parquet_files" | wc -l | tr -d ' ')
+cached_count=0
+while IFS= read -r file; do
+    filename=$(basename "$file")
+    if [ -f "${cache_dir}/${filename}" ]; then
+        cached_count=$((cached_count + 1))
+    fi
+done <<< "$parquet_files"
+
+# Download missing files
+dl_count=0
+while IFS= read -r file; do
+    filename=$(basename "$file")
+    dest="${cache_dir}/${filename}"
+    if [ -f "$dest" ]; then
+        continue
+    fi
+    dl_count=$((dl_count + 1))
+    echo "Downloading ${dl_count} / $((file_count - cached_count)) (cached: ${cached_count}): ${filename}"
+    if ! curl -sf -o "${dest}.tmp" "${source_base}/${file}"; then
+        echo "Failed to download ${source_base}/${file}"
+        rm -f "${dest}.tmp"
+        exit 1
+    fi
+    mv "${dest}.tmp" "$dest"
+done <<< "$parquet_files"
+
+# Take the first cached file to initialize the structure
+first_file="${cache_dir}/$(basename "$(echo "$parquet_files" | head -1)")"
 
 # Initialize the spatial extension and the places table
 cat > "${output_dir}/import-overture.sql" <<EOF
@@ -115,20 +145,19 @@ install spatial;
 load spatial;
 
 -- Create the places table
-create table places as select * from '${first_file_url}' limit 0;
+create table places as select * from '${first_file}' limit 0;
 EOF
 
 # Load the data from each parquet file into the places table
-file_count=$(echo "$parquet_files" | wc -l)
 file_number=0
 
 echo "$parquet_files" | while read -r file; do
   file_number=$((file_number + 1))
-  file_url="${source_base}/${file}"
+  local_file="${cache_dir}/$(basename "$file")"
 
   cat <<EOF
-.print "Importing file ${file_number}/${file_count}: ${file}"
-insert into places select * from '${file_url}'
+.print "Importing file ${file_number}/${file_count}: $(basename "$file")"
+insert into places select * from '${local_file}'
     where bbox.xmin >= ${xmin}
       and bbox.xmax <= ${xmax}
       and bbox.ymin >= ${ymin}
