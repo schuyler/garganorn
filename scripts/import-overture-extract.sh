@@ -151,7 +151,7 @@ EOF
 # Load the data from each parquet file into the places table
 file_number=0
 
-echo "$parquet_files" | while read -r file; do
+while IFS= read -r file; do
   file_number=$((file_number + 1))
   local_file="${cache_dir}/$(basename "$file")"
 
@@ -163,7 +163,7 @@ insert into places select * from '${local_file}'
       and bbox.ymin >= ${ymin}
       and bbox.ymax <= ${ymax};
 EOF
-done >> "${output_dir}/import-overture.sql"
+done <<< "$parquet_files" >> "${output_dir}/import-overture.sql"
 
 # Clean up and create spatial index
 cat >> "${output_dir}/import-overture.sql" <<EOF
