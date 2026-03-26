@@ -95,43 +95,49 @@ elif [ "$source" = "fsq" ]; then
     fi
 else
     # Overture mode
-    if [ -n "$source_arg" ]; then
-        release="$source_arg"
+    if [[ -d "$source_arg" ]]; then
+        # Local directory path
+        overture_parquet_expr="read_parquet('${source_arg}/part-*.parquet')"
+        use_httpfs=false
     else
-        # Auto-discover latest Overture release from S3
-        echo "Auto-discovering latest Overture release..."
-        release=$(curl -s "https://overturemaps-us-west-2.s3.amazonaws.com/?list-type=2&prefix=release/&delimiter=/" |
-          grep -o '<Prefix>release/[0-9][^<]*/</Prefix>' |
-          sed 's/<Prefix>release\/\(.*\)\/<\/Prefix>/\1/' |
-          sort -r |
-          head -1)
-        if [ -z "$release" ]; then
-            echo "No Overture releases found."
+        if [ -n "$source_arg" ]; then
+            release="$source_arg"
+        else
+            # Auto-discover latest Overture release from S3
+            echo "Auto-discovering latest Overture release..."
+            release=$(curl -s "https://overturemaps-us-west-2.s3.amazonaws.com/?list-type=2&prefix=release/&delimiter=/" |
+              grep -o '<Prefix>release/[0-9][^<]*/</Prefix>' |
+              sed 's/<Prefix>release\/\(.*\)\/<\/Prefix>/\1/' |
+              sort -r |
+              head -1)
+            if [ -z "$release" ]; then
+                echo "No Overture releases found."
+                exit 1
+            fi
+        fi
+        echo "Using Overture release: $release"
+        # List parquet files from S3 and build explicit URL list
+        source_base="https://overturemaps-us-west-2.s3.amazonaws.com"
+        overture_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${release}/theme=places/type=place/" |
+          grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
+          sed 's/>\(.*\)</\1/g' |
+          sort)
+        if [ -z "$overture_files" ]; then
+            echo "No Overture parquet files found for release ${release}."
             exit 1
         fi
+        url_list=""
+        while IFS= read -r file; do
+            url="'${source_base}/${file}'"
+            if [ -z "$url_list" ]; then
+                url_list="$url"
+            else
+                url_list="${url_list}, ${url}"
+            fi
+        done <<< "$overture_files"
+        overture_parquet_expr="read_parquet([${url_list}])"
+        use_httpfs=true
     fi
-    echo "Using Overture release: $release"
-    # List parquet files from S3 and build explicit URL list
-    source_base="https://overturemaps-us-west-2.s3.amazonaws.com"
-    overture_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${release}/theme=places/type=place/" |
-      grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
-      sed 's/>\(.*\)</\1/g' |
-      sort)
-    if [ -z "$overture_files" ]; then
-        echo "No Overture parquet files found for release ${release}."
-        exit 1
-    fi
-    url_list=""
-    while IFS= read -r file; do
-        url="'${source_base}/${file}'"
-        if [ -z "$url_list" ]; then
-            url_list="$url"
-        else
-            url_list="${url_list}, ${url}"
-        fi
-    done <<< "$overture_files"
-    overture_parquet_expr="read_parquet([${url_list}])"
-    use_httpfs=true
 fi
 
 # Generate the SQL file
