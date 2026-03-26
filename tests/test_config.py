@@ -19,11 +19,11 @@ def test_missing_file_raises_file_not_found(tmp_path):
         load_config(tmp_path / "does_not_exist.yaml")
 
 
-def test_missing_repo_key_defaults_to_gazetteer_social(tmp_path):
-    """Config without 'repo' key defaults to 'gazetteer.social'."""
+def test_missing_repo_key_defaults_to_places_atgeo_org(tmp_path):
+    """Config without 'repo' key defaults to 'places.atgeo.org'."""
     config_path = _write_config(tmp_path, {"databases": []})
     repo, dbs = load_config(config_path)
-    assert repo == "gazetteer.social"
+    assert repo == "places.atgeo.org"
     assert dbs == []
 
 

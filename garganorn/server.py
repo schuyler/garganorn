@@ -144,7 +144,7 @@ if __name__ == "__main__":
         OvertureMaps("db/overture-maps.duckdb"),
         FoursquareOSP("db/fsq-osp.duckdb"),  # Uncomment if you have the Foursquare database
     ]
-    gazetteer = Server("gazetteer.social", dbs, logging.getLogger())
+    gazetteer = Server("places.atgeo.org", dbs, logging.getLogger())
 
     collection = "org.atgeo.places.foursquare"
     nsid = f"{gazetteer.nsid}.searchRecords"
@@ -161,7 +161,7 @@ if __name__ == "__main__":
     nsid = f"com.atproto.repo.getRecord"
     rkey = output["records"][0]["value"]["rkey"]
     params = gazetteer.server.decode_params(nsid, (
-        ("repo", "gazetteer.social"),
+        ("repo", "places.atgeo.org"),
         ("collection", collection),
         ("rkey", rkey)
     ))

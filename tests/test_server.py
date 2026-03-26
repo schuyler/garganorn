@@ -47,7 +47,7 @@ def _make_server(collections=None, records=None, nearest_results=None):
         for col in collections
     ]
     logger = logging.getLogger("test")
-    return Server("gazetteer.social", dbs, logger)
+    return Server("places.atgeo.org", dbs, logger)
 
 
 # ---------------------------------------------------------------------------
@@ -58,14 +58,14 @@ def test_record_uri():
     """record_uri returns correct AT-Protocol URI string."""
     server = _make_server()
     uri = server.record_uri(FSQ_COLLECTION, "fsq001")
-    assert uri == f"https://gazetteer.social/{FSQ_COLLECTION}/fsq001"
+    assert uri == f"https://places.atgeo.org/{FSQ_COLLECTION}/fsq001"
 
 
 def test_get_record_collection_not_found():
     """get_record raises XrpcError when collection is unknown."""
     server = _make_server()
     with pytest.raises(XrpcError) as exc_info:
-        server.get_record({}, repo="gazetteer.social", collection="unknown.collection", rkey="x")
+        server.get_record({}, repo="places.atgeo.org", collection="unknown.collection", rkey="x")
     assert "CollectionNotFound" in str(exc_info.value) or exc_info.value.name == "CollectionNotFound"
 
 
@@ -73,7 +73,7 @@ def test_get_record_record_not_found():
     """get_record raises XrpcError when db.get_record returns None."""
     server = _make_server(records=None)
     with pytest.raises(XrpcError) as exc_info:
-        server.get_record({}, repo="gazetteer.social", collection=FSQ_COLLECTION, rkey="nonexistent")
+        server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="nonexistent")
     assert "RecordNotFound" in str(exc_info.value) or exc_info.value.name == "RecordNotFound"
 
 
@@ -81,7 +81,7 @@ def test_get_record_success():
     """get_record returns dict with uri, value, and _query."""
     record = dict(SAMPLE_RECORD)  # copy since process pops keys
     server = _make_server(records=[record])
-    result = server.get_record({}, repo="gazetteer.social", collection=FSQ_COLLECTION, rkey="fsq001")
+    result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
     assert "uri" in result
     assert "value" in result
     assert "_query" in result

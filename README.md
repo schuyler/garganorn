@@ -15,7 +15,7 @@ The project is named after the earliest recorded [mammoth goose](https://en.wiki
 Garganorn loads its data sources from a YAML config file. By default it looks for `config.yaml` in the current directory, or you can set the `GARGANORN_CONFIG` environment variable to point elsewhere.
 
 ```yaml
-repo: gazetteer.social
+repo: places.atgeo.org
 databases:
   - type: foursquare
     path: db/fsq-osp.duckdb
@@ -97,7 +97,7 @@ Result:
     {
       "$type": "org.atgeo.searchRecords#record",
       "distance_m": 0,
-      "uri": "https://gazetteer.social/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
+      "uri": "https://places.atgeo.org/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
       "value": {
         "$type": "org.atgeo.place",
         "collection": "org.atgeo.places.foursquare",
@@ -139,7 +139,7 @@ Result:
       "latitude": "37.776145",
       "longitude": "-122.433898",
       "limit": 1,
-      "repo": "gazetteer.social"
+      "repo": "places.atgeo.org"
     },
     "elapsed_ms": 161
   }
@@ -149,13 +149,13 @@ Result:
 ### getRecord
 
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=gazetteer.social&collection=org.atgeo.places.foursquare&rkey=4460d38bf964a5200a331fe3'
+$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=places.atgeo.org&collection=org.atgeo.places.foursquare&rkey=4460d38bf964a5200a331fe3'
 ```
 
 Result:
 ```json
 {
-  "uri": "https://gazetteer.social/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
+  "uri": "https://places.atgeo.org/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
   "value": {
     "$type": "org.atgeo.place",
     "collection": "org.atgeo.places.foursquare",
@@ -192,7 +192,7 @@ Result:
   "_query": {
     "parameters": {
       "collection": "org.atgeo.places.foursquare",
-      "repo": "gazetteer.social",
+      "repo": "places.atgeo.org",
       "rkey": "4460d38bf964a5200a331fe3"
     },
     "elapsed_ms": 5

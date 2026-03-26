@@ -1,4 +1,4 @@
-repo: gazetteer.social
+repo: places.atgeo.org
 databases:
   - type: foursquare
     path: db/fsq-osp.duckdb

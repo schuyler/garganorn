@@ -14,7 +14,7 @@ def load_config(path):
     with open(path) as f:
         config = yaml.safe_load(f)
 
-    repo = config.get("repo", "gazetteer.social")
+    repo = config.get("repo", "places.atgeo.org")
     dbs = []
     for entry in config.get("databases", []):
         db_type = entry["type"]
