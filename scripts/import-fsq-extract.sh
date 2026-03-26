@@ -147,6 +147,7 @@ cat >> "${output_dir}/import.sql" <<EOF
 delete from places where longitude = 0 or latitude = 0 or geom is null;
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geom);
+create index idx_fsq_place_id on places(fsq_place_id);
 EOF
 
 # Compute importance as normalized 0-100 integer score

@@ -1378,7 +1378,7 @@ class TestImportOsmScript:
         FAILS until CREATE INDEX idx_rkey ON places(rkey) is added.
         """
         content = self._read_script()
-        assert "CREATE INDEX idx_rkey ON places(rkey)" in content.lower().replace("\n", " "), (
+        assert "create index idx_rkey on places(rkey)" in content.lower().replace("\n", " "), (
             "import-osm.sh is missing 'CREATE INDEX idx_rkey ON places(rkey)'. "
             "Add this ART index so that hydration lookups by rkey are O(1)."
         )

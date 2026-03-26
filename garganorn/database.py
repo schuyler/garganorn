@@ -236,8 +236,33 @@ class Database:
         result = self.execute(
             self.query_nearest(params, trigrams=trigrams), params
         )
-        records = [self.process_nearest(item) for item in result]
-        return self.hydrate_records(records)
+
+        if q:
+            # Text/spatial+text: query returns minimal columns (rkey, name, distance_m, score).
+            # Hydrate rkeys to get full records with display columns.
+            if not result:
+                return []
+            rkeys = [row["rkey"] for row in result]
+            distances = {row["rkey"]: row["distance_m"] for row in result}
+
+            h_params = {f"h{i}": rk for i, rk in enumerate(rkeys)}
+            full_rows = self.execute(self.query_hydrate(len(rkeys)), h_params)
+            full_map = {}
+            for row in full_rows:
+                record = self.process_record(row)
+                full_map[record["rkey"]] = record
+
+            # Build ordered result list preserving search ranking
+            records = []
+            for rkey in rkeys:
+                if rkey in full_map:
+                    record = full_map[rkey]
+                    record["distance_m"] = distances.get(rkey, 0)
+                    records.append(record)
+            return records
+        else:
+            # Spatial-only: record_columns() already selected, no hydration needed
+            return [self.process_nearest(item) for item in result]
 
     def hydrate_records(self, records):
         """Hydrate search results with full attributes from record_columns."""
@@ -293,19 +318,6 @@ class FoursquareOSP(Database):
         columns = self.record_columns()
         placeholders = ", ".join(f"$h{i}" for i in range(count))
         return f"SELECT {columns} FROM places WHERE fsq_place_id IN ({placeholders})"
-
-    def search_columns(self):
-        return """
-            fsq_place_id as rkey,
-            name,
-            latitude::decimal(10,6)::varchar as latitude,
-            longitude::decimal(10,6)::varchar as longitude,
-            address,
-            locality,
-            postcode,
-            region,
-            country
-        """
 
     def query_record(self):
         columns = self.record_columns()
@@ -368,17 +380,9 @@ class FoursquareOSP(Database):
                 SELECT
                     s.fsq_place_id AS rkey,
                     s.name,
-                    p.latitude::decimal(10,6)::varchar AS latitude,
-                    p.longitude::decimal(10,6)::varchar AS longitude,
-                    p.address,
-                    p.locality,
-                    p.postcode,
-                    p.region,
-                    p.country,
                     0 AS distance_m,
                     s.score
                 FROM scored s
-                JOIN places p ON s.fsq_place_id = p.fsq_place_id
                 WHERE s.score >= {self.JW_THRESHOLD}
                 ORDER BY s.score DESC, s.importance DESC
                 LIMIT $limit
@@ -393,17 +397,9 @@ class FoursquareOSP(Database):
             SELECT
                 c.fsq_place_id AS rkey,
                 c.name,
-                p.latitude::decimal(10,6)::varchar AS latitude,
-                p.longitude::decimal(10,6)::varchar AS longitude,
-                p.address,
-                p.locality,
-                p.postcode,
-                p.region,
-                p.country,
                 0 AS distance_m,
                 jaro_winkler_similarity($norm_q, c.norm_name) AS score
             FROM candidates c
-            JOIN places p ON c.fsq_place_id = p.fsq_place_id
             WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
             ORDER BY score DESC, c.importance DESC
             LIMIT $limit
@@ -424,8 +420,6 @@ class FoursquareOSP(Database):
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT p.fsq_place_id, p.name, n.norm_name,
-                        p.latitude, p.longitude,
-                        p.address, p.locality, p.postcode, p.region, p.country,
                         p.geom, n.importance
                     FROM places p
                     JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
@@ -467,13 +461,6 @@ class FoursquareOSP(Database):
                 SELECT
                     fsq_place_id AS rkey,
                     name,
-                    latitude::decimal(10,6)::varchar AS latitude,
-                    longitude::decimal(10,6)::varchar AS longitude,
-                    address,
-                    locality,
-                    postcode,
-                    region,
-                    country,
                     ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
                     score
                 FROM scored
@@ -484,8 +471,6 @@ class FoursquareOSP(Database):
         return f"""
             WITH candidates AS (
                 SELECT DISTINCT p.fsq_place_id, p.name, n.norm_name,
-                    p.latitude, p.longitude,
-                    p.address, p.locality, p.postcode, p.region, p.country,
                     p.geom, n.importance
                 FROM places p
                 JOIN name_index n ON p.fsq_place_id = n.fsq_place_id
@@ -497,13 +482,6 @@ class FoursquareOSP(Database):
             SELECT
                 fsq_place_id AS rkey,
                 name,
-                latitude::decimal(10,6)::varchar AS latitude,
-                longitude::decimal(10,6)::varchar AS longitude,
-                address,
-                locality,
-                postcode,
-                region,
-                country,
                 ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
                 jaro_winkler_similarity($norm_q, norm_name) AS score
             FROM candidates
@@ -524,7 +502,7 @@ class FoursquareOSP(Database):
             return self._query_trigram_text(params, trigrams)
         else:
             # Spatial-only
-            columns = self.search_columns()
+            columns = self.record_columns()
             return f"""
                 select
                     {columns},
@@ -603,15 +581,6 @@ class OvertureMaps(Database):
         placeholders = ", ".join(f"$h{i}" for i in range(count))
         return f"SELECT {columns} FROM places WHERE id IN ({placeholders})"
 
-    def search_columns(self):
-        return """
-            id as rkey,
-            names.primary as name,
-            st_y(st_centroid(geometry))::decimal(10,6)::varchar as latitude,
-            st_x(st_centroid(geometry))::decimal(10,6)::varchar as longitude,
-            addresses
-        """
-
     def query_record(self):
         columns = self.record_columns()
         return f"""
@@ -673,13 +642,9 @@ class OvertureMaps(Database):
                 SELECT
                     s.id AS rkey,
                     s.name,
-                    st_y(st_centroid(p.geometry))::decimal(10,6)::varchar AS latitude,
-                    st_x(st_centroid(p.geometry))::decimal(10,6)::varchar AS longitude,
-                    p.addresses,
                     0 AS distance_m,
                     s.score
                 FROM scored s
-                JOIN places p ON s.id = p.id
                 WHERE s.score >= {self.JW_THRESHOLD}
                 ORDER BY s.score DESC, s.importance DESC
                 LIMIT $limit
@@ -694,13 +659,9 @@ class OvertureMaps(Database):
             SELECT
                 c.id AS rkey,
                 c.name,
-                st_y(st_centroid(p.geometry))::decimal(10,6)::varchar AS latitude,
-                st_x(st_centroid(p.geometry))::decimal(10,6)::varchar AS longitude,
-                p.addresses,
                 0 AS distance_m,
                 jaro_winkler_similarity($norm_q, c.norm_name) AS score
             FROM candidates c
-            JOIN places p ON c.id = p.id
             WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
             ORDER BY score DESC, c.importance DESC
             LIMIT $limit
@@ -722,7 +683,7 @@ class OvertureMaps(Database):
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT p.id, p.names.primary AS name, n.norm_name,
-                        p.geometry, p.addresses, n.importance
+                        p.geometry, n.importance
                     FROM places p
                     JOIN name_index n ON p.id = n.id
                     WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
@@ -763,9 +724,6 @@ class OvertureMaps(Database):
                 SELECT
                     id AS rkey,
                     name,
-                    st_y(st_centroid(geometry))::decimal(10,6)::varchar AS latitude,
-                    st_x(st_centroid(geometry))::decimal(10,6)::varchar AS longitude,
-                    addresses,
                     ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
                     score
                 FROM scored
@@ -776,7 +734,7 @@ class OvertureMaps(Database):
         return f"""
             WITH candidates AS (
                 SELECT DISTINCT p.id, p.names.primary AS name, n.norm_name,
-                    p.geometry, p.addresses, n.importance
+                    p.geometry, n.importance
                 FROM places p
                 JOIN name_index n ON p.id = n.id
                 WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
@@ -787,9 +745,6 @@ class OvertureMaps(Database):
             SELECT
                 id AS rkey,
                 name,
-                st_y(st_centroid(geometry))::decimal(10,6)::varchar AS latitude,
-                st_x(st_centroid(geometry))::decimal(10,6)::varchar AS longitude,
-                addresses,
                 ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
                 jaro_winkler_similarity($norm_q, norm_name) AS score
             FROM candidates
@@ -810,7 +765,7 @@ class OvertureMaps(Database):
             return self._query_trigram_text(params, trigrams)
         else:
             # Spatial-only
-            columns = self.search_columns()
+            columns = self.record_columns()
             return f"""
                 select
                     {columns},
@@ -889,23 +844,8 @@ class OpenStreetMap(Database):
 
     def query_hydrate(self, count):
         columns = self.record_columns()
-        values = ", ".join(f"($h{i})" for i in range(count))
-        return f"""
-        WITH rkeys(rk) AS (VALUES {values})
-        SELECT {columns}
-        FROM rkeys
-        JOIN places ON places.osm_type = left(rkeys.rk, 1)
-                   AND places.osm_id = substr(rkeys.rk, 2)::BIGINT
-    """
-
-    def search_columns(self):
-        return """
-            rkey,
-            name,
-            latitude::decimal(10,6)::varchar AS latitude,
-            longitude::decimal(10,6)::varchar AS longitude,
-            primary_category
-        """
+        placeholders = ", ".join(f"$h{i}" for i in range(count))
+        return f"SELECT {columns} FROM places WHERE rkey IN ({placeholders})"
 
     def query_record(self):
         columns = self.record_columns()
@@ -969,13 +909,9 @@ class OpenStreetMap(Database):
                 SELECT
                     s.rkey,
                     s.name,
-                    p.latitude::decimal(10,6)::varchar AS latitude,
-                    p.longitude::decimal(10,6)::varchar AS longitude,
-                    p.primary_category,
                     0 AS distance_m,
                     s.score
                 FROM scored s
-                JOIN places p ON p.osm_type = left(s.rkey, 1) AND p.osm_id = substr(s.rkey, 2)::BIGINT
                 WHERE s.score >= {self.JW_THRESHOLD}
                 ORDER BY s.score DESC, s.importance DESC
                 LIMIT $limit
@@ -990,13 +926,9 @@ class OpenStreetMap(Database):
             SELECT
                 c.rkey,
                 c.name,
-                p.latitude::decimal(10,6)::varchar AS latitude,
-                p.longitude::decimal(10,6)::varchar AS longitude,
-                p.primary_category,
                 0 AS distance_m,
                 jaro_winkler_similarity($norm_q, c.norm_name) AS score
             FROM candidates c
-            JOIN places p ON p.osm_type = left(c.rkey, 1) AND p.osm_id = substr(c.rkey, 2)::BIGINT
             WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
             ORDER BY score DESC, c.importance DESC
             LIMIT $limit
@@ -1018,7 +950,7 @@ class OpenStreetMap(Database):
             return f"""
                 WITH candidates AS (
                     SELECT DISTINCT p.rkey, p.name, n.norm_name,
-                        p.latitude, p.longitude, p.geom, n.importance
+                        p.geom, n.importance
                     FROM places p
                     JOIN name_index n ON p.rkey = n.rkey
                     WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
@@ -1029,7 +961,7 @@ class OpenStreetMap(Database):
                 ranked AS (
                     SELECT
                         rkey,
-                        name, norm_name, latitude, longitude, geom, importance,
+                        name, norm_name, geom, importance,
                         jaro_winkler_similarity($norm_q, norm_name) AS full_jw
                     FROM candidates
                     ORDER BY full_jw DESC
@@ -1061,8 +993,6 @@ class OpenStreetMap(Database):
                 SELECT
                     rkey,
                     name,
-                    latitude::decimal(10,6)::varchar AS latitude,
-                    longitude::decimal(10,6)::varchar AS longitude,
                     ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
                     score
                 FROM scored
@@ -1073,7 +1003,7 @@ class OpenStreetMap(Database):
         return f"""
             WITH candidates AS (
                 SELECT DISTINCT p.rkey, p.name, n.norm_name,
-                    p.latitude, p.longitude, p.geom, n.importance
+                    p.geom, n.importance
                 FROM places p
                 JOIN name_index n ON p.rkey = n.rkey
                 WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
@@ -1084,8 +1014,6 @@ class OpenStreetMap(Database):
             SELECT
                 rkey,
                 name,
-                latitude::decimal(10,6)::varchar AS latitude,
-                longitude::decimal(10,6)::varchar AS longitude,
                 ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
                 jaro_winkler_similarity($norm_q, norm_name) AS score
             FROM candidates
@@ -1105,7 +1033,7 @@ class OpenStreetMap(Database):
         elif has_text:
             return self._query_trigram_text(params, trigrams)
         else:
-            columns = self.search_columns()
+            columns = self.record_columns()
             return f"""
                 select
                     {columns},

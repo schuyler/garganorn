@@ -173,6 +173,7 @@ delete from places where geometry is null;
 
 .print "Creating spatial index..."
 create index places_rtree on places using rtree (geometry);
+create index idx_id on places(id);
 EOF
 
 # Compute importance as normalized 0-100 integer score
