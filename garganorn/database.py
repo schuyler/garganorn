@@ -202,26 +202,22 @@ class Database:
 
         return record
 
-    def nearest(self, latitude=None, longitude=None, q=None, expand_m=5000, limit=50):
+    def nearest(self, bbox=None, q=None, limit=50):
         self.connect()
-        params : SearchParams = { "limit": limit }
-        if latitude is not None and longitude is not None:
-        # Expand the bounding box around the point by roughly expand_m meters
-            expand_lat = expand_m / DEG_TO_M
-            expand_lon = expand_lat / math.cos(latitude * DEG_TO_RAD) if math.fabs(latitude) < 90 else expand_lat
-            bbox = (max((longitude - expand_lon, -180)),
-                    max((latitude - expand_lat, -90)),
-                    min((longitude + expand_lon, 180)),
-                    min((latitude + expand_lat, 90)))
+        params: SearchParams = {"limit": limit}
+        if bbox is not None:
+            xmin, ymin, xmax, ymax = bbox
+            mid_lon = (xmin + xmax) / 2
+            mid_lat = (ymin + ymax) / 2
             params.update({
-                "centroid": f"POINT({longitude} {latitude})",
-                "xmin": bbox[0],
-                "ymin": bbox[1],
-                "xmax": bbox[2],
-                "ymax": bbox[3]
+                "centroid": f"POINT({mid_lon} {mid_lat})",
+                "xmin": xmin,
+                "ymin": ymin,
+                "xmax": xmax,
+                "ymax": ymax,
             })
-            width_km = (bbox[2] - bbox[0]) * 111 * math.cos(math.radians(latitude))
-            height_km = (bbox[3] - bbox[1]) * 111
+            width_km = (xmax - xmin) * 111 * math.cos(math.radians(mid_lat))
+            height_km = (ymax - ymin) * 111
             area_km2 = width_km * height_km
         else:
             area_km2 = GLOBE_AREA_KM2
@@ -229,13 +225,11 @@ class Database:
         if q:
             norm_q = Database._strip_accents(q.lower())
             params["norm_q"] = norm_q
-            # Compute trigrams for trigram index path
             trigrams = self._compute_trigrams(q)
             for i, tri in enumerate(trigrams):
                 params[f"g{i}"] = tri
             importance_floor = compute_importance_floor(area_km2)
             params["importance_floor"] = importance_floor
-            # Compute token params for token-level JW blending
             tokens = [t for t in norm_q.split() if t][:Database.MAX_QUERY_TOKENS]
             for i, token in enumerate(tokens):
                 params[f"t{i}"] = token
@@ -1178,12 +1172,12 @@ if __name__ == "__main__":
     from pprint import pprint
 
     d = FoursquareOSP("db/fsq-osp.duckdb")
-    result = d.nearest(37.776145, -122.433898)
+    result = d.nearest(bbox=(-122.48, 37.73, -122.39, 37.82))
     pprint(result)
     d.close()
 
     d = OvertureMaps("db/overture-maps.duckdb")
-    result = d.nearest(37.776145, -122.433898)
+    result = d.nearest(bbox=(-122.48, 37.73, -122.39, 37.82))
     pprint(result)
 
     record = d.get_record("", "org.overturemaps.places", result[0]["rkey"])
