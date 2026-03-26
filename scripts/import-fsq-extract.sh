@@ -204,7 +204,7 @@ with name_prep as (
     where name is not null and length(name) > 0
 ),
 trigrams as (
-    select distinct
+    select
         substr(np.norm_name, pos, 3) as trigram,
         np.fsq_place_id,
         np.name,
@@ -220,8 +220,7 @@ select
     name,
     norm_name,
     importance
-from trigrams
-order by trigram;
+from trigrams;
 EOF
 
 cat >> "${output_dir}/import.sql" <<EOF

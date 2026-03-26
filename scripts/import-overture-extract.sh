@@ -141,6 +141,7 @@ first_file="${cache_dir}/$(basename "$(echo "$parquet_files" | head -1)")"
 # Initialize the spatial extension and the places table
 cat > "${output_dir}/import-overture.sql" <<EOF
 .print "Initializing..."
+SET memory_limit='48GB';
 install spatial;
 load spatial;
 
@@ -229,7 +230,7 @@ with name_prep as (
     where names.primary is not null and length(names.primary) > 0
 ),
 trigrams as (
-    select distinct
+    select
         substr(np.norm_name, pos, 3) as trigram,
         np.id,
         np.name,
@@ -240,8 +241,7 @@ trigrams as (
     where length(np.norm_name) >= 3
 )
 select trigram, id, name, norm_name, importance
-from trigrams
-order by trigram;
+from trigrams;
 EOF
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
