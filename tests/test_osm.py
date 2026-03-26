@@ -104,11 +104,10 @@ def test_query_trigram_spatial_multi_token_has_limit():
 
 
 def test_query_record_parses_rkey():
-    """query_record SQL parses osm_type from first char and osm_id from remainder."""
+    """query_record SQL uses WHERE rkey = $rkey for direct ART-indexed lookup."""
     db = _make_osm()
     sql = db.query_record()
-    assert "left($rkey, 1)" in sql
-    assert "substr($rkey, 2)" in sql
+    assert "rkey = $rkey" in sql
 
 
 def test_process_record_full_address():
