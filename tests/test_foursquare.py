@@ -674,7 +674,8 @@ def test_spatial_only_returns_record_columns():
 
     After the plan is implemented, the spatial-only path selects full record_columns()
     fields directly (no separate hydration needed for spatial). Key record_columns fields
-    like fsq_place_id, address, locality should appear in the spatial-only SQL.
+    that are NOT in search_columns — like placemaker_url and fsq_category_ids — should
+    appear in the spatial-only SQL.
     FAILS until query_nearest selects record_columns() for the spatial-only branch.
     """
     db = _make_fsq()
@@ -685,14 +686,11 @@ def test_spatial_only_returns_record_columns():
     }
     sql = db.query_nearest(params)
     sql_lower = sql.lower()
-    assert "fsq_place_id" in sql_lower, (
-        "Spatial-only SQL should select fsq_place_id (from record_columns)"
+    assert "placemaker_url" in sql_lower, (
+        "Spatial-only SQL should select placemaker_url (from record_columns, not search_columns)"
     )
-    assert "address" in sql_lower, (
-        "Spatial-only SQL should select address (from record_columns)"
-    )
-    assert "locality" in sql_lower, (
-        "Spatial-only SQL should select locality (from record_columns)"
+    assert "fsq_category_ids" in sql_lower, (
+        "Spatial-only SQL should select fsq_category_ids (from record_columns, not search_columns)"
     )
 
 
@@ -717,6 +715,31 @@ def test_query_trigram_spatial_no_name_index_display_cols():
     assert "n.latitude" not in sql, "Spatial SQL should not reference n.latitude (use places instead)"
     assert "n.longitude" not in sql, "Spatial SQL should not reference n.longitude (use places instead)"
     assert "n.address" not in sql, "Spatial SQL should not reference n.address (use places instead)"
+
+
+def test_spatial_text_query_no_display_columns():
+    """Spatial+text query SQL should not select display columns.
+
+    After eliminating places scan, the spatial+text path returns only
+    rkey, name, distance_m, score. Display columns are filled in by hydration.
+    FAILS until _query_trigram_spatial is slimmed per plan.
+    """
+    db = _make_fsq()
+    params: SearchParams = {
+        "q": "coffee",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    trigrams = ["cof", "off", "ffe", "fee"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    # Final SELECT should NOT carry display columns through
+    assert "p.address" not in sql.lower(), (
+        "Spatial+text SQL should not select p.address — hydration fills in display columns"
+    )
+    assert "p.locality" not in sql.lower(), (
+        "Spatial+text SQL should not select p.locality — hydration fills in display columns"
+    )
 
 
 # ---------------------------------------------------------------------------
