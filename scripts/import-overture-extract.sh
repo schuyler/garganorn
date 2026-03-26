@@ -67,31 +67,6 @@ mkdir -p "$output_dir"
 cache_dir="${output_dir}/cache/overture/${latest_release}"
 mkdir -p "$cache_dir"
 
-# Detect or auto-build density file
-density_file="${output_dir}/density-overture.parquet"
-if [ ! -f "$density_file" ]; then
-    echo "Building Overture density table..."
-    "${script_dir}/build-density.sh" overture "${cache_dir}" || { echo "Failed to build density table."; exit 1; }
-    if [ ! -f "$density_file" ]; then
-        echo "Density file not found after build: ${density_file}"
-        exit 1
-    fi
-fi
-
-# Detect or auto-build category IDF file
-idf_file="${output_dir}/category_idf-overture.parquet"
-if [ ! -f "$idf_file" ]; then
-    echo "Building Overture IDF table..."
-    "${script_dir}/build-idf.sh" overture "${cache_dir}" || { echo "Failed to build IDF table."; exit 1; }
-    if [ ! -f "$idf_file" ]; then
-        echo "IDF file not found after build: ${idf_file}"
-        exit 1
-    fi
-fi
-
-# Remove any existing temp file
-rm -f "${output_dir}/${db_filename}.tmp"
-
 # Get the list of available parquet files for places
 echo "Finding available place parquet files..."
 source_base="https://overturemaps-us-west-2.s3.amazonaws.com"
@@ -134,6 +109,31 @@ while IFS= read -r file; do
     fi
     mv "${dest}.tmp" "$dest"
 done <<< "$parquet_files"
+
+# Detect or auto-build density file
+density_file="${output_dir}/density-overture.parquet"
+if [ ! -f "$density_file" ]; then
+    echo "Building Overture density table..."
+    "${script_dir}/build-density.sh" overture "${cache_dir}" || { echo "Failed to build density table."; exit 1; }
+    if [ ! -f "$density_file" ]; then
+        echo "Density file not found after build: ${density_file}"
+        exit 1
+    fi
+fi
+
+# Detect or auto-build category IDF file
+idf_file="${output_dir}/category_idf-overture.parquet"
+if [ ! -f "$idf_file" ]; then
+    echo "Building Overture IDF table..."
+    "${script_dir}/build-idf.sh" overture "${cache_dir}" || { echo "Failed to build IDF table."; exit 1; }
+    if [ ! -f "$idf_file" ]; then
+        echo "IDF file not found after build: ${idf_file}"
+        exit 1
+    fi
+fi
+
+# Remove any existing temp file
+rm -f "${output_dir}/${db_filename}.tmp"
 
 # Take the first cached file to initialize the structure
 first_file="${cache_dir}/$(basename "$(echo "$parquet_files" | head -1)")"
