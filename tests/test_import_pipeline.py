@@ -117,6 +117,7 @@ PLACES_SCHEMA_DDL = """
     CREATE TABLE places (
         osm_type         VARCHAR,
         osm_id           BIGINT,
+        rkey             VARCHAR,
         name             VARCHAR,
         latitude         DOUBLE,
         longitude        DOUBLE,
@@ -131,6 +132,7 @@ PLACES_SCHEMA_DDL = """
 EXPECTED_PLACES_COLUMNS = [
     ("osm_type", "VARCHAR"),
     ("osm_id", "BIGINT"),
+    ("rkey", "VARCHAR"),
     ("name", "VARCHAR"),
     ("latitude", "DOUBLE"),
     ("longitude", "DOUBLE"),
@@ -278,6 +280,7 @@ def osm_duckdb(parquet_dir, tmp_path_factory):
         SELECT
             osm_type,
             osm_id,
+            osm_type || CAST(osm_id AS VARCHAR) AS rkey,
             name,
             latitude,
             longitude,
@@ -333,6 +336,7 @@ def osm_duckdb(parquet_dir, tmp_path_factory):
         SELECT
             'w' AS osm_type,
             qw.osm_id,
+            'w' || CAST(qw.osm_id AS VARCHAR) AS rkey,
             qw.name,
             wc.latitude,
             wc.longitude,
@@ -1203,4 +1207,164 @@ class TestImportOsmScript:
         content = self._read_script()
         assert "type=way" in content, (
             "import-osm.sh must read from type=way/ Hive partition"
+        )
+
+    # -----------------------------------------------------------------------
+    # Performance fix tests (Red phase — these FAIL until fixes are applied)
+    # -----------------------------------------------------------------------
+
+    def test_places_table_has_rkey_column(self):
+        """places table DDL must include a rkey column.
+
+        After the performance fix, the places table is created with a
+        persistent rkey VARCHAR column (osm_type || osm_id::VARCHAR) so that
+        the importance scoring and name index steps can reference it directly
+        instead of recomputing the concatenation on every row.
+        FAILS until the CREATE TABLE places DDL adds a rkey column.
+        """
+        content = self._read_script()
+        # The CREATE TABLE places block must list rkey as a column.
+        # We look for "rkey" appearing inside the DDL (before IMPORT or INSERT).
+        assert "rkey" in content, (
+            "import-osm.sh places table DDL does not define a 'rkey' column. "
+            "Add 'rkey VARCHAR' to the CREATE TABLE places statement and populate "
+            "it as osm_type || osm_id::VARCHAR during INSERT."
+        )
+        # More specifically, the rkey column should appear in the CREATE TABLE block,
+        # not only in derived expressions. Check that it's defined before INSERT INTO.
+        create_pos = content.find("CREATE TABLE places")
+        insert_pos = content.find("INSERT INTO places")
+        assert create_pos != -1, "CREATE TABLE places not found in script"
+        assert insert_pos != -1, "INSERT INTO places not found in script"
+        ddl_block = content[create_pos:insert_pos]
+        assert "rkey" in ddl_block, (
+            "import-osm.sh places DDL block does not contain 'rkey'. "
+            "The column must be declared in CREATE TABLE places."
+        )
+
+    def test_rkey_populated_during_insert(self):
+        """INSERT INTO places must populate rkey as osm_type || osm_id::VARCHAR.
+
+        After the performance fix, the places table has a persistent rkey column.
+        The INSERT for nodes must SELECT the rkey value (e.g. 'n' || id::VARCHAR
+        or osm_type || osm_id::VARCHAR AS rkey) so that the column is populated
+        on every inserted row.  The current script does NOT have rkey in the
+        places DDL at all, so the INSERT SELECT list does not include any
+        rkey-producing expression.
+        FAILS until the INSERT statements assign rkey.
+        """
+        content = self._read_script()
+        # Locate the first INSERT INTO places block (the nodes import).
+        insert_places_pos = content.find("INSERT INTO places")
+        assert insert_places_pos != -1, "INSERT INTO places not found in script"
+        # The second INSERT INTO places starts the ways block. Locate it so we
+        # can bound the node INSERT block precisely.
+        second_insert_pos = content.find("INSERT INTO places", insert_places_pos + 1)
+        if second_insert_pos == -1:
+            # Only one INSERT block — use importance scoring section as end boundary
+            second_insert_pos = content.find("Computing importance scores")
+        if second_insert_pos == -1:
+            second_insert_pos = insert_places_pos + 5000  # generous bound
+        node_insert_block = content[insert_places_pos:second_insert_pos]
+        # rkey must be explicitly produced in the SELECT list of the node INSERT.
+        # Acceptable forms: 'n' || id::VARCHAR AS rkey  /  osm_type || osm_id::VARCHAR AS rkey
+        has_rkey_in_node_insert = (
+            "'n' || id::VARCHAR" in node_insert_block
+            or "'n'||id::VARCHAR" in node_insert_block
+            or "osm_type || osm_id::VARCHAR AS rkey" in node_insert_block
+            or "osm_type||osm_id::VARCHAR AS rkey" in node_insert_block
+        )
+        assert has_rkey_in_node_insert, (
+            "import-osm.sh node INSERT INTO places does not produce a rkey value. "
+            "The SELECT list must include an expression like 'n' || id::VARCHAR AS rkey "
+            "or osm_type || osm_id::VARCHAR AS rkey. "
+            "Currently the places table has no rkey column at all."
+        )
+
+        # Also check the ways INSERT block
+        if second_insert_pos < len(content):
+            # Find the end of the ways INSERT block
+            ways_end = content.find("DELETE FROM places", second_insert_pos)
+            if ways_end == -1:
+                ways_end = content.find("Computing importance", second_insert_pos)
+            if ways_end == -1:
+                ways_end = second_insert_pos + 5000
+            way_insert_block = content[second_insert_pos:ways_end]
+            has_rkey_in_way_insert = (
+                "'w' || qw.osm_id::VARCHAR" in way_insert_block
+                or "'w'||qw.osm_id::VARCHAR" in way_insert_block
+                or "osm_type || osm_id::VARCHAR AS rkey" in way_insert_block
+                or "osm_type||osm_id::VARCHAR AS rkey" in way_insert_block
+                or "qw.osm_type || qw.osm_id::VARCHAR" in way_insert_block
+            )
+            assert has_rkey_in_way_insert, (
+                "import-osm.sh way INSERT INTO places does not produce a rkey value. "
+                "The SELECT list must include an expression like 'w' || qw.osm_id::VARCHAR AS rkey."
+            )
+
+    def test_importance_scoring_uses_s2_level_12(self):
+        """Importance scoring must use S2 level 12, not level 14.
+
+        Density lookup at level 14 (~600m cells) is too fine-grained for
+        importance scoring and requires excessive S2 computation per row.
+        After the performance fix, both the WHERE clause and the s2_cell_parent()
+        call use level 12 (~2.4km cells).
+        FAILS until the level is changed from 14 to 12.
+        """
+        content = self._read_script()
+        # Must NOT use level 14 in the density lookup
+        assert "level = 14" not in content, (
+            "import-osm.sh importance scoring still uses 'WHERE level = 14'. "
+            "Change to 'WHERE level = 12' for the density lookup."
+        )
+        # Must use level 12 in both the WHERE filter and the s2_cell_parent call
+        assert "level = 12" in content, (
+            "import-osm.sh importance scoring does not use 'WHERE level = 12'. "
+            "The t_density temp table filter must be 'WHERE level = 12'."
+        )
+        assert "s2_cell_parent(" in content, (
+            "import-osm.sh importance scoring does not call s2_cell_parent(). "
+            "The density JOIN must use s2_cell_parent(..., 12)."
+        )
+        # The s2_cell_parent call inside the importance section must pass 12
+        importance_section_start = content.find("Computing importance scores")
+        importance_section_end = content.find("Name index", importance_section_start)
+        if importance_section_start == -1:
+            importance_section_start = content.find("place_density")
+        if importance_section_end == -1:
+            importance_section_end = len(content)
+        importance_section = content[importance_section_start:importance_section_end]
+        assert ", 12)" in importance_section or ",12)" in importance_section, (
+            "s2_cell_parent() call in importance scoring section does not pass 12 "
+            "as the level argument. Change s2_cell_parent(..., 14) to s2_cell_parent(..., 12)."
+        )
+
+    def test_analyze_called_before_finalization(self):
+        """ANALYZE must be called after the name index is built and before finalization.
+
+        DuckDB's query planner produces better execution plans after statistics
+        are collected. The performance fix adds an ANALYZE statement after the
+        name index is built so that subsequent queries (including the trigram
+        search) benefit from accurate statistics.
+        FAILS until ANALYZE is added to the script.
+        """
+        content = self._read_script()
+        assert "ANALYZE" in content.upper(), (
+            "import-osm.sh does not call ANALYZE. "
+            "Add 'ANALYZE;' after the name index build step and before the final mv."
+        )
+        # ANALYZE should appear after the name_index build
+        name_index_pos = content.find("name_index")
+        analyze_pos = content.upper().find("ANALYZE")
+        assert analyze_pos != -1, "ANALYZE not found in script"
+        assert analyze_pos > name_index_pos, (
+            "ANALYZE appears before the name_index build in the script. "
+            "It must come after the name index is fully built."
+        )
+        # ANALYZE must also appear before the mv finalization
+        finalize_pos = content.find('mv "$output_db_tmp" "$output_db"')
+        assert finalize_pos != -1, "Finalization mv command not found in script"
+        assert analyze_pos < finalize_pos, (
+            "ANALYZE appears after the finalization mv. "
+            "It must come before the database is renamed to its final path."
         )

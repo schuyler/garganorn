@@ -127,6 +127,7 @@ LOAD spatial;
 CREATE TABLE places (
     osm_type         VARCHAR,
     osm_id           BIGINT,
+    rkey             VARCHAR,
     name             VARCHAR,
     latitude         DOUBLE,
     longitude        DOUBLE,
@@ -221,6 +222,7 @@ WITH filtered AS (
 SELECT
     osm_type,
     osm_id,
+    osm_type || osm_id::VARCHAR AS rkey,
     name,
     latitude,
     longitude,
@@ -354,6 +356,7 @@ way_centroids AS (
 SELECT
     'w' AS osm_type,
     qw.osm_id,
+    'w' || qw.osm_id::VARCHAR AS rkey,
     qw.name,
     wc.latitude,
     wc.longitude,
@@ -424,29 +427,27 @@ INSTALL geography FROM community;
 LOAD geography;
 
 CREATE TEMP TABLE t_density AS
-SELECT * FROM read_parquet('${density_parquet}') WHERE level = 14;
+SELECT * FROM read_parquet('${density_parquet}') WHERE level = 12;
 
 CREATE TEMP TABLE t_idf AS
 SELECT * FROM read_parquet('${idf_parquet}');
 
 CREATE TEMP TABLE place_density AS
 SELECT
-    osm_type || osm_id::VARCHAR AS rkey,
+    p.rkey,
     coalesce(ln(1 + c.pt_count), 0) AS density_score
 FROM places p
 LEFT JOIN t_density c
-    ON c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(p.longitude, p.latitude), 14
-    )::UBIGINT;
+    ON c.cell_id = s2_cell_parent(s2_cellfromlonlat(p.longitude, p.latitude), 12)::UBIGINT;
 
 CREATE TEMP TABLE place_idf AS
 SELECT
-    osm_type || osm_id::VARCHAR AS rkey,
+    p.rkey,
     coalesce(max(idf.idf_score), 0) AS idf_score
 FROM places p
 LEFT JOIN t_idf idf ON idf.category = p.primary_category
 WHERE p.primary_category IS NOT NULL
-GROUP BY osm_type || osm_id::VARCHAR;
+GROUP BY p.rkey;
 
 UPDATE places SET importance = round(
     60 * least(d.density_score / 10.0, 1.0)
@@ -454,7 +455,7 @@ UPDATE places SET importance = round(
 )::INTEGER
 FROM place_density d
 LEFT JOIN place_idf i USING (rkey)
-WHERE places.osm_type || places.osm_id::VARCHAR = d.rkey;
+WHERE places.rkey = d.rkey;
 
 DROP TABLE place_density;
 DROP TABLE place_idf;
@@ -478,7 +479,7 @@ CREATE TABLE IF NOT EXISTS name_index (
 
 INSERT INTO name_index
 WITH name_prep AS (
-    SELECT osm_type || osm_id::VARCHAR AS rkey,
+    SELECT rkey,
            name,
            lower(strip_accents(name)) AS norm_name,
            importance
@@ -496,6 +497,15 @@ ENDSQL
 
 if [ $? -ne 0 ]; then
     echo "Name index build failed."
+    rm -f "$output_db_tmp"
+    exit 1
+fi
+
+echo "Analyzing..."
+duckdb -bail "$output_db_tmp" -c "ANALYZE;"
+
+if [ $? -ne 0 ]; then
+    echo "ANALYZE failed."
     rm -f "$output_db_tmp"
     exit 1
 fi

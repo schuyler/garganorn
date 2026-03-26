@@ -882,7 +882,7 @@ class OpenStreetMap(Database):
 
     def record_columns(self):
         return """
-            osm_type || osm_id::VARCHAR AS rkey,
+            rkey,
             name,
             latitude::decimal(10,6)::varchar AS latitude,
             longitude::decimal(10,6)::varchar AS longitude,
@@ -903,7 +903,7 @@ class OpenStreetMap(Database):
 
     def search_columns(self):
         return """
-            osm_type || osm_id::VARCHAR AS rkey,
+            rkey,
             name,
             latitude::decimal(10,6)::varchar AS latitude,
             longitude::decimal(10,6)::varchar AS longitude,
@@ -1020,10 +1020,10 @@ class OpenStreetMap(Database):
             alpha = self.JW_TOKEN_ALPHA
             return f"""
                 WITH candidates AS (
-                    SELECT DISTINCT p.osm_type, p.osm_id, p.name, n.norm_name,
+                    SELECT DISTINCT p.rkey, p.name, n.norm_name,
                         p.latitude, p.longitude, p.geom, n.importance
                     FROM places p
-                    JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
+                    JOIN name_index n ON p.rkey = n.rkey
                     WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
                       AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
                       AND n.trigram IN ({placeholders})
@@ -1031,7 +1031,7 @@ class OpenStreetMap(Database):
                 ),
                 ranked AS (
                     SELECT
-                        osm_type || osm_id::VARCHAR AS rkey,
+                        rkey,
                         name, norm_name, latitude, longitude, geom, importance,
                         jaro_winkler_similarity($norm_q, norm_name) AS full_jw
                     FROM candidates
@@ -1075,17 +1075,17 @@ class OpenStreetMap(Database):
             """
         return f"""
             WITH candidates AS (
-                SELECT DISTINCT p.osm_type, p.osm_id, p.name, n.norm_name,
+                SELECT DISTINCT p.rkey, p.name, n.norm_name,
                     p.latitude, p.longitude, p.geom, n.importance
                 FROM places p
-                JOIN name_index n ON (p.osm_type || p.osm_id::VARCHAR) = n.rkey
+                JOIN name_index n ON p.rkey = n.rkey
                 WHERE p.bbox.xmin > $xmin AND p.bbox.ymin > $ymin
                   AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
                   AND n.trigram IN ({placeholders})
                   AND n.importance >= $importance_floor
             )
             SELECT
-                osm_type || osm_id::VARCHAR AS rkey,
+                rkey,
                 name,
                 latitude::decimal(10,6)::varchar AS latitude,
                 longitude::decimal(10,6)::varchar AS longitude,

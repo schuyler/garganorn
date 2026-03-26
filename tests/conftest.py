@@ -377,6 +377,7 @@ def _create_osm_db(db_path):
         CREATE TABLE places (
             osm_type VARCHAR,
             osm_id BIGINT,
+            rkey VARCHAR,
             name VARCHAR,
             latitude DOUBLE,
             longitude DOUBLE,
@@ -400,14 +401,14 @@ def _create_osm_db(db_path):
             map_literal = "MAP()::MAP(VARCHAR, VARCHAR)"
         conn.execute(f"""
             INSERT INTO places VALUES (
-                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?, ?, ?,
                 ST_Point(?, ?),
                 ?,
                 {map_literal},
                 {{'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}},
                 ?
             )
-        """, [osm_type, osm_id, name, lat, lon, lon, lat,
+        """, [osm_type, osm_id, rkey, name, lat, lon, lon, lat,
               primary_category,
               lon, lat, lon, lat,
               importance])
