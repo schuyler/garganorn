@@ -624,3 +624,84 @@ def test_query_trigram_spatial_no_name_index_display_cols():
     assert "n.latitude" not in sql, "Spatial SQL should not reference n.latitude (use places instead)"
     assert "n.longitude" not in sql, "Spatial SQL should not reference n.longitude (use places instead)"
     assert "n.address" not in sql, "Spatial SQL should not reference n.address (use places instead)"
+
+
+# ---------------------------------------------------------------------------
+# Attribute hydration tests (Red phase — FAIL until hydrate_records() is impl.)
+# nearest() results currently have empty attributes because search queries
+# only select minimal columns. hydrate_records() will batch-fetch full
+# record_columns() and merge attributes back into search results.
+# ---------------------------------------------------------------------------
+
+def test_nearest_text_has_attributes(fsq_db):
+    """Text search results include non-empty attributes after hydration.
+
+    Before hydration, attributes is {} because search_columns() omits
+    extended fields. After hydration, fsq_place_id is always present.
+    FAILS until hydrate_records() is implemented.
+    """
+    results = fsq_db.nearest(q="Blue Bottle Coffee")
+    assert len(results) > 0
+    for r in results:
+        assert "fsq_place_id" in r.get("attributes", {}), (
+            f"Expected 'fsq_place_id' in attributes after hydration. "
+            f"Got attributes: {r.get('attributes')}. "
+            "nearest() must call hydrate_records() to populate attributes."
+        )
+
+
+def test_nearest_spatial_has_attributes(fsq_db):
+    """Spatial-only search results include non-empty attributes after hydration.
+
+    FAILS until hydrate_records() is implemented.
+    """
+    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194)
+    assert len(results) > 0
+    for r in results:
+        assert "fsq_place_id" in r.get("attributes", {}), (
+            f"Expected 'fsq_place_id' in attributes after hydration. "
+            f"Got attributes: {r.get('attributes')}. "
+            "nearest() must call hydrate_records() to populate attributes."
+        )
+
+
+def test_nearest_spatial_text_has_attributes(fsq_db):
+    """Spatial + text search results include non-empty attributes after hydration.
+
+    FAILS until hydrate_records() is implemented.
+    """
+    results = fsq_db.nearest(latitude=37.7749, longitude=-122.4194, q="Blue Bottle Coffee")
+    assert len(results) > 0
+    for r in results:
+        assert "fsq_place_id" in r.get("attributes", {}), (
+            f"Expected 'fsq_place_id' in attributes after hydration. "
+            f"Got attributes: {r.get('attributes')}. "
+            "nearest() must call hydrate_records() to populate attributes."
+        )
+
+
+def test_nearest_attributes_match_get_record(fsq_db):
+    """Attributes from nearest() match those from get_record() for the same rkey.
+
+    After hydration, the attributes dict in search results should be identical
+    to the attributes produced by a direct get_record() lookup.
+    FAILS until hydrate_records() is implemented.
+    """
+    results = fsq_db.nearest(q="Blue Bottle Coffee")
+    assert len(results) > 0
+    # Find Blue Bottle Coffee in results
+    blue_bottle = next(
+        (r for r in results if "Blue Bottle" in r["names"][0]["text"]), None
+    )
+    assert blue_bottle is not None, "Expected to find 'Blue Bottle Coffee' in nearest() results"
+    rkey = blue_bottle["rkey"]
+
+    direct = fsq_db.get_record("", "org.atgeo.places.foursquare", rkey)
+    assert direct is not None, f"get_record returned None for rkey={rkey}"
+
+    assert blue_bottle["attributes"] == direct["attributes"], (
+        f"attributes from nearest() do not match get_record() for rkey={rkey}. "
+        f"nearest attributes: {blue_bottle['attributes']}. "
+        f"get_record attributes: {direct['attributes']}. "
+        "hydrate_records() must produce the same attributes as get_record()."
+    )

@@ -526,3 +526,81 @@ def test_osm_text_query_returns_primary_category(osm_db):
         f"Got attributes: {attrs}. "
         "Text-only path must JOIN places to return primary_category."
     )
+
+
+# ---------------------------------------------------------------------------
+# Attribute hydration tests (Red phase — FAIL until hydrate_records() is impl.)
+# nearest() results currently have empty attributes because search queries
+# only select minimal columns (or, for text-only pre-Opt4, missing primary_category).
+# hydrate_records() will batch-fetch full record_columns() and merge attributes
+# back into search results.
+# ---------------------------------------------------------------------------
+
+def test_nearest_text_has_attributes(osm_db):
+    """Text search results include non-empty attributes with OSM tags after hydration.
+
+    Fixture n240109189 (Tartine Manufactory) has tags including 'cuisine'.
+    After hydration, process_record parses tags into attributes.
+    Before hydration, text-only results lack tags (search_columns omits them).
+    FAILS until hydrate_records() is implemented.
+    """
+    results = osm_db.nearest(q="Tartine Manufactory")
+    assert len(results) > 0
+    tartine = next(
+        (r for r in results if "Tartine" in r["names"][0]["text"]), None
+    )
+    assert tartine is not None, "Expected to find 'Tartine Manufactory' in results"
+    assert "cuisine" in tartine.get("attributes", {}), (
+        f"Expected 'cuisine' tag in attributes after hydration. "
+        f"Got attributes: {tartine.get('attributes')}. "
+        "nearest() must call hydrate_records() to populate tags in attributes."
+    )
+
+
+def test_nearest_spatial_has_attributes(osm_db):
+    """Spatial-only search results include full tag attributes after hydration.
+
+    Fixture n240109189 (Tartine Manufactory) has tags including 'cuisine=coffee'.
+    Spatial search near its coordinates returns it; after hydration, cuisine should
+    be present in attributes. Before hydration, search_columns() only returns
+    primary_category (not tags), so cuisine is missing.
+    FAILS until hydrate_records() is implemented.
+    """
+    # Search near Tartine Manufactory (has cuisine tag)
+    results = osm_db.nearest(latitude=37.7612, longitude=-122.4195)
+    assert len(results) > 0
+    tartine = next(
+        (r for r in results if "Tartine" in r["names"][0]["text"]), None
+    )
+    assert tartine is not None, "Expected to find 'Tartine Manufactory' in spatial results"
+    assert "cuisine" in tartine.get("attributes", {}), (
+        f"Expected 'cuisine' tag in attributes after hydration. "
+        f"Got attributes: {tartine.get('attributes')}. "
+        "nearest() must call hydrate_records() to populate tags from places.tags."
+    )
+
+
+def test_nearest_attributes_match_get_record(osm_db):
+    """Attributes from nearest() match those from get_record() for the same rkey.
+
+    After hydration, the attributes dict in search results should be identical
+    to the attributes produced by a direct get_record() lookup.
+    FAILS until hydrate_records() is implemented.
+    """
+    results = osm_db.nearest(q="Tartine Manufactory")
+    assert len(results) > 0
+    tartine = next(
+        (r for r in results if "Tartine" in r["names"][0]["text"]), None
+    )
+    assert tartine is not None, "Expected to find 'Tartine Manufactory' in nearest() results"
+    rkey = tartine["rkey"]
+
+    direct = osm_db.get_record("", "org.atgeo.places.osm", rkey)
+    assert direct is not None, f"get_record returned None for rkey={rkey}"
+
+    assert tartine["attributes"] == direct["attributes"], (
+        f"attributes from nearest() do not match get_record() for rkey={rkey}. "
+        f"nearest attributes: {tartine['attributes']}. "
+        f"get_record attributes: {direct['attributes']}. "
+        "hydrate_records() must produce the same attributes as get_record()."
+    )
