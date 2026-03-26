@@ -150,6 +150,39 @@ def test_overture_query_trigram_spatial_uses_jw():
     assert "score >= 0.6" in sql
 
 
+def test_query_trigram_spatial_multi_token_has_limit():
+    """Multi-token _query_trigram_spatial ranked CTE contains a LIMIT.
+
+    The multi-token branch pre-sorts candidates by full_jw and limits them before
+    the expensive token-level scoring step. The ranked CTE must contain LIMIT {top_n}
+    between 'ranked as' and 'name_tokens'.
+    FAILS until LIMIT is added to the multi-token spatial ranked CTE.
+    """
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "north end diner",
+        "centroid": "POINT(-122.4351 37.7748)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+        "importance_floor": 0,
+        "t0": "north",
+        "t1": "end",
+        "t2": "diner",
+    }
+    trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    sql_lower = sql.lower()
+    ranked_pos = sql_lower.find("ranked as")
+    name_tokens_pos = sql_lower.find("name_tokens", ranked_pos)
+    assert ranked_pos != -1, "ranked CTE not found in SQL"
+    assert name_tokens_pos != -1, "name_tokens CTE not found after ranked CTE"
+    ranked_to_name_tokens = sql_lower[ranked_pos:name_tokens_pos]
+    assert "limit" in ranked_to_name_tokens, (
+        "ranked CTE in multi-token spatial path should contain LIMIT to cap candidates "
+        "before token-level scoring. Add LIMIT {top_n} to the ranked CTE."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Integration tests — Overture trigram DB
 # ---------------------------------------------------------------------------

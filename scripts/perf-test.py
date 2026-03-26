@@ -85,6 +85,13 @@ QUERIES = {
         {"q": "wallgreens", "latitude": 37.7749, "longitude": -122.4194},
         {"q": "Macdonalds", "latitude": 37.7749, "longitude": -122.4194},
     ],
+    # --- Spatial + multi-word text ---
+    "spatial_multi_word": [
+        {"q": "Golden Gate Park", "latitude": 37.7694, "longitude": -122.4862},
+        {"q": "Ferry Building Marketplace", "latitude": 37.7955, "longitude": -122.3937},
+        {"q": "Blue Bottle Coffee", "latitude": 37.7749, "longitude": -122.4194},
+        {"q": "Bay Area Rapid Transit", "latitude": 37.7749, "longitude": -122.4194},
+    ],
     # --- Text-only, single short token ---
     "short_query": [
         {"q": "BART"},

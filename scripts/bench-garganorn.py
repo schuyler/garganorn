@@ -29,6 +29,9 @@ QUERIES = [
     {"label": "combined/starbucks+nyc", "q": "Starbucks", "latitude": "40.7128", "longitude": "-74.0060"},
     {"label": "combined/hospital+lagos", "q": "hospital", "latitude": "6.5244", "longitude": "3.3792"},
     {"label": "combined/cafe+tokyo", "q": "café", "latitude": "35.6762", "longitude": "139.6503"},
+    {"label": "combined/golden_gate+sf", "q": "Golden Gate Park", "latitude": "37.7694", "longitude": "-122.4862"},
+    {"label": "combined/ferry_building+sf", "q": "Ferry Building Marketplace", "latitude": "37.7955", "longitude": "-122.3937"},
+    {"label": "combined/blue_bottle+sf", "q": "Blue Bottle Coffee", "latitude": "37.7749", "longitude": "-122.4194"},
 ]
 
 
