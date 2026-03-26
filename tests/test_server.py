@@ -23,7 +23,8 @@ SAMPLE_RECORD = {
     "locations": [
         {"$type": "community.lexicon.location.geo", "latitude": "37.774900", "longitude": "-122.419400"}
     ],
-    "names": [{"text": "Blue Bottle Coffee", "priority": 0}],
+    "name": "Blue Bottle Coffee",
+    "variants": [],
     "attributes": {},
 }
 

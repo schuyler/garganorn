@@ -127,7 +127,8 @@ def test_process_record_full_address():
     record = db.process_record(result)
     assert record["$type"] == "org.atgeo.place"
     assert record["rkey"] == "n240109189"
-    assert record["names"][0]["text"] == "Tartine Manufactory"
+    assert record["name"] == "Tartine Manufactory"
+    assert record["variants"] == []
     # Geo location present
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
     # Address location created because addr:country is present
@@ -222,7 +223,7 @@ def test_nearest_spatial(osm_db):
 def test_nearest_text(osm_db):
     """Text query finds place by trigram match."""
     results = osm_db.nearest(q="tartine")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Tartine" in n for n in names)
 
 
@@ -231,7 +232,7 @@ def test_nearest_spatial_text(osm_db):
     results = osm_db.nearest(bbox=(-122.4645, 37.7162, -122.3745, 37.8062), q="tartine")
     assert len(results) > 0
     assert all(r["distance_m"] >= 0 for r in results)
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Tartine" in n for n in names)
 
 
@@ -240,7 +241,8 @@ def test_get_record_found(osm_db):
     record = osm_db.get_record("", "org.atgeo.places.osm", "n240109189")
     assert record is not None
     assert record["rkey"] == "n240109189"
-    assert record["names"][0]["text"] == "Tartine Manufactory"
+    assert record["name"] == "Tartine Manufactory"
+    assert record["variants"] == []
 
 
 def test_get_record_not_found(osm_db):
@@ -253,7 +255,7 @@ def test_trigram_nearest_text_exact(osm_db):
     """Text search for 'Tartine Manufactory' returns it first."""
     results = osm_db.nearest(q="Tartine Manufactory")
     assert len(results) > 0
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert names[0] == "Tartine Manufactory"
 
 
@@ -284,7 +286,7 @@ def test_token_blending_text_ranking(osm_db):
     This test FAILS until token blending is implemented.
     """
     results = osm_db.nearest(q="North End Diner")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
     assert "North End Pub" in names, "North End Pub not found in results"
     diner_idx = names.index("Diner North End")
@@ -305,7 +307,7 @@ def test_token_blending_spatial_ranking(osm_db):
     results = osm_db.nearest(
         bbox=(-122.4801, 37.7299, -122.3901, 37.8199), q="North End Diner"
     )
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
     assert "North End Pub" in names, "North End Pub not found in results"
     diner_idx = names.index("Diner North End")
@@ -319,7 +321,7 @@ def test_token_blending_spatial_ranking(osm_db):
 def test_single_token_finds_existing_place(osm_db):
     """Single-token query 'Caltrain' finds Caltrain Station (regression guard, should PASS)."""
     results = osm_db.nearest(q="Caltrain")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Caltrain" in n for n in names)
 
 
@@ -330,7 +332,7 @@ def test_single_token_no_blending_applied(osm_db):
     still works correctly after the blending feature is added.
     """
     results = osm_db.nearest(q="Dolores")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Dolores" in n for n in names)
 
 
@@ -549,7 +551,7 @@ def test_osm_text_query_returns_primary_category(osm_db):
     """
     results = osm_db.nearest(q="Tartine Manufactory")
     assert len(results) > 0, "Expected at least one result for 'Tartine Manufactory'"
-    tartine = next((r for r in results if "Tartine" in r["names"][0]["text"]), None)
+    tartine = next((r for r in results if "Tartine" in r["name"]), None)
     assert tartine is not None, "Expected to find 'Tartine Manufactory' in results"
     # After JOIN places, primary_category is parsed into attributes
     attrs = tartine.get("attributes", {})
@@ -579,7 +581,7 @@ def test_nearest_text_has_attributes(osm_db):
     results = osm_db.nearest(q="Tartine Manufactory")
     assert len(results) > 0
     tartine = next(
-        (r for r in results if "Tartine" in r["names"][0]["text"]), None
+        (r for r in results if "Tartine" in r["name"]), None
     )
     assert tartine is not None, "Expected to find 'Tartine Manufactory' in results"
     assert "cuisine" in tartine.get("attributes", {}), (
@@ -602,7 +604,7 @@ def test_nearest_spatial_has_attributes(osm_db):
     results = osm_db.nearest(bbox=(-122.4645, 37.7162, -122.3745, 37.8062))
     assert len(results) > 0
     tartine = next(
-        (r for r in results if "Tartine" in r["names"][0]["text"]), None
+        (r for r in results if "Tartine" in r["name"]), None
     )
     assert tartine is not None, "Expected to find 'Tartine Manufactory' in spatial results"
     assert "cuisine" in tartine.get("attributes", {}), (
@@ -622,7 +624,7 @@ def test_nearest_attributes_match_get_record(osm_db):
     results = osm_db.nearest(q="Tartine Manufactory")
     assert len(results) > 0
     tartine = next(
-        (r for r in results if "Tartine" in r["names"][0]["text"]), None
+        (r for r in results if "Tartine" in r["name"]), None
     )
     assert tartine is not None, "Expected to find 'Tartine Manufactory' in nearest() results"
     rkey = tartine["rkey"]
