@@ -494,71 +494,94 @@ def test_osm_name_index_no_display_columns(osm_db):
     )
 
 
-def test_osm_query_trigram_text_joins_places(osm_db):
-    """Single-token text-only query SQL contains JOIN places after Optimization 4.
+def test_text_query_no_join_places():
+    """Text-only query SQL should NOT contain JOIN places after eliminating places scan.
 
-    After schema normalization, OSM name_index no longer has latitude/longitude.
-    The text-only path must JOIN the places table to retrieve coordinates and
-    primary_category.
-    FAILS until text-only SQL is updated to JOIN places.
+    The plan removes JOIN places from text-only queries. Text search returns
+    only minimal columns (rkey, name, score) from name_index CTEs.
+    Display columns are filled in by hydration via ART-indexed lookup.
+    FAILS until JOIN places is removed from _query_trigram_text.
     """
-    db = osm_db
-    params: SearchParams = {
-        "q": "tartine",
-        "limit": 10,
-        "importance_floor": 0,
-        "norm_q": "tartine",
-        "g0": "tar", "g1": "art", "g2": "rti", "g3": "tin", "g4": "ine",
-    }
+    db = _make_osm()
+    params: SearchParams = {"q": "tartine", "limit": 10}
     trigrams = ["tar", "art", "rti", "tin", "ine"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
-        "Single-token OSM text-only SQL should JOIN places after schema normalization."
+    assert "JOIN PLACES" not in sql.upper().replace("\n", " "), (
+        "OSM text-only SQL should NOT join places — hydration fills in display columns"
     )
 
 
-def test_osm_query_trigram_text_multi_token_joins_places(osm_db):
-    """Multi-token text-only query SQL contains JOIN places after Optimization 4.
+def test_text_query_multi_token_no_join_places():
+    """Multi-token text-only query SQL should NOT contain JOIN places.
 
-    FAILS until multi-token OSM text-only SQL is updated to JOIN places.
+    The plan removes JOIN places from text-only queries (both single-token and
+    multi-token paths). Hydration fills in display columns via ART-indexed lookup.
+    FAILS until JOIN places is removed from the multi-token _query_trigram_text path.
     """
-    db = osm_db
+    db = _make_osm()
     params: SearchParams = {
         "q": "north end diner",
         "limit": 10,
-        "importance_floor": 0,
-        "norm_q": "north end diner",
         "t0": "north",
         "t1": "end",
         "t2": "diner",
     }
     trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
-        "Multi-token OSM text-only SQL should JOIN places after schema normalization."
+    assert "JOIN PLACES" not in sql.upper().replace("\n", " "), (
+        "OSM multi-token text-only SQL should NOT join places — hydration fills in display columns"
     )
 
 
-def test_osm_text_query_returns_primary_category(osm_db):
-    """Text-only query returns primary_category after Optimization 4.
+def test_search_columns_removed():
+    """search_columns() method should not exist after eliminating places scan.
 
-    Before Optimization 4, the OSM text-only path does not return primary_category
-    because it reads only from name_index (which doesn't store it). After schema
-    normalization, text-only queries JOIN places and return p.primary_category.
-
-    Fixture n240109189 (Tartine Manufactory) has primary_category = 'amenity=cafe'.
-    FAILS until the text-only path JOINs places and returns primary_category.
+    FAILS until search_columns is removed from OpenStreetMap.
     """
-    results = osm_db.nearest(q="Tartine Manufactory")
-    assert len(results) > 0, "Expected at least one result for 'Tartine Manufactory'"
-    tartine = next((r for r in results if "Tartine" in r["name"]), None)
-    assert tartine is not None, "Expected to find 'Tartine Manufactory' in results"
-    # After JOIN places, primary_category is parsed into attributes
-    attrs = tartine.get("attributes", {})
-    assert "amenity" in attrs, (
-        f"Expected 'amenity' in attributes after joining places for primary_category. "
-        f"Got attributes: {attrs}. "
-        "Text-only path must JOIN places to return primary_category."
+    db = _make_osm()
+    assert not hasattr(db, 'search_columns'), (
+        "search_columns() should be removed — text/spatial+text paths return "
+        "minimal columns; spatial-only uses record_columns() directly"
+    )
+
+
+def test_spatial_only_returns_record_columns():
+    """The spatial-only branch of query_nearest() should select record_columns() fields.
+
+    After the plan is implemented, the spatial-only path selects full record_columns()
+    fields directly (no separate hydration needed for spatial). Key record_columns fields
+    like primary_category and tags should appear in the spatial-only SQL.
+    FAILS until query_nearest selects record_columns() for the spatial-only branch.
+    """
+    db = _make_osm()
+    params: SearchParams = {
+        "centroid": "POINT(-122.4195 37.7612)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    sql = db.query_nearest(params)
+    sql_lower = sql.lower()
+    assert "primary_category" in sql_lower, (
+        "OSM spatial-only SQL should select primary_category (from record_columns)"
+    )
+    assert "tags" in sql_lower, (
+        "OSM spatial-only SQL should select tags (from record_columns)"
+    )
+
+
+def test_osm_hydrate_uses_rkey():
+    """OpenStreetMap.query_hydrate() SQL should use rkey IN (...) not the decomposed join.
+
+    The current query_hydrate decomposes rkey back to osm_type/osm_id and uses a CTE
+    with VALUES + JOIN. After the plan, with an ART index on rkey, query_hydrate should
+    use a direct 'rkey IN (...)' lookup instead.
+    FAILS until query_hydrate is updated to use rkey IN.
+    """
+    db = _make_osm()
+    sql = db.query_hydrate(3)
+    assert "rkey in" in sql.lower(), (
+        "OpenStreetMap.query_hydrate() should use 'rkey IN (...)' for direct ART-indexed lookup. "
+        "The current decomposed osm_type/osm_id JOIN should be replaced."
     )
 
 

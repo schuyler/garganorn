@@ -80,11 +80,16 @@ def test_process_record_no_addresses():
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
 
 
-def test_text_only_result_search_columns_has_addresses():
-    """search_columns() for OvertureMaps includes addresses column."""
+def test_search_columns_removed():
+    """search_columns() method should not exist after eliminating places scan.
+
+    FAILS until search_columns is removed from OvertureMaps.
+    """
     db = _make_ovr()
-    cols = db.search_columns()
-    assert "addresses" in cols
+    assert not hasattr(db, 'search_columns'), (
+        "search_columns() should be removed — text/spatial+text paths return "
+        "minimal columns; spatial-only uses record_columns() directly"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -424,76 +429,66 @@ def test_overture_name_index_no_display_columns(overture_db):
     )
 
 
-def test_overture_query_trigram_text_joins_places(overture_db):
-    """Single-token text-only query SQL contains JOIN places after Optimization 4.
+def test_text_query_no_join_places():
+    """Text-only query SQL should NOT contain JOIN places after eliminating places scan.
 
-    After schema normalization, Overture name_index no longer has latitude/longitude.
-    The text-only path must JOIN the places table to retrieve coordinates and addresses.
-    FAILS until text-only SQL is updated to JOIN places.
+    The plan removes JOIN places from text-only queries. Text search returns
+    only minimal columns (rkey, name, score) from name_index CTEs.
+    Display columns are filled in by hydration via ART-indexed lookup.
+    FAILS until JOIN places is removed from _query_trigram_text.
     """
-    db = overture_db
-    params: SearchParams = {
-        "q": "anchor brewing",
-        "limit": 10,
-        "importance_floor": 0,
-        "norm_q": "anchor brewing",
-        "g0": "anc", "g1": "nch", "g2": "cho", "g3": "hor",
-    }
+    db = _make_ovr()
+    params: SearchParams = {"q": "anchor brewing", "limit": 10}
     trigrams = ["anc", "nch", "cho", "hor"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
-        "Single-token Overture text-only SQL should JOIN places after schema normalization."
+    assert "JOIN PLACES" not in sql.upper().replace("\n", " "), (
+        "Overture text-only SQL should NOT join places — hydration fills in display columns"
     )
 
 
-def test_overture_query_trigram_text_multi_token_joins_places(overture_db):
-    """Multi-token text-only query SQL contains JOIN places after Optimization 4.
+def test_text_query_multi_token_no_join_places():
+    """Multi-token text-only query SQL should NOT contain JOIN places.
 
-    FAILS until multi-token Overture text-only SQL is updated to JOIN places.
+    The plan removes JOIN places from text-only queries (both single-token and
+    multi-token paths). Hydration fills in display columns via ART-indexed lookup.
+    FAILS until JOIN places is removed from the multi-token _query_trigram_text path.
     """
-    db = overture_db
+    db = _make_ovr()
     params: SearchParams = {
         "q": "north end diner",
         "limit": 10,
-        "importance_floor": 0,
-        "norm_q": "north end diner",
         "t0": "north",
         "t1": "end",
         "t2": "diner",
     }
     trigrams = ["nor", "ort", "rth", "th ", "h e", " en", "end", "nd ", "d d", " di", "din", "ine", "ner"]
     sql = db._query_trigram_text(params, trigrams)
-    assert "JOIN PLACES" in sql.upper().replace("\n", " "), (
-        "Multi-token Overture text-only SQL should JOIN places after schema normalization."
+    assert "JOIN PLACES" not in sql.upper().replace("\n", " "), (
+        "Overture multi-token text-only SQL should NOT join places — hydration fills in display columns"
     )
 
 
-def test_overture_text_query_returns_addresses(overture_db):
-    """Text-only query returns real address data (not NULL) after Optimization 4.
+def test_spatial_only_returns_record_columns():
+    """The spatial-only branch of query_nearest() should select record_columns() fields.
 
-    Before Optimization 4, the Overture text-only path returns `NULL AS addresses`
-    because name_index doesn't store addresses. After schema normalization, text-only
-    queries JOIN places and return real `p.addresses`.
-
-    Fixture ovr001 (Philz Coffee) has address data in the places table.
-    FAILS until the text-only path JOINs places and returns real addresses.
+    After the plan is implemented, the spatial-only path selects full record_columns()
+    fields directly (no separate hydration needed for spatial). Key record_columns fields
+    like id (as rkey), addresses, confidence should appear in the spatial-only SQL.
+    FAILS until query_nearest selects record_columns() for the spatial-only branch.
     """
-    results = overture_db.nearest(q="Philz Coffee")
-    assert len(results) > 0, "Expected at least one result for 'Philz Coffee'"
-    philz = next((r for r in results if "Philz" in r["name"]), None)
-    assert philz is not None, "Expected to find 'Philz Coffee' in results"
-    # After JOIN places, addresses should be populated — result should have an
-    # address-type location (not just geo)
-    assert len(philz["locations"]) >= 2, (
-        f"Expected address location in results after JOIN places. "
-        f"Got locations: {philz['locations']}. "
-        "The text-only path returns NULL AS addresses before Optimization 4."
+    db = _make_ovr()
+    params: SearchParams = {
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    sql = db.query_nearest(params)
+    sql_lower = sql.lower()
+    assert "addresses" in sql_lower, (
+        "Overture spatial-only SQL should select addresses (from record_columns)"
     )
-    addr_locations = [loc for loc in philz["locations"]
-                      if loc["$type"] == "community.lexicon.location.address"]
-    assert len(addr_locations) > 0, (
-        "Expected at least one address-type location. "
-        "Text-only path must JOIN places to return real addresses."
+    assert "confidence" in sql_lower, (
+        "Overture spatial-only SQL should select confidence (from record_columns)"
     )
 
 
