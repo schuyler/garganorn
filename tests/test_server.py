@@ -188,6 +188,22 @@ def test_search_records_bbox_overrides_latlon():
     assert bbox[0] == pytest.approx(-122.5)
 
 
+def test_search_records_bbox_nan():
+    """NaN bbox values raise InvalidBbox."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records({}, collection=FSQ_COLLECTION, bbox="nan,nan,nan,nan")
+    assert exc_info.value.name == "InvalidBbox"
+
+
+def test_search_records_bbox_inf():
+    """Inf bbox values raise InvalidBbox."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records({}, collection=FSQ_COLLECTION, bbox="-inf,0,inf,1")
+    assert exc_info.value.name == "InvalidBbox"
+
+
 def test_search_records_bbox_in_query_response():
     """_query.parameters includes bbox and q."""
     nearest_results = [dict(SAMPLE_RECORD)]

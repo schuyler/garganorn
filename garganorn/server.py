@@ -79,6 +79,8 @@ class Server:
             xmin, ymin, xmax, ymax = (float(p) for p in parts)
         except ValueError:
             raise XrpcError("bbox values must be valid numbers", "InvalidBbox")
+        if any(math.isnan(v) or math.isinf(v) for v in (xmin, ymin, xmax, ymax)):
+            raise XrpcError("bbox values must be finite numbers", "InvalidBbox")
         if xmin >= xmax or ymin >= ymax:
             raise XrpcError("bbox requires xmin < xmax and ymin < ymax", "InvalidBbox")
         return (xmin, ymin, xmax, ymax)
