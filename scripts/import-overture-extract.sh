@@ -216,33 +216,38 @@ DROP TABLE t_density;
 DROP TABLE t_idf;
 EOF
 
-# Build name_index with trigrams (reads importance directly from places)
+# Build name_index with trigrams in batches to avoid OOM on large datasets
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Creating name index..."
-create table name_index as
-with name_prep as (
-    select
-        id,
-        names.primary as name,
-        lower(strip_accents(names.primary)) as norm_name,
-        coalesce(importance, 0) as importance
-    from places
-    where names.primary is not null and length(names.primary) > 0
-),
-trigrams as (
-    select
-        substr(np.norm_name, pos, 3) as trigram,
-        np.id,
-        np.name,
-        np.norm_name,
-        np.importance
-    from name_prep np
-    cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
-    where length(np.norm_name) >= 3
-)
-select trigram, id, name, norm_name, importance
-from trigrams;
+.print "Creating name index (batched)..."
+CREATE TABLE name_index (trigram VARCHAR, id VARCHAR, name VARCHAR, norm_name VARCHAR, importance INTEGER);
 EOF
+
+for batch_start in $(seq 0 5000000 80000000); do
+    batch_end=$((batch_start + 5000000))
+    cat >> "${output_dir}/import-overture.sql" <<EOF
+.print "  name_index batch rowid ${batch_start}–${batch_end}..."
+INSERT INTO name_index
+SELECT
+    substr(np.norm_name, pos, 3) AS trigram,
+    np.id,
+    np.name,
+    np.norm_name,
+    np.importance
+FROM (
+    SELECT
+        id,
+        names.primary AS name,
+        lower(strip_accents(names.primary)) AS norm_name,
+        coalesce(importance, 0) AS importance
+    FROM places
+    WHERE names.primary IS NOT NULL
+      AND length(names.primary) >= 3
+      AND rowid >= ${batch_start}
+      AND rowid < ${batch_end}
+) np
+CROSS JOIN generate_series(1, length(np.norm_name) - 2) AS gs(pos);
+EOF
+done
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Analyzing..."
