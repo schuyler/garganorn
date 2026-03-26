@@ -390,6 +390,7 @@ DELETE FROM places WHERE geom IS NULL;
 
 .print "Building R-tree index..."
 CREATE INDEX places_rtree ON places USING RTREE (geom);
+CREATE INDEX idx_rkey ON places(rkey);
 EOF
 
 if [ $? -ne 0 ]; then
