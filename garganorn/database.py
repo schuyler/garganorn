@@ -264,25 +264,6 @@ class Database:
             # Spatial-only: record_columns() already selected, no hydration needed
             return [self.process_nearest(item) for item in result]
 
-    def hydrate_records(self, records):
-        """Hydrate search results with full attributes from record_columns."""
-        if not records:
-            return records
-        rkeys = [r["rkey"] for r in records]
-        params = {f"h{i}": rk for i, rk in enumerate(rkeys)}
-        full_rows = self.execute(self.query_hydrate(len(rkeys)), params)
-        # Build rkey → attributes map from full record processing
-        attr_map = {}
-        for row in full_rows:
-            processed = self.process_record(row)
-            attr_map[processed["rkey"]] = processed["attributes"]
-        # Merge attributes into search results
-        for record in records:
-            if record["rkey"] in attr_map:
-                record["attributes"] = attr_map[record["rkey"]]
-        return records
-
-
 class FoursquareOSP(Database):
     collection = "org.atgeo.places.foursquare"
 
@@ -853,8 +834,7 @@ class OpenStreetMap(Database):
             select
                 {columns}
             from places
-            where osm_type = left($rkey, 1)
-              and osm_id = substr($rkey, 2)::BIGINT
+            where rkey = $rkey
         """
 
     def _query_trigram_text(self, params: SearchParams, trigrams: list) -> str:
