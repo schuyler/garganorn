@@ -569,6 +569,35 @@ def test_spatial_only_returns_record_columns():
     )
 
 
+def test_spatial_text_query_no_display_columns():
+    """Spatial+text query SQL should not select display columns.
+
+    After eliminating places scan, the spatial+text path returns only
+    rkey, name, distance_m, score. Display columns (latitude, longitude) are
+    filled in by hydration.
+    FAILS until _query_trigram_spatial is slimmed per plan.
+    """
+    db = _make_osm()
+    params: SearchParams = {
+        "q": "tartine",
+        "centroid": "POINT(-122.4195 37.7612)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    trigrams = ["tar", "art", "rti", "tin", "ine"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    # Final SELECT should not carry latitude/longitude through — hydration fills them in
+    # Check the SELECT clause (after the last CTE body) for display columns
+    final_select_start = sql.lower().rfind("select")
+    final_select = sql[final_select_start:]
+    assert "latitude" not in final_select.lower(), (
+        "Spatial+text final SELECT should not include latitude — hydration fills in display columns"
+    )
+    assert "longitude" not in final_select.lower(), (
+        "Spatial+text final SELECT should not include longitude — hydration fills in display columns"
+    )
+
+
 def test_osm_hydrate_uses_rkey():
     """OpenStreetMap.query_hydrate() SQL should use rkey IN (...) not the decomposed join.
 

@@ -492,6 +492,27 @@ def test_spatial_only_returns_record_columns():
     )
 
 
+def test_spatial_text_query_no_display_columns():
+    """Spatial+text query SQL should not select display columns.
+
+    After eliminating places scan, the spatial+text path returns only
+    rkey, name, distance_m, score. Display columns are filled in by hydration.
+    FAILS until _query_trigram_spatial is slimmed per plan.
+    """
+    db = _make_ovr()
+    params: SearchParams = {
+        "q": "anchor brewing",
+        "centroid": "POINT(-122.4194 37.7749)",
+        "xmin": -122.5, "ymin": 37.7, "xmax": -122.3, "ymax": 37.85,
+        "limit": 10,
+    }
+    trigrams = ["anc", "nch", "cho", "hor", "or ", "r b", " br", "bre", "rew", "ewi", "win", "ing"]
+    sql = db._query_trigram_spatial(params, trigrams)
+    assert "p.addresses" not in sql.lower(), (
+        "Spatial+text SQL should not select p.addresses — hydration fills in display columns"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Attribute hydration tests (Red phase — FAIL until hydrate_records() is impl.)
 # nearest() results currently have empty attributes because search queries
