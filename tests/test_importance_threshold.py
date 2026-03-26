@@ -304,9 +304,8 @@ class TestSpatialQueryImportanceFloor:
         db.connect()
         try:
             results = db.nearest(
-                latitude=37.77, longitude=-122.42,
+                bbox=(-122.465, 37.725, -122.375, 37.815),
                 q="Test Coffee",
-                expand_m=5000,
             )
         finally:
             db.close()
@@ -328,9 +327,8 @@ class TestSpatialQueryImportanceFloor:
         db.connect()
         try:
             results = db.nearest(
-                latitude=37.77, longitude=-122.42,
+                bbox=(-128.102, 33.274, -116.738, 42.266),
                 q="Test Coffee",
-                expand_m=500000,
             )
         finally:
             db.close()
