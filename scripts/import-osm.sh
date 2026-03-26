@@ -48,8 +48,8 @@ if [ ! -f "$pbf_path" ]; then
 fi
 
 script_dir="$(dirname "$(realpath "$0")")"
-output_dir="${script_dir}/../db"
-cache_dir="${script_dir}/../db/cache/osm"
+output_dir="$(realpath "${script_dir}/../db")"
+cache_dir="$(realpath -m "${script_dir}/../db/cache/osm")"
 xmin=""
 xmax=""
 ymin=""
