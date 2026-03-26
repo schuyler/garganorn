@@ -192,8 +192,8 @@ FROM places p
 LEFT JOIN t_density c
     ON c.cell_id = s2_cell_parent(
         s2_cellfromlonlat(
-            st_x(st_centroid(p.geometry)),
-            st_y(st_centroid(p.geometry))
+            (p.bbox.xmin + p.bbox.xmax) / 2.0,
+            (p.bbox.ymin + p.bbox.ymax) / 2.0
         ), 12
     );
 CREATE TEMP TABLE place_idf AS
