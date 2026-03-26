@@ -101,7 +101,7 @@ def test_nearest_spatial(overture_db):
 def test_nearest_text(overture_db):
     """Text query finds a place by name fragment via trigram search."""
     results = overture_db.nearest(bbox=(-122.4719, 37.7146, -122.3819, 37.8046), q="Dolores")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Dolores" in n for n in names)
 
 
@@ -110,7 +110,8 @@ def test_get_record(overture_db):
     record = overture_db.get_record("", "org.atgeo.places.overture", "ovr001")
     assert record is not None
     assert record["rkey"] == "ovr001"
-    assert record["names"][0]["text"] == "Philz Coffee"
+    assert record["name"] == "Philz Coffee"
+    assert record["variants"] == []
     # Should have geo location
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
 
@@ -191,7 +192,7 @@ def test_overture_trigram_nearest_text(overture_db):
     """Trigram text search for 'Anchor Brewing' finds it in results."""
     results = overture_db.nearest(q="Anchor Brewing")
     assert len(results) > 0
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Anchor" in n for n in names)
 
 
@@ -215,7 +216,7 @@ def test_token_blending_text_ranking(overture_db):
     This test FAILS until token blending is implemented.
     """
     results = overture_db.nearest(q="North End Diner")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
     assert "North End Pub" in names, "North End Pub not found in results"
     diner_idx = names.index("Diner North End")
@@ -236,7 +237,7 @@ def test_token_blending_spatial_ranking(overture_db):
     results = overture_db.nearest(
         bbox=(-122.4801, 37.7299, -122.3901, 37.8199), q="North End Diner"
     )
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
     assert "North End Pub" in names, "North End Pub not found in results"
     diner_idx = names.index("Diner North End")
@@ -250,7 +251,7 @@ def test_token_blending_spatial_ranking(overture_db):
 def test_single_token_finds_existing_place(overture_db):
     """Single-token query 'Coit' finds Coit Tower (regression guard, should PASS)."""
     results = overture_db.nearest(q="Coit")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Coit" in n for n in names)
 
 
@@ -261,7 +262,7 @@ def test_single_token_no_blending_applied(overture_db):
     still works correctly after the blending feature is added.
     """
     results = overture_db.nearest(q="Lombard")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Lombard" in n for n in names)
 
 
@@ -479,7 +480,7 @@ def test_overture_text_query_returns_addresses(overture_db):
     """
     results = overture_db.nearest(q="Philz Coffee")
     assert len(results) > 0, "Expected at least one result for 'Philz Coffee'"
-    philz = next((r for r in results if "Philz" in r["names"][0]["text"]), None)
+    philz = next((r for r in results if "Philz" in r["name"]), None)
     assert philz is not None, "Expected to find 'Philz Coffee' in results"
     # After JOIN places, addresses should be populated — result should have an
     # address-type location (not just geo)
@@ -546,7 +547,7 @@ def test_nearest_attributes_match_get_record(overture_db):
     results = overture_db.nearest(q="Philz Coffee")
     assert len(results) > 0
     philz = next(
-        (r for r in results if "Philz" in r["names"][0]["text"]), None
+        (r for r in results if "Philz" in r["name"]), None
     )
     assert philz is not None, "Expected to find 'Philz Coffee' in nearest() results"
     rkey = philz["rkey"]

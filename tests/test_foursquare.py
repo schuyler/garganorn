@@ -54,7 +54,8 @@ def test_process_record_full():
     record = db.process_record(result)
     assert record["$type"] == "org.atgeo.place"
     assert record["rkey"] == "fsq001"
-    assert record["names"][0]["text"] == "Blue Bottle Coffee"
+    assert record["name"] == "Blue Bottle Coffee"
+    assert record["variants"] == []
     # Geo location
     assert record["locations"][0]["$type"] == "community.lexicon.location.geo"
     # Address location (country required)
@@ -129,7 +130,7 @@ def test_spatial_only_ordered_by_importance(fsq_db):
 def test_nearest_text(fsq_db):
     """Text query finds place by trigram match."""
     results = fsq_db.nearest(q="tartine")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Tartine" in n for n in names)
 
 
@@ -138,7 +139,8 @@ def test_get_record_found(fsq_db):
     record = fsq_db.get_record("", "org.atgeo.places.foursquare", "fsq001")
     assert record is not None
     assert record["rkey"] == "fsq001"
-    assert record["names"][0]["text"] == "Blue Bottle Coffee"
+    assert record["name"] == "Blue Bottle Coffee"
+    assert record["variants"] == []
 
 
 def test_get_record_not_found(fsq_db):
@@ -232,7 +234,7 @@ def test_trigram_nearest_text_exact_match(fsq_db):
     """Text-only trigram search for 'Tartine Bakery' returns it as first result."""
     results = fsq_db.nearest(q="Tartine Bakery")
     assert len(results) > 0
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert names[0] == "Tartine Bakery"
 
 
@@ -250,7 +252,7 @@ def test_trigram_nearest_spatial_with_text(fsq_db):
     results = fsq_db.nearest(bbox=(-122.4644, 37.7299, -122.3744, 37.8199), q="Blue Bottle Coffee")
     assert len(results) > 0
     assert all(r["distance_m"] >= 0 for r in results)
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Coffee" in n for n in names)
 
 
@@ -272,7 +274,7 @@ def test_token_blending_text_ranking(fsq_db):
     This test FAILS until token blending is implemented.
     """
     results = fsq_db.nearest(q="North End Diner")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
     assert "North End Pub" in names, "North End Pub not found in results"
     diner_idx = names.index("Diner North End")
@@ -293,7 +295,7 @@ def test_token_blending_spatial_ranking(fsq_db):
     results = fsq_db.nearest(
         bbox=(-122.4801, 37.7299, -122.3901, 37.8199), q="North End Diner"
     )
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Diner North End" in names, "Diner North End not found in results"
     assert "North End Pub" in names, "North End Pub not found in results"
     diner_idx = names.index("Diner North End")
@@ -307,7 +309,7 @@ def test_token_blending_spatial_ranking(fsq_db):
 def test_single_token_finds_existing_place(fsq_db):
     """Single-token query 'Alcatraz' finds Alcatraz Island (regression guard, should PASS)."""
     results = fsq_db.nearest(q="Alcatraz")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Alcatraz" in n for n in names)
 
 
@@ -319,7 +321,7 @@ def test_single_token_no_blending_applied(fsq_db):
     """
     results = fsq_db.nearest(q="Ferry")
     # "Ferry Building Marketplace" contains "ferry" and should appear
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert any("Ferry" in n for n in names)
 
 
@@ -335,7 +337,7 @@ def test_four_token_query_finds_correct_place(fsq_db):
     contains all 4 query tokens and should appear in results.
     """
     results = fsq_db.nearest(q="North Beach Community Garden")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "North Beach Community Garden Center" in names, (
         "4-token query should find 'North Beach Community Garden Center'"
     )
@@ -348,7 +350,7 @@ def test_four_token_query_ranks_best_match_first(fsq_db):
     match (e.g., 2-token overlap) should rank lower.
     """
     results = fsq_db.nearest(q="North Beach Community Garden")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert len(names) > 0
     assert names[0] == "North Beach Community Garden Center", (
         f"Expected 'North Beach Community Garden Center' first, got '{names[0]}'"
@@ -361,7 +363,7 @@ def test_five_token_query_finds_airport(fsq_db):
     Verifies blending works at 5 query tokens — matches the fixture exactly.
     """
     results = fsq_db.nearest(q="San Francisco International Airport Terminal")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "San Francisco International Airport Terminal" in names, (
         "5-token query should find 'San Francisco International Airport Terminal'"
     )
@@ -370,7 +372,7 @@ def test_five_token_query_finds_airport(fsq_db):
 def test_five_token_query_ranks_exact_match_first(fsq_db):
     """5-token query 'San Francisco International Airport Terminal' ranks exact match first."""
     results = fsq_db.nearest(q="San Francisco International Airport Terminal")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert len(names) > 0
     assert names[0] == "San Francisco International Airport Terminal", (
         f"Expected exact match first, got '{names[0]}'"
@@ -385,7 +387,7 @@ def test_six_token_query_finds_best_match(fsq_db):
     Verifies blending doesn't break at 6 tokens.
     """
     results = fsq_db.nearest(q="North Beach Community Garden Center Park")
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "North Beach Community Garden Center" in names, (
         "6-token query should find 'North Beach Community Garden Center' via token blending"
     )
@@ -423,7 +425,7 @@ def test_cutoff_survival_reordered_name(fsq_db):
     before token scoring can surface it.
     """
     results = fsq_db.nearest(q="Park Avenue Restaurant", limit=26)
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Restaurant Park Avenue" in names, (
         f"'Restaurant Park Avenue' (perfect token match, low full_jw) should appear "
         f"in results for 'Park Avenue Restaurant' when all candidates are scored. "
@@ -443,7 +445,7 @@ def test_cutoff_survival_spatial_reordered_name(fsq_db):
     too aggressively (e.g. 1x or smaller) in the future.
     """
     results = fsq_db.nearest(bbox=(-122.50, 37.70, -122.35, 37.85), q="Park Avenue Restaurant", limit=26)
-    names = [r["names"][0]["text"] for r in results]
+    names = [r["name"] for r in results]
     assert "Restaurant Park Avenue" in names, (
         f"'Restaurant Park Avenue' (perfect token match, low full_jw) should appear "
         f"in spatial results for 'Park Avenue Restaurant' when all candidates are scored. "
@@ -752,7 +754,7 @@ def test_nearest_attributes_match_get_record(fsq_db):
     assert len(results) > 0
     # Find Blue Bottle Coffee in results
     blue_bottle = next(
-        (r for r in results if "Blue Bottle" in r["names"][0]["text"]), None
+        (r for r in results if "Blue Bottle" in r["name"]), None
     )
     assert blue_bottle is not None, "Expected to find 'Blue Bottle Coffee' in nearest() results"
     rkey = blue_bottle["rkey"]

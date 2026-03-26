@@ -176,9 +176,8 @@ class Database:
                     "longitude": result.pop("longitude"),
                 }
             ],
-            "names": [
-                {"text": result.pop("name"), "priority": 0}
-            ],
+            "name": result.pop("name"),
+            "variants": [],
             "attributes": result
         }
 
@@ -571,9 +570,8 @@ class FoursquareOSP(Database):
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
-            "names": [
-                {"text": result.pop("name"), "priority": 0}
-            ],
+            "name": result.pop("name"),
+            "variants": [],
             "attributes": result
         }
 
@@ -871,9 +869,8 @@ class OvertureMaps(Database):
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
-            "names": [
-                {"text": result.pop("name"), "priority": 0}
-            ],
+            "name": result.pop("name"),
+            "variants": [],
             "attributes": result
         }
 
@@ -1167,9 +1164,8 @@ class OpenStreetMap(Database):
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
-            "names": [
-                {"text": result.pop("name"), "priority": 0}
-            ],
+            "name": result.pop("name"),
+            "variants": [],
             "attributes": tag_dict
         }
 

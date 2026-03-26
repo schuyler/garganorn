@@ -2,32 +2,32 @@
     "lexicon": 1,
     "id": "org.atgeo.place",
     "defs": {
-        "name": {
+        "variant": {
             "type": "object",
-            "required": ["text"],
+            "required": ["name"],
             "properties": {
-                "text": {
+                "name": {
                     "type": "string",
-                    "description": "The name text."
+                    "description": "The variant name text."
                 },
-                "lang": {
+                "type": {
                     "type": "string",
-                    "description": "The language of the name, using two-letter ISO 639-1 codes.",
+                    "description": "The kind of variant: official, alternate, short, colloquial."
+                },
+                "language": {
+                    "type": "string",
+                    "description": "The language of the name.",
                     "format": "language"
-                },
-                "priority": {
-                    "type": "integer",
-                    "description": "The priority of the name, where lower numbers indicate higher priority."
                 }
             }
         },
         "main": {
             "type": "record",
             "key": "record-key",
-            "description": "A geographic place with location, name(s), and other attributes.",
+            "description": "A geographic place with location, name, and other attributes.",
             "record": {
                 "type": "object",
-                "required": [],
+                "required": ["name"],
                 "properties": {
                     "rkey": {
                         "type": "string",
@@ -48,11 +48,16 @@
                         },
                         "description": "The geographic location of the place, in any available representation."
                     },
-                    "names": {
+                    "name": {
+                        "type": "string",
+                        "description": "The primary display name of the place."
+                    },
+                    "variants": {
                         "type": "array",
-                        "description": "The names associated with the place, including linguistic and alternate variants.",
+                        "description": "Alternate names, translations, and other name variants.",
                         "items": {
-                            "type": "#name"
+                            "type": "ref",
+                            "ref": "#variant"
                         }
                     },
                     "attributes": {
@@ -104,12 +109,9 @@
                     },
                     "description": "The geographic location of the place, in any available representation."
                 },
-                "names": {
-                    "type": "array",
-                    "description": "The names associated with the place, included for durability or convenience.",
-                    "items": {
-                        "type": "#name"
-                    }
+                "name": {
+                    "type": "string",
+                    "description": "The primary display name of the place."
                 },
                 "attributes": {
                     "type": "unknown",
