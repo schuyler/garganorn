@@ -1,6 +1,7 @@
 import os, logging
 from flask import Flask
 from lexrpc.flask_server import init_flask
+from lexrpc.base import XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
@@ -18,6 +19,15 @@ def create_app():
     @app.route('/health')
     def health_check():
         return {"status": "ok", "service": "garganorn"}, 200
+
+    @app.route('/<collection>/<rkey>')
+    def get_resource(collection, rkey):
+        try:
+            result = gazetteer.get_record({}, gazetteer.repo, collection, rkey)
+            return result["value"]
+        except XrpcError as e:
+            status = 404 if e.name in ("CollectionNotFound", "RecordNotFound") else 400
+            return {"error": e.name, "message": str(e)}, status
 
     return app
 
