@@ -1030,11 +1030,11 @@ class OpenStreetMap(Database):
     def expand_rkey(rkey: str) -> str:
         """Expand compact OSM rkey prefix to full element type name.
 
-        "n12345" → "node/12345"
-        "w50637691" → "way/50637691"
-        "r99" → "relation/99"
+        "n12345" → "node:12345"
+        "w50637691" → "way:50637691"
+        "r99" → "relation:99"
         """
-        prefixes = {"n": "node/", "w": "way/", "r": "relation/"}
+        prefixes = {"n": "node:", "w": "way:", "r": "relation:"}
         prefix = rkey[0] if rkey else ""
         if prefix in prefixes:
             return prefixes[prefix] + rkey[1:]
@@ -1044,13 +1044,13 @@ class OpenStreetMap(Database):
     def compact_rkey(rkey: str) -> str:
         """Convert expanded rkey form to compact form.
 
-        Maps "node/<id>" → "n<id>", "way/<id>" → "w<id>",
-        "relation/<id>" → "r<id>". Passes through rkeys with no "/" or
+        Maps "node:<id>" → "n<id>", "way:<id>" → "w<id>",
+        "relation:<id>" → "r<id>". Passes through rkeys with no ":" or
         with an unrecognized prefix unchanged.
         """
-        if "/" not in rkey:
+        if ":" not in rkey:
             return rkey
-        prefix, _, rest = rkey.partition("/")
+        prefix, _, rest = rkey.partition(":")
         mapping = {"node": "n", "way": "w", "relation": "r"}
         if prefix not in mapping:
             return rkey
