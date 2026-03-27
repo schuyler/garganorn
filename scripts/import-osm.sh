@@ -450,6 +450,11 @@ DROP TABLE place_density;
 DROP TABLE place_idf;
 DROP TABLE t_idf;
 ENDSQL
+if [ $? -ne 0 ]; then
+    echo "Importance scoring failed."
+    rm -f "$output_db_tmp"
+    exit 1
+fi
 
 # ─── Name index ───────────────────────────────────────────────────────────────
 
