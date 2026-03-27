@@ -125,7 +125,7 @@ def test_process_record_full_address():
     }
     record = db.process_record(result)
     assert record["$type"] == "org.atgeo.place"
-    assert record["rkey"] == "n240109189"
+    assert record["rkey"] == "node/240109189"
     assert record["name"] == "Tartine Manufactory"
     assert record["variants"] == []
     # Geo location present
@@ -239,7 +239,7 @@ def test_get_record_found(osm_db):
     """Known rkey like 'n240109189' returns a record."""
     record = osm_db.get_record("", "org.atgeo.places.osm", "n240109189")
     assert record is not None
-    assert record["rkey"] == "n240109189"
+    assert record["rkey"] == "node/240109189"
     assert record["name"] == "Tartine Manufactory"
     assert record["variants"] == []
 
@@ -689,3 +689,91 @@ def test_nearest_attributes_match_get_record(osm_db):
         f"get_record attributes: {direct['attributes']}. "
         "hydrate_records() must produce the same attributes as get_record()."
     )
+
+
+# ---------------------------------------------------------------------------
+# expand_rkey / compact_rkey tests
+# expand_rkey tests should PASS (method already exists).
+# compact_rkey tests will FAIL until compact_rkey is implemented.
+# ---------------------------------------------------------------------------
+
+def test_expand_rkey_node():
+    """expand_rkey converts 'n12345' to 'node/12345'."""
+    assert OpenStreetMap.expand_rkey("n12345") == "node/12345"
+
+
+def test_expand_rkey_way():
+    """expand_rkey converts 'w50637691' to 'way/50637691'."""
+    assert OpenStreetMap.expand_rkey("w50637691") == "way/50637691"
+
+
+def test_expand_rkey_relation():
+    """expand_rkey converts 'r99' to 'relation/99'."""
+    assert OpenStreetMap.expand_rkey("r99") == "relation/99"
+
+
+def test_expand_rkey_passthrough():
+    """expand_rkey returns unknown prefixes unchanged."""
+    assert OpenStreetMap.expand_rkey("unknown123") == "unknown123"
+
+
+def test_compact_rkey_node():
+    """compact_rkey converts 'node/12345' to 'n12345'.
+
+    FAILS until compact_rkey is implemented.
+    """
+    assert OpenStreetMap.compact_rkey("node/12345") == "n12345"
+
+
+def test_compact_rkey_way():
+    """compact_rkey converts 'way/50637691' to 'w50637691'.
+
+    FAILS until compact_rkey is implemented.
+    """
+    assert OpenStreetMap.compact_rkey("way/50637691") == "w50637691"
+
+
+def test_compact_rkey_relation():
+    """compact_rkey converts 'relation/99' to 'r99'.
+
+    FAILS until compact_rkey is implemented.
+    """
+    assert OpenStreetMap.compact_rkey("relation/99") == "r99"
+
+
+def test_compact_rkey_already_compact():
+    """compact_rkey passes through already-compact rkeys like 'n12345' unchanged.
+
+    FAILS until compact_rkey is implemented.
+    """
+    assert OpenStreetMap.compact_rkey("n12345") == "n12345"
+
+
+def test_compact_rkey_passthrough():
+    """compact_rkey returns unrecognized strings unchanged.
+
+    FAILS until compact_rkey is implemented.
+    """
+    assert OpenStreetMap.compact_rkey("unknown123") == "unknown123"
+
+
+def test_get_record_expanded_rkey(osm_db):
+    """get_record accepts an expanded rkey like 'node/240109189' and returns a record.
+
+    The returned record's rkey should be the expanded form 'node/240109189'.
+    FAILS until get_record compacts the input rkey before lookup.
+    """
+    record = osm_db.get_record("", "org.atgeo.places.osm", "node/240109189")
+    assert record is not None, "get_record returned None for expanded rkey 'node/240109189'"
+    assert record["rkey"] == "node/240109189"
+
+
+def test_get_record_compact_rkey_still_works(osm_db):
+    """get_record still works with a compact rkey 'n240109189' after compact_rkey support is added.
+
+    The returned record's rkey should be the expanded form 'node/240109189'.
+    Verifies that the compact→expanded round-trip is preserved.
+    """
+    record = osm_db.get_record("", "org.atgeo.places.osm", "n240109189")
+    assert record is not None, "get_record returned None for compact rkey 'n240109189'"
+    assert record["rkey"] == "node/240109189"

@@ -20,7 +20,7 @@ def create_app():
     def health_check():
         return {"status": "ok", "service": "garganorn"}, 200
 
-    @app.route('/<collection>/<rkey>')
+    @app.route('/<collection>/<path:rkey>')
     def get_resource(collection, rkey):
         try:
             result = gazetteer.get_record({}, gazetteer.repo, collection, rkey)

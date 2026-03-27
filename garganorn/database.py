@@ -249,8 +249,9 @@ class Database:
             full_rows = self.execute(self.query_hydrate(len(rkeys)), h_params)
             full_map = {}
             for row in full_rows:
+                raw_rkey = row["rkey"]
                 record = self.process_record(row)
-                full_map[record["rkey"]] = record
+                full_map[raw_rkey] = record
 
             # Build ordered result list preserving search ranking
             records = []
@@ -1025,6 +1026,39 @@ class OpenStreetMap(Database):
                 limit $limit;
             """
 
+    @staticmethod
+    def expand_rkey(rkey: str) -> str:
+        """Expand compact OSM rkey prefix to full element type name.
+
+        "n12345" → "node/12345"
+        "w50637691" → "way/50637691"
+        "r99" → "relation/99"
+        """
+        prefixes = {"n": "node/", "w": "way/", "r": "relation/"}
+        prefix = rkey[0] if rkey else ""
+        if prefix in prefixes:
+            return prefixes[prefix] + rkey[1:]
+        return rkey
+
+    @staticmethod
+    def compact_rkey(rkey: str) -> str:
+        """Convert expanded rkey form to compact form.
+
+        Maps "node/<id>" → "n<id>", "way/<id>" → "w<id>",
+        "relation/<id>" → "r<id>". Passes through rkeys with no "/" or
+        with an unrecognized prefix unchanged.
+        """
+        if "/" not in rkey:
+            return rkey
+        prefix, _, rest = rkey.partition("/")
+        mapping = {"node": "n", "way": "w", "relation": "r"}
+        if prefix not in mapping:
+            return rkey
+        return mapping[prefix] + rest
+
+    def get_record(self, _repo: str, _collection: str, rkey: str):
+        return super().get_record(_repo, _collection, self.compact_rkey(rkey))
+
     def process_record(self, result):
         # tags comes as a dict from DuckDB MAP type (absent in search results)
         tag_dict = dict(result.pop("tags", None) or {})
@@ -1070,7 +1104,7 @@ class OpenStreetMap(Database):
         return {
             "$type": "org.atgeo.place",
             "collection": self.collection,
-            "rkey": result.pop("rkey"),
+            "rkey": self.expand_rkey(result.pop("rkey")),
             "locations": locations,
             "name": result.pop("name"),
             "variants": [],
