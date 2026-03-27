@@ -85,6 +85,15 @@ mkdir -p "$cache_dir"
 output_db="${output_dir}/osm.duckdb"
 output_db_tmp="${output_dir}/osm.duckdb.tmp"
 
+import_start=$SECONDS
+stage_start=$SECONDS
+elapsed() {
+    local now=$SECONDS
+    local dt=$((now - stage_start))
+    stage_start=$now
+    printf "  [%dm%02ds]\n" $((dt / 60)) $((dt % 60))
+}
+
 # ─── Stage 1: Convert PBF to Parquet ──────────────────────────────────────────
 
 parquet_dir="${cache_dir}/parquet"
@@ -102,6 +111,7 @@ fi
 
 node_parquet="${parquet_dir}/type=node/*.parquet"
 way_parquet="${parquet_dir}/type=way/*.parquet"
+elapsed
 
 # ─── Stage 2: Build places table ──────────────────────────────────────────────
 
@@ -399,6 +409,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+elapsed
+
 # ─── Build IDF from places table ──────────────────────────────────────────────
 
 "${script_dir}/build-idf.sh" osm "$output_db_tmp"
@@ -409,6 +421,8 @@ if [ $? -ne 0 ]; then
 fi
 
 idf_parquet="${output_dir}/category_idf-osm.parquet"
+
+elapsed
 
 # ─── Importance scoring ───────────────────────────────────────────────────────
 
@@ -463,6 +477,8 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+elapsed
+
 # ─── Name index ───────────────────────────────────────────────────────────────
 
 echo
@@ -501,6 +517,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+elapsed
 echo "Sorting name_index by trigram..."
 duckdb -bail "$output_db_tmp" <<'ENDSQL'
 SET memory_limit='16GB';
@@ -516,6 +533,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+elapsed
 echo "Analyzing..."
 duckdb -bail "$output_db_tmp" -c "ANALYZE;"
 
@@ -527,9 +545,12 @@ fi
 
 # ─── Finalize ─────────────────────────────────────────────────────────────────
 
+elapsed
 echo
 echo "Finalizing database..."
 mv "$output_db_tmp" "$output_db"
 
+total=$((SECONDS - import_start))
 echo
 echo "Wrote ${output_db}"
+printf "Total: %dm%02ds\n" $((total / 60)) $((total % 60))
