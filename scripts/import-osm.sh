@@ -502,6 +502,21 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo "Sorting name_index by trigram..."
+duckdb -bail "$output_db_tmp" <<'ENDSQL'
+SET memory_limit='16GB';
+CREATE TABLE name_index_sorted AS SELECT * FROM name_index ORDER BY trigram;
+DROP TABLE name_index;
+ALTER TABLE name_index_sorted RENAME TO name_index;
+SET memory_limit='48GB';
+ENDSQL
+
+if [ $? -ne 0 ]; then
+    echo "Name index sort failed."
+    rm -f "$output_db_tmp"
+    exit 1
+fi
+
 echo "Analyzing..."
 duckdb -bail "$output_db_tmp" -c "ANALYZE;"
 

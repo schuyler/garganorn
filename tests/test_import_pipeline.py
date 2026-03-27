@@ -1383,6 +1383,42 @@ class TestImportOsmScript:
             "Add this ART index so that hydration lookups by rkey are O(1)."
         )
 
+    def test_name_index_sorted_by_trigram(self):
+        """import-osm.sh must sort name_index by trigram for DuckDB zone map efficiency.
+
+        The OSM import builds name_index via bare INSERT INTO statements. Without a
+        sort-and-rename step after the inserts, DuckDB zone maps are ineffective
+        for 'trigram IN (...)' queries, causing full table scans.
+        FAILS until the sort-and-rename step is added after the batch inserts.
+        """
+        content = self._read_script()
+        flat = content.lower().replace("\n", " ")
+
+        assert "create table name_index_sorted" in flat and "order by trigram" in flat, (
+            "import-osm.sh is missing 'CREATE TABLE name_index_sorted ... ORDER BY trigram'. "
+            "Add a CTAS that reads from name_index and orders by trigram."
+        )
+        assert "drop table name_index;" in flat, (
+            "import-osm.sh is missing 'DROP TABLE name_index;'. "
+            "After creating name_index_sorted, drop the unsorted table."
+        )
+        assert "alter table name_index_sorted rename to name_index" in flat, (
+            "import-osm.sh is missing 'ALTER TABLE name_index_sorted RENAME TO name_index'. "
+            "After dropping the unsorted table, rename name_index_sorted to name_index."
+        )
+
+        # Verify ordering: CREATE TABLE name_index_sorted → DROP TABLE name_index →
+        # ALTER TABLE name_index_sorted RENAME TO name_index
+        create_pos = flat.index("create table name_index_sorted")
+        drop_pos = flat.index("drop table name_index;")
+        rename_pos = flat.index("alter table name_index_sorted rename to name_index")
+        assert create_pos < drop_pos < rename_pos, (
+            "import-osm.sh sort-and-rename steps are out of order. "
+            "Expected: "
+            "CREATE TABLE name_index_sorted → DROP TABLE name_index → "
+            "ALTER TABLE name_index_sorted RENAME TO name_index"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Test: import-fsq-extract.sh existence and structure
