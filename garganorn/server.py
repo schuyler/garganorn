@@ -59,6 +59,7 @@ class Server:
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "uri": self.record_uri(collection, record["rkey"]),
+            **({"importance": record.pop("importance")} if "importance" in record else {}),
             "value": record,
             "_query": {
                 "parameters": {
@@ -119,6 +120,8 @@ class Server:
                     "$type": f"{self.nsid}.searchRecords#record",
                     "uri": self.record_uri(collection, r["rkey"]),
                     "distance_m": r.pop("distance_m"),
+                    **({"score": round(r.pop("score"), 3)} if "score" in r else {}),
+                    **({"importance": r.pop("importance")} if "importance" in r else {}),
                     "value": r,
                 } for r in result
             ],

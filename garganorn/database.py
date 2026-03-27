@@ -183,7 +183,14 @@ class Database:
 
     def get_record(self, _repo: str, _collection: str, rkey: str):
         records = self.execute(self.query_record(), {"rkey": rkey})
-        return self.process_record(records[0]) if records else None
+        if not records:
+            return None
+        result = records[0]
+        importance = result.pop("importance", None)
+        record = self.process_record(result)
+        if importance is not None:
+            record["importance"] = importance
+        return record
 
     def query_nearest(self, _params: SearchParams, trigrams=None):
         raise NotImplementedError
@@ -191,13 +198,18 @@ class Database:
     def process_nearest(self, result):
         # Extract distance before calling process_record
         distance_m = result.pop("distance_m")
-        result.pop("score", None)    # Internal scoring, not exposed in API
+        score = result.pop("score", None)
+        importance = result.pop("importance", None)
 
         # Use the standard record processing
         record = self.process_record(result)
 
         # Add the distance field
         record["distance_m"] = distance_m
+        if score is not None:
+            record["score"] = score
+        if importance is not None:
+            record["importance"] = importance
 
         return record
 
@@ -243,7 +255,11 @@ class Database:
             if not result:
                 return []
             rkeys = [row["rkey"] for row in result]
-            distances = {row["rkey"]: row["distance_m"] for row in result}
+            metadata = {row["rkey"]: {
+                "distance_m": row["distance_m"],
+                "score": row.get("score"),
+                "importance": row.get("importance"),
+            } for row in result}
 
             h_params = {f"h{i}": rk for i, rk in enumerate(rkeys)}
             full_rows = self.execute(self.query_hydrate(len(rkeys)), h_params)
@@ -258,7 +274,12 @@ class Database:
             for rkey in rkeys:
                 if rkey in full_map:
                     record = full_map[rkey]
-                    record["distance_m"] = distances.get(rkey, 0)
+                    meta = metadata[rkey]
+                    record["distance_m"] = meta["distance_m"]
+                    if meta.get("score") is not None:
+                        record["score"] = meta["score"]
+                    if meta.get("importance") is not None:
+                        record["importance"] = meta["importance"]
                     records.append(record)
             return records
         else:
@@ -305,7 +326,8 @@ class FoursquareOSP(Database):
         columns = self.record_columns()
         return f"""
             select
-                {columns}
+                {columns},
+                importance
             from places
             where fsq_place_id = $rkey
         """
@@ -363,7 +385,8 @@ class FoursquareOSP(Database):
                     s.fsq_place_id AS rkey,
                     s.name,
                     0 AS distance_m,
-                    s.score
+                    s.score,
+                    s.importance
                 FROM scored s
                 WHERE s.score >= {self.JW_THRESHOLD}
                 ORDER BY s.score DESC, s.importance DESC
@@ -380,7 +403,8 @@ class FoursquareOSP(Database):
                 c.fsq_place_id AS rkey,
                 c.name,
                 0 AS distance_m,
-                jaro_winkler_similarity($norm_q, c.norm_name) AS score
+                jaro_winkler_similarity($norm_q, c.norm_name) AS score,
+                c.importance AS importance
             FROM candidates c
             WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
             ORDER BY score DESC, c.importance DESC
@@ -444,7 +468,8 @@ class FoursquareOSP(Database):
                     fsq_place_id AS rkey,
                     name,
                     ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                    score
+                    score,
+                    importance
                 FROM scored
                 WHERE score >= {self.JW_THRESHOLD}
                 ORDER BY score DESC, distance_m
@@ -465,7 +490,8 @@ class FoursquareOSP(Database):
                 fsq_place_id AS rkey,
                 name,
                 ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                jaro_winkler_similarity($norm_q, norm_name) AS score
+                jaro_winkler_similarity($norm_q, norm_name) AS score,
+                importance
             FROM candidates
             WHERE score >= {self.JW_THRESHOLD}
             ORDER BY score DESC, distance_m
@@ -488,6 +514,7 @@ class FoursquareOSP(Database):
             return f"""
                 select
                     {columns},
+                    importance,
                     ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer as distance_m
                 from places
                 where bbox.xmin > $xmin and bbox.ymin > $ymin
@@ -567,7 +594,8 @@ class OvertureMaps(Database):
         columns = self.record_columns()
         return f"""
             select
-                {columns}
+                {columns},
+                importance
             from places
             where id = $rkey
         """
@@ -625,7 +653,8 @@ class OvertureMaps(Database):
                     s.id AS rkey,
                     s.name,
                     0 AS distance_m,
-                    s.score
+                    s.score,
+                    s.importance
                 FROM scored s
                 WHERE s.score >= {self.JW_THRESHOLD}
                 ORDER BY s.score DESC, s.importance DESC
@@ -642,7 +671,8 @@ class OvertureMaps(Database):
                 c.id AS rkey,
                 c.name,
                 0 AS distance_m,
-                jaro_winkler_similarity($norm_q, c.norm_name) AS score
+                jaro_winkler_similarity($norm_q, c.norm_name) AS score,
+                c.importance AS importance
             FROM candidates c
             WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
             ORDER BY score DESC, c.importance DESC
@@ -707,7 +737,8 @@ class OvertureMaps(Database):
                     id AS rkey,
                     name,
                     ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
-                    score
+                    score,
+                    importance
                 FROM scored
                 WHERE score >= {self.JW_THRESHOLD}
                 ORDER BY score DESC, distance_m
@@ -728,7 +759,8 @@ class OvertureMaps(Database):
                 id AS rkey,
                 name,
                 ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
-                jaro_winkler_similarity($norm_q, norm_name) AS score
+                jaro_winkler_similarity($norm_q, norm_name) AS score,
+                importance
             FROM candidates
             WHERE score >= {self.JW_THRESHOLD}
             ORDER BY score DESC, distance_m
@@ -751,6 +783,7 @@ class OvertureMaps(Database):
             return f"""
                 select
                     {columns},
+                    importance,
                     ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer as distance_m
                 from places
                 where bbox.xmin > $xmin and bbox.ymin > $ymin
@@ -833,7 +866,8 @@ class OpenStreetMap(Database):
         columns = self.record_columns()
         return f"""
             select
-                {columns}
+                {columns},
+                importance
             from places
             where rkey = $rkey
         """
@@ -891,7 +925,8 @@ class OpenStreetMap(Database):
                     s.rkey,
                     s.name,
                     0 AS distance_m,
-                    s.score
+                    s.score,
+                    s.importance
                 FROM scored s
                 WHERE s.score >= {self.JW_THRESHOLD}
                 ORDER BY s.score DESC, s.importance DESC
@@ -908,7 +943,8 @@ class OpenStreetMap(Database):
                 c.rkey,
                 c.name,
                 0 AS distance_m,
-                jaro_winkler_similarity($norm_q, c.norm_name) AS score
+                jaro_winkler_similarity($norm_q, c.norm_name) AS score,
+                c.importance AS importance
             FROM candidates c
             WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
             ORDER BY score DESC, c.importance DESC
@@ -975,7 +1011,8 @@ class OpenStreetMap(Database):
                     rkey,
                     name,
                     ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                    score
+                    score,
+                    importance
                 FROM scored
                 WHERE score >= {self.JW_THRESHOLD}
                 ORDER BY score DESC, distance_m
@@ -996,7 +1033,8 @@ class OpenStreetMap(Database):
                 rkey,
                 name,
                 ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                jaro_winkler_similarity($norm_q, norm_name) AS score
+                jaro_winkler_similarity($norm_q, norm_name) AS score,
+                importance
             FROM candidates
             WHERE score >= {self.JW_THRESHOLD}
             ORDER BY score DESC, distance_m
@@ -1018,6 +1056,7 @@ class OpenStreetMap(Database):
             return f"""
                 select
                     {columns},
+                    importance,
                     ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer as distance_m
                 from places
                 where bbox.xmin > $xmin and bbox.ymin > $ymin

@@ -215,3 +215,65 @@ def test_search_records_bbox_in_query_response():
     params = result["_query"]["parameters"]
     assert "bbox" in params
     assert "q" in params
+
+
+def test_search_records_text_query_includes_score_and_importance():
+    """search_records with q= returns wrapper with score and importance; neither leaks into value."""
+    record = dict(SAMPLE_RECORD)
+    record["score"] = 0.75
+    record["importance"] = 3
+    server = _make_server(nearest_results=[record])
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION, latitude="37.7749", longitude="-122.4194", q="coffee"
+    )
+    assert "records" in result
+    wrapper = result["records"][0]
+    assert "score" in wrapper
+    assert isinstance(wrapper["score"], float)
+    assert "importance" in wrapper
+    assert isinstance(wrapper["importance"], int)
+    assert "score" not in wrapper["value"]
+    assert "importance" not in wrapper["value"]
+
+
+def test_search_records_spatial_only_includes_importance_not_score():
+    """search_records without q= returns wrapper with importance but no score."""
+    record = dict(SAMPLE_RECORD)
+    record["importance"] = 5
+    server = _make_server(nearest_results=[record])
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION, latitude="37.7749", longitude="-122.4194"
+    )
+    assert "records" in result
+    wrapper = result["records"][0]
+    assert "importance" in wrapper
+    assert isinstance(wrapper["importance"], int)
+    assert "score" not in wrapper
+    assert "importance" not in wrapper["value"]
+
+
+def test_search_records_score_is_rounded():
+    """search_records rounds score to 3 decimal places."""
+    record = dict(SAMPLE_RECORD)
+    record["score"] = 0.8571428571
+    record["importance"] = 1
+    server = _make_server(nearest_results=[record])
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION, latitude="37.7749", longitude="-122.4194", q="coffee"
+    )
+    wrapper = result["records"][0]
+    assert wrapper["score"] == 0.857
+
+
+def test_get_record_includes_importance():
+    """get_record wrapper includes importance; it does not leak into value."""
+    record = dict(SAMPLE_RECORD)
+    record["importance"] = 7
+    server = _make_server(records=[record])
+    result = server.get_record(
+        {}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001"
+    )
+    assert "importance" in result
+    assert isinstance(result["importance"], int)
+    assert "importance" not in result["value"]
+    assert "score" not in result
