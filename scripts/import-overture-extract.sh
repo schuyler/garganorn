@@ -110,17 +110,6 @@ while IFS= read -r file; do
     mv "${dest}.tmp" "$dest"
 done <<< "$parquet_files"
 
-# Detect or auto-build density file
-density_file="${output_dir}/density-overture.parquet"
-if [ ! -f "$density_file" ]; then
-    echo "Building Overture density table..."
-    "${script_dir}/build-density.sh" overture "${cache_dir}" || { echo "Failed to build density table."; exit 1; }
-    if [ ! -f "$density_file" ]; then
-        echo "Density file not found after build: ${density_file}"
-        exit 1
-    fi
-fi
-
 # Detect or auto-build category IDF file
 idf_file="${output_dir}/category_idf-overture.parquet"
 if [ ! -f "$idf_file" ]; then
@@ -177,27 +166,24 @@ create index idx_id on places(id);
 EOF
 
 # Compute importance as normalized 0-100 integer score
-# 60% density (S2 level 12 cell count) + 40% category IDF
+# 60% window-function density (S2 level 12 cell count) + 40% category IDF
 cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Loading geography extension for importance scoring..."
 install geography from community;
 load geography;
 .print "Computing importance scores..."
 ALTER TABLE places ADD COLUMN importance INTEGER DEFAULT 0;
-CREATE TEMP TABLE t_density AS SELECT * FROM read_parquet('${density_file}') WHERE level = 12;
 CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}');
 CREATE TEMP TABLE place_density AS
-SELECT
-    p.id,
-    coalesce(ln(1 + c.pt_count), 0) AS density_score
-FROM places p
-LEFT JOIN t_density c
-    ON c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(
-            (p.bbox.xmin + p.bbox.xmax) / 2.0,
-            (p.bbox.ymin + p.bbox.ymax) / 2.0
-        ), 12
-    );
+SELECT id,
+       ln(1 + count(*) OVER (
+           PARTITION BY s2_cell_parent(
+               s2_cellfromlonlat(
+                   (bbox.xmin + bbox.xmax) / 2.0,
+                   (bbox.ymin + bbox.ymax) / 2.0
+               ), 12)
+       )) AS density_score
+FROM places;
 CREATE TEMP TABLE place_idf AS
 SELECT
     p.id,
@@ -213,7 +199,6 @@ LEFT JOIN place_idf i USING (id)
 WHERE places.id = d.id;
 DROP TABLE place_density;
 DROP TABLE place_idf;
-DROP TABLE t_density;
 DROP TABLE t_idf;
 EOF
 

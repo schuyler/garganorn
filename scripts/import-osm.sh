@@ -399,14 +399,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# ─── Build density and IDF from places table ──────────────────────────────────
-
-"${script_dir}/build-density.sh" osm "$output_db_tmp"
-if [ $? -ne 0 ]; then
-    echo "build-density.sh failed."
-    rm -f "$output_db_tmp"
-    exit 1
-fi
+# ─── Build IDF from places table ──────────────────────────────────────────────
 
 "${script_dir}/build-idf.sh" osm "$output_db_tmp"
 if [ $? -ne 0 ]; then
@@ -415,7 +408,6 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-density_parquet="${output_dir}/density-osm.parquet"
 idf_parquet="${output_dir}/category_idf-osm.parquet"
 
 # ─── Importance scoring ───────────────────────────────────────────────────────
@@ -427,19 +419,15 @@ duckdb -bail "$output_db_tmp" <<ENDSQL
 INSTALL geography FROM community;
 LOAD geography;
 
-CREATE TEMP TABLE t_density AS
-SELECT * FROM read_parquet('${density_parquet}') WHERE level = 12;
-
 CREATE TEMP TABLE t_idf AS
 SELECT * FROM read_parquet('${idf_parquet}');
 
 CREATE TEMP TABLE place_density AS
-SELECT
-    p.rkey,
-    coalesce(ln(1 + c.pt_count), 0) AS density_score
-FROM places p
-LEFT JOIN t_density c
-    ON c.cell_id = s2_cell_parent(s2_cellfromlonlat(p.longitude, p.latitude), 12)::UBIGINT;
+SELECT rkey,
+       ln(1 + count(*) OVER (
+           PARTITION BY s2_cell_parent(s2_cellfromlonlat(longitude, latitude), 12)
+       )) AS density_score
+FROM places;
 
 CREATE TEMP TABLE place_idf AS
 SELECT
@@ -460,7 +448,6 @@ WHERE places.rkey = d.rkey;
 
 DROP TABLE place_density;
 DROP TABLE place_idf;
-DROP TABLE t_density;
 DROP TABLE t_idf;
 ENDSQL
 

@@ -1302,41 +1302,35 @@ class TestImportOsmScript:
                 "The SELECT list must include an expression like 'w' || qw.osm_id::VARCHAR AS rkey."
             )
 
-    def test_importance_scoring_uses_s2_level_12(self):
-        """Importance scoring must use S2 level 12, not level 14.
+    def test_importance_density_uses_window_function(self):
+        """import-osm.sh must compute density via window function, not JOIN.
 
-        Density lookup at level 14 (~600m cells) is too fine-grained for
-        importance scoring and requires excessive S2 computation per row.
-        After the performance fix, both the WHERE clause and the s2_cell_parent()
-        call use level 12 (~2.4km cells).
-        FAILS until the level is changed from 14 to 12.
+        Computing density with a LEFT JOIN against a precomputed density
+        parquet requires recomputing s2_cellfromlonlat() inside the JOIN
+        condition, which DuckDB handles poorly. A window function with
+        PARTITION BY computes density in a single scan without a JOIN.
+        FAILS until the LEFT JOIN t_density is replaced with count(*) OVER.
         """
         content = self._read_script()
-        # Must NOT use level 14 in the density lookup
-        assert "level = 14" not in content, (
-            "import-osm.sh importance scoring still uses 'WHERE level = 14'. "
-            "Change to 'WHERE level = 12' for the density lookup."
+        importance_start = content.find("Computing importance scores")
+        importance_end = content.find("Name index", importance_start)
+        if importance_start == -1:
+            importance_start = content.find("place_density")
+        if importance_end == -1 or importance_end <= importance_start:
+            importance_end = len(content)
+        section = content[importance_start:importance_end].lower()
+
+        assert "count(*) over" in section.replace("\n", " "), (
+            "import-osm.sh importance scoring should use 'count(*) OVER (PARTITION BY ...)' "
+            "for density instead of LEFT JOIN t_density."
         )
-        # Must use level 12 in both the WHERE filter and the s2_cell_parent call
-        assert "level = 12" in content, (
-            "import-osm.sh importance scoring does not use 'WHERE level = 12'. "
-            "The t_density temp table filter must be 'WHERE level = 12'."
+        assert "left join t_density" not in section.replace("\n", " "), (
+            "import-osm.sh importance scoring still uses LEFT JOIN t_density. "
+            "Replace with a window function."
         )
-        assert "s2_cell_parent(" in content, (
-            "import-osm.sh importance scoring does not call s2_cell_parent(). "
-            "The density JOIN must use s2_cell_parent(..., 12)."
-        )
-        # The s2_cell_parent call inside the importance section must pass 12
-        importance_section_start = content.find("Computing importance scores")
-        importance_section_end = content.find("Name index", importance_section_start)
-        if importance_section_start == -1:
-            importance_section_start = content.find("place_density")
-        if importance_section_end == -1:
-            importance_section_end = len(content)
-        importance_section = content[importance_section_start:importance_section_end]
-        assert ", 12)" in importance_section or ",12)" in importance_section, (
-            "s2_cell_parent() call in importance scoring section does not pass 12 "
-            "as the level argument. Change s2_cell_parent(..., 14) to s2_cell_parent(..., 12)."
+        assert ", 12)" in section or ",12)" in section, (
+            "import-osm.sh importance scoring window function must use S2 level 12. "
+            "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
         )
 
     def test_analyze_called_before_finalization(self):
@@ -1475,6 +1469,37 @@ class TestImportFsqScript:
             "Add ORDER BY trigram to the CTAS so DuckDB zone maps are effective."
         )
 
+    def test_importance_density_uses_window_function(self):
+        """import-fsq-extract.sh must compute density via window function, not JOIN.
+
+        Computing density with a LEFT JOIN against a precomputed density
+        parquet requires recomputing s2_cellfromlonlat() inside the JOIN
+        condition, which DuckDB handles poorly. A window function with
+        PARTITION BY computes density in a single scan without a JOIN.
+        FAILS until the LEFT JOIN t_density is replaced with count(*) OVER.
+        """
+        content = self._read_script()
+        importance_start = content.find("Computing importance scores")
+        importance_end = content.find("Build name_index", importance_start)
+        if importance_start == -1:
+            importance_start = content.find("place_density")
+        if importance_end == -1 or importance_end <= importance_start:
+            importance_end = len(content)
+        section = content[importance_start:importance_end].lower()
+
+        assert "count(*) over" in section.replace("\n", " "), (
+            "import-fsq-extract.sh importance scoring should use 'count(*) OVER (PARTITION BY ...)' "
+            "for density instead of LEFT JOIN t_density."
+        )
+        assert "left join t_density" not in section.replace("\n", " "), (
+            "import-fsq-extract.sh importance scoring still uses LEFT JOIN t_density. "
+            "Replace with a window function."
+        )
+        assert ", 12)" in section or ",12)" in section, (
+            "import-fsq-extract.sh importance scoring window function must use S2 level 12. "
+            "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Test: import-overture-extract.sh existence and structure
@@ -1550,4 +1575,35 @@ class TestImportOvertureScript:
             "import-overture-extract.sh sort-and-rename steps are out of order. "
             "Expected: CREATE TABLE name_index_sorted → DROP TABLE name_index → "
             "ALTER TABLE name_index_sorted RENAME TO name_index"
+        )
+
+    def test_importance_density_uses_window_function(self):
+        """import-overture-extract.sh must compute density via window function, not JOIN.
+
+        Computing density with a LEFT JOIN against a precomputed density
+        parquet requires recomputing s2_cellfromlonlat() inside the JOIN
+        condition, which DuckDB handles poorly. A window function with
+        PARTITION BY computes density in a single scan without a JOIN.
+        FAILS until the LEFT JOIN t_density is replaced with count(*) OVER.
+        """
+        content = self._read_script()
+        importance_start = content.find("Computing importance scores")
+        importance_end = content.find("Build name_index", importance_start)
+        if importance_start == -1:
+            importance_start = content.find("place_density")
+        if importance_end == -1 or importance_end <= importance_start:
+            importance_end = len(content)
+        section = content[importance_start:importance_end].lower()
+
+        assert "count(*) over" in section.replace("\n", " "), (
+            "import-overture-extract.sh importance scoring should use 'count(*) OVER (PARTITION BY ...)' "
+            "for density instead of LEFT JOIN t_density."
+        )
+        assert "left join t_density" not in section.replace("\n", " "), (
+            "import-overture-extract.sh importance scoring still uses LEFT JOIN t_density. "
+            "Replace with a window function."
+        )
+        assert ", 12)" in section or ",12)" in section, (
+            "import-overture-extract.sh importance scoring window function must use S2 level 12. "
+            "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
         )

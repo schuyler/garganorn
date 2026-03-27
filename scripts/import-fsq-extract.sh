@@ -93,17 +93,6 @@ for i in $(seq 0 99); do
     mv "${dest}.tmp" "$dest"
 done
 
-# Detect or auto-build density file
-density_file="${output_dir}/density-fsq.parquet"
-if [ ! -f "$density_file" ]; then
-    echo "Building FSQ density table..."
-    "${script_dir}/build-density.sh" fsq "${cache_dir}" || { echo "Failed to build density table."; exit 1; }
-    if [ ! -f "$density_file" ]; then
-        echo "Density file not found after build: ${density_file}"
-        exit 1
-    fi
-fi
-
 # Detect or auto-build category IDF file
 idf_file="${output_dir}/category_idf-fsq.parquet"
 if [ ! -f "$idf_file" ]; then
@@ -151,24 +140,20 @@ create index idx_fsq_place_id on places(fsq_place_id);
 EOF
 
 # Compute importance as normalized 0-100 integer score
-# 60% density (S2 level 12 cell count) + 40% category IDF
+# 60% window-function density (S2 level 12 cell count) + 40% category IDF
 cat >> "${output_dir}/import.sql" <<EOF
 .print "Loading geography extension for importance scoring..."
 install geography from community;
 load geography;
 .print "Computing importance scores..."
 ALTER TABLE places ADD COLUMN importance INTEGER DEFAULT 0;
-CREATE TEMP TABLE t_density AS SELECT * FROM read_parquet('${density_file}') WHERE level = 12;
 CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}');
 CREATE TEMP TABLE place_density AS
-SELECT
-    p.fsq_place_id,
-    coalesce(ln(1 + c.pt_count), 0) AS density_score
-FROM places p
-LEFT JOIN t_density c
-    ON c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(p.longitude, p.latitude), 12
-    );
+SELECT fsq_place_id,
+       ln(1 + count(*) OVER (
+           PARTITION BY s2_cell_parent(s2_cellfromlonlat(longitude, latitude), 12)
+       )) AS density_score
+FROM places;
 CREATE TEMP TABLE place_idf AS
 SELECT
     p.fsq_place_id,
@@ -187,7 +172,6 @@ LEFT JOIN place_idf i USING (fsq_place_id)
 WHERE places.fsq_place_id = d.fsq_place_id;
 DROP TABLE place_density;
 DROP TABLE place_idf;
-DROP TABLE t_density;
 DROP TABLE t_idf;
 EOF
 
