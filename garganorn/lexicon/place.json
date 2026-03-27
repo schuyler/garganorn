@@ -42,8 +42,7 @@
                                 "community.lexicon.location.geo",
                                 "community.lexicon.location.hthree",
                                 "community.lexicon.location.address",
-                                "community.lexicon.location.wkt",
-                                "community.lexicon.location.geojson"
+                                "community.lexicon.location.bbox"
                             ]
                         },
                         "description": "The geographic location of the place, in any available representation."
@@ -103,8 +102,7 @@
                             "community.lexicon.location.geo",
                             "community.lexicon.location.hthree",
                             "community.lexicon.location.address",
-                            "community.lexicon.location.wkt",
-                            "community.lexicon.location.geojson"
+                            "community.lexicon.location.bbox"
                         ]
                     },
                     "description": "The geographic location of the place, in any available representation."
