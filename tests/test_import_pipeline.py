@@ -1333,6 +1333,60 @@ class TestImportOsmScript:
             "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
         )
 
+    def test_importance_uses_ctas_not_update(self):
+        """import-osm.sh must use CTAS + DROP + RENAME for importance, not UPDATE.
+
+        UPDATE on a large DuckDB columnar table is extremely slow because it
+        rewrites the entire column. CTAS (CREATE TABLE ... AS SELECT) + DROP +
+        RENAME is the correct pattern for bulk column rewrites in DuckDB.
+        FAILS until the UPDATE places SET importance is replaced with CTAS.
+        """
+        content = self._read_script()
+        flat = content.lower().replace("\n", " ")
+
+        assert "create table places_scored as" in flat, (
+            "import-osm.sh is missing 'CREATE TABLE places_scored AS'. "
+            "Replace 'UPDATE places SET importance' with a CTAS."
+        )
+        assert "drop table places;" in flat, (
+            "import-osm.sh is missing 'DROP TABLE places'. "
+            "After creating places_scored, drop the old places table."
+        )
+        assert "alter table places_scored rename to places" in flat, (
+            "import-osm.sh is missing 'ALTER TABLE places_scored RENAME TO places'. "
+            "After dropping the old table, rename places_scored to places."
+        )
+        assert "update places set importance" not in flat, (
+            "import-osm.sh still uses 'UPDATE places SET importance'. "
+            "Replace with CTAS + DROP + RENAME."
+        )
+        # Window function / s2 level 12 assertions preserved from
+        # test_importance_density_uses_window_function
+        importance_start = content.find("Computing importance scores")
+        importance_end = content.find("Name index", importance_start)
+        if importance_start == -1:
+            importance_start = content.find("place_density")
+        if importance_end == -1 or importance_end <= importance_start:
+            importance_end = len(content)
+        section = content[importance_start:importance_end].lower()
+        assert "load spatial" in section, (
+            "import-osm.sh importance scoring heredoc must 'LOAD spatial' so that the "
+            "RTREE index creation (CREATE INDEX ... USING RTREE) can succeed. "
+            "Add 'LOAD spatial;' after 'LOAD geography;' in the importance scoring heredoc."
+        )
+        assert "left join place_density" in section, (
+            "import-osm.sh CTAS should use 'LEFT JOIN place_density' (not INNER JOIN) "
+            "to preserve all places even if density data is missing."
+        )
+        assert "count(*) over" in section.replace("\n", " "), (
+            "import-osm.sh importance CTAS should still use 'count(*) OVER (PARTITION BY ...)' "
+            "for the density window function."
+        )
+        assert ", 12)" in section or ",12)" in section, (
+            "import-osm.sh importance CTAS window function must use S2 level 12. "
+            "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
+        )
+
     def test_analyze_called_before_finalization(self):
         """ANALYZE must be called after the name index is built and before finalization.
 
@@ -1500,6 +1554,55 @@ class TestImportFsqScript:
             "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
         )
 
+    def test_importance_uses_ctas_not_update(self):
+        """import-fsq-extract.sh must use CTAS + DROP + RENAME for importance, not UPDATE.
+
+        UPDATE on a large DuckDB columnar table is extremely slow because it
+        rewrites the entire column. CTAS (CREATE TABLE ... AS SELECT) + DROP +
+        RENAME is the correct pattern for bulk column rewrites in DuckDB.
+        FAILS until the UPDATE places SET importance is replaced with CTAS.
+        """
+        content = self._read_script()
+        flat = content.lower().replace("\n", " ")
+
+        assert "create table places_scored as" in flat, (
+            "import-fsq-extract.sh is missing 'CREATE TABLE places_scored AS'. "
+            "Replace 'UPDATE places SET importance' with a CTAS."
+        )
+        assert "drop table places;" in flat, (
+            "import-fsq-extract.sh is missing 'DROP TABLE places'. "
+            "After creating places_scored, drop the old places table."
+        )
+        assert "alter table places_scored rename to places" in flat, (
+            "import-fsq-extract.sh is missing 'ALTER TABLE places_scored RENAME TO places'. "
+            "After dropping the old table, rename places_scored to places."
+        )
+        assert "update places set importance" not in flat, (
+            "import-fsq-extract.sh still uses 'UPDATE places SET importance'. "
+            "Replace with CTAS + DROP + RENAME."
+        )
+        # Window function / s2 level 12 assertions preserved from
+        # test_importance_density_uses_window_function
+        importance_start = content.find("Computing importance scores")
+        importance_end = content.find("Build name_index", importance_start)
+        if importance_start == -1:
+            importance_start = content.find("place_density")
+        if importance_end == -1 or importance_end <= importance_start:
+            importance_end = len(content)
+        section = content[importance_start:importance_end].lower()
+        assert "left join place_density" in section, (
+            "import-fsq-extract.sh CTAS should use 'LEFT JOIN place_density' (not INNER JOIN) "
+            "to preserve all places even if density data is missing."
+        )
+        assert "count(*) over" in section.replace("\n", " "), (
+            "import-fsq-extract.sh importance CTAS should still use 'count(*) OVER (PARTITION BY ...)' "
+            "for the density window function."
+        )
+        assert ", 12)" in section or ",12)" in section, (
+            "import-fsq-extract.sh importance CTAS window function must use S2 level 12. "
+            "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
+        )
+
 
 # ---------------------------------------------------------------------------
 # Test: import-overture-extract.sh existence and structure
@@ -1605,5 +1708,54 @@ class TestImportOvertureScript:
         )
         assert ", 12)" in section or ",12)" in section, (
             "import-overture-extract.sh importance scoring window function must use S2 level 12. "
+            "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
+        )
+
+    def test_importance_uses_ctas_not_update(self):
+        """import-overture-extract.sh must use CTAS + DROP + RENAME for importance, not UPDATE.
+
+        UPDATE on a large DuckDB columnar table is extremely slow because it
+        rewrites the entire column. CTAS (CREATE TABLE ... AS SELECT) + DROP +
+        RENAME is the correct pattern for bulk column rewrites in DuckDB.
+        FAILS until the UPDATE places SET importance is replaced with CTAS.
+        """
+        content = self._read_script()
+        flat = content.lower().replace("\n", " ")
+
+        assert "create table places_scored as" in flat, (
+            "import-overture-extract.sh is missing 'CREATE TABLE places_scored AS'. "
+            "Replace 'UPDATE places SET importance' with a CTAS."
+        )
+        assert "drop table places;" in flat, (
+            "import-overture-extract.sh is missing 'DROP TABLE places'. "
+            "After creating places_scored, drop the old places table."
+        )
+        assert "alter table places_scored rename to places" in flat, (
+            "import-overture-extract.sh is missing 'ALTER TABLE places_scored RENAME TO places'. "
+            "After dropping the old table, rename places_scored to places."
+        )
+        assert "update places set importance" not in flat, (
+            "import-overture-extract.sh still uses 'UPDATE places SET importance'. "
+            "Replace with CTAS + DROP + RENAME."
+        )
+        # Window function / s2 level 12 assertions preserved from
+        # test_importance_density_uses_window_function
+        importance_start = content.find("Computing importance scores")
+        importance_end = content.find("Build name_index", importance_start)
+        if importance_start == -1:
+            importance_start = content.find("place_density")
+        if importance_end == -1 or importance_end <= importance_start:
+            importance_end = len(content)
+        section = content[importance_start:importance_end].lower()
+        assert "left join place_density" in section, (
+            "import-overture-extract.sh CTAS should use 'LEFT JOIN place_density' (not INNER JOIN) "
+            "to preserve all places even if density data is missing."
+        )
+        assert "count(*) over" in section.replace("\n", " "), (
+            "import-overture-extract.sh importance CTAS should still use 'count(*) OVER (PARTITION BY ...)' "
+            "for the density window function."
+        )
+        assert ", 12)" in section or ",12)" in section, (
+            "import-overture-extract.sh importance CTAS window function must use S2 level 12. "
             "Use s2_cell_parent(s2_cellfromlonlat(...), 12) in the PARTITION BY."
         )

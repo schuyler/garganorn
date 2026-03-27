@@ -418,6 +418,7 @@ echo "Computing importance scores..."
 duckdb -bail "$output_db_tmp" <<ENDSQL
 INSTALL geography FROM community;
 LOAD geography;
+LOAD spatial;
 
 CREATE TEMP TABLE t_idf AS
 SELECT * FROM read_parquet('${idf_parquet}');
@@ -438,13 +439,19 @@ LEFT JOIN t_idf idf ON idf.category = p.primary_category
 WHERE p.primary_category IS NOT NULL
 GROUP BY p.rkey;
 
-UPDATE places SET importance = round(
-    60 * least(d.density_score / 10.0, 1.0)
-  + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
-)::INTEGER
-FROM place_density d
-LEFT JOIN place_idf i USING (rkey)
-WHERE places.rkey = d.rkey;
+CREATE TABLE places_scored AS
+SELECT p.* EXCLUDE (importance),
+       round(
+           60 * least(coalesce(d.density_score, 0) / 10.0, 1.0)
+         + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
+       )::INTEGER AS importance
+FROM places p
+LEFT JOIN place_density d USING (rkey)
+LEFT JOIN place_idf i USING (rkey);
+DROP TABLE places;
+ALTER TABLE places_scored RENAME TO places;
+CREATE INDEX places_rtree ON places USING RTREE (geom);
+CREATE INDEX idx_rkey ON places(rkey);
 
 DROP TABLE place_density;
 DROP TABLE place_idf;

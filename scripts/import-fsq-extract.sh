@@ -146,7 +146,6 @@ cat >> "${output_dir}/import.sql" <<EOF
 install geography from community;
 load geography;
 .print "Computing importance scores..."
-ALTER TABLE places ADD COLUMN importance INTEGER DEFAULT 0;
 CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}');
 CREATE TEMP TABLE place_density AS
 SELECT fsq_place_id,
@@ -163,13 +162,19 @@ FROM places p,
 LEFT JOIN t_idf idf ON idf.category = t.category
 WHERE p.fsq_category_ids IS NOT NULL
 GROUP BY p.fsq_place_id;
-UPDATE places SET importance = round(
-    60 * least(d.density_score / 10.0, 1.0)
-  + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
-)::INTEGER
-FROM place_density d
-LEFT JOIN place_idf i USING (fsq_place_id)
-WHERE places.fsq_place_id = d.fsq_place_id;
+CREATE TABLE places_scored AS
+SELECT p.*,
+       round(
+           60 * least(coalesce(d.density_score, 0) / 10.0, 1.0)
+         + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
+       )::INTEGER AS importance
+FROM places p
+LEFT JOIN place_density d USING (fsq_place_id)
+LEFT JOIN place_idf i USING (fsq_place_id);
+DROP TABLE places;
+ALTER TABLE places_scored RENAME TO places;
+create index places_rtree on places using rtree (geom);
+create index idx_fsq_place_id on places(fsq_place_id);
 DROP TABLE place_density;
 DROP TABLE place_idf;
 DROP TABLE t_idf;
