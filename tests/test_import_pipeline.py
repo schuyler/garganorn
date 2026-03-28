@@ -1468,6 +1468,68 @@ class TestImportOsmScript:
         )
 
 
+
+# ---------------------------------------------------------------------------
+# Test: osmium pre-filter stage in import-osm.sh
+# ---------------------------------------------------------------------------
+
+
+class TestOsmiumPreFilter:
+    """Verify that import-osm.sh includes the osmium tags-filter pre-filtering stage."""
+
+    @pytest.fixture(scope="class")
+    def script_content(self):
+        script_path = os.path.join(
+            os.path.dirname(__file__), "..", "scripts", "import-osm.sh"
+        )
+        with open(script_path) as f:
+            return f.read()
+
+    def test_script_checks_osmium_dependency(self, script_content):
+        assert "command -v osmium" in script_content, (
+            "import-osm.sh should check for osmium with 'command -v osmium'"
+        )
+
+    def test_osmium_tags_filter_command_present(self, script_content):
+        assert "osmium tags-filter" in script_content, (
+            "import-osm.sh should invoke 'osmium tags-filter'"
+        )
+
+    def test_all_category_tags_in_osmium_filter(self, script_content):
+        """Every SQL category key must appear as both n/<key> and w/<key> in the osmium filter."""
+        category_keys = [
+            "amenity", "shop", "tourism", "leisure", "office", "craft",
+            "healthcare", "historic", "natural", "man_made", "aeroway",
+            "railway", "public_transport", "place",
+        ]
+        for key in category_keys:
+            assert f"n/{key}" in script_content, (
+                f"osmium filter missing node prefix for tag key: n/{key}"
+            )
+            assert f"w/{key}" in script_content, (
+                f"osmium filter missing way prefix for tag key: w/{key}"
+            )
+
+    def test_filtered_pbf_cache_variable(self, script_content):
+        assert "filtered.osm.pbf" in script_content, (
+            "import-osm.sh should reference a cached filtered PBF file"
+        )
+
+    def test_osm_pbf_parquet_uses_filtered_input(self, script_content):
+        """osm-pbf-parquet should use the filtered PBF, not the original."""
+        assert 'osm-pbf-parquet --input "$pbf_path"' not in script_content, (
+            "osm-pbf-parquet should use $pbf_input (filtered), not $pbf_path (original)"
+        )
+        assert 'osm-pbf-parquet --input "$pbf_input"' in script_content, (
+            "osm-pbf-parquet must reference $pbf_input variable"
+        )
+
+    def test_parquet_cache_sentinel(self, script_content):
+        assert "/.complete" in script_content, (
+            "import-osm.sh should use a .complete sentinel for parquet cache validation"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Test: import-fsq-extract.sh existence and structure
 # ---------------------------------------------------------------------------

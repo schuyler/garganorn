@@ -18,6 +18,14 @@ if ! command -v osm-pbf-parquet &> /dev/null; then
     exit 1
 fi
 
+if ! command -v osmium &> /dev/null; then
+    echo "osmium not installed. Please install it first."
+    echo "To install osmium-tool:"
+    echo "  brew install osmium-tool    # macOS"
+    echo "  apt install osmium-tool     # Debian/Ubuntu"
+    exit 1
+fi
+
 usage() {
     echo
     echo "Usage: $0 <pbf_path> [options]"
@@ -94,19 +102,46 @@ elapsed() {
     printf "  [%dm%02ds]\n" $((dt / 60)) $((dt % 60))
 }
 
+# ─── Stage 0: Filter PBF with osmium ────────────────────────────────────────
+
+filtered_pbf="${cache_dir}/filtered.osm.pbf"
+
+if [ -f "$filtered_pbf" ] && [ "$filtered_pbf" -nt "$pbf_path" ]; then
+    echo "Using cached filtered PBF: $filtered_pbf"
+else
+    echo "Filtering PBF with osmium tags-filter..."
+    osmium tags-filter "$pbf_path" \
+        n/amenity n/shop n/tourism n/leisure n/office n/craft n/healthcare \
+        n/historic n/natural n/man_made n/aeroway n/railway n/public_transport n/place \
+        w/amenity w/shop w/tourism w/leisure w/office w/craft w/healthcare \
+        w/historic w/natural w/man_made w/aeroway w/railway w/public_transport w/place \
+        --overwrite \
+        -o "$filtered_pbf"
+    if [ $? -ne 0 ]; then
+        echo "osmium tags-filter failed."
+        exit 1
+    fi
+fi
+
+pbf_input="$filtered_pbf"
+
+elapsed
+
 # ─── Stage 1: Convert PBF to Parquet ──────────────────────────────────────────
 
 parquet_dir="${cache_dir}/parquet"
 
-if [ -d "$parquet_dir" ] && [ -n "$(ls -A "$parquet_dir"/type=node/ 2>/dev/null)" ]; then
+if [ -f "$parquet_dir/.complete" ] && [ "$parquet_dir/.complete" -nt "$pbf_input" ]; then
     echo "Using cached Parquet: $parquet_dir"
 else
     echo "Converting PBF to Parquet with osm-pbf-parquet..."
-    osm-pbf-parquet --input "$pbf_path" --output "$parquet_dir"
+    rm -rf "$parquet_dir"
+    osm-pbf-parquet --input "$pbf_input" --output "$parquet_dir"
     if [ $? -ne 0 ]; then
         echo "osm-pbf-parquet conversion failed."
         exit 1
     fi
+    touch "$parquet_dir/.complete"
 fi
 
 node_parquet="${parquet_dir}/type=node/*.parquet"
