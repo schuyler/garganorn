@@ -2,6 +2,26 @@
     "lexicon": 1,
     "id": "org.atgeo.place",
     "defs": {
+        "relation": {
+            "type": "object",
+            "description": "A reference to a related place record.",
+            "required": ["rkey"],
+            "properties": {
+                "rkey": {
+                    "type": "string",
+                    "description": "Collection-qualified record key (e.g. org.atgeo.places.wof:85922583).",
+                    "format": "record-key"
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Display name of the related place."
+                },
+                "level": {
+                    "type": "integer",
+                    "description": "Admin hierarchy level (0=continent, 10=country, 25=region, 50=locality, etc.)."
+                }
+            }
+        },
         "variant": {
             "type": "object",
             "required": ["name"],
@@ -68,12 +88,26 @@
                         "description": "The date when the place record was last updated",
                         "format": "datetime"
                     },
-                    "same_as": {
-                        "type": "array",
-                        "description": "A list of place IDs that refer to the same place in different datasets or contexts.",
-                        "items": {
-                            "type": "string",
-                            "format": "record-key"
+                    "relations": {
+                        "type": "object",
+                        "description": "Related records, keyed by relation type.",
+                        "properties": {
+                            "within": {
+                                "type": "array",
+                                "description": "Admin regions that geographically contain this place, ordered by level ascending.",
+                                "items": {
+                                    "type": "ref",
+                                    "ref": "#relation"
+                                }
+                            },
+                            "same_as": {
+                                "type": "array",
+                                "description": "Records in other collections or datasets that represent the same place.",
+                                "items": {
+                                    "type": "ref",
+                                    "ref": "#relation"
+                                }
+                            }
                         }
                     }
                 }

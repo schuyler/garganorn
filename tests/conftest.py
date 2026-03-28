@@ -456,3 +456,99 @@ def osm_db(osm_db_path):
     db.connect()
     yield db
     db.close()
+
+
+from garganorn.boundaries import BoundaryLookup, WhosOnFirst
+
+# ---------------------------------------------------------------------------
+# WoF boundary test data
+# ---------------------------------------------------------------------------
+
+# wof_id, name, placetype, level, lat, lon, country, wkt_geom,
+# min_lat, min_lon, max_lat, max_lon, names_json, concordances
+WOF_BOUNDARIES = [
+    (102191575, "North America", "continent", 0, 40.0, -100.0, "XX",
+     "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
+     20.0, -130.0, 55.0, -60.0, None, None),
+    (85633793, "United States", "country", 10, 39.0, -98.0, "US",
+     "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
+     24.0, -125.0, 50.0, -66.0, None, '{"wk:id": "Q30"}'),
+    (85688637, "California", "region", 25, 37.0, -120.0, "US",
+     "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
+     34.0, -125.0, 42.0, -118.0,
+     '[{"name": "California", "language": "eng", "variant": "preferred"}, '
+     '{"name": "Californie", "language": "fra", "variant": "preferred"}]',
+     '{"wk:id": "Q99", "gn:id": "5332921"}'),
+    (85922583, "San Francisco", "locality", 50, 37.7749, -122.4194, "US",
+     "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
+     37.6, -122.55, 37.85, -122.3,
+     '[{"name": "San Francisco", "language": "eng", "variant": "preferred"}, '
+     '{"name": "\u65e7\u91d1\u5c71", "language": "zho", "variant": "preferred"}]',
+     '{"wk:id": "Q62", "gn:id": "5391959"}'),
+    (85977539, "Manhattan", "borough", 55, 40.7831, -73.9712, "US",
+     "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
+     40.68, -74.05, 40.88, -73.90, None, None),
+]
+
+
+def _create_wof_db(db_path):
+    """Create a WoF boundary DuckDB with test polygons."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE boundaries (
+            wof_id BIGINT,
+            rkey VARCHAR,
+            name VARCHAR,
+            placetype VARCHAR,
+            level INTEGER,
+            latitude DOUBLE,
+            longitude DOUBLE,
+            geom GEOMETRY,
+            country VARCHAR,
+            min_latitude DOUBLE,
+            min_longitude DOUBLE,
+            max_latitude DOUBLE,
+            max_longitude DOUBLE,
+            names_json VARCHAR,
+            concordances VARCHAR
+        )
+    """)
+    for row in WOF_BOUNDARIES:
+        wof_id, name, placetype, level, lat, lon, country, wkt, \
+            min_lat, min_lon, max_lat, max_lon, names_json, concordances = row
+        conn.execute("""
+            INSERT INTO boundaries VALUES (
+                ?, ?::VARCHAR, ?, ?, ?, ?, ?,
+                ST_GeomFromText(?),
+                ?, ?, ?, ?, ?, ?, ?
+            )
+        """, [wof_id, wof_id, name, placetype, level, lat, lon, wkt,
+              country, min_lat, min_lon, max_lat, max_lon,
+              names_json, concordances])
+    conn.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
+    conn.execute("CREATE INDEX idx_rkey ON boundaries(rkey)")
+    conn.close()
+
+
+@pytest.fixture(scope="session")
+def wof_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("wof") / "wof.duckdb"
+    _create_wof_db(db_path)
+    return db_path
+
+
+@pytest.fixture
+def boundary_lookup(wof_db_path):
+    bl = BoundaryLookup(wof_db_path)
+    bl.connect()
+    yield bl
+    bl.close()
+
+
+@pytest.fixture
+def wof_db(wof_db_path):
+    db = WhosOnFirst(wof_db_path)
+    db.connect()
+    yield db
+    db.close()

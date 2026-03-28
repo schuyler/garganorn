@@ -2,15 +2,17 @@
 import yaml
 from pathlib import Path
 from .database import FoursquareOSP, OvertureMaps, OpenStreetMap
+from .boundaries import WhosOnFirst
 
 DATABASE_TYPES = {
     "foursquare": FoursquareOSP,
     "overture": OvertureMaps,
     "osm": OpenStreetMap,
+    "wof": WhosOnFirst,
 }
 
 def load_config(path):
-    """Load a YAML config file and return (repo, databases)."""
+    """Load a YAML config file and return (repo, databases, boundaries_path)."""
     with open(path) as f:
         config = yaml.safe_load(f)
 
@@ -24,4 +26,6 @@ def load_config(path):
             raise ValueError(f"Unknown database type: {db_type}")
         dbs.append(cls(db_path))
 
-    return repo, dbs
+    boundaries_path = config.get("boundaries")
+
+    return repo, dbs, boundaries_path

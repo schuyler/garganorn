@@ -38,7 +38,7 @@ def client():
     """Flask test client with mock DBs."""
     mock_db = _make_mock_db(FSQ_COLLECTION, record=dict(SAMPLE_RECORD))
     with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db])
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None)
         app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as c:
@@ -50,7 +50,7 @@ def client_no_record():
     """Flask test client where get_record returns None (record not found)."""
     mock_db = _make_mock_db(FSQ_COLLECTION, record=None)
     with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db])
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None)
         app = create_app()
     app.config["TESTING"] = True
     with app.test_client() as c:

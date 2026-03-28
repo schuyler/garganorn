@@ -4,16 +4,18 @@ from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
 from garganorn import Server
 from garganorn.config import load_config
+from garganorn.boundaries import BoundaryLookup
 
 DEFAULT_CONFIG = "config.yaml"
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
-    repo, dbs = load_config(config_path)
+    repo, dbs, boundaries_path = load_config(config_path)
 
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
-    gazetteer = Server(repo, dbs, app.logger)
+    boundaries = BoundaryLookup(boundaries_path) if boundaries_path else None
+    gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries)
     init_flask(gazetteer.server, app)
 
     @app.route('/health')

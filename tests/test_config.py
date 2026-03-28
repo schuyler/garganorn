@@ -4,6 +4,7 @@ import yaml
 
 from garganorn.config import load_config
 from garganorn.database import FoursquareOSP, OvertureMaps
+from garganorn.boundaries import WhosOnFirst
 
 
 def _write_config(tmp_path, data):
@@ -22,7 +23,7 @@ def test_missing_file_raises_file_not_found(tmp_path):
 def test_missing_repo_key_defaults_to_places_atgeo_org(tmp_path):
     """Config without 'repo' key defaults to 'places.atgeo.org'."""
     config_path = _write_config(tmp_path, {"databases": []})
-    repo, dbs = load_config(config_path)
+    repo, dbs, _ = load_config(config_path)
     assert repo == "places.atgeo.org"
     assert dbs == []
 
@@ -30,7 +31,7 @@ def test_missing_repo_key_defaults_to_places_atgeo_org(tmp_path):
 def test_explicit_repo_key_is_used(tmp_path):
     """Explicit 'repo' key in config is returned."""
     config_path = _write_config(tmp_path, {"repo": "myserver.example.com", "databases": []})
-    repo, dbs = load_config(config_path)
+    repo, dbs, _ = load_config(config_path)
     assert repo == "myserver.example.com"
 
 
@@ -52,7 +53,7 @@ def test_foursquare_type_creates_foursquare_osp(tmp_path):
     config_path = _write_config(tmp_path, {
         "databases": [{"type": "foursquare", "path": str(fake_db)}]
     })
-    repo, dbs = load_config(config_path)
+    repo, dbs, _ = load_config(config_path)
     assert len(dbs) == 1
     assert isinstance(dbs[0], FoursquareOSP)
 
@@ -64,6 +65,35 @@ def test_overture_type_creates_overture_maps(tmp_path):
     config_path = _write_config(tmp_path, {
         "databases": [{"type": "overture", "path": str(fake_db)}]
     })
-    repo, dbs = load_config(config_path)
+    repo, dbs, _ = load_config(config_path)
     assert len(dbs) == 1
     assert isinstance(dbs[0], OvertureMaps)
+
+
+def test_boundaries_path_from_config(tmp_path):
+    """Config with 'boundaries' key returns the path as third element."""
+    config_path = _write_config(tmp_path, {
+        "boundaries": "db/wof-boundaries.duckdb",
+        "databases": []
+    })
+    repo, dbs, boundaries_path = load_config(config_path)
+    assert boundaries_path == "db/wof-boundaries.duckdb"
+
+
+def test_config_without_boundaries(tmp_path):
+    """Config without 'boundaries' key returns None."""
+    config_path = _write_config(tmp_path, {"databases": []})
+    repo, dbs, boundaries_path = load_config(config_path)
+    assert boundaries_path is None
+
+
+def test_wof_type_creates_whos_on_first(tmp_path):
+    """'wof' database type creates a WhosOnFirst instance."""
+    fake_db = tmp_path / "wof.duckdb"
+    fake_db.touch()
+    config_path = _write_config(tmp_path, {
+        "databases": [{"type": "wof", "path": str(fake_db)}]
+    })
+    repo, dbs, boundaries_path = load_config(config_path)
+    assert len(dbs) == 1
+    assert isinstance(dbs[0], WhosOnFirst)

@@ -277,3 +277,47 @@ def test_get_record_includes_importance():
     assert isinstance(result["importance"], int)
     assert "importance" not in result["value"]
     assert "score" not in result
+
+
+def test_get_record_with_boundaries_includes_relations():
+    """get_record includes relations.within inside the record value."""
+    record = dict(SAMPLE_RECORD)
+    mock_db = _make_mock_db(records=[record])
+
+    # Mock BoundaryLookup
+    mock_boundaries = MagicMock()
+    mock_boundaries.containment.return_value = [
+        {"rkey": "org.atgeo.places.wof:85922583", "name": "San Francisco", "level": 50},
+    ]
+
+    logger = logging.getLogger("test")
+    server = Server("places.atgeo.org", [mock_db], logger, boundaries=mock_boundaries)
+    result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
+
+    value = result["value"]
+    assert "relations" in value
+    assert "within" in value["relations"]
+    assert value["relations"]["within"][0]["name"] == "San Francisco"
+    # relations should NOT be at the envelope level
+    assert "relations" not in result
+
+
+def test_get_record_without_boundaries_has_no_relations():
+    """get_record omits relations when no boundaries configured."""
+    record = dict(SAMPLE_RECORD)
+    server = _make_server(records=[record])
+    result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
+    assert "relations" not in result["value"]
+
+
+def test_get_record_boundaries_empty_containment():
+    """get_record omits relations when containment returns empty list."""
+    record = dict(SAMPLE_RECORD)
+    mock_db = _make_mock_db(records=[record])
+    mock_boundaries = MagicMock()
+    mock_boundaries.containment.return_value = []
+
+    logger = logging.getLogger("test")
+    server = Server("places.atgeo.org", [mock_db], logger, boundaries=mock_boundaries)
+    result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
+    assert "relations" not in result["value"]

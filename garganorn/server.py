@@ -34,9 +34,10 @@ class Server:
         "com.atproto.repo.getRecord": "get_record",
     }
 
-    def __init__(self, repo, dbs, logger):
+    def __init__(self, repo, dbs, logger, boundaries=None):
         self.repo = repo
         self.db = dict([(db.collection, db) for db in dbs])
+        self.boundaries = boundaries
         self.lexicons = load_lexicons()
         self.server = lexrpc.Server(lexicons=self.lexicons)
         self.logger = logger
@@ -56,6 +57,24 @@ class Server:
         record = self.db[collection].get_record(repo, collection, rkey)
         if record is None:
             raise XrpcError(f"Record {rkey} not found in collection {collection}", "RecordNotFound")
+
+        # Compute containment relations
+        relations = {}
+        if self.boundaries:
+            locations = record.get("locations", [])
+            for loc in locations:
+                if loc.get("$type") == "community.lexicon.location.geo":
+                    lat = float(loc["latitude"])
+                    lon = float(loc["longitude"])
+                    within = self.boundaries.containment(lat, lon)
+                    if within:
+                        relations["within"] = within
+                    break
+
+        # Inject relations into the record value
+        if relations:
+            record["relations"] = relations
+
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "uri": self.record_uri(collection, record["rkey"]),
