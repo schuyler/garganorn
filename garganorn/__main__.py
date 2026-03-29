@@ -1,5 +1,5 @@
 import os, logging
-from flask import Flask
+from flask import Flask, abort
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
 from garganorn import Server
@@ -17,6 +17,15 @@ def create_app():
     boundaries = BoundaryLookup(boundaries_path) if boundaries_path else None
     gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries)
     init_flask(gazetteer.server, app)
+
+    lexicon_map = {lex["id"]: lex for lex in gazetteer.lexicons}
+
+    @app.route('/<nsid>')
+    def get_lexicon(nsid):
+        lexicon = lexicon_map.get(nsid)
+        if lexicon is None:
+            abort(404)
+        return lexicon
 
     @app.route('/health')
     def health_check():
