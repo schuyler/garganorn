@@ -29,10 +29,14 @@ SAMPLE_RECORD = {
 }
 
 
+TEST_ATTRIBUTION_URL = "https://example.com/attribution"
+
+
 def _make_mock_db(collection=FSQ_COLLECTION, records=None, nearest_results=None):
     """Create a mock Database object."""
     mock = MagicMock()
     mock.collection = collection
+    mock.attribution = TEST_ATTRIBUTION_URL
     mock.get_record.return_value = records[0] if records else None
     mock.nearest.return_value = nearest_results or []
     return mock
@@ -321,3 +325,29 @@ def test_get_record_boundaries_empty_containment():
     server = Server("places.atgeo.org", [mock_db], logger, boundaries=mock_boundaries)
     result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
     assert "relations" not in result["value"]
+
+
+def test_get_record_includes_attribution():
+    """get_record response includes attribution as a string at envelope level, not inside value."""
+    record = dict(SAMPLE_RECORD)
+    server = _make_server(records=[record])
+    result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
+    assert "attribution" in result
+    assert isinstance(result["attribution"], str)
+    assert result["attribution"] == TEST_ATTRIBUTION_URL
+    assert "attribution" not in result["value"]
+
+
+def test_search_records_includes_attribution():
+    """Each record wrapper in search_records includes attribution as a string at envelope level, not inside value."""
+    nearest_results = [dict(SAMPLE_RECORD)]
+    server = _make_server(nearest_results=nearest_results)
+    result = server.search_records(
+        {}, collection=FSQ_COLLECTION, latitude="37.7749", longitude="-122.4194"
+    )
+    assert "records" in result
+    wrapper = result["records"][0]
+    assert "attribution" in wrapper
+    assert isinstance(wrapper["attribution"], str)
+    assert wrapper["attribution"] == TEST_ATTRIBUTION_URL
+    assert "attribution" not in wrapper["value"]

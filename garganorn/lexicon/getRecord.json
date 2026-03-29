@@ -35,9 +35,10 @@
         "encoding": "application/json",
         "schema": {
           "type": "object",
-          "required": ["uri", "value"],
+          "required": ["uri", "attribution", "value"],
           "properties": {
             "uri": { "type": "string", "format": "uri" },
+            "attribution": { "type": "string", "format": "uri" },
             "cid": { "type": "string", "format": "cid" },
             "value": { "type": "unknown" }
           }

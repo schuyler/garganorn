@@ -37,6 +37,7 @@ class SearchParams(TypedDict, total=False):
 class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
     collection: str = "org.atgeo"
+    attribution: str = ""
 
     JW_THRESHOLD = 0.6
     JW_TOKEN_ALPHA = 0.5
@@ -288,6 +289,7 @@ class Database:
 
 class FoursquareOSP(Database):
     collection = "org.atgeo.places.foursquare"
+    attribution = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
 
     def record_columns(self):
         return f"""
@@ -574,6 +576,7 @@ class FoursquareOSP(Database):
 
 class OvertureMaps(Database):
     collection = "org.atgeo.places.overture"
+    attribution = "https://docs.overturemaps.org/attribution/"
 
     def record_columns(self):
         return f"""
@@ -866,6 +869,7 @@ class OvertureMaps(Database):
 
 class OpenStreetMap(Database):
     collection = "org.atgeo.places.osm"
+    attribution = "https://www.openstreetmap.org/copyright"
 
     def record_columns(self):
         return """

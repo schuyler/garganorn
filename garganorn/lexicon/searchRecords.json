@@ -76,9 +76,10 @@
         "record": {
             "type": "object",
             "description": "A record with its location and distance from the given coordinates",
-            "required": [ "uri", "value" ],
+            "required": [ "uri", "attribution", "value" ],
             "properties": {
                 "uri": { "type": "string", "format": "uri" },
+                "attribution": { "type": "string", "format": "uri" },
                 "cid": { "type": "string", "format": "cid" },
                 "distance_m": { "type": "integer" },
                 "value": {
