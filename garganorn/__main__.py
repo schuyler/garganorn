@@ -18,6 +18,13 @@ def create_app():
     gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries)
     init_flask(gazetteer.server, app)
 
+    @app.route('/lexicon/<path:nsid>')
+    def get_lexicon(nsid):
+        lexicon = gazetteer.lexicon_by_id.get(nsid)
+        if lexicon is None:
+            return {"error": "LexiconNotFound", "message": f"Lexicon {nsid} not found"}, 404
+        return lexicon
+
     @app.route('/health')
     def health_check():
         return {"status": "ok", "service": "garganorn"}, 200

@@ -100,3 +100,20 @@ def test_health_still_works(client):
     """GET /health still returns 200 (regression check)."""
     resp = client.get("/health")
     assert resp.status_code == 200
+
+
+def test_lexicon_found(client):
+    """GET /lexicon/<nsid> returns 200 with the lexicon JSON."""
+    resp = client.get("/lexicon/org.atgeo.place")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["id"] == "org.atgeo.place"
+    assert data["lexicon"] == 1
+
+
+def test_lexicon_not_found(client):
+    """GET /lexicon/<nsid> for unknown NSID returns 404."""
+    resp = client.get("/lexicon/com.example.nonexistent")
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert data["error"] == "LexiconNotFound"

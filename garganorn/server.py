@@ -39,6 +39,7 @@ class Server:
         self.db = dict([(db.collection, db) for db in dbs])
         self.boundaries = boundaries
         self.lexicons = load_lexicons()
+        self.lexicon_by_id = {lex["id"]: lex for lex in self.lexicons}
         self.server = lexrpc.Server(lexicons=self.lexicons)
         self.logger = logger
         for name, method in self.methods.items():
