@@ -993,163 +993,77 @@ class TestDensityOsmMode:
 
 
 # ---------------------------------------------------------------------------
-# Test: build-idf.sh OSM mode (reads from osm.duckdb via ATTACH)
+# Test: inline IDF (computed inside osm.duckdb, no external build-idf.sh)
 # ---------------------------------------------------------------------------
 
-class TestIdfOsmMode:
-    """
-    build-idf.sh OSM mode should ATTACH an osm.duckdb and read primary_category
-    directly from the places table — not re-derive it from a CASE/WHEN on tags.
+INLINE_IDF_SQL = """
+CREATE TEMP TABLE t_idf AS
+SELECT primary_category AS category,
+    count(*) AS n_places,
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
+FROM places
+CROSS JOIN (SELECT count(*) AS total FROM places) N
+WHERE primary_category IS NOT NULL
+GROUP BY primary_category, N.total;
+"""
 
-    The new SQL:
-        ATTACH '${osm_db_path}' AS osm_import (READ_ONLY);
-        INSERT INTO category_idf
-        SELECT primary_category AS category,
-            count(*) AS n_places,
-            ln(N.total::double / count(*)::double) AS idf_score
-        FROM osm_import.places
-        CROSS JOIN (SELECT count(*) AS total FROM osm_import.places) N
-        WHERE primary_category IS NOT NULL
-        GROUP BY primary_category, N.total;
+
+class TestInlineIdfOsmMode:
+    """
+    IDF is now computed inline inside the osm.duckdb at import time.
+    No external build-idf.sh step; the IDF TEMP TABLE is derived directly
+    from the places table using a single CTAS.
     """
 
-    def test_idf_attach_reads_from_places_table(self, osm_duckdb):
-        """IDF query via ATTACH returns a row per distinct primary_category."""
-        conn = duckdb.connect(":memory:")
-        conn.execute(f"ATTACH '{osm_duckdb}' AS osm_import (READ_ONLY)")
-        conn.execute("""
-            CREATE TABLE category_idf (
-                category  VARCHAR NOT NULL,
-                n_places  UBIGINT NOT NULL,
-                idf_score DOUBLE NOT NULL
-            )
-        """)
-        conn.execute("""
-            INSERT INTO category_idf
-            SELECT primary_category AS category,
-                count(*) AS n_places,
-                ln(N.total::double / count(*)::double) AS idf_score
-            FROM osm_import.places
-            CROSS JOIN (SELECT count(*) AS total FROM osm_import.places) N
-            WHERE primary_category IS NOT NULL
-            GROUP BY primary_category, N.total
-        """)
-        count = conn.execute(
-            "SELECT count(*) FROM category_idf"
-        ).fetchone()[0]
+    def test_inline_idf_reads_from_places_table(self, osm_duckdb):
+        """Inline IDF query returns a row per distinct primary_category."""
+        conn = duckdb.connect(str(osm_duckdb))
+        conn.execute(INLINE_IDF_SQL)
+        count = conn.execute("SELECT count(*) FROM t_idf").fetchone()[0]
         conn.close()
         assert count > 0, "IDF table should have at least one category row"
 
-    def test_idf_categories_match_places_categories(self, osm_duckdb):
-        """Every distinct primary_category in places should appear in the IDF table."""
-        conn = duckdb.connect(":memory:")
-        conn.execute(f"ATTACH '{osm_duckdb}' AS osm_import (READ_ONLY)")
-        conn.execute("""
-            CREATE TABLE category_idf (
-                category  VARCHAR NOT NULL,
-                n_places  UBIGINT NOT NULL,
-                idf_score DOUBLE NOT NULL
-            )
-        """)
-        conn.execute("""
-            INSERT INTO category_idf
-            SELECT primary_category AS category,
-                count(*) AS n_places,
-                ln(N.total::double / count(*)::double) AS idf_score
-            FROM osm_import.places
-            CROSS JOIN (SELECT count(*) AS total FROM osm_import.places) N
-            WHERE primary_category IS NOT NULL
-            GROUP BY primary_category, N.total
-        """)
+    def test_inline_idf_categories_match_places_categories(self, osm_duckdb):
+        """Every distinct primary_category in places should appear in t_idf."""
+        conn = duckdb.connect(str(osm_duckdb))
+        conn.execute(INLINE_IDF_SQL)
         distinct_cats = {
             r[0]
             for r in conn.execute(
-                "SELECT DISTINCT primary_category FROM osm_import.places "
+                "SELECT DISTINCT primary_category FROM places "
                 "WHERE primary_category IS NOT NULL"
             ).fetchall()
         }
         idf_cats = {
-            r[0] for r in conn.execute("SELECT category FROM category_idf").fetchall()
+            r[0] for r in conn.execute("SELECT category FROM t_idf").fetchall()
         }
         conn.close()
         assert distinct_cats == idf_cats, (
             "IDF categories should exactly match distinct places categories"
         )
 
-    def test_idf_n_places_sums_to_total(self, osm_duckdb):
+    def test_inline_idf_n_places_sums_to_total(self, osm_duckdb):
         """Sum of n_places across all categories equals total place count."""
-        conn = duckdb.connect(":memory:")
-        conn.execute(f"ATTACH '{osm_duckdb}' AS osm_import (READ_ONLY)")
-        conn.execute("""
-            CREATE TABLE category_idf (
-                category  VARCHAR NOT NULL,
-                n_places  UBIGINT NOT NULL,
-                idf_score DOUBLE NOT NULL
-            )
-        """)
-        conn.execute("""
-            INSERT INTO category_idf
-            SELECT primary_category AS category,
-                count(*) AS n_places,
-                ln(N.total::double / count(*)::double) AS idf_score
-            FROM osm_import.places
-            CROSS JOIN (SELECT count(*) AS total FROM osm_import.places) N
-            WHERE primary_category IS NOT NULL
-            GROUP BY primary_category, N.total
-        """)
+        conn = duckdb.connect(str(osm_duckdb))
+        conn.execute(INLINE_IDF_SQL)
         total_places = conn.execute(
-            "SELECT count(*) FROM osm_import.places WHERE primary_category IS NOT NULL"
+            "SELECT count(*) FROM places WHERE primary_category IS NOT NULL"
         ).fetchone()[0]
         sum_n_places = conn.execute(
-            "SELECT sum(n_places) FROM category_idf"
+            "SELECT sum(n_places) FROM t_idf"
         ).fetchone()[0]
         conn.close()
         assert sum_n_places == total_places
 
-    def test_idf_score_is_positive(self, osm_duckdb):
+    def test_inline_idf_score_is_positive(self, osm_duckdb):
         """IDF scores should all be >= 0 (ln(N/n) >= 0 when n <= N)."""
-        conn = duckdb.connect(":memory:")
-        conn.execute(f"ATTACH '{osm_duckdb}' AS osm_import (READ_ONLY)")
-        conn.execute("""
-            CREATE TABLE category_idf (
-                category  VARCHAR NOT NULL,
-                n_places  UBIGINT NOT NULL,
-                idf_score DOUBLE NOT NULL
-            )
-        """)
-        conn.execute("""
-            INSERT INTO category_idf
-            SELECT primary_category AS category,
-                count(*) AS n_places,
-                ln(N.total::double / count(*)::double) AS idf_score
-            FROM osm_import.places
-            CROSS JOIN (SELECT count(*) AS total FROM osm_import.places) N
-            WHERE primary_category IS NOT NULL
-            GROUP BY primary_category, N.total
-        """)
+        conn = duckdb.connect(str(osm_duckdb))
+        conn.execute(INLINE_IDF_SQL)
         neg_count = conn.execute(
-            "SELECT count(*) FROM category_idf WHERE idf_score < 0"
+            "SELECT count(*) FROM t_idf WHERE idf_score < 0"
         ).fetchone()[0]
         conn.close()
         assert neg_count == 0, "all IDF scores should be >= 0"
-
-    def test_idf_osm_mode_rejects_geoparquet_path(self, tmp_path):
-        """
-        build-idf.sh currently does not accept 'osm' as a source.
-        This test verifies the gap exists and will fail once the
-        new osm mode is added that expects a .duckdb path.
-        """
-        script = os.path.join(
-            os.path.dirname(__file__), "..", "scripts", "build-idf.sh"
-        )
-        result = subprocess.run(
-            ["bash", script, "osm", str(tmp_path / "nonexistent.geoparquet")],
-            capture_output=True,
-            text=True,
-        )
-        assert result.returncode != 0, (
-            "build-idf.sh should reject invalid osm mode invocation"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1431,6 +1345,11 @@ class TestImportOsmScript:
             "Add this ART index so that hydration lookups by rkey are O(1)."
         )
 
+    def test_no_external_idf_dependency(self):
+        content = self._read_script()
+        assert "build-idf" not in content
+        assert "category_idf" not in content
+
     def test_name_index_sorted_by_trigram(self):
         """import-osm.sh must sort name_index by trigram for DuckDB zone map efficiency.
 
@@ -1571,6 +1490,11 @@ class TestImportFsqScript:
             "Add this ART index so that hydration lookups by fsq_place_id are O(1)."
         )
 
+    def test_no_external_idf_dependency(self):
+        content = self._read_script()
+        assert "build-idf" not in content
+        assert "category_idf" not in content
+
     def test_name_index_sorted_by_trigram(self):
         """import-fsq-extract.sh must sort name_index by trigram for DuckDB zone map efficiency.
 
@@ -1706,6 +1630,11 @@ class TestImportOvertureScript:
             "import-overture-extract.sh is missing 'CREATE INDEX idx_id ON places(id)'. "
             "Add this ART index so that hydration lookups by id are O(1)."
         )
+
+    def test_no_external_idf_dependency(self):
+        content = self._read_script()
+        assert "build-idf" not in content
+        assert "category_idf" not in content
 
     def test_name_index_sorted_by_trigram(self):
         """import-overture-extract.sh must sort name_index by trigram for DuckDB zone map efficiency.

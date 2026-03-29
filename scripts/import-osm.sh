@@ -446,19 +446,6 @@ fi
 
 elapsed
 
-# ─── Build IDF from places table ──────────────────────────────────────────────
-
-"${script_dir}/build-idf.sh" osm "$output_db_tmp"
-if [ $? -ne 0 ]; then
-    echo "build-idf.sh failed."
-    rm -f "$output_db_tmp"
-    exit 1
-fi
-
-idf_parquet="${output_dir}/category_idf-osm.parquet"
-
-elapsed
-
 # ─── Importance scoring ───────────────────────────────────────────────────────
 
 echo
@@ -470,7 +457,13 @@ LOAD geography;
 LOAD spatial;
 
 CREATE TEMP TABLE t_idf AS
-SELECT * FROM read_parquet('${idf_parquet}');
+SELECT primary_category AS category,
+    count(*) AS n_places,
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
+FROM places
+CROSS JOIN (SELECT count(*) AS total FROM places) N
+WHERE primary_category IS NOT NULL
+GROUP BY primary_category, N.total;
 
 CREATE TEMP TABLE place_density AS
 SELECT rkey,

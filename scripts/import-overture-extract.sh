@@ -110,17 +110,6 @@ while IFS= read -r file; do
     mv "${dest}.tmp" "$dest"
 done <<< "$parquet_files"
 
-# Detect or auto-build category IDF file
-idf_file="${output_dir}/category_idf-overture.parquet"
-if [ ! -f "$idf_file" ]; then
-    echo "Building Overture IDF table..."
-    "${script_dir}/build-idf.sh" overture "${cache_dir}" || { echo "Failed to build IDF table."; exit 1; }
-    if [ ! -f "$idf_file" ]; then
-        echo "IDF file not found after build: ${idf_file}"
-        exit 1
-    fi
-fi
-
 # Remove any existing temp file
 rm -f "${output_dir}/${db_filename}.tmp"
 
@@ -172,7 +161,18 @@ cat >> "${output_dir}/import-overture.sql" <<EOF
 install geography from community;
 load geography;
 .print "Computing importance scores..."
-CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}');
+CREATE TEMP TABLE t_idf AS
+SELECT
+    categories.primary AS category,
+    count(*) AS n_places,
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
+FROM places
+CROSS JOIN (
+    SELECT count(*) AS total FROM places
+    WHERE categories.primary IS NOT NULL
+) N
+WHERE categories.primary IS NOT NULL
+GROUP BY categories.primary, N.total;
 CREATE TEMP TABLE place_density AS
 SELECT id,
        ln(1 + count(*) OVER (

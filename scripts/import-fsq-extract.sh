@@ -93,17 +93,6 @@ for i in $(seq 0 99); do
     mv "${dest}.tmp" "$dest"
 done
 
-# Detect or auto-build category IDF file
-idf_file="${output_dir}/category_idf-fsq.parquet"
-if [ ! -f "$idf_file" ]; then
-    echo "Building FSQ IDF table..."
-    "${script_dir}/build-idf.sh" fsq "${cache_dir}" || { echo "Failed to build IDF table."; exit 1; }
-    if [ ! -f "$idf_file" ]; then
-        echo "IDF file not found after build: ${idf_file}"
-        exit 1
-    fi
-fi
-
 # Remove any existing temp file
 rm -f "${output_dir}/fsq-osp.duckdb.tmp"
 
@@ -146,7 +135,18 @@ cat >> "${output_dir}/import.sql" <<EOF
 install geography from community;
 load geography;
 .print "Computing importance scores..."
-CREATE TEMP TABLE t_idf AS SELECT * FROM read_parquet('${idf_file}');
+CREATE TEMP TABLE t_idf AS
+SELECT
+    category,
+    count(*) AS n_places,
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
+FROM (
+    SELECT unnest(fsq_category_ids) AS category
+    FROM places
+    WHERE fsq_category_ids IS NOT NULL
+) cats
+CROSS JOIN (SELECT count(*) AS total FROM places) N
+GROUP BY category, N.total;
 CREATE TEMP TABLE place_density AS
 SELECT fsq_place_id,
        ln(1 + count(*) OVER (
