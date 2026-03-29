@@ -2,37 +2,31 @@
 
 ## Overview
 
-This document describes two pre-built artifacts used to compute an
+This document describes the pre-built and inline artifacts used to compute an
 "importance" score for each place record, used to rank text-only search
 results in the `name_index` table:
 
 1. A **density table** that pre-aggregates place counts into S2 cells at
    multiple resolution levels. Places in denser neighborhoods score higher.
+   Built as a **standalone artifact** from a global places dataset and
+   attached read-only during import.
 
-2. A **category IDF table** that assigns an inverse-frequency score to each
-   place category. Places with rarer categories (e.g. cities, airports)
-   score higher than places with common categories (e.g. restaurants,
-   coffee shops).
+2. A **category IDF score** computed **inline during import** from the
+   extract's own places table. Places with rarer categories (e.g. cities,
+   airports) score higher than places with common categories (e.g.
+   restaurants, coffee shops).
 
-Both tables are built as **standalone artifacts**, separate from and
-independent of the place import pipeline. Global density patterns and
-category distributions change very slowly (annually at most), while places
-themselves are refreshed much more frequently. Decoupling the builds avoids
-unnecessary rebuilds and removes the `geography` extension as a hard
-dependency of the import scripts.
-
-The density build produces a single Parquet file (`cell_counts.parquet`)
-and the category IDF build produces `category_idf.parquet`. Place import
-scripts attach these read-only when building the `name_index`. If either
-file is not available, import falls back gracefully — missing density
-contributes 0, missing IDF contributes 0.
+The density build produces a single Parquet file (`cell_counts.parquet`).
+Place import scripts attach it read-only when building the `name_index`. If
+absent, density contributes 0 and text search still works. Category IDF is
+always available because it is derived from the places table itself.
 
 The density build uses the
 [`geography`](https://duckdb.org/community_extensions/extensions/geography)
 community extension for DuckDB, which wraps Google's S2 geometry library and
 provides native `S2_CELL` and `S2_CELL_CENTER` types backed by 64-bit
 unsigned integers. This extension is required only during the density build
-and during place import (for the density join), not for the IDF build.
+and during place import (for the density join).
 
 ## S2 Level Reference
 
@@ -170,7 +164,7 @@ patterns (which cities are dense, which areas are sparse) change on
 timescales of years to decades. Rebuilding more often than annually provides
 negligible benefit.
 
-## Category IDF Table
+## Category IDF
 
 ### Concept
 
@@ -183,76 +177,54 @@ This captures the intuition that a city, airport, or embassy is more
 "important" as a search result than one of millions of coffee shops — even
 if they happen to share a name.
 
-### Schema
+### Inline Computation
 
-```sql
-CREATE TABLE category_idf (
-    collection VARCHAR NOT NULL,  -- dataset identifier (e.g. 'foursquare', 'overture')
-    category   VARCHAR NOT NULL,  -- category ID (Foursquare) or primary name (Overture)
-    n_places   UBIGINT NOT NULL,  -- count of places with this category
-    idf_score  DOUBLE  NOT NULL   -- ln(N / n_places)
-);
+Category IDF is computed inline during import from the extract's own
+places table, using a `t_idf` temp table created before importance scoring.
+The formula and result schema are the same across all three importers; only
+the category column name differs.
+
+The `t_idf` temp table has this schema:
+
 ```
-
-### Sort Order
-
-Sorted by `(collection, category)` for zonemap efficiency.
-
-### Storage Estimate
-
-Foursquare has ~1,000 category IDs; Overture has ~2,000 category values.
-The full table is ~3,000 rows — negligible.
-
-### Category IDF Build (Standalone Process)
-
-The IDF build reads from the same global places datasets as the density
-build and produces `category_idf.parquet`. It can run as part of the same
-build pipeline or independently.
-
-#### Source Data
-
-Unlike the density build, the IDF build is dataset-specific — Foursquare
-and Overture use completely different category systems, so both must be
-processed. The `collection` column distinguishes them.
+category  VARCHAR   -- category ID or name
+n_places  UBIGINT   -- count of places with this category
+idf_score DOUBLE    -- ln(N / n_places)
+```
 
 #### Foursquare OSP
 
 Foursquare places have an `fsq_category_ids` column containing an array of
-category ID strings. A place may belong to multiple categories. We unnest
-the array so that each category is counted independently.
+category ID strings. A place may belong to multiple categories. The IDF
+query unnests the array so each category is counted independently.
 
 ```sql
-INSERT INTO category_idf
+CREATE TEMP TABLE t_idf AS
 SELECT
-    'foursquare' AS collection,
     category,
     count(*) AS n_places,
-    ln(N.total::double / count(*)::double) AS idf_score
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
 FROM (
     SELECT unnest(fsq_category_ids) AS category
     FROM places
     WHERE fsq_category_ids IS NOT NULL
 ) cats
-CROSS JOIN (
-    SELECT count(*) AS total FROM places
-) N
+CROSS JOIN (SELECT count(*) AS total FROM places) N
 GROUP BY category, N.total;
 ```
 
 #### Overture Maps
 
-Overture places have a `categories.primary` field (a single string) and an
-optional `categories.alternate` array. We use the primary category for the
-IDF calculation, since it's always present and represents the most specific
-classification.
+Overture places have a `categories.primary` field (a single string). We
+use the primary category, since it's always present and represents the most
+specific classification.
 
 ```sql
-INSERT INTO category_idf
+CREATE TEMP TABLE t_idf AS
 SELECT
-    'overture' AS collection,
     categories.primary AS category,
     count(*) AS n_places,
-    ln(N.total::double / count(*)::double) AS idf_score
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
 FROM places
 CROSS JOIN (
     SELECT count(*) AS total FROM places
@@ -262,30 +234,30 @@ WHERE categories.primary IS NOT NULL
 GROUP BY categories.primary, N.total;
 ```
 
-#### Export as sorted Parquet
+#### OSM
+
+OSM places have a `primary_category` column (single string).
 
 ```sql
-COPY (
-    SELECT * FROM category_idf ORDER BY collection, category
-) TO 'category_idf.parquet' (FORMAT PARQUET);
+CREATE TEMP TABLE t_idf AS
+SELECT primary_category AS category,
+    count(*) AS n_places,
+    ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
+FROM places
+CROSS JOIN (SELECT count(*) AS total FROM places) N
+WHERE primary_category IS NOT NULL
+GROUP BY primary_category, N.total;
 ```
 
 ### Multi-Category Places
 
 When a place has multiple categories (Foursquare's `fsq_category_ids`
-array, Overture's `categories.alternate`), the **maximum IDF** across all
-of the place's categories is used as its category importance. A place
-tagged as both "Restaurant" (common, low IDF) and "Historic Landmark"
-(rare, high IDF) gets the higher score.
+array), the **maximum IDF** across all of the place's categories is used as
+its category importance. A place tagged as both "Restaurant" (common, low
+IDF) and "Historic Landmark" (rare, high IDF) gets the higher score.
 
-This is handled during the name_index join at import time, not in the IDF
-table itself.
-
-### Build Frequency
-
-Less often than density — category distributions are essentially static
-unless the taxonomy itself changes. Rebuilding when adopting a new dataset
-release is sufficient.
+This is handled during the `place_idf` temp table join at import time, not
+in `t_idf` itself.
 
 ## Importance Scoring
 
@@ -351,169 +323,37 @@ Attraction" shouldn't be penalized for the latter being common).
 
 ## Consuming Pre-built Artifacts During Place Import
 
-Place import scripts use the density and IDF tables to assign importance
-scores when building the `name_index`. Both files are attached as read-only
-Parquet sources. The `geography` extension is required at import time for
-the density join's `s2_cellfromlonlat` / `s2_cell_parent` calls.
+Place import scripts use the density table and inline-computed IDF to assign
+importance scores when building the `name_index`. The density file is attached
+as a read-only Parquet source; IDF is computed directly from the places table.
+The `geography` extension is required at import time for the density join's
+`s2_cellfromlonlat` / `s2_cell_parent` calls.
 
 ### Joining importance into name_index (Foursquare)
 
-```sql
-CREATE TABLE name_index AS
-SELECT
-    token,
-    p.fsq_place_id,
-    p.name,
-    p.latitude::decimal(10,6)::varchar AS latitude,
-    p.longitude::decimal(10,6)::varchar AS longitude,
-    p.address, p.locality, p.postcode, p.region, p.country,
-    coalesce(ln(1 + c.pt_count), 0)
-        + coalesce(p.max_idf, 0) AS importance
-FROM (
-    SELECT
-        unnest(string_split(lower(strip_accents(name)), ' ')) AS token,
-        fsq_place_id, name, latitude, longitude,
-        address, locality, postcode, region, country,
-        max_idf
-    FROM (
-        SELECT
-            p.*,
-            max(idf.idf_score) AS max_idf
-        FROM places p
-        LEFT JOIN read_parquet('category_idf.parquet') idf
-            ON idf.collection = 'foursquare'
-            AND idf.category = unnest(p.fsq_category_ids)
-        WHERE p.name IS NOT NULL AND length(p.name) > 0
-        GROUP BY ALL
-    )
-) p
-LEFT JOIN read_parquet('cell_counts.parquet') c
-    ON c.level = 12
-    AND c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(p.longitude, p.latitude), 12
-    )
-WHERE length(p.token) > 1
-ORDER BY token, importance DESC;
-```
+Importance scoring uses the inline `t_idf` temp table (computed from the
+places table) and the pre-built `cell_counts.parquet` density file. The
+actual import script uses a `place_idf` CTE that joins `t_idf` against
+places via unnest to get the max IDF per place, then combines with density
+from the cell_counts parquet.
 
 **Note:** The IDF join unnests `fsq_category_ids` and takes the max score
-per place, then the density join adds the spatial component. Both are LEFT
-JOINs so missing data contributes 0 via `coalesce`.
-
-**Implementation warning:** The inner subquery uses
-`unnest(p.fsq_category_ids)` inside a LEFT JOIN with `GROUP BY ALL`, which
-is valid DuckDB syntax but may not be optimized well by the query planner
-on large datasets. If this query is slow or produces unexpected results,
-replace the nested subquery with a CTE that pre-computes the max IDF per
-place before the main join:
-
-```sql
-CREATE TABLE name_index AS
-WITH place_idf AS (
-    SELECT
-        p.fsq_place_id,
-        max(idf.idf_score) AS max_idf
-    FROM places p,
-        unnest(p.fsq_category_ids) AS t(category)
-    LEFT JOIN read_parquet('category_idf.parquet') idf
-        ON idf.collection = 'foursquare'
-        AND idf.category = t.category
-    WHERE p.fsq_category_ids IS NOT NULL
-    GROUP BY p.fsq_place_id
-)
-SELECT
-    token,
-    p.fsq_place_id,
-    p.name,
-    p.latitude::decimal(10,6)::varchar AS latitude,
-    p.longitude::decimal(10,6)::varchar AS longitude,
-    p.address, p.locality, p.postcode, p.region, p.country,
-    coalesce(ln(1 + c.pt_count), 0)
-        + coalesce(pi.max_idf, 0) AS importance
-FROM (
-    SELECT
-        unnest(string_split(lower(strip_accents(name)), ' ')) AS token,
-        fsq_place_id, name, latitude, longitude,
-        address, locality, postcode, region, country
-    FROM places
-    WHERE name IS NOT NULL AND length(name) > 0
-) p
-LEFT JOIN place_idf pi USING (fsq_place_id)
-LEFT JOIN read_parquet('cell_counts.parquet') c
-    ON c.level = 12
-    AND c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(p.longitude, p.latitude), 12
-    )
-WHERE length(p.token) > 1
-ORDER BY token, importance DESC;
-```
-
-Test both variants against real data and use whichever performs better.
+per place; the density join adds the spatial component. The density JOIN
+is LEFT so missing density data contributes 0 via `coalesce`.
 
 ### Joining importance into name_index (Overture Maps)
 
-```sql
-CREATE TABLE name_index AS
-SELECT
-    token,
-    p.id AS rkey,
-    p.name,
-    st_y(st_centroid(p.geometry))::decimal(10,6)::varchar AS latitude,
-    st_x(st_centroid(p.geometry))::decimal(10,6)::varchar AS longitude,
-    coalesce(ln(1 + c.pt_count), 0)
-        + coalesce(idf.idf_score, 0) AS importance
-FROM (
-    SELECT
-        unnest(string_split(lower(strip_accents(names.primary)), ' ')) AS token,
-        *
-    FROM places
-    WHERE names.primary IS NOT NULL AND length(names.primary) > 0
-) p
-LEFT JOIN read_parquet('category_idf.parquet') idf
-    ON idf.collection = 'overture'
-    AND idf.category = p.categories.primary
-LEFT JOIN read_parquet('cell_counts.parquet') c
-    ON c.level = 12
-    AND c.cell_id = s2_cell_parent(
-        s2_cellfromlonlat(
-            st_x(st_centroid(p.geometry)),
-            st_y(st_centroid(p.geometry))
-        ), 12
-    )
-WHERE length(p.token) > 1
-ORDER BY token, importance DESC;
-```
+Same two-signal pattern as Foursquare. Overture uses a single
+`categories.primary` string, so the `t_idf` join is a simple equality —
+no unnest or max needed. The density join uses `cell_counts.parquet` as
+with FSQ.
 
-Overture uses a single `categories.primary` string, so the IDF join is a
-simple equality — no unnest or max needed.
+### Graceful fallback without pre-built density
 
-### Graceful fallback without pre-built data
-
-If neither the density file nor the IDF file is available at import time,
-the `name_index` build falls back to the current behavior:
-
-```sql
--- Fallback: no density or IDF data available
-CREATE TABLE name_index AS
-SELECT
-    token, fsq_place_id, name, latitude, longitude,
-    address, locality, postcode, region, country,
-    0 AS importance
-FROM (
-    SELECT
-        unnest(string_split(lower(strip_accents(name)), ' ')) AS token,
-        fsq_place_id, name, latitude, longitude,
-        address, locality, postcode, region, country
-    FROM places
-    WHERE name IS NOT NULL AND length(name) > 0
-) sub
-WHERE length(token) > 1
-ORDER BY token, importance DESC;
-```
-
-The import script should check for each file independently and include
-whichever joins are possible. If only one file is present, the other
-signal contributes 0.
+If the density file is absent at import time, the density signal
+contributes 0. Category IDF is always available since it is computed
+inline from the places table. The import script checks for the density
+file independently and omits the density join when not present.
 
 ## Integration Summary
 
@@ -524,24 +364,20 @@ DENSITY BUILD (standalone, annual)
     3. Cascade to levels 13–6
     4. Export cell_counts.parquet
 
-CATEGORY IDF BUILD (standalone, annual or less)
-    1. Load global places datasets (Foursquare AND Overture)
-    2. Unnest/extract categories, count places per category
-    3. Compute ln(N / n_c) per category
-    4. Export category_idf.parquet
-
 PLACE IMPORT (per-dataset, monthly or as needed)
     1. Create places table, load from parquet
     2. Clean up (remove nulls/zeros)
     3. Create spatial index (rtree)
-    4. Build name_index with importance from:
+    4. Compute category IDF inline (t_idf temp table from places)
+    5. Build name_index with importance from:
        - cell_counts.parquet (density, if available)
-       - category_idf.parquet (category IDF, if available)
-    5. ANALYZE
+       - t_idf temp table (category IDF, always available)
+    6. ANALYZE
 ```
 
-The density and IDF files are read-only inputs to the place import, not
-products of it. All three pipelines share no mutable state.
+The density file is a read-only input to place import, not a product of it.
+Category IDF is derived from the import's own places table and requires no
+external file.
 
 ## Query Patterns
 

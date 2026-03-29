@@ -62,12 +62,11 @@ FROM (
           + 40 * least(coalesce(max(idf.idf_score), 0) / 18.0, 1.0)
         )::INTEGER AS importance
     FROM places p
-    LEFT JOIN read_parquet('${density_file}') c
+    LEFT JOIN read_parquet('${density_file}') c  -- density from pre-built parquet
         ON c.level = 12
         AND c.cell_id = s2_cell_parent(s2_cellfromlonlat(p.longitude, p.latitude), 12)
-    LEFT JOIN read_parquet('${idf_file}') idf
-        ON idf.collection = 'foursquare'
-        AND idf.category = ANY(p.fsq_category_ids)
+    LEFT JOIN t_idf idf
+        ON idf.category = ANY(p.fsq_category_ids)
     GROUP BY p.fsq_place_id, c.pt_count
 ) sub
 WHERE places.fsq_place_id = sub.fsq_place_id;

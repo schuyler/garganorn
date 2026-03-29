@@ -493,7 +493,7 @@ AND wc.latitude BETWEEN ${ymin} AND ${ymax}
 
 ## Pipeline Ordering Change
 
-### Current order (osm-data-source branch)
+### Previous order (osm-data-source branch, superseded)
 
 ```
 Stage 1: QuackOSM → GeoParquet
@@ -504,9 +504,8 @@ build-idf.sh osm <geoparquet>       ← reads raw GeoParquet
 Stage 2: DuckDB SQL → places table → importance scoring → name_index
 ```
 
-Density and IDF run before Stage 2 because they read from the Stage 1
-GeoParquet (which has geometry for all features, not just the filtered
-subset).
+Density and IDF ran before Stage 2 because they read from the Stage 1
+GeoParquet. This approach is superseded — see "New order" below.
 
 ### New order
 
@@ -516,19 +515,19 @@ Stage 1: osm-pbf-parquet → Hive Parquet
 Stage 2: DuckDB SQL → places table (nodes + way centroids)
   ↓
 build-density.sh osm <osm.duckdb>   ← reads from places table
-build-idf.sh osm <osm.duckdb>       ← reads from places table
   ↓
-Importance scoring → name_index
+Importance scoring (IDF computed inline from places) → name_index
 ```
 
-Density and IDF move AFTER the places table is built, because:
+Density moves AFTER the places table is built, because:
 
 1. The Hive Parquet from osm-pbf-parquet has no resolved coordinates for
    ways. The places table does.
 2. Reading from the already-built places table is simpler — coordinates
    and primary_category are already computed.
-3. The density/IDF computation only needs coordinates and categories, both
-   of which are in the places table.
+
+Category IDF is computed inline during importance scoring directly from the
+places table, so no separate build step is needed.
 
 ### build-density.sh changes (OSM mode)
 
@@ -566,44 +565,18 @@ osm.duckdb database path. The script uses DuckDB's `ATTACH` to read from
 it read-only. Only the base-level INSERT (level 14) changes; the cascade
 loop that builds levels 13 down to 6 is unchanged.
 
-**Execution model**: density/IDF run as separate `duckdb` CLI invocations
-from bash, after the main import DuckDB session has closed. This avoids
-write-lock conflicts on the tmp database file.
+**Execution model**: the density build runs as a separate `duckdb` CLI
+invocation from bash, after the main import DuckDB session has closed. This
+avoids write-lock conflicts on the tmp database file. Category IDF is
+computed inline within the main importance scoring session.
 
-### build-idf.sh changes (OSM mode)
+### Category IDF (OSM mode)
 
-Same pattern — read `primary_category` directly from places table instead
-of re-deriving it from tags:
-
-```sql
--- Current (re-derives category from GeoParquet tags):
-INSERT INTO category_idf
-SELECT category, count(*) AS n_places,
-    ln(N.total::double / count(*)::double) AS idf_score
-FROM (
-    SELECT CASE WHEN tags['amenity'] IS NOT NULL THEN ...  END AS category
-    FROM read_parquet('osm_places.geoparquet')
-) cats
-CROSS JOIN (SELECT count(*) AS total FROM read_parquet('osm_places.geoparquet')) N
-WHERE category IS NOT NULL
-GROUP BY category, N.total;
-
--- New (reads pre-computed category from places table via ATTACH):
-ATTACH '${osm_db_path}' AS osm_import (READ_ONLY);
-INSERT INTO category_idf
-SELECT primary_category AS category,
-    count(*) AS n_places,
-    ln(N.total::double / count(*)::double) AS idf_score
-FROM osm_import.places
-CROSS JOIN (
-    SELECT count(*) AS total FROM osm_import.places
-) N
-WHERE primary_category IS NOT NULL
-GROUP BY primary_category, N.total;
-```
-
-This eliminates the duplicated CASE/WHEN category derivation logic from
-build-idf.sh.
+Category IDF is now computed inline during importance scoring in
+`import-osm.sh`, directly from the places table. No separate `build-idf.sh`
+invocation is needed. The inline query reads `primary_category` from the
+places table — the same column already computed during Stage 2 — eliminating
+the duplicated CASE/WHEN category derivation logic that `build-idf.sh` previously required.
 
 ## Spatial Extension
 
@@ -674,9 +647,8 @@ fi
 # DELETE FROM places WHERE geom IS NULL
 # CREATE INDEX places_rtree ON places USING RTREE (geom)
 
-# ─── Build density and IDF from places table ─────────────────────────────────
+# ─── Build density from places table ─────────────────────────────────────────
 # build-density.sh osm "$output_dir/osm.duckdb.tmp"
-# build-idf.sh osm "$output_dir/osm.duckdb.tmp"
 
 # ─── Importance scoring ──────────────────────────────────────────────────────
 # Same as current EXCEPT: drop the "ALTER TABLE places ADD COLUMN importance"
@@ -690,13 +662,12 @@ fi
 # mv osm.duckdb.tmp osm.duckdb
 ```
 
-Note: density and IDF build scripts read from `osm.duckdb.tmp` (the
-in-progress database) rather than a separate parquet source. The tmp file
-is the DuckDB database being constructed — it has the places table
-populated but not yet finalized. The build scripts need to ATTACH to it
-read-only or the import script needs to run them against the same DuckDB
-connection. The simplest approach: run density/IDF as separate DuckDB
-invocations that ATTACH the tmp database.
+Note: the density build script reads from `osm.duckdb.tmp` (the in-progress
+database) rather than a separate parquet source. The tmp file is the DuckDB
+database being constructed — it has the places table populated but not yet
+finalized. The build script runs as a separate DuckDB invocation that ATTACHes
+the tmp database read-only. Category IDF is computed inline within the main
+importance scoring DuckDB session, so no ATTACH is needed for it.
 
 ## Test Fixture Changes
 
