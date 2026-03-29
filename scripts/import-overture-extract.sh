@@ -207,10 +207,58 @@ DROP TABLE place_idf;
 DROP TABLE t_idf;
 EOF
 
+# Extract name variants
+cat >> "${output_dir}/import-overture.sql" <<'EOF'
+.print "Extracting name variants..."
+ALTER TABLE places ADD COLUMN variants
+    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [];
+
+CREATE TEMP TABLE overture_variants AS
+WITH common_entries AS (
+    SELECT id,
+        e.key AS language,
+        e."value" AS name
+    FROM places,
+         unnest(map_entries(names.common)) AS e
+    WHERE names.common IS NOT NULL
+),
+rule_entries AS (
+    SELECT id,
+        r.language,
+        r."value" AS name,
+        CASE r.variant
+            WHEN 'common'     THEN 'alternate'
+            WHEN 'official'   THEN 'official'
+            WHEN 'alternate'  THEN 'alternate'
+            WHEN 'short'      THEN 'short'
+            ELSE 'alternate'
+        END AS type
+    FROM places,
+         unnest(names.rules) AS r
+    WHERE names.rules IS NOT NULL
+),
+all_variants AS (
+    SELECT id, name, 'alternate' AS type, language FROM common_entries
+    UNION ALL
+    SELECT id, name, type, language FROM rule_entries
+)
+SELECT id, list({'name': name, 'type': type, 'language': language}
+                ORDER BY name) AS variants
+FROM all_variants
+WHERE name IS NOT NULL AND name != ''
+GROUP BY id;
+
+UPDATE places p SET variants = coalesce(
+    (SELECT ov.variants FROM overture_variants ov WHERE ov.id = p.id),
+    []
+);
+DROP TABLE overture_variants;
+EOF
+
 # Build name_index with trigrams in batches to avoid OOM on large datasets
 cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Creating name index (batched)..."
-CREATE TABLE name_index (trigram VARCHAR, id VARCHAR, name VARCHAR, norm_name VARCHAR, importance INTEGER);
+CREATE TABLE name_index (trigram VARCHAR, id VARCHAR, name VARCHAR, norm_name VARCHAR, importance INTEGER, is_variant BOOLEAN DEFAULT FALSE);
 EOF
 
 for batch_start in $(seq 0 5000000 80000000); do
@@ -223,7 +271,8 @@ SELECT
     np.id,
     np.name,
     np.norm_name,
-    np.importance
+    np.importance,
+    FALSE AS is_variant
 FROM (
     SELECT
         id,
@@ -239,6 +288,29 @@ FROM (
 CROSS JOIN generate_series(1, length(np.norm_name) - 2) AS gs(pos);
 EOF
 done
+
+cat >> "${output_dir}/import-overture.sql" <<'EOF'
+.print "Indexing variant names..."
+INSERT INTO name_index
+WITH variant_names AS (
+    SELECT id,
+           v.name,
+           lower(strip_accents(v.name)) AS norm_name,
+           importance,
+           TRUE AS is_variant
+    FROM places,
+         unnest(variants) AS v
+    WHERE v.name IS NOT NULL AND length(v.name) >= 3
+)
+SELECT substr(vn.norm_name, pos, 3) AS trigram,
+       vn.id,
+       vn.name,
+       vn.norm_name,
+       vn.importance,
+       vn.is_variant
+FROM variant_names vn
+CROSS JOIN generate_series(1, length(vn.norm_name) - 2) AS gs(pos);
+EOF
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Sorting name index by trigram..."

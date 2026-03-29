@@ -113,7 +113,8 @@ def _create_fsq_db(db_path):
             fsq_category_labels VARCHAR[],
             placemaker_url VARCHAR,
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance INTEGER
+            importance INTEGER,
+            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
         )
     """)
 
@@ -170,7 +171,8 @@ def _create_fsq_db(db_path):
                 ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
                 NULL,
                 {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                ?
+                ?,
+                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
             )
         """, [fsq_id, name, lat, lon, lon, lat,
               address, locality, postcode, region, admin_region, post_town, po_box,
@@ -184,14 +186,15 @@ def _create_fsq_db(db_path):
             fsq_place_id VARCHAR,
             name VARCHAR,
             norm_name VARCHAR,
-            importance INTEGER
+            importance INTEGER,
+            is_variant BOOLEAN DEFAULT FALSE
         )
     """)
     for row in FSQ_PLACES:
         fsq_id, name, lat, lon, address, locality, postcode, region, _, _, _, country = row
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
             """, [trigram, fsq_id, name, FoursquareOSP._strip_accents(name.lower()),
                   fsq_importance[fsq_id]])
 
@@ -225,7 +228,8 @@ def _create_overture_db(db_path):
             confidence DOUBLE,
             version INTEGER,
             sources STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
-            importance INTEGER
+            importance INTEGER,
+            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
         )
     """)
 
@@ -239,19 +243,33 @@ def _create_overture_db(db_path):
         "ovr007": 70,
     }
 
+    # Variant data for Overture places
+    ovr_variants = {
+        "ovr003": [{"name": "Tour de Coit", "type": "alternate", "language": "fr"}],
+    }
+
     for row in OVERTURE_PLACES:
         ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
-        conn.execute("""
+        variants = ovr_variants.get(ovr_id, [])
+        if variants:
+            variant_sql = "[" + ", ".join(
+                f"{{'name': '{v['name']}', 'type': '{v['type']}', 'language': '{v['language']}'}}"
+                for v in variants
+            ) + "]::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]"
+        else:
+            variant_sql = "[]::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]"
+        conn.execute(f"""
             INSERT INTO places VALUES (
                 ?, ST_Point(?, ?),
-                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                {'primary': ?},
-                {'primary': NULL},
-                [{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}],
+                {{'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}},
+                {{'primary': ?}},
+                {{'primary': NULL}},
+                [{{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}}],
                 NULL, NULL, NULL, NULL,
                 NULL,
                 0.9, 1, NULL,
-                ?
+                ?,
+                {variant_sql}
             )
         """, [ovr_id, lon, lat,
               lon, lat, lon, lat,
@@ -270,16 +288,28 @@ def _create_overture_db(db_path):
             id VARCHAR,
             name VARCHAR,
             norm_name VARCHAR,
-            importance INTEGER
+            importance INTEGER,
+            is_variant BOOLEAN DEFAULT FALSE
         )
     """)
     for row in OVERTURE_PLACES:
         ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
             """, [trigram, ovr_id, name, OvertureMaps._strip_accents(name.lower()),
                   ovr_importance[ovr_id]])
+
+    # Index variant names for Overture places
+    for ovr_id, variants in ovr_variants.items():
+        importance = ovr_importance[ovr_id]
+        for v in variants:
+            variant_name = v["name"]
+            norm_variant = OvertureMaps._strip_accents(variant_name.lower())
+            for trigram in _generate_trigrams(variant_name):
+                conn.execute("""
+                    INSERT INTO name_index VALUES (?, ?, ?, ?, ?, TRUE)
+                """, [trigram, ovr_id, variant_name, norm_variant, importance])
 
     conn.close()
 
@@ -385,9 +415,19 @@ def _create_osm_db(db_path):
             primary_category VARCHAR,
             tags MAP(VARCHAR, VARCHAR),
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance INTEGER
+            importance INTEGER,
+            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
         )
     """)
+
+    # Variant data for OSM places
+    osm_variants = {
+        "n240109189": [
+            {"name": "Tartine Manufactory SF", "type": "alternate", "language": "en"},
+            {"name": "Old Tartine", "type": "historical", "language": None},
+            {"name": "Tartine MFY", "type": "short", "language": None},
+        ],
+    }
 
     for row in OSM_PLACES:
         osm_type, osm_id, name, lat, lon, primary_category, tags = row
@@ -399,6 +439,14 @@ def _create_osm_db(db_path):
             map_literal = f"MAP {{{map_entries}}}"
         else:
             map_literal = "MAP()::MAP(VARCHAR, VARCHAR)"
+        variants = osm_variants.get(rkey, [])
+        if variants:
+            def _fmt_variant(v):
+                lang = f"'{v['language']}'" if v.get("language") else "NULL"
+                return f"{{'name': '{v['name']}', 'type': '{v['type']}', 'language': {lang}}}"
+            variant_sql = "[" + ", ".join(_fmt_variant(v) for v in variants) + "]::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]"
+        else:
+            variant_sql = "[]::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]"
         conn.execute(f"""
             INSERT INTO places VALUES (
                 ?, ?, ?, ?, ?, ?,
@@ -406,7 +454,8 @@ def _create_osm_db(db_path):
                 ?,
                 {map_literal},
                 {{'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}},
-                ?
+                ?,
+                {variant_sql}
             )
         """, [osm_type, osm_id, rkey, name, lat, lon, lon, lat,
               primary_category,
@@ -419,7 +468,8 @@ def _create_osm_db(db_path):
             rkey VARCHAR,
             name VARCHAR,
             norm_name VARCHAR,
-            importance INTEGER
+            importance INTEGER,
+            is_variant BOOLEAN DEFAULT FALSE
         )
     """)
     for row in OSM_PLACES:
@@ -428,9 +478,20 @@ def _create_osm_db(db_path):
         importance = OSM_IMPORTANCE[rkey]
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
             """, [trigram, rkey, name, OpenStreetMap._strip_accents(name.lower()),
                   importance])
+
+    # Index variant names for OSM places
+    for rkey, variants in osm_variants.items():
+        importance = OSM_IMPORTANCE[rkey]
+        for v in variants:
+            variant_name = v["name"]
+            norm_variant = OpenStreetMap._strip_accents(variant_name.lower())
+            for trigram in _generate_trigrams(variant_name):
+                conn.execute("""
+                    INSERT INTO name_index VALUES (?, ?, ?, ?, ?, TRUE)
+                """, [trigram, rkey, variant_name, norm_variant, importance])
 
     conn.close()
 

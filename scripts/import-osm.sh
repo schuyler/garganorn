@@ -514,6 +514,77 @@ fi
 
 elapsed
 
+# ─── Variant extraction ───────────────────────────────────────────────────────
+
+echo
+echo "Extracting name variants..."
+
+duckdb -bail "$output_db_tmp" <<EOF
+ALTER TABLE places ADD COLUMN variants
+    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [];
+
+CREATE TEMP TABLE raw_variants AS
+WITH tag_entries AS (
+    SELECT
+        'n' || id::VARCHAR AS rkey,
+        unnest(map_entries(tags)) AS e
+    FROM read_parquet('${node_parquet}')
+    WHERE tags['name'] IS NOT NULL
+    UNION ALL
+    SELECT
+        'w' || id::VARCHAR AS rkey,
+        unnest(map_entries(tags)) AS e
+    FROM read_parquet('${way_parquet}')
+    WHERE tags['name'] IS NOT NULL
+),
+name_tags AS (
+    SELECT rkey, e.key, e.value
+    FROM tag_entries
+    WHERE e.key LIKE 'name:%'
+       OR e.key IN ('alt_name','old_name','official_name',
+                    'short_name','loc_name','int_name')
+),
+split_values AS (
+    SELECT rkey,
+        trim(s.value) AS name,
+        CASE
+            WHEN key LIKE 'name:%' THEN 'alternate'
+            WHEN key = 'alt_name' THEN 'alternate'
+            WHEN key = 'old_name' THEN 'historical'
+            WHEN key = 'official_name' THEN 'official'
+            WHEN key = 'short_name' THEN 'short'
+            WHEN key = 'loc_name' THEN 'colloquial'
+            WHEN key = 'int_name' THEN 'alternate'
+        END AS type,
+        CASE
+            WHEN key LIKE 'name:%' THEN replace(key, 'name:', '')
+            ELSE NULL
+        END AS language
+    FROM name_tags,
+         unnest(string_split(value, ';')) AS s(value)
+    WHERE trim(s.value) != ''
+)
+SELECT rkey,
+       list({'name': name, 'type': type, 'language': language}
+            ORDER BY name) AS variants
+FROM split_values
+GROUP BY rkey;
+
+UPDATE places p SET variants = coalesce(
+    (SELECT rv.variants FROM raw_variants rv WHERE rv.rkey = p.rkey),
+    []
+);
+DROP TABLE raw_variants;
+EOF
+
+if [ $? -ne 0 ]; then
+    echo "Variant extraction failed."
+    rm -f "$output_db_tmp"
+    exit 1
+fi
+
+elapsed
+
 # ─── Name index ───────────────────────────────────────────────────────────────
 
 echo
@@ -525,7 +596,8 @@ CREATE TABLE IF NOT EXISTS name_index (
     rkey             VARCHAR,
     name             VARCHAR,
     norm_name        VARCHAR,
-    importance       INTEGER
+    importance       INTEGER,
+    is_variant       BOOLEAN DEFAULT FALSE
 );
 
 INSERT INTO name_index
@@ -541,9 +613,30 @@ SELECT substr(np.norm_name, pos, 3) AS trigram,
        np.rkey,
        np.name,
        np.norm_name,
-       np.importance
+       np.importance,
+       FALSE AS is_variant
 FROM name_prep np
 CROSS JOIN generate_series(1, length(np.norm_name) - 2) AS gs(pos);
+
+INSERT INTO name_index
+WITH variant_names AS (
+    SELECT rkey,
+           v.name,
+           lower(strip_accents(v.name)) AS norm_name,
+           importance,
+           TRUE AS is_variant
+    FROM places,
+         unnest(variants) AS v
+    WHERE v.name IS NOT NULL AND length(v.name) >= 3
+)
+SELECT substr(vn.norm_name, pos, 3) AS trigram,
+       vn.rkey,
+       vn.name,
+       vn.norm_name,
+       vn.importance,
+       vn.is_variant
+FROM variant_names vn
+CROSS JOIN generate_series(1, length(vn.norm_name) - 2) AS gs(pos);
 ENDSQL
 
 if [ $? -ne 0 ]; then

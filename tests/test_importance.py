@@ -170,7 +170,8 @@ def fsq_tiebreak_db_path(tmp_path_factory):
             fsq_category_labels VARCHAR[],
             placemaker_url VARCHAR,
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance INTEGER
+            importance INTEGER,
+            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
         )
     """)
 
@@ -190,7 +191,8 @@ def fsq_tiebreak_db_path(tmp_path_factory):
                 ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
                 NULL,
                 {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                ?
+                ?,
+                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
             )
         """, [fsq_id, name, lat, lon, lon, lat,
               lon, lat, lon, lat,
@@ -202,14 +204,15 @@ def fsq_tiebreak_db_path(tmp_path_factory):
             fsq_place_id VARCHAR,
             name VARCHAR,
             norm_name VARCHAR,
-            importance INTEGER
+            importance INTEGER,
+            is_variant BOOLEAN DEFAULT FALSE
         )
     """)
 
     for fsq_id, name, lat, lon, importance in places:
         for trigram in _generate_trigrams(name):
             conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?)
+                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
             """, [trigram, fsq_id, name, FoursquareOSP._strip_accents(name.lower()), importance])
 
     conn.close()

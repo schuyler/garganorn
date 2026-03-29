@@ -180,6 +180,13 @@ DROP TABLE place_idf;
 DROP TABLE t_idf;
 EOF
 
+# Add empty variants column (FSQ has no variant source data)
+cat >> "${output_dir}/import.sql" <<'EOF'
+.print "Adding variants column..."
+ALTER TABLE places ADD COLUMN variants
+    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [];
+EOF
+
 # Build name_index with trigrams (reads importance directly from places)
 cat >> "${output_dir}/import.sql" <<EOF
 .print "Creating name index..."
@@ -199,7 +206,8 @@ trigrams as (
         np.fsq_place_id,
         np.name,
         np.norm_name,
-        np.importance
+        np.importance,
+        false as is_variant
     from name_prep np
     cross join generate_series(1, length(np.norm_name) - 2) as gs(pos)
     where length(np.norm_name) >= 3
@@ -209,7 +217,8 @@ select
     fsq_place_id,
     name,
     norm_name,
-    importance
+    importance,
+    is_variant
 from trigrams
 order by trigram;
 EOF

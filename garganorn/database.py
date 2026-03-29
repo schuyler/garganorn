@@ -314,7 +314,8 @@ class FoursquareOSP(Database):
             twitter,
             fsq_category_ids,
             fsq_category_labels,
-            placemaker_url
+            placemaker_url,
+            variants
         """
 
     def query_hydrate(self, count):
@@ -552,13 +553,22 @@ class FoursquareOSP(Database):
                 **address_data
             })
 
+        raw_variants = result.pop("variants", None) or []
+        variants = []
+        for v in raw_variants:
+            entry = {"name": v["name"]}
+            if v.get("type"):
+                entry["type"] = v["type"]
+            if v.get("language"):
+                entry["language"] = v["language"]
+            variants.append(entry)
         return {
             "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
             "name": result.pop("name"),
-            "variants": [],
+            "variants": variants,
             "attributes": result
         }
 
@@ -582,7 +592,8 @@ class OvertureMaps(Database):
             brand,
             confidence::decimal(4,3)::varchar as confidence,
             version,
-            sources
+            sources,
+            variants
         """
 
     def query_hydrate(self, count):
@@ -834,13 +845,22 @@ class OvertureMaps(Database):
             # Remove addresses from result to avoid duplication in attributes
             result.pop("addresses")
 
+        raw_variants = result.pop("variants", None) or []
+        variants = []
+        for v in raw_variants:
+            entry = {"name": v["name"]}
+            if v.get("type"):
+                entry["type"] = v["type"]
+            if v.get("language"):
+                entry["language"] = v["language"]
+            variants.append(entry)
         return {
             "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
             "name": result.pop("name"),
-            "variants": [],
+            "variants": variants,
             "attributes": result
         }
 
@@ -854,7 +874,8 @@ class OpenStreetMap(Database):
             latitude::decimal(10,6)::varchar AS latitude,
             longitude::decimal(10,6)::varchar AS longitude,
             primary_category,
-            tags
+            tags,
+            variants
         """
 
     def query_hydrate(self, count):
@@ -1099,6 +1120,17 @@ class OpenStreetMap(Database):
         return super().get_record(_repo, _collection, self.compact_rkey(rkey))
 
     def process_record(self, result):
+        # Pop variants before tags unpacking
+        raw_variants = result.pop("variants", None) or []
+        variants = []
+        for v in raw_variants:
+            entry = {"name": v["name"]}
+            if v.get("type"):
+                entry["type"] = v["type"]
+            if v.get("language"):
+                entry["language"] = v["language"]
+            variants.append(entry)
+
         # tags comes as a dict from DuckDB MAP type (absent in search results)
         tag_dict = dict(result.pop("tags", None) or {})
 
@@ -1146,7 +1178,7 @@ class OpenStreetMap(Database):
             "rkey": self.expand_rkey(result.pop("rkey")),
             "locations": locations,
             "name": result.pop("name"),
-            "variants": [],
+            "variants": variants,
             "attributes": tag_dict
         }
 

@@ -32,7 +32,7 @@
                 },
                 "type": {
                     "type": "string",
-                    "description": "The kind of variant: official, alternate, short, colloquial."
+                    "description": "The kind of variant: official, alternate, short, colloquial, historical."
                 },
                 "language": {
                     "type": "string",

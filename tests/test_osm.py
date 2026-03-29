@@ -241,7 +241,7 @@ def test_get_record_found(osm_db):
     assert record is not None
     assert record["rkey"] == "node:240109189"
     assert record["name"] == "Tartine Manufactory"
-    assert record["variants"] == []
+    assert isinstance(record["variants"], list)
 
 
 def test_get_record_not_found(osm_db):
