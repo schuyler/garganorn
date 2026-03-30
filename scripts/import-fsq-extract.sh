@@ -10,6 +10,22 @@ if ! command -v duckdb &> /dev/null; then
     exit 1
 fi
 
+# Extract --log option before positional parsing
+log_file=""
+remaining_args=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --log) log_file="$2"; shift 2 ;;
+        *) remaining_args+=("$1"); shift ;;
+    esac
+done
+set -- "${remaining_args[@]}"
+
+if [ -n "$log_file" ]; then
+    mkdir -p "$(dirname "$log_file")"
+    exec > >(tee "$log_file") 2>&1
+fi
+
 xmin=$1
 ymin=$2
 xmax=$3
@@ -17,7 +33,7 @@ ymax=$4
 
 if [ -z "$xmin" ] || [ -z "$ymin" ] || [ -z "$xmax" ] || [ -z "$ymax" ]; then
     echo
-    echo "Usage: $0 <xmin> <ymin> <xmax> <ymax>"
+    echo "Usage: $0 [--log <path>] <xmin> <ymin> <xmax> <ymax>"
     echo
     exit 1
 fi

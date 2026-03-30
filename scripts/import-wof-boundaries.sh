@@ -10,6 +10,7 @@ set -euo pipefail
 # Usage: import-wof-boundaries.sh [options]
 #   --source <path>      Use a pre-downloaded WoF SQLite (skip download)
 #   --output-dir <dir>   Output directory (default: scripts/../db)
+#   --log <path>         Log output to file (tee)
 # ---------------------------------------------------------------------------
 
 # --- Dependency checks ---
@@ -28,6 +29,7 @@ fi
 # --- Parse arguments ---
 
 source_db=""
+log_file=""
 script_dir="$(dirname "$(realpath "$0")")"
 output_dir="${script_dir}/../db"
 
@@ -41,13 +43,22 @@ while [[ $# -gt 0 ]]; do
             output_dir="$2"
             shift 2
             ;;
+        --log)
+            log_file="$2"
+            shift 2
+            ;;
         *)
             echo "Unknown option: $1"
-            echo "Usage: $0 [--source <sqlite_path>] [--output-dir <dir>]"
+            echo "Usage: $0 [--source <sqlite_path>] [--output-dir <dir>] [--log <path>]"
             exit 1
             ;;
     esac
 done
+
+if [ -n "$log_file" ]; then
+    mkdir -p "$(dirname "$log_file")"
+    exec > >(tee "$log_file") 2>&1
+fi
 
 mkdir -p "$output_dir"
 

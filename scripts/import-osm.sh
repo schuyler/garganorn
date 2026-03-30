@@ -33,6 +33,7 @@ usage() {
     echo "  pbf_path: path to the OSM PBF file"
     echo
     echo "  Options:"
+    echo "    --log <path>          log output to file (tee)"
     echo "    --output-dir <dir>    output directory (default: scripts/../db)"
     echo "    --cache-dir <dir>     cache directory (default: scripts/../db/cache/osm)"
     echo "    --xmin <lon>          bounding box west edge"
@@ -62,6 +63,7 @@ xmin=""
 xmax=""
 ymin=""
 ymax=""
+log_file=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -71,9 +73,15 @@ while [ $# -gt 0 ]; do
         --xmax)       xmax="$2";       shift 2 ;;
         --ymin)       ymin="$2";       shift 2 ;;
         --ymax)       ymax="$2";       shift 2 ;;
+        --log)        log_file="$2"; shift 2 ;;
         *) echo "Unknown option: $1"; usage ;;
     esac
 done
+
+if [ -n "$log_file" ]; then
+    mkdir -p "$(dirname "$log_file")"
+    exec > >(tee "$log_file") 2>&1
+fi
 
 # Validate bbox: all four must be provided together or not at all
 bbox_count=0
