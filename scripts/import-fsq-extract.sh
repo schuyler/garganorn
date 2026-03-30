@@ -118,6 +118,8 @@ cat > "${output_dir}/import.sql" <<EOF
 SET memory_limit='48GB';
 install spatial;
 load spatial;
+.headers off
+.mode list
 create table places as select * EXCLUDE (geom), geom::GEOMETRY as geom from '${cache_dir}/places-00000.zstd.parquet' limit 0;
 EOF
 
@@ -125,7 +127,7 @@ EOF
 for i in $(seq 0 99); do
     source_file="${cache_dir}/places-$(printf '%05d' $i).zstd.parquet"
     cat <<EOF
-.print "Importing ${i} / 100"
+SELECT printf('[%s] Importing ${i} / 100', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 insert into places select * EXCLUDE (geom), geom::GEOMETRY as geom from '${source_file}'
     where bbox.xmin >= ${xmin} and bbox.xmax <= ${xmax}
     and bbox.ymin >= ${ymin} and bbox.ymax <= ${ymax}
@@ -137,17 +139,17 @@ done >> "${output_dir}/import.sql"
 
 # Create spatial index
 cat >> "${output_dir}/import.sql" <<EOF
-.print "Creating spatial index..."
+SELECT printf('[%s] Creating spatial index...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 create index idx_fsq_place_id on places(fsq_place_id);
 EOF
 
 # Compute importance as normalized 0-100 integer score
 # 60% window-function density (S2 level 12 cell count) + 40% category IDF
 cat >> "${output_dir}/import.sql" <<EOF
-.print "Loading geography extension for importance scoring..."
+SELECT printf('[%s] Loading geography extension for importance scoring...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 install geography from community;
 load geography;
-.print "Computing importance scores..."
+SELECT printf('[%s] Computing importance scores...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 CREATE TEMP TABLE t_idf AS
 SELECT
     category,
@@ -194,14 +196,14 @@ EOF
 
 # Add empty variants column (FSQ has no variant source data)
 cat >> "${output_dir}/import.sql" <<'EOF'
-.print "Adding variants column..."
+SELECT printf('[%s] Adding variants column...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 ALTER TABLE places ADD COLUMN variants
     STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [];
 EOF
 
 # Build name_index with trigrams (reads importance directly from places)
 cat >> "${output_dir}/import.sql" <<EOF
-.print "Creating name index..."
+SELECT printf('[%s] Creating name index...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 create table name_index as
 with name_prep as (
     select
@@ -236,7 +238,7 @@ order by trigram;
 EOF
 
 cat >> "${output_dir}/import.sql" <<EOF
-.print "Analyzing..."
+SELECT printf('[%s] Analyzing...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 analyze;
 EOF
 

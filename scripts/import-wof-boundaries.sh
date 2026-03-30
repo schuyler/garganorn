@@ -112,6 +112,8 @@ INSTALL sqlite;
 LOAD sqlite;
 INSTALL spatial;
 LOAD spatial;
+.headers off
+.mode list
 
 ATTACH '${source_db}' AS wof (TYPE sqlite, READ_ONLY);
 
@@ -137,7 +139,7 @@ SELECT * FROM (VALUES
 ) AS t(placetype, level);
 
 -- Stage 1: Build boundaries table from WoF SPR + GeoJSON
-.print 'Stage 1: Building boundaries table...'
+SELECT printf('[%s] Stage 1: Building boundaries table...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 CREATE TABLE boundaries AS
 WITH staged AS (
     SELECT
@@ -168,11 +170,11 @@ WITH staged AS (
 SELECT * FROM staged
 WHERE ST_GeometryType(geom) != 'POINT';
 
-.print 'Stage 1 complete.'
+SELECT printf('[%s] Stage 1 complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 SELECT count(*) AS boundary_count FROM boundaries;
 
 -- Stage 2: Denormalize multilingual names
-.print 'Stage 2: Adding multilingual names...'
+SELECT printf('[%s] Stage 2: Adding multilingual names...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 ALTER TABLE boundaries ADD COLUMN names_json VARCHAR;
 
 UPDATE boundaries b
@@ -196,10 +198,10 @@ FROM (
 ) n
 WHERE b.wof_id = n.id;
 
-.print 'Stage 2 complete.'
+SELECT printf('[%s] Stage 2 complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 
 -- Stage 3: Add concordances (cross-references to external datasets)
-.print 'Stage 3: Adding concordances...'
+SELECT printf('[%s] Stage 3: Adding concordances...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 ALTER TABLE boundaries ADD COLUMN concordances VARCHAR;
 
 UPDATE boundaries b
@@ -216,17 +218,17 @@ FROM (
 ) c
 WHERE b.wof_id = c.id;
 
-.print 'Stage 3 complete.'
+SELECT printf('[%s] Stage 3 complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 
 -- Stage 4: Create indexes and finalize
-.print 'Stage 4: Creating indexes...'
+SELECT printf('[%s] Stage 4: Creating indexes...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom);
 CREATE INDEX idx_rkey ON boundaries(rkey);
 
 DROP TABLE placetype_levels;
 
 ANALYZE;
-.print 'Import complete.'
+SELECT printf('[%s] Import complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 EOSQL
 )
 

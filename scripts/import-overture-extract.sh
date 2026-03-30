@@ -138,6 +138,8 @@ cat > "${output_dir}/import-overture.sql" <<EOF
 SET memory_limit='48GB';
 install spatial;
 load spatial;
+.headers off
+.mode list
 
 -- Create the places table
 create table places as select * from '${first_file}' limit 0;
@@ -151,7 +153,7 @@ while IFS= read -r file; do
   local_file="${cache_dir}/$(basename "$file")"
 
   cat <<EOF
-.print "Importing file ${file_number}/${file_count}: $(basename "$file")"
+SELECT printf('[%s] Importing file ${file_number}/${file_count}: $(basename "$file")', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 insert into places select * from '${local_file}'
     where bbox.xmin >= ${xmin}
       and bbox.xmax <= ${xmax}
@@ -163,17 +165,17 @@ done <<< "$parquet_files" >> "${output_dir}/import-overture.sql"
 
 # Create spatial index
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Creating spatial index..."
+SELECT printf('[%s] Creating spatial index...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 create index idx_id on places(id);
 EOF
 
 # Compute importance as normalized 0-100 integer score
 # 60% window-function density (S2 level 12 cell count) + 40% category IDF
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Loading geography extension for importance scoring..."
+SELECT printf('[%s] Loading geography extension for importance scoring...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 install geography from community;
 load geography;
-.print "Computing importance scores..."
+SELECT printf('[%s] Computing importance scores...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 CREATE TEMP TABLE t_idf AS
 SELECT
     categories.primary AS category,
@@ -221,7 +223,7 @@ EOF
 
 # Extract name variants
 cat >> "${output_dir}/import-overture.sql" <<'EOF'
-.print "Extracting name variants..."
+SELECT printf('[%s] Extracting name variants...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 CREATE TEMP TABLE overture_variants AS
 WITH common_entries AS (
     SELECT id,
@@ -270,14 +272,14 @@ EOF
 
 # Build name_index with trigrams in batches to avoid OOM on large datasets
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Creating name index (batched)..."
+SELECT printf('[%s] Creating name index (batched)...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 CREATE TABLE name_index (trigram VARCHAR, id VARCHAR, name VARCHAR, norm_name VARCHAR, importance INTEGER, is_variant BOOLEAN DEFAULT FALSE);
 EOF
 
 for batch_start in $(seq 0 5000000 80000000); do
     batch_end=$((batch_start + 5000000))
     cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "  name_index batch rowid ${batch_start}–${batch_end}..."
+SELECT printf('[%s] name_index batch rowid ${batch_start}–${batch_end}...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 INSERT INTO name_index
 SELECT
     substr(np.norm_name, pos, 3) AS trigram,
@@ -303,7 +305,7 @@ EOF
 done
 
 cat >> "${output_dir}/import-overture.sql" <<'EOF'
-.print "Indexing variant names..."
+SELECT printf('[%s] Indexing variant names...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 INSERT INTO name_index
 WITH variant_names AS (
     SELECT id,
@@ -326,7 +328,7 @@ CROSS JOIN generate_series(1, length(vn.norm_name) - 2) AS gs(pos);
 EOF
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Sorting name index by trigram..."
+SELECT printf('[%s] Sorting name index by trigram...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 SET memory_limit='16GB';
 CREATE TABLE name_index_sorted AS SELECT * FROM name_index ORDER BY trigram;
 SET memory_limit='48GB';
@@ -335,7 +337,7 @@ ALTER TABLE name_index_sorted RENAME TO name_index;
 EOF
 
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Analyzing..."
+SELECT printf('[%s] Analyzing...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 analyze;
 EOF
 

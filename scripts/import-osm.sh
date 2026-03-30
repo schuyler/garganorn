@@ -176,6 +176,8 @@ fi
 duckdb -bail "$output_db_tmp" <<EOF
 INSTALL spatial;
 LOAD spatial;
+.headers off
+.mode list
 
 CREATE TABLE places (
     osm_type         VARCHAR,
@@ -191,7 +193,7 @@ CREATE TABLE places (
     importance       INTEGER DEFAULT 0
 );
 
-.print "Importing nodes..."
+SELECT printf('[%s] Importing nodes...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 INSERT INTO places
 WITH filtered AS (
     SELECT
@@ -303,7 +305,7 @@ WHERE primary_category IS NOT NULL
   AND name IS NOT NULL
   ${node_bbox_filter};
 
-.print "Importing way centroids..."
+SELECT printf('[%s] Importing way centroids...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 INSERT INTO places
 WITH qualifying_ways AS (
     SELECT
@@ -438,7 +440,7 @@ WHERE qw.primary_category IS NOT NULL
   AND qw.name IS NOT NULL
   ${way_bbox_filter};
 
-.print "Cleaning up null geom rows..."
+SELECT printf('[%s] Cleaning up null geom rows...', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 DELETE FROM places WHERE geom IS NULL;
 
 CREATE INDEX idx_rkey ON places(rkey);
