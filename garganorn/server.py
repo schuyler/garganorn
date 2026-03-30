@@ -27,11 +27,15 @@ def load_lexicons():
     
     return lexicons
 
+LEXICON_SCHEMA_COLLECTION = "com.atproto.lexicon.schema"
+
+
 class Server:
     nsid = "org.atgeo"
     methods = {
         f"{nsid}.searchRecords": "search_records",
         "com.atproto.repo.getRecord": "get_record",
+        "com.atproto.repo.listRecords": "list_records",
     }
 
     def __init__(self, repo, dbs, logger, boundaries=None):
@@ -39,6 +43,7 @@ class Server:
         self.db = dict([(db.collection, db) for db in dbs])
         self.boundaries = boundaries
         self.lexicons = load_lexicons()
+        self.lexicon_map = {lex["id"]: lex for lex in self.lexicons}
         self.server = lexrpc.Server(lexicons=self.lexicons)
         self.logger = logger
         for name, method in self.methods.items():
@@ -51,6 +56,19 @@ class Server:
         return f"https://{self.repo}/{collection}/{rkey}"
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
+        # Lexicon schema collection: serve from in-memory lexicon_map
+        if collection == LEXICON_SCHEMA_COLLECTION:
+            lexicon = self.lexicon_map.get(rkey)
+            if lexicon is None:
+                raise XrpcError(
+                    f"Record {rkey} not found in collection {collection}",
+                    "RecordNotFound",
+                )
+            return {
+                "uri": f"at://did:web:{self.repo}/{LEXICON_SCHEMA_COLLECTION}/{rkey}",
+                "value": lexicon,
+            }
+
         start_time = time.perf_counter()
         if collection not in self.db:
             raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
@@ -90,6 +108,42 @@ class Server:
                 "elapsed_ms": run_time
             }
         }
+
+    def list_records(self, _, repo: str, collection: str, limit: int = 50,
+                     cursor: str = "", reverse: bool = False):
+        if collection != LEXICON_SCHEMA_COLLECTION:
+            raise XrpcError(
+                f"Collection {collection} not found on server {self.repo}",
+                "CollectionNotFound",
+            )
+
+        # Sort lexicon NSIDs for stable pagination
+        nsids = sorted(self.lexicon_map.keys(), reverse=reverse)
+
+        # Apply cursor: skip past the cursor NSID
+        if cursor:
+            try:
+                idx = nsids.index(cursor) + 1
+            except ValueError:
+                idx = 0
+            nsids = nsids[idx:]
+
+        # Apply limit
+        page = nsids[:limit]
+        next_cursor = page[-1] if len(nsids) > limit else None
+
+        records = [
+            {
+                "uri": f"at://did:web:{self.repo}/{LEXICON_SCHEMA_COLLECTION}/{nsid}",
+                "value": self.lexicon_map[nsid],
+            }
+            for nsid in page
+        ]
+
+        result = {"records": records}
+        if next_cursor:
+            result["cursor"] = next_cursor
+        return result
 
     def _parse_bbox(self, bbox_str):
         """Parse and validate bbox string 'xmin,ymin,xmax,ymax'. Returns tuple or raises XrpcError."""

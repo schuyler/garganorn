@@ -18,7 +18,7 @@ def create_app():
     gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries)
     init_flask(gazetteer.server, app)
 
-    lexicon_map = {lex["id"]: lex for lex in gazetteer.lexicons}
+    lexicon_map = gazetteer.lexicon_map
 
     @app.route('/<nsid>')
     def get_lexicon(nsid):
@@ -26,6 +26,20 @@ def create_app():
         if lexicon is None:
             abort(404)
         return lexicon
+
+    @app.route('/.well-known/did.json')
+    def did_document():
+        return {
+            "id": f"did:web:{gazetteer.repo}",
+            "alsoKnownAs": [f"at://{gazetteer.repo}"],
+            "service": [
+                {
+                    "id": "#atproto_pds",
+                    "type": "AtprotoPersonalDataServer",
+                    "serviceEndpoint": f"https://{gazetteer.repo}",
+                }
+            ],
+        }
 
     @app.route('/health')
     def health_check():

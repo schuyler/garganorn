@@ -351,3 +351,119 @@ def test_search_records_includes_attribution():
     assert isinstance(wrapper["attribution"], str)
     assert wrapper["attribution"] == TEST_ATTRIBUTION_URL
     assert "attribution" not in wrapper["value"]
+
+
+LEXICON_SCHEMA_COLLECTION = "com.atproto.lexicon.schema"
+
+
+def test_get_record_lexicon_schema():
+    """get_record returns lexicon JSON when collection is com.atproto.lexicon.schema."""
+    server = _make_server()
+    # rkey is an NSID like "org.atgeo.place"
+    result = server.get_record(
+        {}, repo="places.atgeo.org",
+        collection=LEXICON_SCHEMA_COLLECTION, rkey="org.atgeo.place"
+    )
+    assert "uri" in result
+    assert "value" in result
+    assert result["uri"] == "at://did:web:places.atgeo.org/com.atproto.lexicon.schema/org.atgeo.place"
+    assert result["value"]["id"] == "org.atgeo.place"
+    assert result["value"]["lexicon"] == 1
+    # No attribution for lexicon schemas
+    assert "attribution" not in result
+    # No importance for lexicon schemas
+    assert "importance" not in result
+
+
+def test_get_record_lexicon_schema_not_found():
+    """get_record raises RecordNotFound for unknown NSID in lexicon schema collection."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.get_record(
+            {}, repo="places.atgeo.org",
+            collection=LEXICON_SCHEMA_COLLECTION, rkey="nonexistent.lexicon"
+        )
+    assert exc_info.value.name == "RecordNotFound"
+
+
+def test_list_records_lexicon_schema():
+    """list_records returns all lexicon schemas with AT URIs."""
+    server = _make_server()
+    result = server.list_records(
+        {}, repo="places.atgeo.org", collection=LEXICON_SCHEMA_COLLECTION
+    )
+    assert "records" in result
+    records = result["records"]
+    assert len(records) > 0
+    # Each record has uri and value
+    for rec in records:
+        assert "uri" in rec
+        assert "value" in rec
+        nsid = rec["value"]["id"]
+        assert rec["uri"] == f"at://did:web:places.atgeo.org/com.atproto.lexicon.schema/{nsid}"
+    # Records are sorted by NSID
+    nsids = [r["value"]["id"] for r in records]
+    assert nsids == sorted(nsids)
+
+
+def test_list_records_lexicon_schema_limit():
+    """list_records respects the limit parameter."""
+    server = _make_server()
+    result = server.list_records(
+        {}, repo="places.atgeo.org", collection=LEXICON_SCHEMA_COLLECTION,
+        limit=2
+    )
+    assert len(result["records"]) == 2
+    assert "cursor" in result  # More records available
+
+
+def test_list_records_lexicon_schema_cursor():
+    """list_records paginates using cursor."""
+    server = _make_server()
+    page1 = server.list_records(
+        {}, repo="places.atgeo.org", collection=LEXICON_SCHEMA_COLLECTION,
+        limit=2
+    )
+    assert len(page1["records"]) == 2
+    cursor = page1["cursor"]
+
+    page2 = server.list_records(
+        {}, repo="places.atgeo.org", collection=LEXICON_SCHEMA_COLLECTION,
+        limit=2, cursor=cursor
+    )
+    assert len(page2["records"]) > 0
+    # No overlap between pages
+    page1_nsids = {r["value"]["id"] for r in page1["records"]}
+    page2_nsids = {r["value"]["id"] for r in page2["records"]}
+    assert page1_nsids.isdisjoint(page2_nsids)
+
+
+def test_list_records_lexicon_schema_reverse():
+    """list_records with reverse=True returns records in reverse NSID order."""
+    server = _make_server()
+    result = server.list_records(
+        {}, repo="places.atgeo.org", collection=LEXICON_SCHEMA_COLLECTION,
+        reverse=True
+    )
+    nsids = [r["value"]["id"] for r in result["records"]]
+    assert nsids == sorted(nsids, reverse=True)
+
+
+def test_list_records_collection_not_found():
+    """list_records raises CollectionNotFound for unsupported collections."""
+    server = _make_server()
+    with pytest.raises(XrpcError) as exc_info:
+        server.list_records(
+            {}, repo="places.atgeo.org", collection="unknown.collection"
+        )
+    assert exc_info.value.name == "CollectionNotFound"
+
+
+def test_list_records_no_cursor_on_last_page():
+    """list_records omits cursor when all records fit in one page."""
+    server = _make_server()
+    result = server.list_records(
+        {}, repo="places.atgeo.org", collection=LEXICON_SCHEMA_COLLECTION,
+        limit=100
+    )
+    assert "cursor" not in result

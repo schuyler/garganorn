@@ -116,3 +116,18 @@ def test_lexicon_unknown_nsid(client):
     """GET /<nsid> returns 404 for an unknown NSID."""
     resp = client.get("/nonexistent.lexicon")
     assert resp.status_code == 404
+
+
+def test_did_document(client):
+    """GET /.well-known/did.json returns a valid DID document."""
+    resp = client.get("/.well-known/did.json")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/json"
+    data = resp.get_json()
+    assert data["id"] == "did:web:places.atgeo.org"
+    assert data["alsoKnownAs"] == ["at://places.atgeo.org"]
+    # PDS service endpoint
+    services = {s["id"]: s for s in data["service"]}
+    assert "#atproto_pds" in services
+    assert services["#atproto_pds"]["type"] == "AtprotoPersonalDataServer"
+    assert services["#atproto_pds"]["serviceEndpoint"] == "https://places.atgeo.org"
