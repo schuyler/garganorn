@@ -153,7 +153,7 @@ def test_overture_query_trigram_spatial_uses_jw():
     assert "GROUP BY" not in sql
     assert "with candidates" in sql.lower()
     assert "ST_Distance_Sphere" in sql
-    assert "score >= 0.6" in sql
+    assert ">= 0.6" in sql
 
 
 def test_query_trigram_spatial_multi_token_has_limit():

@@ -255,7 +255,13 @@ class Database:
             # Hydrate rkeys to get full records with display columns.
             if not result:
                 return []
-            rkeys = [row["rkey"] for row in result]
+            seen = set()
+            rkeys = []
+            for row in result:
+                rk = row["rkey"]
+                if rk not in seen:
+                    seen.add(rk)
+                    rkeys.append(rk)
             metadata = {row["rkey"]: {
                 "distance_m": row["distance_m"],
                 "score": row.get("score"),
@@ -383,16 +389,23 @@ class FoursquareOSP(Database):
                         {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
                     FROM ranked r
                     LEFT JOIN token_avg t ON r.fsq_place_id = t.fsq_place_id AND r.name = t.name
+                ),
+                deduped AS (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY fsq_place_id ORDER BY score DESC
+                    ) AS rn
+                    FROM scored
+                    WHERE score >= {self.JW_THRESHOLD}
                 )
                 SELECT
-                    s.fsq_place_id AS rkey,
-                    s.name,
+                    d.fsq_place_id AS rkey,
+                    d.name,
                     0 AS distance_m,
-                    s.score,
-                    s.importance
-                FROM scored s
-                WHERE s.score >= {self.JW_THRESHOLD}
-                ORDER BY s.score DESC, s.importance DESC
+                    d.score,
+                    d.importance
+                FROM deduped d
+                WHERE d.rn = 1
+                ORDER BY d.score DESC, d.importance DESC
                 LIMIT $limit
             """
         return f"""
@@ -401,16 +414,28 @@ class FoursquareOSP(Database):
                 FROM name_index
                 WHERE trigram IN ({placeholders})
                   AND importance >= $importance_floor
+            ),
+            scored AS (
+                SELECT c.*,
+                    jaro_winkler_similarity($norm_q, c.norm_name) AS score
+                FROM candidates c
+                WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
+            ),
+            deduped AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY fsq_place_id ORDER BY score DESC
+                ) AS rn
+                FROM scored
             )
             SELECT
-                c.fsq_place_id AS rkey,
-                c.name,
+                d.fsq_place_id AS rkey,
+                d.name,
                 0 AS distance_m,
-                jaro_winkler_similarity($norm_q, c.norm_name) AS score,
-                c.importance AS importance
-            FROM candidates c
-            WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
-            ORDER BY score DESC, c.importance DESC
+                d.score,
+                d.importance
+            FROM deduped d
+            WHERE d.rn = 1
+            ORDER BY d.score DESC, d.importance DESC
             LIMIT $limit
         """
 
@@ -466,16 +491,25 @@ class FoursquareOSP(Database):
                         {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
                     FROM ranked r
                     LEFT JOIN token_avg t ON r.fsq_place_id = t.fsq_place_id AND r.name = t.name
+                ),
+                deduped AS (
+                    SELECT *,
+                        ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY fsq_place_id ORDER BY score DESC, ST_Distance_Sphere(geom, ST_GeomFromText($centroid)) ASC
+                        ) AS rn
+                    FROM scored
+                    WHERE score >= {self.JW_THRESHOLD}
                 )
                 SELECT
-                    fsq_place_id AS rkey,
-                    name,
-                    ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                    score,
-                    importance
-                FROM scored
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, distance_m
+                    d.fsq_place_id AS rkey,
+                    d.name,
+                    d.distance_m,
+                    d.score,
+                    d.importance
+                FROM deduped d
+                WHERE d.rn = 1
+                ORDER BY d.score DESC, d.distance_m
                 LIMIT $limit
             """
         return f"""
@@ -488,16 +522,29 @@ class FoursquareOSP(Database):
                   AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
                   AND n.trigram IN ({placeholders})
                   AND n.importance >= $importance_floor
+            ),
+            scored AS (
+                SELECT c.*,
+                    jaro_winkler_similarity($norm_q, c.norm_name) AS score,
+                    ST_Distance_Sphere(c.geom, ST_GeomFromText($centroid))::integer AS distance_m
+                FROM candidates c
+                WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
+            ),
+            deduped AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY fsq_place_id ORDER BY score DESC, distance_m ASC
+                ) AS rn
+                FROM scored
             )
             SELECT
-                fsq_place_id AS rkey,
-                name,
-                ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                jaro_winkler_similarity($norm_q, norm_name) AS score,
-                importance
-            FROM candidates
-            WHERE score >= {self.JW_THRESHOLD}
-            ORDER BY score DESC, distance_m
+                d.fsq_place_id AS rkey,
+                d.name,
+                d.distance_m,
+                d.score,
+                d.importance
+            FROM deduped d
+            WHERE d.rn = 1
+            ORDER BY d.score DESC, d.distance_m
             LIMIT $limit
         """
 
@@ -662,16 +709,23 @@ class OvertureMaps(Database):
                         {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
                     FROM ranked r
                     LEFT JOIN token_avg t ON r.id = t.id AND r.name = t.name
+                ),
+                deduped AS (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY id ORDER BY score DESC
+                    ) AS rn
+                    FROM scored
+                    WHERE score >= {self.JW_THRESHOLD}
                 )
                 SELECT
-                    s.id AS rkey,
-                    s.name,
+                    d.id AS rkey,
+                    d.name,
                     0 AS distance_m,
-                    s.score,
-                    s.importance
-                FROM scored s
-                WHERE s.score >= {self.JW_THRESHOLD}
-                ORDER BY s.score DESC, s.importance DESC
+                    d.score,
+                    d.importance
+                FROM deduped d
+                WHERE d.rn = 1
+                ORDER BY d.score DESC, d.importance DESC
                 LIMIT $limit
             """
         return f"""
@@ -680,16 +734,28 @@ class OvertureMaps(Database):
                 FROM name_index
                 WHERE trigram IN ({placeholders})
                   AND importance >= $importance_floor
+            ),
+            scored AS (
+                SELECT c.*,
+                    jaro_winkler_similarity($norm_q, c.norm_name) AS score
+                FROM candidates c
+                WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
+            ),
+            deduped AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY id ORDER BY score DESC
+                ) AS rn
+                FROM scored
             )
             SELECT
-                c.id AS rkey,
-                c.name,
+                d.id AS rkey,
+                d.name,
                 0 AS distance_m,
-                jaro_winkler_similarity($norm_q, c.norm_name) AS score,
-                c.importance AS importance
-            FROM candidates c
-            WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
-            ORDER BY score DESC, c.importance DESC
+                d.score,
+                d.importance
+            FROM deduped d
+            WHERE d.rn = 1
+            ORDER BY d.score DESC, d.importance DESC
             LIMIT $limit
         """
 
@@ -746,16 +812,25 @@ class OvertureMaps(Database):
                         {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
                     FROM ranked r
                     LEFT JOIN token_avg t ON r.id = t.id AND r.name = t.name
+                ),
+                deduped AS (
+                    SELECT *,
+                        ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY id ORDER BY score DESC, ST_Distance_Sphere(geometry, ST_GeomFromText($centroid)) ASC
+                        ) AS rn
+                    FROM scored
+                    WHERE score >= {self.JW_THRESHOLD}
                 )
                 SELECT
-                    id AS rkey,
-                    name,
-                    ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
-                    score,
-                    importance
-                FROM scored
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, distance_m
+                    d.id AS rkey,
+                    d.name,
+                    d.distance_m,
+                    d.score,
+                    d.importance
+                FROM deduped d
+                WHERE d.rn = 1
+                ORDER BY d.score DESC, d.distance_m
                 LIMIT $limit
             """
         return f"""
@@ -768,16 +843,29 @@ class OvertureMaps(Database):
                   AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
                   AND n.trigram IN ({placeholders})
                   AND n.importance >= $importance_floor
+            ),
+            scored AS (
+                SELECT c.*,
+                    jaro_winkler_similarity($norm_q, c.norm_name) AS score,
+                    ST_Distance_Sphere(c.geometry, ST_GeomFromText($centroid))::integer AS distance_m
+                FROM candidates c
+                WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
+            ),
+            deduped AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY id ORDER BY score DESC, distance_m ASC
+                ) AS rn
+                FROM scored
             )
             SELECT
-                id AS rkey,
-                name,
-                ST_Distance_Sphere(geometry, ST_GeomFromText($centroid))::integer AS distance_m,
-                jaro_winkler_similarity($norm_q, norm_name) AS score,
-                importance
-            FROM candidates
-            WHERE score >= {self.JW_THRESHOLD}
-            ORDER BY score DESC, distance_m
+                d.id AS rkey,
+                d.name,
+                d.distance_m,
+                d.score,
+                d.importance
+            FROM deduped d
+            WHERE d.rn = 1
+            ORDER BY d.score DESC, d.distance_m
             LIMIT $limit
         """
 
@@ -945,16 +1033,23 @@ class OpenStreetMap(Database):
                         {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
                     FROM ranked r
                     LEFT JOIN token_avg t ON r.rkey = t.rkey AND r.name = t.name
+                ),
+                deduped AS (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY rkey ORDER BY score DESC
+                    ) AS rn
+                    FROM scored
+                    WHERE score >= {self.JW_THRESHOLD}
                 )
                 SELECT
-                    s.rkey,
-                    s.name,
+                    d.rkey,
+                    d.name,
                     0 AS distance_m,
-                    s.score,
-                    s.importance
-                FROM scored s
-                WHERE s.score >= {self.JW_THRESHOLD}
-                ORDER BY s.score DESC, s.importance DESC
+                    d.score,
+                    d.importance
+                FROM deduped d
+                WHERE d.rn = 1
+                ORDER BY d.score DESC, d.importance DESC
                 LIMIT $limit
             """
         return f"""
@@ -963,16 +1058,28 @@ class OpenStreetMap(Database):
                 FROM name_index
                 WHERE trigram IN ({placeholders})
                   AND importance >= $importance_floor
+            ),
+            scored AS (
+                SELECT c.*,
+                    jaro_winkler_similarity($norm_q, c.norm_name) AS score
+                FROM candidates c
+                WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
+            ),
+            deduped AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY rkey ORDER BY score DESC
+                ) AS rn
+                FROM scored
             )
             SELECT
-                c.rkey,
-                c.name,
+                d.rkey,
+                d.name,
                 0 AS distance_m,
-                jaro_winkler_similarity($norm_q, c.norm_name) AS score,
-                c.importance AS importance
-            FROM candidates c
-            WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
-            ORDER BY score DESC, c.importance DESC
+                d.score,
+                d.importance
+            FROM deduped d
+            WHERE d.rn = 1
+            ORDER BY d.score DESC, d.importance DESC
             LIMIT $limit
         """
 
@@ -1031,16 +1138,25 @@ class OpenStreetMap(Database):
                         {alpha} * r.full_jw + {1 - alpha} * COALESCE(t.token_jw, r.full_jw) AS score
                     FROM ranked r
                     LEFT JOIN token_avg t ON r.rkey = t.rkey AND r.name = t.name
+                ),
+                deduped AS (
+                    SELECT *,
+                        ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY rkey ORDER BY score DESC, ST_Distance_Sphere(geom, ST_GeomFromText($centroid)) ASC
+                        ) AS rn
+                    FROM scored
+                    WHERE score >= {self.JW_THRESHOLD}
                 )
                 SELECT
-                    rkey,
-                    name,
-                    ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                    score,
-                    importance
-                FROM scored
-                WHERE score >= {self.JW_THRESHOLD}
-                ORDER BY score DESC, distance_m
+                    d.rkey,
+                    d.name,
+                    d.distance_m,
+                    d.score,
+                    d.importance
+                FROM deduped d
+                WHERE d.rn = 1
+                ORDER BY d.score DESC, d.distance_m
                 LIMIT $limit
             """
         return f"""
@@ -1053,16 +1169,29 @@ class OpenStreetMap(Database):
                   AND p.bbox.xmax < $xmax AND p.bbox.ymax < $ymax
                   AND n.trigram IN ({placeholders})
                   AND n.importance >= $importance_floor
+            ),
+            scored AS (
+                SELECT c.*,
+                    jaro_winkler_similarity($norm_q, c.norm_name) AS score,
+                    ST_Distance_Sphere(c.geom, ST_GeomFromText($centroid))::integer AS distance_m
+                FROM candidates c
+                WHERE jaro_winkler_similarity($norm_q, c.norm_name) >= {self.JW_THRESHOLD}
+            ),
+            deduped AS (
+                SELECT *, ROW_NUMBER() OVER (
+                    PARTITION BY rkey ORDER BY score DESC, distance_m ASC
+                ) AS rn
+                FROM scored
             )
             SELECT
-                rkey,
-                name,
-                ST_Distance_Sphere(geom, ST_GeomFromText($centroid))::integer AS distance_m,
-                jaro_winkler_similarity($norm_q, norm_name) AS score,
-                importance
-            FROM candidates
-            WHERE score >= {self.JW_THRESHOLD}
-            ORDER BY score DESC, distance_m
+                d.rkey,
+                d.name,
+                d.distance_m,
+                d.score,
+                d.importance
+            FROM deduped d
+            WHERE d.rn = 1
+            ORDER BY d.score DESC, d.distance_m
             LIMIT $limit
         """
 
