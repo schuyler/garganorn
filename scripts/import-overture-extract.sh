@@ -226,10 +226,10 @@ cat >> "${output_dir}/import-overture.sql" <<'EOF'
 CREATE TEMP TABLE overture_variants AS
 WITH common_entries AS (
     SELECT id,
-        e.key AS language,
-        e."value" AS name
+        unnest.key AS language,
+        unnest."value" AS name
     FROM places,
-         unnest(map_entries(names.common)) AS e
+         unnest(map_entries(names.common))
     WHERE names.common IS NOT NULL
 ),
 rule_entries AS (
