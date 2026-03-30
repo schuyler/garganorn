@@ -54,35 +54,22 @@ mkdir -p "$output_dir"
 # --- Download WoF admin SQLite if no source provided ---
 
 WOF_DIST_URL="https://data.geocode.earth/wof/dist/sqlite"
+WOF_LATEST_FILE="whosonfirst-data-admin-latest.db.bz2"
 
 if [ -z "$source_db" ]; then
     cache_dir="${output_dir}/cache/wof"
     mkdir -p "$cache_dir"
 
-    # Discover the latest admin database filename from the distribution index
-    echo "Discovering latest WoF admin database..."
-    latest_file=$(curl -sL "$WOF_DIST_URL/" |
-        grep -oE 'href="(whosonfirst-data-admin-[^"]+\.db\.bz2)"' |
-        sed 's/href="//;s/"//' |
-        sort -r |
-        head -1)
-
-    if [ -z "$latest_file" ]; then
-        echo "Could not discover WoF admin database from $WOF_DIST_URL"
-        echo "Try downloading manually and use --source <path>"
-        exit 1
-    fi
-
-    db_name="${latest_file%.bz2}"
+    db_name="${WOF_LATEST_FILE%.bz2}"
     cached_db="${cache_dir}/${db_name}"
 
     if [ -f "$cached_db" ]; then
         echo "Using cached: $cached_db"
     else
-        bz2_path="${cache_dir}/${latest_file}"
+        bz2_path="${cache_dir}/${WOF_LATEST_FILE}"
         if [ ! -f "$bz2_path" ]; then
-            echo "Downloading: ${WOF_DIST_URL}/${latest_file}"
-            curl -L -o "$bz2_path" "${WOF_DIST_URL}/${latest_file}"
+            echo "Downloading: ${WOF_DIST_URL}/${WOF_LATEST_FILE}"
+            curl -L -o "$bz2_path" "${WOF_DIST_URL}/${WOF_LATEST_FILE}"
         fi
         echo "Decompressing..."
         bunzip2 -k "$bz2_path"
