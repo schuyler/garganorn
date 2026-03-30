@@ -234,9 +234,9 @@ WITH common_entries AS (
 ),
 rule_entries AS (
     SELECT id,
-        r.language,
-        r."value" AS name,
-        CASE r.variant
+        unnest.language,
+        unnest."value" AS name,
+        CASE unnest.variant
             WHEN 'common'     THEN 'alternate'
             WHEN 'official'   THEN 'official'
             WHEN 'alternate'  THEN 'alternate'
@@ -244,7 +244,7 @@ rule_entries AS (
             ELSE 'alternate'
         END AS type
     FROM places,
-         unnest(names.rules) AS r
+         unnest(names.rules)
     WHERE names.rules IS NOT NULL
 ),
 all_variants AS (
