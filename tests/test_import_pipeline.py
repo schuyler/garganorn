@@ -1283,10 +1283,10 @@ class TestImportOsmScript:
         if importance_end == -1 or importance_end <= importance_start:
             importance_end = len(content)
         section = content[importance_start:importance_end].lower()
-        assert "load spatial" in section, (
-            "import-osm.sh importance scoring heredoc must 'LOAD spatial' so that the "
-            "RTREE index creation (CREATE INDEX ... USING RTREE) can succeed. "
-            "Add 'LOAD spatial;' after 'LOAD geography;' in the importance scoring heredoc."
+        assert "load spatial" not in section, (
+            "import-osm.sh importance scoring heredoc should not 'LOAD spatial' — "
+            "spatial is not used in this section and the RTREE index has been removed. "
+            "Remove 'LOAD spatial;' from the importance scoring heredoc."
         )
         assert "left join place_density" in section, (
             "import-osm.sh CTAS should use 'LEFT JOIN place_density' (not INNER JOIN) "

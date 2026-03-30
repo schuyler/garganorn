@@ -277,10 +277,9 @@ def _create_overture_db(db_path):
               country, postcode, locality, freeform, region,
               ovr_importance[ovr_id]])
 
-    # Note: The production schema documents a RTREE index on bbox, but DuckDB
-    # requires a GEOMETRY column for RTREE. The production queries use bbox
-    # struct field range comparisons, which don't require an explicit index.
-    # We skip creating the RTREE index here.
+    # Intentionally no RTREE index on the places table. All spatial filtering
+    # uses bbox struct field comparisons, which do not require an explicit index.
+    # RTREE is only used on the WoF boundaries table (ST_Contains queries).
 
     conn.execute("""
         CREATE TABLE name_index (

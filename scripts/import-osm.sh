@@ -441,8 +441,6 @@ WHERE qw.primary_category IS NOT NULL
 .print "Cleaning up null geom rows..."
 DELETE FROM places WHERE geom IS NULL;
 
-.print "Building R-tree index..."
-CREATE INDEX places_rtree ON places USING RTREE (geom);
 CREATE INDEX idx_rkey ON places(rkey);
 EOF
 
@@ -462,7 +460,6 @@ echo "Computing importance scores..."
 duckdb -bail "$output_db_tmp" <<ENDSQL
 INSTALL geography FROM community;
 LOAD geography;
-LOAD spatial;
 
 CREATE TEMP TABLE t_idf AS
 SELECT primary_category AS category,
@@ -500,7 +497,6 @@ LEFT JOIN place_density d USING (rkey)
 LEFT JOIN place_idf i USING (rkey);
 DROP TABLE places;
 ALTER TABLE places_scored RENAME TO places;
-CREATE INDEX places_rtree ON places USING RTREE (geom);
 CREATE INDEX idx_rkey ON places(rkey);
 
 DROP TABLE place_density;
@@ -575,7 +571,6 @@ FROM places p
 LEFT JOIN raw_variants rv USING (rkey);
 DROP TABLE places;
 ALTER TABLE places_with_variants RENAME TO places;
-CREATE INDEX places_rtree ON places USING RTREE (geom);
 CREATE INDEX idx_rkey ON places(rkey);
 DROP TABLE raw_variants;
 EOF

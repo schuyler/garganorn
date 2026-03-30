@@ -139,8 +139,6 @@ done >> "${output_dir}/import.sql"
 cat >> "${output_dir}/import.sql" <<EOF
 .print "Cleaning up..."
 delete from places where longitude = 0 or latitude = 0 or geom is null;
-.print "Creating spatial index..."
-create index places_rtree on places using rtree (geom);
 create index idx_fsq_place_id on places(fsq_place_id);
 EOF
 
@@ -189,7 +187,6 @@ LEFT JOIN place_density d USING (fsq_place_id)
 LEFT JOIN place_idf i USING (fsq_place_id);
 DROP TABLE places;
 ALTER TABLE places_scored RENAME TO places;
-create index places_rtree on places using rtree (geom);
 create index idx_fsq_place_id on places(fsq_place_id);
 DROP TABLE place_density;
 DROP TABLE place_idf;

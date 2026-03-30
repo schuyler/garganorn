@@ -165,8 +165,6 @@ cat >> "${output_dir}/import-overture.sql" <<EOF
 .print "Cleaning up..."
 delete from places where geometry is null;
 
-.print "Creating spatial index..."
-create index places_rtree on places using rtree (geometry);
 create index idx_id on places(id);
 EOF
 
@@ -216,7 +214,6 @@ LEFT JOIN place_density d USING (id)
 LEFT JOIN place_idf i USING (id);
 DROP TABLE places;
 ALTER TABLE places_scored RENAME TO places;
-create index places_rtree on places using rtree (geometry);
 create index idx_id on places(id);
 DROP TABLE place_density;
 DROP TABLE place_idf;
@@ -268,7 +265,6 @@ FROM places p
 LEFT JOIN overture_variants ov USING (id);
 DROP TABLE places;
 ALTER TABLE places_with_variants RENAME TO places;
-create index places_rtree on places using rtree (geometry);
 create index idx_id on places(id);
 DROP TABLE overture_variants;
 EOF
