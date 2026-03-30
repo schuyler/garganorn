@@ -467,3 +467,22 @@ def test_list_records_no_cursor_on_last_page():
         limit=100
     )
     assert "cursor" not in result
+
+
+def test_get_record_boundaries_error_degrades_gracefully():
+    """get_record returns record without relations when boundaries lookup fails."""
+    record = dict(SAMPLE_RECORD)
+    mock_db = _make_mock_db(records=[record])
+
+    # Mock BoundaryLookup that raises on containment
+    mock_boundaries = MagicMock()
+    mock_boundaries.containment.side_effect = Exception("database not found")
+
+    logger = logging.getLogger("test")
+    server = Server("places.atgeo.org", [mock_db], logger, boundaries=mock_boundaries)
+    result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
+
+    # Should succeed with record but no relations
+    assert "value" in result
+    assert result["value"]["rkey"] == "fsq001"
+    assert "relations" not in result["value"]

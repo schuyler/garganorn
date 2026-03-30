@@ -84,7 +84,14 @@ class Server:
                 if loc.get("$type") == "community.lexicon.location.geo":
                     lat = float(loc["latitude"])
                     lon = float(loc["longitude"])
-                    within = self.boundaries.containment(lat, lon)
+                    try:
+                        within = self.boundaries.containment(lat, lon)
+                    except Exception:
+                        self.logger.warning(
+                            "Boundary lookup failed for (%.6f, %.6f), returning record without relations",
+                            lat, lon, exc_info=True,
+                        )
+                        break
                     if within:
                         relations["within"] = within
                     break
