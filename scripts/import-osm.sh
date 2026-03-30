@@ -619,13 +619,13 @@ CROSS JOIN generate_series(1, length(np.norm_name) - 2) AS gs(pos);
 INSERT INTO name_index
 WITH variant_names AS (
     SELECT rkey,
-           v.name,
-           lower(strip_accents(v.name)) AS norm_name,
+           unnest.name,
+           lower(strip_accents(unnest.name)) AS norm_name,
            importance,
            TRUE AS is_variant
     FROM places,
-         unnest(variants) AS v
-    WHERE v.name IS NOT NULL AND length(v.name) >= 3
+         unnest(variants)
+    WHERE unnest.name IS NOT NULL AND length(unnest.name) >= 3
 )
 SELECT substr(vn.norm_name, pos, 3) AS trigram,
        vn.rkey,
