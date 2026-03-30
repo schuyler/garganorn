@@ -156,15 +156,14 @@ insert into places select * from '${local_file}'
     where bbox.xmin >= ${xmin}
       and bbox.xmax <= ${xmax}
       and bbox.ymin >= ${ymin}
-      and bbox.ymax <= ${ymax};
+      and bbox.ymax <= ${ymax}
+      and geometry is not null;
 EOF
 done <<< "$parquet_files" >> "${output_dir}/import-overture.sql"
 
-# Clean up and create spatial index
+# Create spatial index
 cat >> "${output_dir}/import-overture.sql" <<EOF
-.print "Cleaning up..."
-delete from places where geometry is null;
-
+.print "Creating spatial index..."
 create index idx_id on places(id);
 EOF
 

@@ -139,33 +139,34 @@ SELECT * FROM (VALUES
 -- Stage 1: Build boundaries table from WoF SPR + GeoJSON
 .print 'Stage 1: Building boundaries table...'
 CREATE TABLE boundaries AS
-SELECT
-    s.id AS wof_id,
-    s.id::VARCHAR AS rkey,
-    s.name,
-    s.placetype,
-    pl.level,
-    s.latitude,
-    s.longitude,
-    ST_GeomFromGeoJSON(json_extract(g.body, '\$.geometry')) AS geom,
-    s.country,
-    s.min_latitude,
-    s.min_longitude,
-    s.max_latitude,
-    s.max_longitude
-FROM wof.spr s
-JOIN wof.geojson g ON s.id = g.id AND g.is_alt != 1
-JOIN placetype_levels pl ON pl.placetype = s.placetype
-WHERE s.is_current != 0
-  AND s.is_deprecated != 1
-  AND s.latitude IS NOT NULL
-  AND s.longitude IS NOT NULL
-  AND s.name IS NOT NULL
-  AND g.body IS NOT NULL;
-
--- Remove point geometries (no containment value)
-DELETE FROM boundaries
-WHERE ST_GeometryType(geom) = 'POINT';
+WITH staged AS (
+    SELECT
+        s.id AS wof_id,
+        s.id::VARCHAR AS rkey,
+        s.name,
+        s.placetype,
+        pl.level,
+        s.latitude,
+        s.longitude,
+        ST_GeomFromGeoJSON(json_extract(g.body, '\$.geometry')) AS geom,
+        s.country,
+        s.min_latitude,
+        s.min_longitude,
+        s.max_latitude,
+        s.max_longitude
+    FROM wof.spr s
+    JOIN wof.geojson g ON s.id = g.id AND g.is_alt != 1
+    JOIN placetype_levels pl ON pl.placetype = s.placetype
+    WHERE s.is_current != 0
+      AND s.is_deprecated != 1
+      AND s.latitude IS NOT NULL
+      AND s.longitude IS NOT NULL
+      AND s.name IS NOT NULL
+      AND g.body IS NOT NULL
+)
+-- Exclude point geometries (no containment value)
+SELECT * FROM staged
+WHERE ST_GeometryType(geom) != 'POINT';
 
 .print 'Stage 1 complete.'
 SELECT count(*) AS boundary_count FROM boundaries;

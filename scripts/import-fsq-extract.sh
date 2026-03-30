@@ -130,15 +130,14 @@ insert into places select * EXCLUDE (geom), geom::GEOMETRY as geom from '${sourc
     where bbox.xmin >= ${xmin} and bbox.xmax <= ${xmax}
     and bbox.ymin >= ${ymin} and bbox.ymax <= ${ymax}
     and date_refreshed > '2020-03-15'
-    and date_closed is null;
+    and date_closed is null
+    and longitude != 0 and latitude != 0 and geom is not null;
 EOF
 done >> "${output_dir}/import.sql"
 
-# Clean up the places table by removing any rows with invalid longitude or latitude
-# and then create the spatial index
+# Create spatial index
 cat >> "${output_dir}/import.sql" <<EOF
-.print "Cleaning up..."
-delete from places where longitude = 0 or latitude = 0 or geom is null;
+.print "Creating spatial index..."
 create index idx_fsq_place_id on places(fsq_place_id);
 EOF
 
