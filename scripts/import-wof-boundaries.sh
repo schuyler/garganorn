@@ -96,6 +96,7 @@ rm -f "$output_db_tmp"
 echo "Building boundary database..."
 
 import_sql=$(cat <<EOSQL
+.bail on
 INSTALL sqlite;
 LOAD sqlite;
 INSTALL spatial;
@@ -146,7 +147,6 @@ JOIN wof.geojson g ON s.id = g.id AND g.is_alt != 1
 JOIN placetype_levels pl ON pl.placetype = s.placetype
 WHERE s.is_current != 0
   AND s.is_deprecated != 1
-  AND s.is_alt != 1
   AND s.latitude IS NOT NULL
   AND s.longitude IS NOT NULL
   AND s.name IS NOT NULL
