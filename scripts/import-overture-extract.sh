@@ -210,9 +210,6 @@ EOF
 # Extract name variants
 cat >> "${output_dir}/import-overture.sql" <<'EOF'
 .print "Extracting name variants..."
-ALTER TABLE places ADD COLUMN variants
-    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [];
-
 CREATE TEMP TABLE overture_variants AS
 WITH common_entries AS (
     SELECT id,
@@ -248,10 +245,15 @@ FROM all_variants
 WHERE name IS NOT NULL AND name != ''
 GROUP BY id;
 
-UPDATE places p SET variants = coalesce(
-    (SELECT ov.variants FROM overture_variants ov WHERE ov.id = p.id),
-    []
-);
+CREATE TABLE places_with_variants AS
+SELECT p.*,
+       coalesce(ov.variants, []) AS variants
+FROM places p
+LEFT JOIN overture_variants ov USING (id);
+DROP TABLE places;
+ALTER TABLE places_with_variants RENAME TO places;
+create index places_rtree on places using rtree (geometry);
+create index idx_id on places(id);
 DROP TABLE overture_variants;
 EOF
 

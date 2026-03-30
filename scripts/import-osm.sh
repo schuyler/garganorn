@@ -513,9 +513,6 @@ echo
 echo "Extracting name variants..."
 
 duckdb -bail "$output_db_tmp" <<EOF
-ALTER TABLE places ADD COLUMN variants
-    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [];
-
 CREATE TEMP TABLE raw_variants AS
 WITH tag_entries AS (
     SELECT
@@ -563,10 +560,15 @@ SELECT rkey,
 FROM split_values
 GROUP BY rkey;
 
-UPDATE places p SET variants = coalesce(
-    (SELECT rv.variants FROM raw_variants rv WHERE rv.rkey = p.rkey),
-    []
-);
+CREATE TABLE places_with_variants AS
+SELECT p.*,
+       coalesce(rv.variants, []) AS variants
+FROM places p
+LEFT JOIN raw_variants rv USING (rkey);
+DROP TABLE places;
+ALTER TABLE places_with_variants RENAME TO places;
+CREATE INDEX places_rtree ON places USING RTREE (geom);
+CREATE INDEX idx_rkey ON places(rkey);
 DROP TABLE raw_variants;
 EOF
 
