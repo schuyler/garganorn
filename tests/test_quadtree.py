@@ -1237,6 +1237,6 @@ class TestOvertureVariants:
         """).fetchone()
         conn.close()
         assert row is not None, "No variant found for ov001 — expected names.common entry"
-        assert row[0] is not None, "variants[1].name is NULL"
-        assert row[1] is not None, "variants[1].type is NULL"
-        assert row[2] is not None, "variants[1].language is NULL"
+        assert row[0] == "Blue Bottle Coffee", f"Unexpected variant name: {row[0]}"
+        assert row[1] == "alternate", f"Unexpected variant type: {row[1]}"
+        assert row[2] == "en", f"Unexpected variant language: {row[2]}"
