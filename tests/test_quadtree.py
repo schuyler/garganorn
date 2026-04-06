@@ -1187,20 +1187,25 @@ class TestOvertureVariants:
         )
 
     def test_variants_from_names_rules(self, overture_parquet, tmp_path):
-        """A row with names.rules entries must get non-empty variants (ov002)."""
+        """A row with names.rules entries must get non-empty variants (ov002).
+
+        ov002 has a single rules entry: language='en', value='GG Park',
+        variant='short'.  The CASE expression must map 'short' → type='short'.
+        """
         db_path = tmp_path / "test_ov_var_rules.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_overture_import(conn, overture_parquet)
         self._run_variants(conn)
         row = conn.execute("""
-            SELECT len(variants) FROM places WHERE id = 'ov002'
+            SELECT variants[1].name, variants[1].type, variants[1].language
+            FROM places WHERE id = 'ov002' AND len(variants) > 0
         """).fetchone()
         conn.close()
-        assert row is not None, "ov002 not found in places after variants SQL"
-        assert row[0] > 0, (
-            f"ov002 has names.rules but got empty variants (len={row[0]})"
-        )
+        assert row is not None, "ov002 not found or has empty variants after variants SQL"
+        assert row[0] == "GG Park", f"Unexpected variant name: {row[0]}"
+        assert row[1] == "short", f"Unexpected variant type (expected 'short' from CASE): {row[1]}"
+        assert row[2] == "en", f"Unexpected variant language: {row[2]}"
 
     def test_variants_empty_when_no_names(self, overture_parquet, tmp_path):
         """A row with names IS NULL must get an empty variants array (ov003)."""
