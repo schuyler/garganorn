@@ -663,7 +663,7 @@ class TestFsqVariants:
 #   ov003  in-bbox, no names (NULL)                 → survives (empty variants)
 #   ov004  in-bbox, has categories.primary          → survives
 #   ov005  in-bbox, different categories.primary    → survives
-#   ov006  longitude outside xmax (out of bbox)     → excluded by bbox filter
+#   ov006  bbox.xmin (-123.001) < filter xmin (-122.55) → excluded by bbox filter
 #   ov007  geometry IS NULL                         → excluded by null-geometry filter
 
 _OV_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
@@ -922,6 +922,19 @@ class TestOvertureImport:
         conn.close()
         assert not bad, f"qk17 values with unexpected characters: {bad}"
 
+    def test_geometry_column_is_geometry_type(self, overture_parquet, tmp_path):
+        """The geometry column must be of GEOMETRY type after import."""
+        db_path = tmp_path / "test_ov_geom_type.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        assert "geometry" in describe, "geometry column missing from places"
+        assert describe["geometry"] == "GEOMETRY", (
+            f"Expected geometry to be GEOMETRY, got {describe['geometry']}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: overture_importance.sql
@@ -996,6 +1009,116 @@ class TestOvertureImportance:
         """).fetchall()
         conn.close()
         assert not nulls, f"Rows with NULL importance: {nulls}"
+
+    def test_unique_category_scores_higher(self, overture_parquet, tmp_path):
+        """A place with a unique category should score higher than one with a common category (IDF).
+
+        ov001 has 'coffee_shop' which appears in 3 of 5 surviving rows
+        (ov001, ov003, ov004) → IDF = ln(5/3) ≈ 0.511.
+        ov005 has 'unique_venue' which appears in only 1 of 5 surviving rows
+        → IDF = ln(5/1) ≈ 1.609.
+        ov005 should score strictly higher than ov001.
+        """
+        db_path = tmp_path / "test_ov_idf.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_importance(conn)
+        rows = conn.execute("""
+            SELECT id, importance FROM places WHERE id IN ('ov001', 'ov005') ORDER BY id
+        """).fetchall()
+        conn.close()
+        assert len(rows) == 2, f"Expected 2 rows, got {rows}"
+        imp = {r[0]: r[1] for r in rows}
+        assert imp["ov005"] > imp["ov001"], (
+            f"Unique category place ov005 ({imp['ov005']}) should score "
+            f"higher than common-category place ov001 ({imp['ov001']})"
+        )
+
+    def test_density_scoring_path(self, tmp_path):
+        """High-density group scores higher than low-density isolated place.
+
+        Creates a fresh parquet fixture with:
+        - Group A: 5 places clustered near SF (share the same zoom-15 quadkey)
+        - Group B: 1 place in Tokyo
+
+        Both groups use the same single category so IDF scores are equal.
+        The density term (ln(1+count)) dominates: Group A ≈ ln(6) ≈ 1.79,
+        Group B ≈ ln(2) ≈ 0.69.  Any Group A place must outscore Group B.
+        """
+        import duckdb as _duckdb
+
+        parquet_path = tmp_path / "ov_density_test.parquet"
+
+        conn = _duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_ov_density (
+                id          VARCHAR,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                geometry    VARCHAR,
+                names       STRUCT(
+                                common MAP(VARCHAR, VARCHAR),
+                                rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                            ),
+                categories  STRUCT("primary" VARCHAR)
+            )
+        """)
+
+        # Group A: 5 places clustered in SF (within ~100m, same zoom-15 quadkey).
+        group_a = [
+            ("a001", "SF Place 1", 37.7700, -122.4100),
+            ("a002", "SF Place 2", 37.7701, -122.4101),
+            ("a003", "SF Place 3", 37.7702, -122.4099),
+            ("a004", "SF Place 4", 37.7699, -122.4102),
+            ("a005", "SF Place 5", 37.7700, -122.4098),
+        ]
+        # Group B: 1 place in Tokyo.
+        group_b = [
+            ("b001", "Tokyo Place", 35.6800, 139.6900),
+        ]
+
+        for ov_id, name, lat, lon in group_a + group_b:
+            conn.execute(f"""
+                INSERT INTO tmp_ov_density VALUES (
+                    '{ov_id}',
+                    {{'xmin': {lon - 0.001}, 'ymin': {lat - 0.001},
+                      'xmax': {lon + 0.001}, 'ymax': {lat + 0.001}}},
+                    'POINT({lon} {lat})',
+                    NULL::STRUCT(common MAP(VARCHAR, VARCHAR),
+                                 rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
+                    {{'primary': 'catA'}}
+                )
+            """)
+
+        conn.execute(f"COPY tmp_ov_density TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        parquet_glob = str(tmp_path / "*.parquet")
+
+        # Global bbox covering both SF and Tokyo.
+        global_bbox = dict(xmin=-180, xmax=180, ymin=-90, ymax=90)
+
+        db_path = tmp_path / "test_ov_density.duckdb"
+        conn = _duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, parquet_glob, bbox=global_bbox)
+        self._run_importance(conn)
+        rows = conn.execute("""
+            SELECT id, importance
+            FROM places
+            ORDER BY id
+        """).fetchall()
+        conn.close()
+
+        imp = {r[0]: r[1] for r in rows}
+        assert "b001" in imp, f"Group B place missing from results; got: {list(imp.keys())}"
+        for aid in ("a001", "a002", "a003", "a004", "a005"):
+            assert aid in imp, f"Group A place {aid} missing from results"
+            assert imp[aid] > imp["b001"], (
+                f"High-density place {aid} (importance={imp[aid]}) should score "
+                f"higher than low-density Tokyo place b001 (importance={imp['b001']})"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1094,3 +1217,26 @@ class TestOvertureVariants:
         assert row[0] == 0, (
             f"ov003 has no names but got non-empty variants (len={row[0]})"
         )
+
+    def test_variants_struct_has_expected_fields(self, overture_parquet, tmp_path):
+        """The variants struct must have name, type, and language fields.
+
+        ov001 has a names.common entry ('en' → 'Blue Bottle Coffee').
+        After overture_variants.sql, variants[1] must expose .name, .type,
+        and .language.  The type for a names.common entry should be 'alternate'.
+        """
+        db_path = tmp_path / "test_ov_variants_fields.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_variants(conn)
+        row = conn.execute("""
+            SELECT variants[1].name, variants[1].type, variants[1].language
+            FROM places
+            WHERE id = 'ov001' AND len(variants) > 0
+        """).fetchone()
+        conn.close()
+        assert row is not None, "No variant found for ov001 — expected names.common entry"
+        assert row[0] is not None, "variants[1].name is NULL"
+        assert row[1] is not None, "variants[1].type is NULL"
+        assert row[2] is not None, "variants[1].language is NULL"
