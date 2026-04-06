@@ -643,3 +643,454 @@ class TestFsqVariants:
         assert row[0] == "Test Variant", f"Unexpected variant name: {row[0]}"
         assert row[1] == "alternate", f"Unexpected variant type: {row[1]}"
         assert row[2] == "en", f"Unexpected variant language: {row[2]}"
+
+
+# ---------------------------------------------------------------------------
+# Fixtures: synthetic Overture parquet file
+# ---------------------------------------------------------------------------
+
+# Overture parquet columns used by the import pipeline:
+#   id        VARCHAR          — primary key
+#   bbox      STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+#   geometry  VARCHAR          — WKT string (import SQL casts to GEOMETRY)
+#   names     STRUCT(common MAP(VARCHAR, VARCHAR),
+#                    rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[])
+#   categories STRUCT(primary VARCHAR)
+#
+# Row legend (id → outcome):
+#   ov001  in-bbox, has names.common entry         → survives
+#   ov002  in-bbox, has names.rules entry           → survives
+#   ov003  in-bbox, no names (NULL)                 → survives (empty variants)
+#   ov004  in-bbox, has categories.primary          → survives
+#   ov005  in-bbox, different categories.primary    → survives
+#   ov006  longitude outside xmax (out of bbox)     → excluded by bbox filter
+#   ov007  geometry IS NULL                         → excluded by null-geometry filter
+
+_OV_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
+
+
+@pytest.fixture(scope="module")
+def overture_parquet(tmp_path_factory):
+    """Write a single Overture-schema parquet file and return a glob path for it."""
+    base = tmp_path_factory.mktemp("overture_parquet")
+    parquet_path = base / "overture_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    # Build the table row-by-row using VALUES.  The names column uses DuckDB
+    # struct/map literals; geometry is VARCHAR WKT (import SQL casts it).
+    conn.execute("""
+        CREATE TABLE tmp_ov (
+            id          VARCHAR,
+            bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            geometry    VARCHAR,
+            names       STRUCT(
+                            common MAP(VARCHAR, VARCHAR),
+                            rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                        ),
+            categories  STRUCT("primary" VARCHAR)
+        )
+    """)
+
+    # ov001 — in-bbox, names.common has one entry (language 'en')
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov001',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'common': map(['en'], ['Blue Bottle Coffee']),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'}
+        )
+    """)
+
+    # ov002 — in-bbox, names.rules has one entry
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov002',
+            {'xmin': -122.487, 'ymin': 37.768, 'xmax': -122.485, 'ymax': 37.770},
+            'POINT(-122.486 37.769)',
+            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  [{'language': 'en', 'value': 'GG Park', 'variant': 'short'}]},
+            {'primary': 'park'}
+        )
+    """)
+
+    # ov003 — in-bbox, names IS NULL → empty variants after variants SQL
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov003',
+            {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
+            'POINT(-122.410 37.770)',
+            NULL,
+            {'primary': 'coffee_shop'}
+        )
+    """)
+
+    # ov004 — in-bbox, same category as ov001 (coffee_shop)
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov004',
+            {'xmin': -122.431, 'ymin': 37.779, 'xmax': -122.429, 'ymax': 37.781},
+            'POINT(-122.430 37.780)',
+            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'}
+        )
+    """)
+
+    # ov005 — in-bbox, unique category (gets higher IDF than coffee_shop)
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov005',
+            {'xmin': -122.401, 'ymin': 37.779, 'xmax': -122.399, 'ymax': 37.781},
+            'POINT(-122.400 37.780)',
+            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'unique_venue'}
+        )
+    """)
+
+    # ov006 — out of bbox (longitude < xmin = -122.55)
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov006',
+            {'xmin': -123.001, 'ymin': 37.749, 'xmax': -122.999, 'ymax': 37.751},
+            'POINT(-123.000 37.750)',
+            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'}
+        )
+    """)
+
+    # ov007 — geometry IS NULL (in-bbox coordinates, but geometry absent)
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov007',
+            {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
+            NULL,
+            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'}
+        )
+    """)
+
+    conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return str(base / "*.parquet")
+
+
+# ---------------------------------------------------------------------------
+# Helper: run overture_import.sql against the parquet fixture
+# ---------------------------------------------------------------------------
+
+def _run_overture_import(conn, parquet_glob, bbox=None):
+    """Load, substitute, and execute overture_import.sql on `conn`.
+
+    bbox defaults to the SF bbox defined in _OV_BBOX.
+    Strips INSTALL/LOAD spatial and SET memory_limit lines for test isolation.
+    """
+    if bbox is None:
+        bbox = _OV_BBOX
+
+    substitutions = {
+        "memory_limit": "4GB",
+        "parquet_glob": parquet_glob,
+        "xmin": bbox["xmin"],
+        "xmax": bbox["xmax"],
+        "ymin": bbox["ymin"],
+        "ymax": bbox["ymax"],
+    }
+    raw_sql = _load_sql("overture_import.sql", substitutions)
+    sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+    conn.execute(sql)
+
+
+# ---------------------------------------------------------------------------
+# Tests: overture_import.sql
+# ---------------------------------------------------------------------------
+
+class TestOvertureImport:
+    """Tests for garganorn/sql/overture_import.sql."""
+
+    def test_sql_file_exists(self):
+        """The SQL file must exist on disk (will fail until Green phase)."""
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_import.sql"
+        assert sql_path.exists(), f"SQL file not found: {sql_path}"
+
+    def test_places_table_created(self, overture_parquet, tmp_path):
+        """After import, the `places` table must exist."""
+        db_path = tmp_path / "test_ov_import.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        tables = [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
+        conn.close()
+        assert "places" in tables
+
+    def test_places_has_id_column(self, overture_parquet, tmp_path):
+        """After import, `places` must have an `id` column."""
+        db_path = tmp_path / "test_ov_id_col.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        assert "id" in cols, f"id column missing; found columns: {cols}"
+
+    def test_places_has_qk17_column(self, overture_parquet, tmp_path):
+        """After import, `places` must have a `qk17` column."""
+        db_path = tmp_path / "test_ov_qk17_col.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        assert "qk17" in cols, f"qk17 column missing; found columns: {cols}"
+
+    def test_places_expected_columns(self, overture_parquet, tmp_path):
+        """After import, `places` must include the columns expected downstream."""
+        required = {"id", "bbox", "qk17"}
+        db_path = tmp_path / "test_ov_cols.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        missing = required - cols
+        assert not missing, f"Missing columns: {missing}"
+
+    def test_bbox_filter_excludes_out_of_range(self, overture_parquet, tmp_path):
+        """Rows outside the bbox must be excluded."""
+        db_path = tmp_path / "test_ov_bbox.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        ids = {row[0] for row in conn.execute("SELECT id FROM places").fetchall()}
+        conn.close()
+        assert "ov006" not in ids, "Out-of-bbox row (ov006) must be excluded"
+
+    def test_null_geometry_excluded(self, overture_parquet, tmp_path):
+        """Rows with geometry IS NULL must be excluded."""
+        db_path = tmp_path / "test_ov_null_geom.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        ids = {row[0] for row in conn.execute("SELECT id FROM places").fetchall()}
+        conn.close()
+        assert "ov007" not in ids, "Null-geometry row (ov007) must be excluded"
+
+    def test_good_rows_included(self, overture_parquet, tmp_path):
+        """All in-bbox, non-null-geometry rows must survive the import filters."""
+        expected = {"ov001", "ov002", "ov003", "ov004", "ov005"}
+        db_path = tmp_path / "test_ov_good.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        ids = {row[0] for row in conn.execute("SELECT id FROM places").fetchall()}
+        conn.close()
+        missing = expected - ids
+        assert not missing, f"Expected rows missing after import: {missing}"
+
+    def test_qk17_is_17_chars(self, overture_parquet, tmp_path):
+        """qk17 values must be 17-character strings for all surviving rows."""
+        db_path = tmp_path / "test_ov_qk17_len.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        bad = conn.execute("""
+            SELECT id, qk17
+            FROM places
+            WHERE qk17 IS NULL OR length(qk17) != 17
+        """).fetchall()
+        conn.close()
+        assert not bad, f"Rows with invalid qk17: {bad}"
+
+    def test_qk17_contains_only_valid_chars(self, overture_parquet, tmp_path):
+        """qk17 values must consist only of digits 0-3 (quadkey alphabet)."""
+        db_path = tmp_path / "test_ov_qk17_chars.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        bad = conn.execute("""
+            SELECT id, qk17
+            FROM places
+            WHERE NOT regexp_matches(qk17, '^[0-3]{17}$')
+        """).fetchall()
+        conn.close()
+        assert not bad, f"qk17 values with unexpected characters: {bad}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: overture_importance.sql
+# ---------------------------------------------------------------------------
+
+class TestOvertureImportance:
+    """Tests for garganorn/sql/overture_importance.sql.
+
+    Each test creates a fresh DuckDB connection, runs overture_import.sql first,
+    then runs overture_importance.sql.
+    """
+
+    def test_sql_file_exists(self):
+        """The SQL file must exist on disk (will fail until Green phase)."""
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_importance.sql"
+        assert sql_path.exists(), f"SQL file not found: {sql_path}"
+
+    def _run_importance(self, conn):
+        """Load and execute overture_importance.sql on `conn`."""
+        raw_sql = _load_sql("overture_importance.sql", {})
+        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+        conn.execute(sql)
+
+    def test_importance_column_added(self, overture_parquet, tmp_path):
+        """After overture_importance.sql, `places` must have an `importance` column."""
+        db_path = tmp_path / "test_ov_imp_col.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_importance(conn)
+        cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        assert "importance" in cols, f"importance column missing; found: {cols}"
+
+    def test_importance_column_is_integer(self, overture_parquet, tmp_path):
+        """The `importance` column must be INTEGER type."""
+        db_path = tmp_path / "test_ov_imp_type.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_importance(conn)
+        describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        assert describe.get("importance") in ("INTEGER", "INT", "INT4", "SIGNED"), (
+            f"importance column type unexpected: {describe.get('importance')}"
+        )
+
+    def test_importance_values_in_range(self, overture_parquet, tmp_path):
+        """All importance values must be in [0, 100]."""
+        db_path = tmp_path / "test_ov_imp_range.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_importance(conn)
+        bad = conn.execute("""
+            SELECT id, importance
+            FROM places
+            WHERE importance < 0 OR importance > 100
+        """).fetchall()
+        conn.close()
+        assert not bad, f"Rows with out-of-range importance: {bad}"
+
+    def test_importance_not_null(self, overture_parquet, tmp_path):
+        """All surviving rows must have a non-NULL importance value."""
+        db_path = tmp_path / "test_ov_imp_notnull.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_importance(conn)
+        nulls = conn.execute("""
+            SELECT id FROM places WHERE importance IS NULL
+        """).fetchall()
+        conn.close()
+        assert not nulls, f"Rows with NULL importance: {nulls}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: overture_variants.sql
+# ---------------------------------------------------------------------------
+
+class TestOvertureVariants:
+    """Tests for garganorn/sql/overture_variants.sql.
+
+    Each test runs overture_import.sql first, then overture_variants.sql.
+    """
+
+    def test_sql_file_exists(self):
+        """The SQL file must exist on disk (will fail until Green phase)."""
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_variants.sql"
+        assert sql_path.exists(), f"SQL file not found: {sql_path}"
+
+    def _run_variants(self, conn):
+        """Load and execute overture_variants.sql on `conn`."""
+        raw_sql = _load_sql("overture_variants.sql", {})
+        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+        conn.execute(sql)
+
+    def test_variants_column_added(self, overture_parquet, tmp_path):
+        """After overture_variants.sql, `places` must have a `variants` column."""
+        db_path = tmp_path / "test_ov_var_col.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_variants(conn)
+        cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        assert "variants" in cols, f"variants column missing; found: {cols}"
+
+    def test_variants_column_is_struct_array(self, overture_parquet, tmp_path):
+        """The `variants` column must be an array of STRUCTs."""
+        db_path = tmp_path / "test_ov_var_type.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_variants(conn)
+        describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
+        conn.close()
+        col_type = describe.get("variants", "")
+        assert "STRUCT" in col_type, (
+            f"variants column type should be a STRUCT array; got: {col_type}"
+        )
+        assert "[]" in col_type or "ARRAY" in col_type.upper(), (
+            f"variants column should be an array type; got: {col_type}"
+        )
+
+    def test_variants_from_names_common(self, overture_parquet, tmp_path):
+        """A row with names.common entries must get non-empty variants (ov001)."""
+        db_path = tmp_path / "test_ov_var_common.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_variants(conn)
+        row = conn.execute("""
+            SELECT len(variants) FROM places WHERE id = 'ov001'
+        """).fetchone()
+        conn.close()
+        assert row is not None, "ov001 not found in places after variants SQL"
+        assert row[0] > 0, (
+            f"ov001 has names.common but got empty variants (len={row[0]})"
+        )
+
+    def test_variants_from_names_rules(self, overture_parquet, tmp_path):
+        """A row with names.rules entries must get non-empty variants (ov002)."""
+        db_path = tmp_path / "test_ov_var_rules.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_variants(conn)
+        row = conn.execute("""
+            SELECT len(variants) FROM places WHERE id = 'ov002'
+        """).fetchone()
+        conn.close()
+        assert row is not None, "ov002 not found in places after variants SQL"
+        assert row[0] > 0, (
+            f"ov002 has names.rules but got empty variants (len={row[0]})"
+        )
+
+    def test_variants_empty_when_no_names(self, overture_parquet, tmp_path):
+        """A row with names IS NULL must get an empty variants array (ov003)."""
+        db_path = tmp_path / "test_ov_var_empty.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_overture_import(conn, overture_parquet)
+        self._run_variants(conn)
+        row = conn.execute("""
+            SELECT len(variants) FROM places WHERE id = 'ov003'
+        """).fetchone()
+        conn.close()
+        assert row is not None, "ov003 not found in places after variants SQL"
+        assert row[0] == 0, (
+            f"ov003 has no names but got non-empty variants (len={row[0]})"
+        )
