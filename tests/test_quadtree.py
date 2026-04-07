@@ -2071,6 +2071,13 @@ class TestComputeTileAssignments:
             f"but these did not: {non_z17}"
         )
 
+        # All 4 places must be in the SAME zoom-17 tile (len==1 unique qk), confirming
+        # the fixture geometry is correct and the fallback is actually exercised.
+        qk_values = [row[1] for row in rows]  # row is (place_id, tile_qk)
+        assert len(set(qk_values)) == 1, (
+            f"All 4 places should share the same zoom-17 tile; got {len(set(qk_values))} distinct tiles: {set(qk_values)}"
+        )
+
     def test_null_qk17_excluded(self):
         """Places with qk17=NULL must be excluded from tile_assignments."""
         places = [
