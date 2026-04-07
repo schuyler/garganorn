@@ -1887,3 +1887,153 @@ class TestOsmVariants:
         row = self._get_n1007_variant(osm_parquet, tmp_path, "test_osm_var_int.duckdb", "International Name")
         assert row is not None, "No variant with name='International Name' found for n1007"
         assert row[1] == "alternate", f"Expected type='alternate' for int_name, got {row[1]!r}"
+
+
+# ---------------------------------------------------------------------------
+# Tests: compute_tile_assignments.sql
+# ---------------------------------------------------------------------------
+
+def _run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=1000):
+    """Load, substitute, and execute compute_tile_assignments.sql on `conn`.
+
+    Raises FileNotFoundError when the SQL file does not yet exist (Red phase).
+    """
+    sql = _load_sql(
+        "compute_tile_assignments.sql",
+        {
+            "pk_expr": pk_expr,
+            "min_zoom": min_zoom,
+            "max_zoom": max_zoom,
+            "max_per_tile": max_per_tile,
+        },
+    )
+    conn.execute(sql)
+
+
+def _make_tile_assignment_db(conn, places):
+    """Populate an in-memory DuckDB connection with a minimal places table.
+
+    `places` is a list of (fsq_place_id, latitude, longitude) tuples.
+    The qk17 column is computed directly via ST_QuadKey so the fixture
+    matches what the real import pipeline would produce.
+    """
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE places (
+            fsq_place_id VARCHAR,
+            name         VARCHAR,
+            latitude     DOUBLE,
+            longitude    DOUBLE,
+            qk17         VARCHAR
+        )
+    """)
+    for fsq_id, lat, lon in places:
+        conn.execute(
+            "INSERT INTO places VALUES (?, ?, ?, ?, ST_QuadKey(?, ?, 17))",
+            [fsq_id, f"Place {fsq_id}", lat, lon, lon, lat],
+        )
+
+
+class TestComputeTileAssignments:
+    """Tests for garganorn/sql/compute_tile_assignments.sql.
+
+    All tests fail at Red phase with FileNotFoundError because the SQL file
+    does not exist yet.
+    """
+
+    def test_main_case_table_exists_with_expected_columns(self, tmp_path):
+        """After running the SQL, tile_assignments must exist with place_id and tile_qk.
+
+        Fixture: 5 SF places + 1 NYC place, max_per_tile=2.  The 5 SF places
+        share the same zoom-6 quadkey (count=5 > 2), so the SQL must subdivide
+        them to a finer zoom level where tiles have ≤ 2 places.  The NYC place
+        is isolated (count=1 ≤ 2) so it gets a coarse tile.
+        """
+        # SF cluster — 5 places very close together (same zoom-6 quadkey)
+        # NYC place — isolated in a different zoom-6 quadkey
+        places = [
+            ("sf001", 37.7749, -122.4194),
+            ("sf002", 37.7750, -122.4195),
+            ("sf003", 37.7748, -122.4193),
+            ("sf004", 37.7751, -122.4196),
+            ("sf005", 37.7747, -122.4192),
+            ("nyc001", 40.7128, -74.0060),
+        ]
+
+        db_path = tmp_path / "test_tile_main.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_tile_assignment_db(conn, places)
+        _run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=2)
+
+        # tile_assignments table must exist
+        tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
+        assert "tile_assignments" in tables, (
+            f"tile_assignments table not found; tables: {tables}"
+        )
+
+        # Must have place_id and tile_qk columns
+        cols = {row[0] for row in conn.execute("DESCRIBE tile_assignments").fetchall()}
+        assert "place_id" in cols, f"place_id column missing; found: {cols}"
+        assert "tile_qk" in cols, f"tile_qk column missing; found: {cols}"
+
+        # Every place with non-null qk17 must appear exactly once
+        assigned_ids = {row[0] for row in conn.execute(
+            "SELECT place_id FROM tile_assignments"
+        ).fetchall()}
+        expected_ids = {p[0] for p in places}
+        assert assigned_ids == expected_ids, (
+            f"Assigned IDs differ from expected.\n"
+            f"  Missing: {expected_ids - assigned_ids}\n"
+            f"  Extra:   {assigned_ids - expected_ids}"
+        )
+
+        # No tile_qk (at zooms < 17) may have more records than max_per_tile.
+        # Zoom-17 tiles are accepted as-is per the spec.
+        overflow = conn.execute("""
+            SELECT tile_qk, count(*) AS cnt
+            FROM tile_assignments
+            WHERE length(tile_qk) < 17
+            GROUP BY tile_qk
+            HAVING count(*) > 2
+        """).fetchall()
+        assert not overflow, (
+            f"Tiles at zoom < 17 exceed max_per_tile=2: {overflow}"
+        )
+
+        conn.close()
+
+    def test_zoom17_fallback_when_all_in_one_cell(self, tmp_path):
+        """When max_per_tile=1, all places must fall back to zoom-17 tiles.
+
+        Fixture: 4 places all within the same zoom-6 quadkey prefix.
+        max_per_tile=1 means every multi-place tile at every zoom level is
+        too full.  Because zoom 17 is the unconditional fallback, every place
+        must receive a tile_qk of length 17.
+        """
+        # All in a very tight SF cluster — guaranteed same zoom-6 prefix.
+        places = [
+            ("p001", 37.7749, -122.4194),
+            ("p002", 37.7750, -122.4195),
+            ("p003", 37.7748, -122.4193),
+            ("p004", 37.7751, -122.4196),
+        ]
+
+        db_path = tmp_path / "test_tile_z17.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_tile_assignment_db(conn, places)
+        _run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=1)
+
+        rows = conn.execute(
+            "SELECT place_id, tile_qk FROM tile_assignments ORDER BY place_id"
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == len(places), (
+            f"Expected {len(places)} rows in tile_assignments, got {len(rows)}"
+        )
+
+        non_z17 = [(pid, qk) for pid, qk in rows if len(qk) != 17]
+        assert not non_z17, (
+            f"With max_per_tile=1 all places should fall back to zoom-17 tiles, "
+            f"but these did not: {non_z17}"
+        )
