@@ -2106,3 +2106,510 @@ class TestComputeTileAssignments:
         assert "a002" in present_ids, "a002 should be present in tile_assignments"
 
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Helper: build a minimal FSQ places + tile_assignments DB for export tests
+# ---------------------------------------------------------------------------
+
+_FSQ_EXPORT_PLACES = [
+    # (fsq_place_id, name, lat, lon, importance, country)
+    ("exp001", "Blue Bottle Coffee",  37.7749, -122.4194, 72, "US"),
+    ("exp002", "Golden Gate Park",    37.7694, -122.4862, 85, "US"),
+    ("exp003", "Tartine Bakery",      37.7617, -122.4243, 68, "US"),
+    # place with null country — should produce no address location
+    ("exp004", "Mystery Spot",        37.7800, -122.4300, 40, None),
+]
+
+# One 6-char tile quadkey used for all export fixture places
+_EXPORT_TILE_QK = "023130"
+
+
+def _make_fsq_export_db(conn, places_rows=None):
+    """Populate `conn` with minimal `places` and `tile_assignments` tables.
+
+    `places_rows` defaults to _FSQ_EXPORT_PLACES if None.
+    Each entry is (fsq_place_id, name, lat, lon, importance, country).
+    """
+    if places_rows is None:
+        places_rows = _FSQ_EXPORT_PLACES
+
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE places (
+            fsq_place_id        VARCHAR,
+            name                VARCHAR,
+            latitude            DOUBLE,
+            longitude           DOUBLE,
+            importance          INTEGER,
+            address             VARCHAR,
+            locality            VARCHAR,
+            region              VARCHAR,
+            postcode            VARCHAR,
+            country             VARCHAR,
+            admin_region        VARCHAR,
+            post_town           VARCHAR,
+            po_box              VARCHAR,
+            tel                 VARCHAR,
+            website             VARCHAR,
+            email               VARCHAR,
+            facebook_id         VARCHAR,
+            instagram           VARCHAR,
+            twitter             VARCHAR,
+            fsq_category_ids    VARCHAR[],
+            fsq_category_labels VARCHAR[],
+            placemaker_url      VARCHAR,
+            variants            STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+            qk17                VARCHAR
+        )
+    """)
+
+    for fsq_id, name, lat, lon, imp, country in places_rows:
+        country_val = f"'{country}'" if country is not None else "NULL"
+        # Compute qk17 from actual coordinates so ST_QuadKey produces a valid 17-char key.
+        conn.execute(f"""
+            INSERT INTO places
+            SELECT
+                '{fsq_id}', '{name}', {lat}, {lon}, {imp},
+                NULL, NULL, NULL, NULL, {country_val},
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                ARRAY['13065143'], ARRAY['Food & Drink'],
+                NULL,
+                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                ST_QuadKey({lon}, {lat}, 17)
+        """)
+
+    conn.execute("""
+        CREATE TABLE tile_assignments (
+            place_id VARCHAR,
+            tile_qk  VARCHAR
+        )
+    """)
+    for fsq_id, _name, _lat, _lon, _imp, _country in places_rows:
+        conn.execute(
+            "INSERT INTO tile_assignments VALUES (?, ?)",
+            [fsq_id, _EXPORT_TILE_QK],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: fsq_export_tiles.sql
+# ---------------------------------------------------------------------------
+
+class TestFsqExportTiles:
+    """Tests for garganorn/sql/fsq_export_tiles.sql.
+
+    All tests fail at Red phase: the SQL file does not exist yet.
+    """
+
+    _SUBS = {"attribution": "Foursquare Open Source Places", "repo": "https://example.com"}
+
+    def _run_export(self, conn):
+        raw_sql = _load_sql("fsq_export_tiles.sql", self._SUBS)
+        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+        conn.execute(sql)
+
+    def test_sql_file_exists(self):
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "fsq_export_tiles.sql"
+        assert sql_path.exists(), f"SQL file not found: {sql_path}"
+
+    def test_export_produces_rows(self, tmp_path):
+        db_path = tmp_path / "test_fsq_export_rows.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT * FROM tile_export").fetchall()
+        conn.close()
+        assert len(rows) >= 1, "fsq_export_tiles.sql must produce at least one row"
+
+    def test_tile_json_structure(self, tmp_path):
+        """tile_json must be valid JSON with top-level 'attribution' and 'records' keys."""
+        import json
+        db_path = tmp_path / "test_fsq_export_struct.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT tile_qk, tile_json FROM tile_export").fetchall()
+        conn.close()
+        assert rows, "No rows returned from tile_export"
+        for tile_qk, tile_json in rows:
+            parsed = json.loads(tile_json)
+            assert "attribution" in parsed, (
+                f"tile_json for {tile_qk} missing 'attribution' key; keys={list(parsed)}"
+            )
+            assert "records" in parsed, (
+                f"tile_json for {tile_qk} missing 'records' key; keys={list(parsed)}"
+            )
+
+    def test_record_schema(self, tmp_path):
+        """Each record must have the expected top-level fields."""
+        import json
+        db_path = tmp_path / "test_fsq_export_rec_schema.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        conn.close()
+        for (tile_json,) in rows:
+            parsed = json.loads(tile_json)
+            for rec in parsed["records"]:
+                assert "uri" in rec, f"Record missing 'uri': {list(rec)}"
+                assert isinstance(rec["uri"], str), "uri must be a string"
+                assert rec["uri"].startswith("https://"), (
+                    f"uri must start with 'https://': {rec['uri']!r}"
+                )
+                assert "rkey" in rec, f"Record missing 'rkey': {list(rec)}"
+                val = rec.get("value", {})
+                assert val.get("$type") == "org.atgeo.place", (
+                    f"value.$type must be 'org.atgeo.place'; got {val.get('$type')!r}"
+                )
+                assert "name" in val, f"value missing 'name': {list(val)}"
+                assert "importance" in val, f"value missing 'importance': {list(val)}"
+                assert isinstance(val["importance"], int), (
+                    f"importance must be int; got {type(val['importance'])}"
+                )
+                assert "locations" in val, f"value missing 'locations': {list(val)}"
+                assert isinstance(val["locations"], list), "locations must be a list"
+                assert "variants" in val, f"value missing 'variants': {list(val)}"
+                assert isinstance(val["variants"], list), "variants must be a list"
+                assert "attributes" in val, f"value missing 'attributes': {list(val)}"
+                assert isinstance(val["attributes"], dict), "attributes must be a dict"
+                assert "relations" in val, f"value missing 'relations': {list(val)}"
+                assert isinstance(val["relations"], dict), "relations must be a dict"
+
+    def test_geo_location(self, tmp_path):
+        """First location entry must be a geo location with string lat/lon."""
+        import json
+        db_path = tmp_path / "test_fsq_export_geo.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        conn.close()
+        for (tile_json,) in rows:
+            parsed = json.loads(tile_json)
+            for rec in parsed["records"]:
+                locations = rec["value"]["locations"]
+                assert len(locations) >= 1, "Each record must have at least one location"
+                geo = locations[0]
+                assert geo.get("$type") == "community.lexicon.location.geo", (
+                    f"First location must be geo type; got {geo.get('$type')!r}"
+                )
+                assert "latitude" in geo, "Geo location missing 'latitude'"
+                assert "longitude" in geo, "Geo location missing 'longitude'"
+                assert isinstance(geo["latitude"], str), (
+                    f"geo latitude must be a string; got {type(geo['latitude'])}"
+                )
+                assert isinstance(geo["longitude"], str), (
+                    f"geo longitude must be a string; got {type(geo['longitude'])}"
+                )
+
+    def test_address_location_when_country_present(self, tmp_path):
+        """A place with a non-null country must have an address location as the second entry."""
+        import json
+        db_path = tmp_path / "test_fsq_export_addr.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        conn.close()
+
+        found = False
+        for (tile_json,) in rows:
+            parsed = json.loads(tile_json)
+            for rec in parsed["records"]:
+                if rec["value"].get("name") in ("Blue Bottle Coffee", "Golden Gate Park", "Tartine Bakery"):
+                    locations = rec["value"]["locations"]
+                    assert len(locations) >= 2, (
+                        f"Place with country must have address location; "
+                        f"got {len(locations)} location(s) for {rec['value']['name']}"
+                    )
+                    addr = locations[1]
+                    assert addr.get("$type") == "community.lexicon.location.address", (
+                        f"Second location must be address type; got {addr.get('$type')!r}"
+                    )
+                    found = True
+        assert found, "No records with country found in export output"
+
+    def test_no_address_when_country_null(self, tmp_path):
+        """A place with null country must have exactly 1 location (geo only)."""
+        import json
+        db_path = tmp_path / "test_fsq_export_no_addr.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        conn.close()
+
+        found = False
+        for (tile_json,) in rows:
+            parsed = json.loads(tile_json)
+            for rec in parsed["records"]:
+                if rec["value"].get("name") == "Mystery Spot":
+                    locations = rec["value"]["locations"]
+                    assert len(locations) == 1, (
+                        f"Place with null country must have exactly 1 location; "
+                        f"got {len(locations)}"
+                    )
+                    found = True
+        assert found, "Mystery Spot (null country place) not found in export output"
+
+
+# ---------------------------------------------------------------------------
+# Tests: export_tiles() Python function
+# ---------------------------------------------------------------------------
+
+class TestExportTiles:
+    """Tests for garganorn.quadtree.export_tiles().
+
+    All tests fail at Red phase: garganorn.quadtree does not exist yet.
+    """
+
+    def test_import(self):
+        """Importing export_tiles must raise ImportError in Red phase."""
+        from garganorn.quadtree import export_tiles  # noqa: F401
+
+    def test_writes_gzipped_files(self, tmp_path):
+        """export_tiles must write .json.gz files under {output_dir}/{qk[:6]}/{qk}.json.gz."""
+        try:
+            from garganorn.quadtree import export_tiles
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        db_path = tmp_path / "export_tiles_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        export_tiles(conn, str(output_dir), "fsq")
+        conn.close()
+
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert gz_files, "export_tiles must write at least one .json.gz file"
+        for gz in gz_files:
+            # Path must be output_dir/<6-char-prefix>/<qk>.json.gz
+            parts = gz.relative_to(output_dir).parts
+            assert len(parts) == 2, (
+                f"Expected 2-level path (<qk6>/<qk>.json.gz), got: {gz}"
+            )
+            qk_dir = parts[0]
+            qk_file = parts[1].replace(".json.gz", "")
+            assert qk_file.startswith(qk_dir), (
+                f"File quadkey {qk_file!r} must start with dir prefix {qk_dir!r}"
+            )
+
+    def test_returns_manifest_dict(self, tmp_path):
+        """export_tiles must return a dict mapping quadkey strings to integer record counts."""
+        try:
+            from garganorn.quadtree import export_tiles
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        db_path = tmp_path / "export_manifest_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+
+        output_dir = tmp_path / "output_manifest"
+        output_dir.mkdir()
+        result = export_tiles(conn, str(output_dir), "fsq")
+        conn.close()
+
+        assert isinstance(result, dict), (
+            f"export_tiles must return a dict; got {type(result)}"
+        )
+        for qk, count in result.items():
+            assert isinstance(qk, str), f"Manifest key must be str; got {type(qk)}"
+            assert isinstance(count, int), (
+                f"Manifest value must be int; got {type(count)} for key {qk!r}"
+            )
+
+    def test_json_content_valid(self, tmp_path):
+        """Each .json.gz file must decompress to valid JSON with a 'records' array."""
+        import gzip
+        import json
+        try:
+            from garganorn.quadtree import export_tiles
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        db_path = tmp_path / "export_content_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+
+        output_dir = tmp_path / "output_content"
+        output_dir.mkdir()
+        export_tiles(conn, str(output_dir), "fsq")
+        conn.close()
+
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert gz_files, "No .json.gz files written"
+        for gz in gz_files:
+            with gzip.open(gz, "rt", encoding="utf-8") as fh:
+                parsed = json.load(fh)
+            assert "records" in parsed, (
+                f"Decompressed JSON missing 'records' key in {gz}"
+            )
+            assert isinstance(parsed["records"], list), (
+                f"'records' must be a list in {gz}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Tests: run_pipeline() Python function
+# ---------------------------------------------------------------------------
+
+class TestRunPipeline:
+    """Tests for garganorn.quadtree.run_pipeline().
+
+    All tests fail at Red phase: garganorn.quadtree does not exist yet.
+    """
+
+    def test_import(self):
+        """Importing run_pipeline must raise ImportError in Red phase."""
+        from garganorn.quadtree import run_pipeline  # noqa: F401
+
+    def test_fsq_pipeline_smoke(self, fsq_parquet, tmp_path):
+        """End-to-end smoke test: at least one .json.gz and manifest.json produced."""
+        import json
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        output_dir = tmp_path / "pipeline_out"
+        output_dir.mkdir()
+
+        run_pipeline(
+            "fsq",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+        # At least one tile file under output_dir/fsq/
+        fsq_dir = output_dir / "fsq"
+        gz_files = list(fsq_dir.rglob("*.json.gz")) if fsq_dir.exists() else []
+        assert gz_files, (
+            f"run_pipeline must write at least one .json.gz under {fsq_dir}"
+        )
+
+        # manifest.json must exist
+        manifest_path = fsq_dir / "manifest.json"
+        assert manifest_path.exists(), (
+            f"run_pipeline must write manifest.json at {manifest_path}"
+        )
+        with open(manifest_path) as fh:
+            manifest = json.load(fh)
+        assert "source" in manifest, "manifest.json missing 'source'"
+        assert manifest["source"] == "fsq", (
+            f"manifest source must be 'fsq'; got {manifest['source']!r}"
+        )
+
+        # No leftover .duckdb temp file
+        duckdb_files = list(output_dir.rglob("*.duckdb"))
+        assert not duckdb_files, (
+            f"run_pipeline must not leave .duckdb files behind: {duckdb_files}"
+        )
+
+    @pytest.mark.xfail(
+        raises=(duckdb.IOException, duckdb.CatalogException),
+        reason="OSM pipeline with nonexistent parquet raises DuckDB IO/Catalog error; "
+               "test confirms tuple parquet_glob is unpacked without TypeError",
+    )
+    def test_osm_pipeline_parquet_is_tuple(self, tmp_path):
+        """run_pipeline accepts a 2-tuple for parquet_glob (OSM node+way paths)."""
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        output_dir = tmp_path / "osm_tuple_out"
+        output_dir.mkdir()
+
+        # Nonexistent paths — DuckDB will raise IOException or CatalogException,
+        # but the function must not raise TypeError from failing to unpack the tuple.
+        run_pipeline(
+            "osm",
+            ("/nonexistent/nodes/*.parquet", "/nonexistent/ways/*.parquet"),
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: write_manifest() Python function
+# ---------------------------------------------------------------------------
+
+class TestWriteManifest:
+    """Tests for garganorn.quadtree.write_manifest().
+
+    All tests fail at Red phase: garganorn.quadtree does not exist yet.
+    """
+
+    def test_import(self):
+        """Importing write_manifest must raise ImportError in Red phase."""
+        from garganorn.quadtree import write_manifest  # noqa: F401
+
+    def test_creates_manifest_json(self, tmp_path):
+        """write_manifest must create a manifest.json file."""
+        try:
+            from garganorn.quadtree import write_manifest
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        write_manifest({"023130": 42, "023131": 7}, str(tmp_path), "fsq")
+        assert (tmp_path / "manifest.json").exists(), "manifest.json not found"
+
+    def test_manifest_structure(self, tmp_path):
+        """manifest.json must have 'source', 'generated_at', and 'quadkeys' fields."""
+        import json
+        try:
+            from garganorn.quadtree import write_manifest
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        out_dir = tmp_path / "manifest_struct"
+        out_dir.mkdir()
+        write_manifest({"023130": 42}, str(out_dir), "fsq")
+        with open(out_dir / "manifest.json") as fh:
+            manifest = json.load(fh)
+        assert "source" in manifest, f"manifest missing 'source'; keys={list(manifest)}"
+        assert "generated_at" in manifest, (
+            f"manifest missing 'generated_at'; keys={list(manifest)}"
+        )
+        assert "quadkeys" in manifest, (
+            f"manifest missing 'quadkeys'; keys={list(manifest)}"
+        )
+        assert isinstance(manifest["quadkeys"], list), "quadkeys must be a list"
+        assert manifest["source"] == "fsq", (
+            f"source must be 'fsq'; got {manifest['source']!r}"
+        )
+
+    def test_quadkeys_sorted(self, tmp_path):
+        """write_manifest must write quadkeys in sorted order regardless of input order."""
+        import json
+        try:
+            from garganorn.quadtree import write_manifest
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        out_dir = tmp_path / "manifest_sorted"
+        out_dir.mkdir()
+        # Pass unsorted dict
+        write_manifest(
+            {"023133": 5, "023130": 42, "023132": 17, "023131": 7},
+            str(out_dir),
+            "fsq",
+        )
+        with open(out_dir / "manifest.json") as fh:
+            manifest = json.load(fh)
+        qkeys = manifest["quadkeys"]
+        assert qkeys == sorted(qkeys), (
+            f"quadkeys must be sorted; got {qkeys}"
+        )
