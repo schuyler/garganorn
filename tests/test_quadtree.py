@@ -1941,6 +1941,10 @@ class TestComputeTileAssignments:
     does not exist yet.
     """
 
+    def test_sql_file_exists(self):
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "compute_tile_assignments.sql"
+        assert sql_path.exists(), f"SQL file not found: {sql_path}"
+
     def test_main_case_table_exists_with_expected_columns(self, tmp_path):
         """After running the SQL, tile_assignments must exist with place_id and tile_qk.
 
@@ -1960,10 +1964,12 @@ class TestComputeTileAssignments:
             ("nyc001", 40.7128, -74.0060),
         ]
 
+        max_per_tile = 2
+
         db_path = tmp_path / "test_tile_main.duckdb"
         conn = duckdb.connect(str(db_path))
         _make_tile_assignment_db(conn, places)
-        _run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=2)
+        _run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
 
         # tile_assignments table must exist
         tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
@@ -1986,18 +1992,38 @@ class TestComputeTileAssignments:
             f"  Missing: {expected_ids - assigned_ids}\n"
             f"  Extra:   {assigned_ids - expected_ids}"
         )
+        assert conn.execute("SELECT count(*) FROM tile_assignments").fetchone()[0] == len(places)
 
         # No tile_qk (at zooms < 17) may have more records than max_per_tile.
         # Zoom-17 tiles are accepted as-is per the spec.
-        overflow = conn.execute("""
+        overflow = conn.execute(f"""
             SELECT tile_qk, count(*) AS cnt
             FROM tile_assignments
             WHERE length(tile_qk) < 17
             GROUP BY tile_qk
-            HAVING count(*) > 2
+            HAVING count(*) > {max_per_tile}
         """).fetchall()
         assert not overflow, (
-            f"Tiles at zoom < 17 exceed max_per_tile=2: {overflow}"
+            f"Tiles at zoom < 17 exceed max_per_tile={max_per_tile}: {overflow}"
+        )
+
+        # At least one place must have been assigned a coarse tile (zoom < 17).
+        coarse_count = conn.execute(
+            "SELECT count(*) FROM tile_assignments WHERE length(tile_qk) < 17"
+        ).fetchone()[0]
+        assert coarse_count >= 1, (
+            "Expected at least one place assigned a tile at zoom < 17, "
+            f"but coarse_count={coarse_count}"
+        )
+
+        # The NYC place (isolated at zoom 6) must receive a zoom-6 tile.
+        nyc_qk = conn.execute(
+            "SELECT tile_qk FROM tile_assignments WHERE place_id = 'nyc001'"
+        ).fetchone()
+        assert nyc_qk is not None, "nyc001 not found in tile_assignments"
+        assert len(nyc_qk[0]) == 6, (
+            f"nyc001 expected a zoom-6 tile (length 6), got tile_qk={nyc_qk[0]!r} "
+            f"(length {len(nyc_qk[0])})"
         )
 
         conn.close()
