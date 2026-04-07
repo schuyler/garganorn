@@ -1,24 +1,15 @@
--- Re-reads source parquet rather than querying the places table because the
--- OSM import pipeline strips name:* and alt_name/old_name tags from places
--- (only a category-key allowlist is preserved). Variant names are only
--- available in the original parquet.
--- Parameters: ${node_parquet}, ${way_parquet}
+-- Reads variant name tags from places.tags (preserved during import).
+-- No parquet parameters needed.
 CREATE TEMP TABLE raw_variants AS
 WITH tag_entries AS (
     SELECT
-        'n' || id::VARCHAR AS rkey,
+        rkey,
         unnest(map_entries(tags)) AS e
-    FROM read_parquet('${node_parquet}')
-    WHERE tags['name'] IS NOT NULL
-    UNION ALL
-    SELECT
-        'w' || id::VARCHAR AS rkey,
-        unnest(map_entries(tags)) AS e
-    FROM read_parquet('${way_parquet}')
-    WHERE tags['name'] IS NOT NULL
+    FROM places
+    WHERE tags IS NOT NULL
 ),
 name_tags AS (
-    SELECT rkey, e.key, e.value
+    SELECT rkey, e.key AS key, e.value AS value
     FROM tag_entries
     WHERE e.key LIKE 'name:%'
        OR e.key IN ('alt_name','old_name','official_name',

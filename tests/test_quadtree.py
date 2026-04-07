@@ -1623,6 +1623,21 @@ class TestOsmImport:
             "Way w2001 (tourism=attraction) should survive import via centroid computation"
         )
 
+    def test_import_preserves_variant_tags(self, osm_parquet, tmp_path):
+        """n1005 has alt_name and name:fr; both must survive in places.tags after import."""
+        db_path = tmp_path / "test_osm_variant_tags.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        row = conn.execute(
+            "SELECT tags FROM places WHERE rkey = 'n1005'"
+        ).fetchone()
+        conn.close()
+        assert row is not None, "n1005 not found in places"
+        tags = dict(row[0])
+        assert 'alt_name' in tags, f"alt_name missing from tags: {tags}"
+        assert 'name:fr' in tags, f"name:fr missing from tags: {tags}"
+
 
 # ---------------------------------------------------------------------------
 # Tests: osm_importance.sql
@@ -1769,15 +1784,9 @@ class TestOsmVariants:
         sql_path = REPO_ROOT / "garganorn" / "sql" / "osm_variants.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
-    def _run_variants(self, conn, node_glob, way_glob=None):
+    def _run_variants(self, conn):
         """Load and execute osm_variants.sql on `conn`."""
-        if way_glob is None:
-            way_glob = node_glob
-        substitutions = {
-            "node_parquet": node_glob,
-            "way_parquet": way_glob,
-        }
-        raw_sql = _load_sql("osm_variants.sql", substitutions)
+        raw_sql = _load_sql("osm_variants.sql", {})
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
@@ -1787,7 +1796,7 @@ class TestOsmVariants:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_variants(conn, osm_parquet["node"], osm_parquet["way"])
+        self._run_variants(conn)
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "variants" in cols, f"variants column missing; found: {cols}"
@@ -1798,7 +1807,7 @@ class TestOsmVariants:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_variants(conn, osm_parquet["node"], osm_parquet["way"])
+        self._run_variants(conn)
         nulls = conn.execute(
             "SELECT rkey FROM places WHERE variants IS NULL"
         ).fetchall()
@@ -1811,7 +1820,7 @@ class TestOsmVariants:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_variants(conn, osm_parquet["node"], osm_parquet["way"])
+        self._run_variants(conn)
         # Find the variant with name='The Old Spot' for n1005
         row = conn.execute("""
             SELECT v.name, v.type, v.language
@@ -1832,7 +1841,7 @@ class TestOsmVariants:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_variants(conn, osm_parquet["node"], osm_parquet["way"])
+        self._run_variants(conn)
         row = conn.execute("""
             SELECT v.name, v.type, v.language
             FROM (
@@ -1853,7 +1862,7 @@ class TestOsmVariants:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_variants(conn, osm_parquet["node"], osm_parquet["way"])
+        self._run_variants(conn)
         row = conn.execute(
             "SELECT len(variants) FROM places WHERE rkey = 'n1001'"
         ).fetchone()
@@ -1867,7 +1876,7 @@ class TestOsmVariants:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_variants(conn, osm_parquet["node"], osm_parquet["way"])
+        self._run_variants(conn)
         row = conn.execute(f"""
             SELECT v.name, v.type, v.language
             FROM (
