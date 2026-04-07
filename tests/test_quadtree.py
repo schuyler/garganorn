@@ -2031,17 +2031,20 @@ class TestComputeTileAssignments:
     def test_zoom17_fallback_when_all_in_one_cell(self, tmp_path):
         """When max_per_tile=1, all places must fall back to zoom-17 tiles.
 
-        Fixture: 4 places all within the same zoom-6 quadkey prefix.
-        max_per_tile=1 means every multi-place tile at every zoom level is
-        too full.  Because zoom 17 is the unconditional fallback, every place
-        must receive a tile_qk of length 17.
+        Fixture: 4 places all within the same zoom-17 tile (~1m apart, 0.00003°
+        spread, well within the ~0.00274° zoom-17 tile width).  With
+        max_per_tile=1 the shared zoom-17 tile has count=4 > 1, so no zoom
+        level — including 17 — can satisfy the density constraint.  Because
+        zoom 17 is the unconditional fallback, every place must still receive a
+        tile_qk of length 17.
         """
-        # All in a very tight SF cluster — guaranteed same zoom-6 prefix.
+        # All in the same zoom-17 tile (~1m apart) — count=4 > max_per_tile=1
+        # at every zoom level including 17, triggering the fallback.
         places = [
-            ("p001", 37.7749, -122.4194),
-            ("p002", 37.7750, -122.4195),
-            ("p003", 37.7748, -122.4193),
-            ("p004", 37.7751, -122.4196),
+            ("p001", 37.77000, -122.42000),
+            ("p002", 37.77001, -122.42001),
+            ("p003", 37.77002, -122.42002),
+            ("p004", 37.77003, -122.42003),
         ]
 
         db_path = tmp_path / "test_tile_z17.duckdb"
@@ -2087,5 +2090,12 @@ class TestComputeTileAssignments:
             "SELECT place_id FROM tile_assignments WHERE place_id = 'null001'"
         ).fetchall()
         assert null_rows == [], "Place with null qk17 should be excluded from tile_assignments"
+
+        present_ids = {row[0] for row in conn.execute("SELECT place_id FROM tile_assignments").fetchall()}
+        assert len(present_ids) == len(places), (
+            f"Expected {len(places)} non-null places in tile_assignments, got {len(present_ids)}: {present_ids}"
+        )
+        assert "a001" in present_ids, "a001 should be present in tile_assignments"
+        assert "a002" in present_ids, "a002 should be present in tile_assignments"
 
         conn.close()
