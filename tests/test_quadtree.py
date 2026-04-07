@@ -2058,8 +2058,34 @@ class TestComputeTileAssignments:
             f"Expected {len(places)} rows in tile_assignments, got {len(rows)}"
         )
 
+        assigned_ids = {row[0] for row in rows}
+        expected_ids = {p[0] for p in places}
+        assert assigned_ids == expected_ids, f"place_id mismatch: assigned={assigned_ids}, expected={expected_ids}"
+
         non_z17 = [(pid, qk) for pid, qk in rows if len(qk) != 17]
         assert not non_z17, (
             f"With max_per_tile=1 all places should fall back to zoom-17 tiles, "
             f"but these did not: {non_z17}"
         )
+
+    def test_null_qk17_excluded(self):
+        """Places with qk17=NULL must be excluded from tile_assignments."""
+        places = [
+            ("a001", 37.7749, -122.4194),
+            ("a002", 37.7750, -122.4195),
+        ]
+
+        conn = duckdb.connect()
+        _make_tile_assignment_db(conn, places)
+        conn.execute(
+            "INSERT INTO places (fsq_place_id, name, latitude, longitude, qk17) "
+            "VALUES ('null001', 'Null Place', 37.77, -122.42, NULL)"
+        )
+        _run_tile_assignments(conn, pk_expr='fsq_place_id', max_per_tile=10)
+
+        null_rows = conn.execute(
+            "SELECT place_id FROM tile_assignments WHERE place_id = 'null001'"
+        ).fetchall()
+        assert null_rows == [], "Place with null qk17 should be excluded from tile_assignments"
+
+        conn.close()
