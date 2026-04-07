@@ -363,7 +363,7 @@ class TestFsqImportance:
 
     def _run_importance(self, conn):
         """Load, substitute, and execute fsq_importance.sql on `conn`."""
-        substitutions: dict = {}
+        substitutions: dict = {"density_norm": "10.0", "idf_norm": "18.0"}
         raw_sql = _load_sql("fsq_importance.sql", substitutions)
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
@@ -954,7 +954,7 @@ class TestOvertureImportance:
 
     def _run_importance(self, conn):
         """Load and execute overture_importance.sql on `conn`."""
-        raw_sql = _load_sql("overture_importance.sql", {})
+        raw_sql = _load_sql("overture_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
@@ -1620,7 +1620,7 @@ class TestOsmImportance:
 
     def _run_importance(self, conn):
         """Load and execute osm_importance.sql on `conn`."""
-        raw_sql = _load_sql("osm_importance.sql", {})
+        raw_sql = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
@@ -1722,7 +1722,7 @@ class TestOsmImportance:
         conn = _duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         _run_osm_import(conn, str(node_path), str(way_path), bbox=global_bbox)
-        raw_sql = _load_sql("osm_importance.sql", {})
+        raw_sql = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
         rows = conn.execute("SELECT rkey, importance FROM places ORDER BY rkey").fetchall()
         conn.close()
