@@ -2666,7 +2666,7 @@ class TestQuadtreeMainCLI:
     # ------------------------------------------------------------------
 
     def test_required_args_parsed(self, tmp_path):
-        """main() must parse --source, --parquet, --bbox, and --output correctly."""
+        """main() must parse --source, --parquet, and --output correctly; bbox defaults to None."""
         from garganorn.quadtree import main
 
         output_dir = str(tmp_path / "tiles")
@@ -2675,7 +2675,6 @@ class TestQuadtreeMainCLI:
             "garganorn.quadtree",
             "--source", "fsq",
             "--parquet", "db/cache/fsq/*.parquet",
-            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", output_dir,
         ]
 
@@ -2693,15 +2692,10 @@ class TestQuadtreeMainCLI:
             f"parquet_glob must be 'db/cache/fsq/*.parquet'; got {parquet_arg!r}. Full call: {ca}"
         )
 
-        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else None)
-        assert bbox_arg is not None and len(bbox_arg) == 4, (
-            f"bbox must be a 4-element sequence; got {bbox_arg!r}. Full call: {ca}"
+        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else "NOT_PRESENT")
+        assert bbox_arg is None, (
+            f"bbox must be None when --bbox is omitted; got {bbox_arg!r}. Full call: {ca}"
         )
-        xmin, ymin, xmax, ymax = bbox_arg
-        assert abs(xmin - (-74.1)) < 1e-9, f"bbox xmin must be -74.1; got {xmin!r}"
-        assert abs(ymin - 40.6) < 1e-9, f"bbox ymin must be 40.6; got {ymin!r}"
-        assert abs(xmax - (-73.8)) < 1e-9, f"bbox xmax must be -73.8; got {xmax!r}"
-        assert abs(ymax - 40.9) < 1e-9, f"bbox ymax must be 40.9; got {ymax!r}"
 
         output_dir_arg = ca.kwargs.get("output_dir") if "output_dir" in ca.kwargs else (ca.args[3] if len(ca.args) > 3 else None)
         assert str(output_dir_arg) == str(tmp_path / "tiles"), (
@@ -2881,35 +2875,21 @@ class TestQuadtreeMainCLI:
             with patch("sys.argv", argv):
                 main()
 
-    def test_missing_parquet_causes_systemexit(self, tmp_path):
-        """Omitting required --parquet must cause argparse to call sys.exit."""
+    def test_missing_parquet_non_osm_causes_systemexit(self, tmp_path):
+        """Omitting --parquet for non-OSM source must cause sys.exit."""
         from garganorn.quadtree import main
 
         argv = [
             "garganorn.quadtree",
             "--source", "fsq",
-            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", str(tmp_path / "tiles"),
         ]
 
-        with pytest.raises(SystemExit):
-            with patch("sys.argv", argv):
-                main()
-
-    def test_missing_bbox_causes_systemexit(self, tmp_path):
-        """Omitting required --bbox must cause argparse to call sys.exit."""
-        from garganorn.quadtree import main
-
-        argv = [
-            "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
-            "--output", str(tmp_path / "tiles"),
-        ]
-
-        with pytest.raises(SystemExit):
-            with patch("sys.argv", argv):
-                main()
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with pytest.raises(SystemExit):
+                with patch("sys.argv", argv):
+                    main()
+        mock_pipeline.assert_not_called()
 
     def test_missing_output_causes_systemexit(self, tmp_path):
         """Omitting required --output must cause argparse to call sys.exit."""
@@ -2927,20 +2907,147 @@ class TestQuadtreeMainCLI:
                 main()
 
     # ------------------------------------------------------------------
-    # Test 6: OSM source uses two --parquet arguments
+    # Test 6: OSM source uses --parquet-dir to derive node/way globs
     # ------------------------------------------------------------------
 
-    def test_osm_two_parquet_args_passed_as_tuple(self, tmp_path):
-        """For --source osm, two --parquet values must be forwarded as a tuple."""
+    def test_osm_parquet_dir_derives_node_way_paths(self, tmp_path):
+        """--source osm --parquet-dir /some/dir must forward type=node/type=way globs as tuple."""
         from garganorn.quadtree import main
 
         argv = [
             "garganorn.quadtree",
             "--source", "osm",
-            "--parquet", "db/cache/osm/nodes/*.parquet",
-            "--parquet", "db/cache/osm/ways/*.parquet",
-            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--parquet-dir", "/some/dir",
             "--output", str(tmp_path / "tiles_osm"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+        parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
+
+        assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 2, (
+            f"For OSM, parquet_glob must be a 2-element tuple; got {parquet_arg!r}"
+        )
+        node_glob, way_glob = parquet_arg
+        assert node_glob == "/some/dir/type=node/*.parquet", f"node glob wrong: {node_glob!r}"
+        assert way_glob == "/some/dir/type=way/*.parquet", f"way glob wrong: {way_glob!r}"
+
+        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else "NOT_PRESENT")
+        assert bbox_arg is None, f"bbox must be None when --bbox is omitted; got {bbox_arg!r}"
+
+    def test_osm_missing_parquet_dir_causes_systemexit(self, tmp_path):
+        """--source osm without --parquet-dir must cause SystemExit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "osm",
+            "--output", str(tmp_path / "tiles_osm_bad"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with pytest.raises(SystemExit):
+                with patch("sys.argv", argv):
+                    main()
+        mock_pipeline.assert_not_called()
+
+    def test_osm_parquet_arg_rejected(self, tmp_path):
+        """--source osm with --parquet (not --parquet-dir) must cause SystemExit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "osm",
+            "--parquet", "db/cache/osm/*.parquet",
+            "--output", str(tmp_path / "tiles_osm_bad"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with pytest.raises(SystemExit):
+                with patch("sys.argv", argv):
+                    main()
+        mock_pipeline.assert_not_called()
+
+    def test_non_osm_parquet_dir_rejected(self, tmp_path):
+        """--source fsq with --parquet-dir must cause SystemExit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet-dir", "/some/dir",
+            "--output", str(tmp_path / "tiles_fsq_bad"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with pytest.raises(SystemExit):
+                with patch("sys.argv", argv):
+                    main()
+        mock_pipeline.assert_not_called()
+
+    def test_bbox_optional_defaults_to_none(self, tmp_path):
+        """Omitting --bbox must result in run_pipeline being called with bbox=None."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--output", str(tmp_path / "tiles_no_bbox"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else "NOT_PRESENT")
+        assert bbox_arg is None, f"bbox must be None when --bbox is omitted; got {bbox_arg!r}"
+
+    def test_bbox_provided_passed_as_tuple(self, tmp_path):
+        """--bbox values must be forwarded to run_pipeline as a 4-float tuple."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles_with_bbox"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else None)
+        assert isinstance(bbox_arg, tuple), f"bbox must be a tuple; got {type(bbox_arg)!r}"
+        assert bbox_arg is not None and len(bbox_arg) == 4, (
+            f"bbox must be a 4-element sequence; got {bbox_arg!r}"
+        )
+        xmin, ymin, xmax, ymax = bbox_arg
+        assert abs(xmin - (-74.1)) < 1e-9
+        assert abs(ymin - 40.6) < 1e-9
+        assert abs(xmax - (-73.8)) < 1e-9
+        assert abs(ymax - 40.9) < 1e-9
+
+    def test_osm_parquet_dir_with_bbox(self, tmp_path):
+        """--source osm --parquet-dir with --bbox must forward both parquet globs and bbox tuple."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "osm",
+            "--parquet-dir", "/some/dir",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles_osm_bbox"),
         ]
 
         with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
@@ -2951,43 +3058,19 @@ class TestQuadtreeMainCLI:
         ca = mock_pipeline.call_args
 
         parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
-
         assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 2, (
             f"For OSM, parquet_glob must be a 2-element tuple; got {parquet_arg!r}"
         )
         node_glob, way_glob = parquet_arg
-        assert node_glob == "db/cache/osm/nodes/*.parquet"
-        assert way_glob == "db/cache/osm/ways/*.parquet"
+        assert node_glob == "/some/dir/type=node/*.parquet"
+        assert way_glob == "/some/dir/type=way/*.parquet"
 
-    def test_osm_wrong_parquet_count_raises_systemexit(self, tmp_path):
-        """--source osm with only one --parquet must cause SystemExit."""
-        from garganorn.quadtree import main
-
-        argv = [
-            "garganorn.quadtree",
-            "--source", "osm",
-            "--parquet", "db/cache/osm/nodes/*.parquet",
-            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
-            "--output", str(tmp_path / "tiles_osm_bad"),
-        ]
-
-        with pytest.raises(SystemExit):
-            with patch("sys.argv", argv):
-                main()
-
-    def test_non_osm_two_parquet_raises_systemexit(self, tmp_path):
-        """--source fsq with two --parquet arguments must cause SystemExit."""
-        from garganorn.quadtree import main
-
-        argv = [
-            "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/part1/*.parquet",
-            "--parquet", "db/cache/fsq/part2/*.parquet",
-            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
-            "--output", str(tmp_path / "tiles_fsq_bad"),
-        ]
-
-        with pytest.raises(SystemExit):
-            with patch("sys.argv", argv):
-                main()
+        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else None)
+        assert isinstance(bbox_arg, tuple) and len(bbox_arg) == 4, (
+            f"bbox must be a 4-element tuple; got {bbox_arg!r}"
+        )
+        xmin, ymin, xmax, ymax = bbox_arg
+        assert abs(xmin - (-74.1)) < 1e-9
+        assert abs(ymin - 40.6) < 1e-9
+        assert abs(xmax - (-73.8)) < 1e-9
+        assert abs(ymax - 40.9) < 1e-9

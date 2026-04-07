@@ -68,6 +68,8 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         log.info("[%s] %s: done (%.1fs, %d places)",
                  source, stage, time.monotonic() - t0, count)
 
+    xmin, ymin, xmax, ymax = bbox if bbox is not None else (-180, -90, 180, 90)
+
     # Import stage — OSM needs two separate parquet paths
     if source == "osm":
         node_parquet, way_parquet = parquet_glob
@@ -75,12 +77,12 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                 memory_limit=memory_limit,
                 node_parquet=node_parquet,
                 way_parquet=way_parquet,
-                xmin=bbox[0], ymin=bbox[1], xmax=bbox[2], ymax=bbox[3])
+                xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
     else:
         run_sql("import", f"{source}_import.sql",
                 memory_limit=memory_limit,
                 parquet_glob=parquet_glob,
-                xmin=bbox[0], ymin=bbox[1], xmax=bbox[2], ymax=bbox[3])
+                xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
     run_sql("importance", f"{source}_importance.sql",
             density_norm=10.0, idf_norm=18.0)
@@ -122,12 +124,13 @@ def main():
     )
     parser.add_argument("--source", required=True, choices=["fsq", "overture", "osm"],
                         help="Data source: fsq, overture, or osm")
-    parser.add_argument("--parquet", required=True, action="append", dest="parquet",
-                        metavar="GLOB",
-                        help="Parquet glob pattern. Specify twice for OSM (nodes, ways).")
-    parser.add_argument("--bbox", required=True, nargs=4, type=float,
+    parser.add_argument("--parquet", default=None,
+                        help="Parquet glob pattern (fsq, overture)")
+    parser.add_argument("--parquet-dir", default=None, dest="parquet_dir",
+                        help="osm-pbf-parquet output directory (osm only)")
+    parser.add_argument("--bbox", default=None, nargs=4, type=float,
                         metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
-                        help="Bounding box: xmin ymin xmax ymax")
+                        help="Bounding box filter (optional; default: all records)")
     parser.add_argument("--output", required=True,
                         help="Base output directory")
     parser.add_argument("--config", default=None,
@@ -140,11 +143,15 @@ def main():
     args = parser.parse_args()
 
     if args.source == "osm":
-        if len(args.parquet) != 2:
-            parser.error(f"--source osm requires exactly two --parquet arguments (nodes, ways); got {len(args.parquet)}")
+        if args.parquet_dir is None:
+            parser.error("--source osm requires --parquet-dir")
+        if args.parquet is not None:
+            parser.error("--source osm uses --parquet-dir, not --parquet")
     else:
-        if len(args.parquet) != 1:
-            parser.error(f"--source {args.source} requires exactly one --parquet argument; got {len(args.parquet)}")
+        if args.parquet is None:
+            parser.error(f"--source {args.source} requires --parquet")
+        if args.parquet_dir is not None:
+            parser.error(f"--source {args.source} uses --parquet, not --parquet-dir")
 
     # Load config defaults
     config_memory_limit = None
@@ -166,14 +173,17 @@ def main():
         config_max_per_tile if config_max_per_tile is not None else 1000
     )
 
-    # Build bbox tuple
-    bbox = tuple(args.bbox)
+    # Build bbox: None means no filter
+    bbox = tuple(args.bbox) if args.bbox is not None else None
 
-    # Build parquet_glob: tuple for OSM, single string otherwise
+    # Build parquet_glob: derive node/way paths for OSM, single string otherwise
     if args.source == "osm":
-        parquet_glob = tuple(args.parquet)
+        parquet_glob = (
+            f"{args.parquet_dir}/type=node/*.parquet",
+            f"{args.parquet_dir}/type=way/*.parquet",
+        )
     else:
-        parquet_glob = args.parquet[0]
+        parquet_glob = args.parquet
 
     run_pipeline(
         args.source,
