@@ -114,15 +114,32 @@ def fsq_parquet(tmp_path_factory):
 
     conn.execute("""
         CREATE TABLE tmp_fsq (
-            fsq_place_id    VARCHAR,
-            name            VARCHAR,
-            latitude        DOUBLE,
-            longitude       DOUBLE,
-            bbox            STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            geom            VARCHAR,
-            date_refreshed  DATE,
-            date_closed     DATE,
-            fsq_category_ids VARCHAR[]
+            fsq_place_id        VARCHAR,
+            name                VARCHAR,
+            latitude            DOUBLE,
+            longitude           DOUBLE,
+            bbox                STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            geom                VARCHAR,
+            date_refreshed      DATE,
+            date_closed         DATE,
+            date_created        DATE,
+            address             VARCHAR,
+            locality            VARCHAR,
+            region              VARCHAR,
+            postcode            VARCHAR,
+            country             VARCHAR,
+            admin_region        VARCHAR,
+            post_town           VARCHAR,
+            po_box              VARCHAR,
+            tel                 VARCHAR,
+            website             VARCHAR,
+            email               VARCHAR,
+            facebook_id         VARCHAR,
+            instagram           VARCHAR,
+            twitter             VARCHAR,
+            fsq_category_ids    VARCHAR[],
+            fsq_category_labels VARCHAR[],
+            placemaker_url      VARCHAR
         )
     """)
 
@@ -147,7 +164,12 @@ def fsq_parquet(tmp_path_factory):
                 {geom_val},
                 '{date_ref}',
                 {closed_val},
-                {cat_str}::VARCHAR[]
+                NULL,
+                NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL,
+                {cat_str}::VARCHAR[],
+                NULL::VARCHAR[], NULL
             )
         """)
 
