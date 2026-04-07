@@ -2649,3 +2649,345 @@ class TestWriteManifest:
         assert qkeys == sorted(qkeys), (
             f"quadkeys must be sorted; got {qkeys}"
         )
+
+
+# ── Task 5: CLI entry point ──
+
+import sys
+import textwrap
+from unittest.mock import patch
+
+
+class TestQuadtreeMainCLI:
+    """Tests for the main() CLI entry point in garganorn/quadtree.py."""
+
+    # ------------------------------------------------------------------
+    # Test 1: Parse all required arguments
+    # ------------------------------------------------------------------
+
+    def test_required_args_parsed(self, tmp_path):
+        """main() must parse --source, --parquet, --bbox, and --output correctly."""
+        from garganorn.quadtree import main
+
+        output_dir = str(tmp_path / "tiles")
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", output_dir,
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+
+        source_arg = ca.kwargs.get("source") if "source" in ca.kwargs else (ca.args[0] if len(ca.args) > 0 else None)
+        parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
+        assert source_arg == "fsq", f"source must be 'fsq'; got {source_arg!r}. Full call: {ca}"
+        assert parquet_arg == "db/cache/fsq/*.parquet", (
+            f"parquet_glob must be 'db/cache/fsq/*.parquet'; got {parquet_arg!r}. Full call: {ca}"
+        )
+
+        bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else None)
+        assert bbox_arg is not None and len(bbox_arg) == 4, (
+            f"bbox must be a 4-element sequence; got {bbox_arg!r}. Full call: {ca}"
+        )
+        xmin, ymin, xmax, ymax = bbox_arg
+        assert abs(xmin - (-74.1)) < 1e-9, f"bbox xmin must be -74.1; got {xmin!r}"
+        assert abs(ymin - 40.6) < 1e-9, f"bbox ymin must be 40.6; got {ymin!r}"
+        assert abs(xmax - (-73.8)) < 1e-9, f"bbox xmax must be -73.8; got {xmax!r}"
+        assert abs(ymax - 40.9) < 1e-9, f"bbox ymax must be 40.9; got {ymax!r}"
+
+        output_dir_arg = ca.kwargs.get("output_dir") if "output_dir" in ca.kwargs else (ca.args[3] if len(ca.args) > 3 else None)
+        assert str(output_dir_arg) == str(tmp_path / "tiles"), (
+            f"output_dir must be {str(tmp_path / 'tiles')!r}; got {output_dir_arg!r}. Full call: {ca}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 2: --memory-limit and --max-per-tile CLI values are used
+    # ------------------------------------------------------------------
+
+    def test_cli_memory_and_max_per_tile_used(self, tmp_path):
+        """CLI --memory-limit and --max-per-tile must be forwarded to run_pipeline."""
+        from garganorn.quadtree import main
+
+        output_dir = str(tmp_path / "tiles")
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "overture",
+            "--parquet", "db/cache/overture/*.parquet",
+            "--bbox", "-122.55", "37.60", "-122.30", "37.85",
+            "--output", output_dir,
+            "--memory-limit", "32GB",
+            "--max-per-tile", "500",
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+
+        memory_limit = ca.kwargs.get("memory_limit") if "memory_limit" in ca.kwargs else (ca.args[4] if len(ca.args) > 4 else None)
+        max_per_tile = ca.kwargs.get("max_per_tile") if "max_per_tile" in ca.kwargs else (ca.args[5] if len(ca.args) > 5 else None)
+
+        assert memory_limit == "32GB", (
+            f"memory_limit must be '32GB'; got {memory_limit!r}. Full call: {ca}"
+        )
+        assert max_per_tile == 500, (
+            f"max_per_tile must be 500 (int); got {max_per_tile!r}. Full call: {ca}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 3: --config loads defaults; CLI flags override config values
+    # ------------------------------------------------------------------
+
+    def test_config_defaults_and_cli_override(self, tmp_path):
+        """--config must set tiles.memory_limit/max_per_tile as defaults; CLI overrides."""
+        from garganorn.quadtree import main
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(textwrap.dedent("""\
+            repo: places.atgeo.org
+            tiles:
+              memory_limit: "16GB"
+              max_per_tile: 250
+        """))
+
+        output_dir = str(tmp_path / "tiles_override")
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", output_dir,
+            "--config", str(config_path),
+            "--memory-limit", "64GB",
+            "--max-per-tile", "2000",
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+
+        memory_limit = ca.kwargs.get("memory_limit") if "memory_limit" in ca.kwargs else (ca.args[4] if len(ca.args) > 4 else None)
+        max_per_tile = ca.kwargs.get("max_per_tile") if "max_per_tile" in ca.kwargs else (ca.args[5] if len(ca.args) > 5 else None)
+
+        assert memory_limit == "64GB", (
+            f"CLI --memory-limit '64GB' must override config '16GB'; got {memory_limit!r}"
+        )
+        assert max_per_tile == 2000, (
+            f"CLI --max-per-tile 2000 must override config 250; got {max_per_tile!r}"
+        )
+
+    def test_config_defaults_used_when_no_cli_flags(self, tmp_path):
+        """When --config is set but CLI flags are absent, config values are used."""
+        from garganorn.quadtree import main
+
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(textwrap.dedent("""\
+            repo: places.atgeo.org
+            tiles:
+              memory_limit: "16GB"
+              max_per_tile: 250
+        """))
+
+        output_dir = str(tmp_path / "tiles_config_only")
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", output_dir,
+            "--config", str(config_path),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+
+        memory_limit = ca.kwargs.get("memory_limit") if "memory_limit" in ca.kwargs else (ca.args[4] if len(ca.args) > 4 else None)
+        max_per_tile = ca.kwargs.get("max_per_tile") if "max_per_tile" in ca.kwargs else (ca.args[5] if len(ca.args) > 5 else None)
+
+        assert memory_limit == "16GB", (
+            f"Config tiles.memory_limit '16GB' must be used when CLI flag absent; got {memory_limit!r}"
+        )
+        assert max_per_tile == 250, (
+            f"Config tiles.max_per_tile 250 must be used when CLI flag absent; got {max_per_tile!r}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 4: Falls back to "48GB" / 1000 when neither CLI nor config
+    # ------------------------------------------------------------------
+
+    def test_hardcoded_defaults_when_no_config_or_cli(self, tmp_path):
+        """With no --config and no --memory-limit/--max-per-tile, must use '48GB'/1000."""
+        from garganorn.quadtree import main
+
+        output_dir = str(tmp_path / "tiles_defaults")
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", output_dir,
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+
+        memory_limit = ca.kwargs.get("memory_limit") if "memory_limit" in ca.kwargs else (ca.args[4] if len(ca.args) > 4 else None)
+        max_per_tile = ca.kwargs.get("max_per_tile") if "max_per_tile" in ca.kwargs else (ca.args[5] if len(ca.args) > 5 else None)
+
+        assert memory_limit == "48GB", f"Default memory_limit must be '48GB'; got {memory_limit!r}"
+        assert max_per_tile == 1000, f"Default max_per_tile must be 1000; got {max_per_tile!r}"
+
+    # ------------------------------------------------------------------
+    # Test 5: Missing required args cause SystemExit
+    # ------------------------------------------------------------------
+
+    def test_missing_source_causes_systemexit(self, tmp_path):
+        """Omitting required --source must cause argparse to call sys.exit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles"),
+        ]
+
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", argv):
+                main()
+
+    def test_missing_parquet_causes_systemexit(self, tmp_path):
+        """Omitting required --parquet must cause argparse to call sys.exit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles"),
+        ]
+
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", argv):
+                main()
+
+    def test_missing_bbox_causes_systemexit(self, tmp_path):
+        """Omitting required --bbox must cause argparse to call sys.exit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--output", str(tmp_path / "tiles"),
+        ]
+
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", argv):
+                main()
+
+    def test_missing_output_causes_systemexit(self, tmp_path):
+        """Omitting required --output must cause argparse to call sys.exit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+        ]
+
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", argv):
+                main()
+
+    # ------------------------------------------------------------------
+    # Test 6: OSM source uses two --parquet arguments
+    # ------------------------------------------------------------------
+
+    def test_osm_two_parquet_args_passed_as_tuple(self, tmp_path):
+        """For --source osm, two --parquet values must be forwarded as a tuple."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "osm",
+            "--parquet", "db/cache/osm/nodes/*.parquet",
+            "--parquet", "db/cache/osm/ways/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles_osm"),
+        ]
+
+        with patch("garganorn.quadtree.run_pipeline") as mock_pipeline:
+            with patch("sys.argv", argv):
+                main()
+
+        mock_pipeline.assert_called_once()
+        ca = mock_pipeline.call_args
+
+        parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
+
+        assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 2, (
+            f"For OSM, parquet_glob must be a 2-element tuple; got {parquet_arg!r}"
+        )
+        node_glob, way_glob = parquet_arg
+        assert node_glob == "db/cache/osm/nodes/*.parquet"
+        assert way_glob == "db/cache/osm/ways/*.parquet"
+
+    def test_osm_wrong_parquet_count_raises_systemexit(self, tmp_path):
+        """--source osm with only one --parquet must cause SystemExit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "osm",
+            "--parquet", "db/cache/osm/nodes/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles_osm_bad"),
+        ]
+
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", argv):
+                main()
+
+    def test_non_osm_two_parquet_raises_systemexit(self, tmp_path):
+        """--source fsq with two --parquet arguments must cause SystemExit."""
+        from garganorn.quadtree import main
+
+        argv = [
+            "garganorn.quadtree",
+            "--source", "fsq",
+            "--parquet", "db/cache/fsq/part1/*.parquet",
+            "--parquet", "db/cache/fsq/part2/*.parquet",
+            "--bbox", "-74.1", "40.6", "-73.8", "40.9",
+            "--output", str(tmp_path / "tiles_fsq_bad"),
+        ]
+
+        with pytest.raises(SystemExit):
+            with patch("sys.argv", argv):
+                main()

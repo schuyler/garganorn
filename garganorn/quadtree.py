@@ -1,3 +1,4 @@
+import argparse
 import gzip
 import json
 import logging
@@ -8,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import duckdb
+import yaml
 
 log = logging.getLogger(__name__)
 
@@ -111,3 +113,77 @@ def write_manifest(manifest, output_dir, source):
     }
     with open(os.path.join(output_dir, "manifest.json"), "w") as f:
         json.dump(data, f, indent=2)
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    parser = argparse.ArgumentParser(
+        description="Build quadtree tile exports from place parquet data."
+    )
+    parser.add_argument("--source", required=True, choices=["fsq", "overture", "osm"],
+                        help="Data source: fsq, overture, or osm")
+    parser.add_argument("--parquet", required=True, action="append", dest="parquet",
+                        metavar="GLOB",
+                        help="Parquet glob pattern. Specify twice for OSM (nodes, ways).")
+    parser.add_argument("--bbox", required=True, nargs=4, type=float,
+                        metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+                        help="Bounding box: xmin ymin xmax ymax")
+    parser.add_argument("--output", required=True,
+                        help="Base output directory")
+    parser.add_argument("--config", default=None,
+                        help="Path to YAML config file")
+    parser.add_argument("--memory-limit", default=None, dest="memory_limit",
+                        help="DuckDB memory limit (e.g. 48GB)")
+    parser.add_argument("--max-per-tile", default=None, type=int, dest="max_per_tile",
+                        help="Maximum records per tile")
+
+    args = parser.parse_args()
+
+    if args.source == "osm":
+        if len(args.parquet) != 2:
+            parser.error(f"--source osm requires exactly two --parquet arguments (nodes, ways); got {len(args.parquet)}")
+    else:
+        if len(args.parquet) != 1:
+            parser.error(f"--source {args.source} requires exactly one --parquet argument; got {len(args.parquet)}")
+
+    # Load config defaults
+    config_memory_limit = None
+    config_max_per_tile = None
+    if args.config is not None:
+        with open(args.config) as f:
+            cfg = yaml.safe_load(f)
+        tiles_cfg = cfg.get("tiles", {}) if cfg else {}
+        config_memory_limit = tiles_cfg.get("memory_limit")
+        config_max_per_tile = tiles_cfg.get("max_per_tile")
+
+    # Resolve memory_limit: CLI > config > hardcoded default
+    memory_limit = args.memory_limit if args.memory_limit is not None else (
+        config_memory_limit if config_memory_limit is not None else "48GB"
+    )
+
+    # Resolve max_per_tile: CLI > config > hardcoded default
+    max_per_tile = args.max_per_tile if args.max_per_tile is not None else (
+        config_max_per_tile if config_max_per_tile is not None else 1000
+    )
+
+    # Build bbox tuple
+    bbox = tuple(args.bbox)
+
+    # Build parquet_glob: tuple for OSM, single string otherwise
+    if args.source == "osm":
+        parquet_glob = tuple(args.parquet)
+    else:
+        parquet_glob = args.parquet[0]
+
+    run_pipeline(
+        args.source,
+        parquet_glob,
+        bbox,
+        args.output,
+        memory_limit=memory_limit,
+        max_per_tile=max_per_tile,
+    )
+
+
+if __name__ == "__main__":
+    main()

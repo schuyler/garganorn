@@ -33,4 +33,4 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.setuptools]
 packages = ["garganorn"]
-package-data = {"garganorn" = ["lexicon/*.json"]}
+package-data = {"garganorn" = ["lexicon/*.json", "sql/**/*.sql"]}
