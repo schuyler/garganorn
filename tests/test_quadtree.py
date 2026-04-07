@@ -2121,7 +2121,7 @@ _FSQ_EXPORT_PLACES = [
     ("exp004", "Mystery Spot",        37.7800, -122.4300, 40, None),
 ]
 
-# One 6-char tile quadkey used for all export fixture places
+# 6-char zoom-6 quadkey prefix — all fixture places are assigned to this single tile
 _EXPORT_TILE_QK = "023130"
 
 
@@ -2151,6 +2151,8 @@ def _make_fsq_export_db(conn, places_rows=None):
             admin_region        VARCHAR,
             post_town           VARCHAR,
             po_box              VARCHAR,
+            date_created        DATE,
+            date_refreshed      DATE,
             tel                 VARCHAR,
             website             VARCHAR,
             email               VARCHAR,
@@ -2173,7 +2175,7 @@ def _make_fsq_export_db(conn, places_rows=None):
             SELECT
                 '{fsq_id}', '{name}', {lat}, {lon}, {imp},
                 NULL, NULL, NULL, NULL, {country_val},
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                 ARRAY['13065143'], ARRAY['Food & Drink'],
                 NULL,
                 []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
@@ -2328,6 +2330,9 @@ class TestFsqExportTiles:
                     addr = locations[1]
                     assert addr.get("$type") == "community.lexicon.location.address", (
                         f"Second location must be address type; got {addr.get('$type')!r}"
+                    )
+                    assert addr.get("country") == "US", (
+                        f"Address country should be 'US'; got {addr.get('country')!r}"
                     )
                     found = True
         assert found, "No records with country found in export output"
