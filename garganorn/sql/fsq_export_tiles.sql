@@ -5,26 +5,25 @@ SELECT
         attribution: '${attribution}',
         records: list({
             uri: 'https://${repo}/org.atgeo.places.foursquare/' || p.fsq_place_id,
-            rkey: p.fsq_place_id,
             value: {
-                "$$type": 'org.atgeo.place',
+                "$type": 'org.atgeo.place',
                 rkey: p.fsq_place_id,
                 name: p.name,
                 importance: p.importance,
                 locations: list_concat(
                     [{
-                        "$$type": 'community.lexicon.location.geo',
+                        "$type": 'community.lexicon.location.geo',
                         latitude: p.latitude::DECIMAL(10,6)::VARCHAR,
                         longitude: p.longitude::DECIMAL(10,6)::VARCHAR
                     }],
                     CASE WHEN p.country IS NOT NULL THEN [{
-                        "$$type": 'community.lexicon.location.address',
+                        "$type": 'community.lexicon.location.address',
                         country: p.country,
                         region: p.region,
                         locality: p.locality,
                         street: p.address,
                         postalCode: p.postcode
-                    }] ELSE []::STRUCT("$$type" VARCHAR, country VARCHAR, region VARCHAR, locality VARCHAR, street VARCHAR, postalCode VARCHAR)[] END
+                    }] ELSE []::STRUCT("$type" VARCHAR, country VARCHAR, region VARCHAR, locality VARCHAR, street VARCHAR, postalCode VARCHAR)[] END
                 ),
                 variants: coalesce(p.variants, []),
                 attributes: {

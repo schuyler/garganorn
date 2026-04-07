@@ -35,7 +35,7 @@ def _load_sql(filename: str, substitutions: dict) -> str:
     # Let FileNotFoundError propagate — that's the expected Red-phase failure.
     raw = sql_path.read_text()
     # Use string.Template for ${var} substitution.
-    return string.Template(raw).substitute(substitutions)
+    return string.Template(raw).safe_substitute(substitutions)
 
 
 def _strip_spatial_install(sql: str) -> str:
@@ -2283,8 +2283,8 @@ class TestFsqExportTiles:
                 assert rec["uri"].startswith("https://"), (
                     f"uri must start with 'https://': {rec['uri']!r}"
                 )
-                assert "rkey" in rec, f"Record missing 'rkey': {list(rec)}"
                 val = rec.get("value", {})
+                assert "rkey" in val, f"value missing 'rkey': {list(val)}"
                 assert val.get("$type") == "org.atgeo.place", (
                     f"value.$type must be 'org.atgeo.place'; got {val.get('$type')!r}"
                 )

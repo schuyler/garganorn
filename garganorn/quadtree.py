@@ -2,6 +2,7 @@ import gzip
 import json
 import logging
 import os
+import string
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,9 +29,10 @@ REPO = "places.atgeo.org"
 def export_tiles(con, output_dir: str, source: str) -> dict:
     """Query DuckDB for per-tile JSON and write gzipped files. Returns {qk: record_count}."""
     sql_dir = Path(__file__).parent / "sql"
-    sql = (sql_dir / f"{source}_export_tiles.sql").read_text()
-    sql = sql.replace("${attribution}", ATTRIBUTION[source])
-    sql = sql.replace("${repo}", REPO)
+    raw = (sql_dir / f"{source}_export_tiles.sql").read_text()
+    sql = string.Template(raw).safe_substitute(
+        attribution=ATTRIBUTION[source], repo=REPO
+    )
     con.execute(sql)  # creates tile_export view
     result = con.execute("SELECT tile_qk, tile_json FROM tile_export").fetchall()
     log.info("export: queried %d tiles from DuckDB", len(result))
