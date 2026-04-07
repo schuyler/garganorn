@@ -86,8 +86,10 @@ WITH filtered AS (
                 'water_tower', 'works', 'chimney', 'obelisk', 'watermill',
                 'beacon')
             AND tags['name'] IS NOT NULL)
-        OR tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport')
-        OR tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+        OR (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport')
+            AND tags['name'] IS NOT NULL)
+        OR (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+            AND tags['name'] IS NOT NULL)
         OR (tags['public_transport'] = 'station' AND tags['name'] IS NOT NULL)
         OR (tags['place'] IN (
                 'city', 'town', 'village', 'hamlet', 'suburb',
@@ -124,8 +126,8 @@ SELECT
 FROM filtered
 WHERE primary_category IS NOT NULL
   AND name IS NOT NULL
-  AND longitude BETWEEN ${xmin} AND ${xmax}
-  AND latitude BETWEEN ${ymin} AND ${ymax};
+  AND longitude >= ${xmin} AND longitude <= ${xmax}
+  AND latitude >= ${ymin} AND latitude <= ${ymax};
 
 INSERT INTO places
 WITH qualifying_ways AS (
@@ -195,8 +197,10 @@ WITH qualifying_ways AS (
                 'water_tower', 'works', 'chimney', 'obelisk', 'watermill',
                 'beacon')
             AND tags['name'] IS NOT NULL)
-        OR tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport')
-        OR tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+        OR (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport')
+            AND tags['name'] IS NOT NULL)
+        OR (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+            AND tags['name'] IS NOT NULL)
         OR (tags['public_transport'] = 'station' AND tags['name'] IS NOT NULL)
         OR (tags['place'] IN (
                 'city', 'town', 'village', 'hamlet', 'suburb',
@@ -262,8 +266,8 @@ FROM qualifying_ways qw
 JOIN way_centroids wc ON qw.osm_id = wc.osm_id
 WHERE qw.primary_category IS NOT NULL
   AND qw.name IS NOT NULL
-  AND wc.longitude BETWEEN ${xmin} AND ${xmax}
-  AND wc.latitude BETWEEN ${ymin} AND ${ymax};
+  AND wc.longitude >= ${xmin} AND wc.longitude <= ${xmax}
+  AND wc.latitude >= ${ymin} AND wc.latitude <= ${ymax};
 
 DELETE FROM places WHERE geom IS NULL;
 

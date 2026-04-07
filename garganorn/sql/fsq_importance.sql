@@ -8,7 +8,7 @@ FROM (
     FROM places
     WHERE fsq_category_ids IS NOT NULL
 ) cats
-CROSS JOIN (SELECT count(*) AS total FROM places) N
+CROSS JOIN (SELECT count(*) AS total FROM places WHERE fsq_category_ids IS NOT NULL) N
 GROUP BY category, N.total;
 
 CREATE TEMP TABLE place_density AS
@@ -31,8 +31,8 @@ GROUP BY p.fsq_place_id;
 CREATE TABLE places_scored AS
 SELECT p.*,
        round(
-           60 * least(coalesce(d.density_score, 0) / 10.0, 1.0)
-         + 40 * least(coalesce(i.idf_score, 0) / 18.0, 1.0)
+           60 * least(coalesce(d.density_score, 0) / ${density_norm}, 1.0)
+         + 40 * least(coalesce(i.idf_score, 0) / ${idf_norm}, 1.0)
        )::INTEGER AS importance
 FROM places p
 LEFT JOIN place_density d USING (fsq_place_id)

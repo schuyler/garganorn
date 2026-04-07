@@ -1,3 +1,8 @@
+-- Re-reads source parquet rather than querying the places table because the
+-- OSM import pipeline strips name:* and alt_name/old_name tags from places
+-- (only a category-key allowlist is preserved). Variant names are only
+-- available in the original parquet.
+-- Parameters: ${node_parquet}, ${way_parquet}
 CREATE TEMP TABLE raw_variants AS
 WITH tag_entries AS (
     SELECT
