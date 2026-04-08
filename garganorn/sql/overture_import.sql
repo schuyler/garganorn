@@ -1,3 +1,4 @@
+-- Drop any leftover table from a prior run to make the script idempotent.
 DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
 INSTALL spatial; LOAD spatial;
