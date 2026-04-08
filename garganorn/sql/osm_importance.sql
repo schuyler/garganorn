@@ -21,6 +21,8 @@ SELECT
 FROM places p
 LEFT JOIN t_idf idf ON idf.category = p.primary_category;
 
+-- Drop any leftover table from a prior run to make the script idempotent.
+DROP TABLE IF EXISTS places_scored;
 CREATE TABLE places_scored AS
 SELECT p.* EXCLUDE (importance),
        round(

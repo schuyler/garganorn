@@ -41,6 +41,8 @@ SELECT rkey,
 FROM split_values
 GROUP BY rkey;
 
+-- Drop any leftover table from a prior run to make the script idempotent.
+DROP TABLE IF EXISTS places_with_variants;
 CREATE TABLE places_with_variants AS
 SELECT p.*,
        coalesce(rv.variants, []) AS variants

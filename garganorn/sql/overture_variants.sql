@@ -33,6 +33,8 @@ FROM all_variants
 WHERE name IS NOT NULL AND name != ''
 GROUP BY id;
 
+-- Drop any leftover table from a prior run to make the script idempotent.
+DROP TABLE IF EXISTS places_with_variants;
 CREATE TABLE places_with_variants AS
 SELECT p.*,
        coalesce(ov.variants, []) AS variants

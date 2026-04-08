@@ -28,6 +28,8 @@ LEFT JOIN t_idf idf ON idf.category = t.category
 WHERE p.fsq_category_ids IS NOT NULL
 GROUP BY p.fsq_place_id;
 
+-- Drop any leftover table from a prior run to make the script idempotent.
+DROP TABLE IF EXISTS places_scored;
 CREATE TABLE places_scored AS
 SELECT p.*,
        round(
