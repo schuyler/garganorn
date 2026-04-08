@@ -36,7 +36,7 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
     sql = string.Template(raw).safe_substitute(
         attribution=ATTRIBUTION[source], repo=REPO
     )
-    con.execute(sql)  # creates tile_export view
+    con.execute(sql)  # materializes tile_export table
     cursor = con.execute("SELECT tile_qk, tile_json FROM tile_export")
     manifest = {}
     tile_count = 0

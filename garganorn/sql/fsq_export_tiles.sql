@@ -1,4 +1,5 @@
-CREATE OR REPLACE VIEW tile_export AS
+DROP TABLE IF EXISTS tile_export;
+CREATE TABLE tile_export AS
 SELECT
     ta.tile_qk,
     to_json({
