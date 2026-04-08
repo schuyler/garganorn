@@ -366,6 +366,24 @@ class TestFsqImport:
             f"Expected geom to be GEOMETRY, got {describe['geom']}"
         )
 
+    def test_qk17_computed_in_ctas_not_alter_update(self):
+        """qk17 must be computed inline in the CTAS, not via ALTER TABLE + UPDATE.
+
+        The ALTER TABLE / UPDATE two-pass approach causes a full second scan of
+        the places table. Once qk17 is folded into the CTAS SELECT list those
+        two statements must not appear in the SQL file.
+        """
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "fsq_import.sql"
+        sql = sql_path.read_text()
+        assert "ALTER TABLE places ADD COLUMN qk17" not in sql, (
+            "fsq_import.sql still uses ALTER TABLE to add qk17; "
+            "fold qk17 into the CTAS SELECT list instead"
+        )
+        assert "UPDATE places SET qk17" not in sql, (
+            "fsq_import.sql still uses UPDATE to populate qk17; "
+            "fold qk17 into the CTAS SELECT list instead"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: fsq_importance.sql
@@ -2415,6 +2433,27 @@ class TestFsqExportTiles:
                     )
                     found = True
         assert found, "Mystery Spot (null country place) not found in export output"
+
+    def test_tile_export_is_table_not_view(self, tmp_path):
+        """tile_export must be a BASE TABLE, not a VIEW.
+
+        Fails at Red phase because fsq_export_tiles.sql currently creates a
+        VIEW (CREATE OR REPLACE VIEW tile_export ...).  After the implementation
+        converts it to a TABLE (DROP TABLE IF EXISTS + CREATE TABLE AS), this
+        test will pass.
+        """
+        db_path = tmp_path / "test_tile_export_table_type.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        row = conn.execute(
+            "SELECT table_type FROM information_schema.tables WHERE table_name = 'tile_export'"
+        ).fetchone()
+        conn.close()
+        assert row is not None, "tile_export not found in information_schema.tables"
+        assert row[0] == "BASE TABLE", (
+            f"tile_export must be a BASE TABLE; got {row[0]!r}"
+        )
 
 
 # ---------------------------------------------------------------------------
