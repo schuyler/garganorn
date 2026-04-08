@@ -1,0 +1,21 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.coverageResult",
+    "defs": {
+        "main": {
+            "type": "object",
+            "description": "A coverage result containing tile file URLs for a collection",
+            "required": ["tiles"],
+            "properties": {
+                "tiles": {
+                    "type": "array",
+                    "description": "Sorted list of tile file URLs",
+                    "items": {
+                        "type": "string",
+                        "format": "uri"
+                    }
+                }
+            }
+        }
+    }
+}

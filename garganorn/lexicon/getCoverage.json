@@ -1,0 +1,37 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.getCoverage",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Get tile file URLs covering a bounding box for a given collection",
+            "parameters": {
+                "type": "params",
+                "properties": {
+                    "collection": {
+                        "type": "string",
+                        "description": "The collection to get coverage for, e.g. 'org.atgeo.places.foursquare'",
+                        "format": "nsid"
+                    },
+                    "bbox": {
+                        "type": "string",
+                        "description": "Bounding box as xmin,ymin,xmax,ymax in WGS84 decimal degrees"
+                    }
+                },
+                "required": ["collection", "bbox"]
+            },
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "ref",
+                    "ref": "org.atgeo.coverageResult"
+                }
+            },
+            "errors": [
+                {"name": "BboxTooLarge", "description": "The bounding box covers too many tiles"},
+                {"name": "CollectionNotFound", "description": "The specified collection does not exist on this server"},
+                {"name": "InvalidBbox", "description": "The bbox parameter must be four comma-separated numbers with xmin < xmax and ymin < ymax"}
+            ]
+        }
+    }
+}

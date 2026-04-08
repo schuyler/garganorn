@@ -12,7 +12,7 @@ DATABASE_TYPES = {
 }
 
 def load_config(path):
-    """Load a YAML config file and return (repo, databases, boundaries_path)."""
+    """Load a YAML config file and return (repo, databases, boundaries_path, tiles_config)."""
     with open(path) as f:
         config = yaml.safe_load(f)
 
@@ -28,4 +28,4 @@ def load_config(path):
 
     boundaries_path = config.get("boundaries")
 
-    return repo, dbs, boundaries_path
+    return repo, dbs, boundaries_path, config.get("tiles")

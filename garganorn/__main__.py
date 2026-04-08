@@ -10,12 +10,20 @@ DEFAULT_CONFIG = "config.yaml"
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
-    repo, dbs, boundaries_path = load_config(config_path)
+    repo, dbs, boundaries_path, tiles_config = load_config(config_path)
 
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
     boundaries = BoundaryLookup(boundaries_path) if boundaries_path else None
-    gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries)
+    tile_manifests = {}
+    max_coverage_tiles = 50
+    if tiles_config:
+        from garganorn.quadtree import TileManifest
+        for collection, coll_cfg in tiles_config.get("collections", {}).items():
+            tile_manifests[collection] = TileManifest(coll_cfg["manifest"], coll_cfg["base_url"])
+        max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
+    gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries,
+                       tile_manifests=tile_manifests, max_coverage_tiles=max_coverage_tiles)
     init_flask(gazetteer.server, app)
 
     lexicon_map = gazetteer.lexicon_map

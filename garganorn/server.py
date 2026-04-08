@@ -4,6 +4,7 @@ from importlib.resources import files
 
 import lexrpc
 from lexrpc.base import XrpcError
+from garganorn.quadtree import BboxTooLarge
 
 def load_lexicons():
     """Load all lexicon JSON files from the lexicon directory."""
@@ -38,10 +39,12 @@ class Server:
         "com.atproto.repo.listRecords": "list_records",
     }
 
-    def __init__(self, repo, dbs, logger, boundaries=None):
+    def __init__(self, repo, dbs, logger, boundaries=None, tile_manifests=None, max_coverage_tiles=50):
         self.repo = repo
         self.db = dict([(db.collection, db) for db in dbs])
         self.boundaries = boundaries
+        self.tile_manifests = tile_manifests or {}
+        self.max_coverage_tiles = max_coverage_tiles
         self.lexicons = load_lexicons()
         self.lexicon_map = {lex["id"]: lex for lex in self.lexicons}
         self.server = lexrpc.Server(lexicons=self.lexicons)
@@ -50,6 +53,7 @@ class Server:
             """Register bound methods with the server."""
             #print(f"Registering {name} to {method}")
             self.server.register(name, getattr(self, method))
+        self.server.register("org.atgeo.getCoverage", self.get_coverage)
 
     def record_uri(self, collection, rkey):
         assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
@@ -166,6 +170,17 @@ class Server:
         if xmin >= xmax or ymin >= ymax:
             raise XrpcError("bbox requires xmin < xmax and ymin < ymax", "InvalidBbox")
         return (xmin, ymin, xmax, ymax)
+
+    def get_coverage(self, _, collection: str, bbox: str):
+        parsed_bbox = self._parse_bbox(bbox)
+        manifest = self.tile_manifests.get(collection)
+        if manifest is None:
+            raise XrpcError(f"Unknown collection: {collection}", "CollectionNotFound")
+        try:
+            tiles = manifest.get_tiles_for_bbox(*parsed_bbox, max_tiles=self.max_coverage_tiles)
+        except BboxTooLarge as e:
+            raise XrpcError(str(e), "BboxTooLarge") from e
+        return {"tiles": sorted(tiles)}
 
     def search_records(self, _, collection: str, latitude: str = "", longitude: str = "",
                        q: str = "", limit: str = "50", bbox: str = ""):

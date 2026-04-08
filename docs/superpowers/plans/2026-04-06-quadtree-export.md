@@ -4,7 +4,7 @@
 
 **Goal:** Generate static gzipped JSON tile files from raw parquet inputs (FSQ, Overture, OSM), partitioned by Bing quadkey so each tile contains ≤`max_per_tile` records (default 1000), and serve tile URLs via a new `getCoverage` XRPC endpoint. This is additive — no existing code is removed or refactored.
 
-**Architecture:** SQL fragments in `garganorn/sql/` handle all heavy processing (import, importance scoring, variant extraction, tile partitioning, JSON construction) in DuckDB. Python (`garganorn/quadtree.py`) orchestrates SQL execution and writes gzipped output to disk. A manifest JSON file lists quadkeys per collection, loaded at startup for fast bbox→URL lookup in the getCoverage endpoint. Each collection (FSQ/Overture/OSM) gets its own tile tree.
+**Architecture:** SQL fragments in `garganorn/sql/` handle all heavy processing (import, importance scoring, variant extraction, tile partitioning, JSON construction) in DuckDB. Python (`garganorn/quadtree.py`) orchestrates SQL execution and writes gzipped output to disk. A `manifest.duckdb` per source stores quadkeys and record-to-tile mappings, loaded at startup for fast bbox→URL lookup in the getCoverage endpoint and rkey→tile lookup for getRecord. Each collection (FSQ/Overture/OSM) gets its own tile tree.
 
 **Tech Stack:** Python, Flask, DuckDB (spatial extension only), lexrpc, gzip
 
@@ -38,16 +38,17 @@
 - `garganorn/sql/fsq_export_tiles.sql` — FSQ per-tile JSON construction in DuckDB
 - `garganorn/sql/overture_export_tiles.sql` — Overture per-tile JSON construction in DuckDB
 - `garganorn/sql/osm_export_tiles.sql` — OSM per-tile JSON construction in DuckDB
-- `garganorn/quadtree.py` — Pipeline orchestrator, manifest writer, CLI entry point, TileManifest class, quadkey_to_bbox
+- `garganorn/quadtree.py` — Pipeline orchestrator, manifest DB writer, CLI entry point, TileManifest class, quadkey_to_bbox
+- `garganorn/tile_reader.py` — TileBackedCollection class for serving getRecord from static tiles
 - `garganorn/lexicon/getCoverage.json` — Query lexicon
 - `garganorn/lexicon/coverageResult.json` — Record lexicon for tile contents
 - `tests/test_quadtree.py` — Tests for quadtree module
 - `tests/test_get_coverage.py` — Tests for getCoverage endpoint
 
 **Files to modify:**
-- `garganorn/server.py` — Add getCoverage handler, accept TileManifest
+- `garganorn/server.py` — Add getCoverage handler, tile serving route, tile_collections for getRecord
 - `garganorn/config.py` — Parse tiles config section
-- `garganorn/__main__.py` — Wire TileManifest into Server
+- `garganorn/__main__.py` — Wire TileManifest and TileBackedCollection into Server
 - `config.yaml` — Add `tiles` section
 - `pyproject.toml` — Add `"sql/**/*.sql"` to package-data
 
@@ -301,7 +302,7 @@ Python substitutes `${pk_expr}`, `${min_zoom}` (6), `${max_zoom}` (17), and `${m
 - Create: `garganorn/sql/fsq_export_tiles.sql`
 - Create: `garganorn/sql/overture_export_tiles.sql`
 - Create: `garganorn/sql/osm_export_tiles.sql`
-- Add to: `garganorn/quadtree.py` — `export_tiles()`, `run_pipeline()`, `write_manifest()`
+- Add to: `garganorn/quadtree.py` — `export_tiles()`, `run_pipeline()`, `write_manifest_db()`
 
 JSON is constructed entirely in DuckDB. Python reads the result and writes gzipped bytes to disk.
 
@@ -455,7 +456,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
              source, len(manifest),
              sum(manifest.values()), time.monotonic() - t0)
 
-    write_manifest(manifest, output_dir, source)
+    write_manifest_db(con, output_dir, source)
     con.close()
     os.remove(db_path)
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
@@ -470,19 +471,33 @@ SOURCE_PK = {
 }
 ```
 
-**write_manifest():**
+**write_manifest_db()** — writes the manifest DuckDB containing both the record→tile lookup and tile metadata. This replaces the separate `manifest.json` and `lookup.duckdb` files with a single `manifest.duckdb` per source:
 ```python
-def write_manifest(manifest, output_dir, source):
-    data = {
-        "source": source,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "quadkeys": sorted(manifest.keys()),
-    }
-    with open(os.path.join(output_dir, "manifest.json"), "w") as f:
-        json.dump(data, f, indent=2)
+def write_manifest_db(con, output_dir: str, source: str):
+    """Write manifest.duckdb with record_tiles + metadata tables."""
+    manifest_path = os.path.join(output_dir, "manifest.duckdb")
+    if os.path.exists(manifest_path):
+        os.remove(manifest_path)
+    con.execute(f"ATTACH '{manifest_path}' AS manifest")
+    con.execute("""
+        CREATE TABLE manifest.record_tiles AS
+        SELECT place_id AS rkey, tile_qk
+        FROM tile_assignments
+        ORDER BY place_id
+    """)
+    con.execute("""
+        CREATE TABLE manifest.metadata AS
+        SELECT ? AS source, ? AS generated_at
+    """, [source, datetime.now(timezone.utc).isoformat()])
+    con.execute("DETACH manifest")
+    log.info("[%s] wrote manifest DB: %s", source, manifest_path)
 ```
 
-The manifest stores the list of quadkeys. URLs are deterministic: `{base_url}/{qk[:6]}/{qk}.json.gz`.
+The manifest DB contains:
+- `record_tiles` — `rkey → tile_qk` mapping (ordered by rkey for zone map efficiency on point lookups)
+- `metadata` — source name, generation timestamp
+
+Tile quadkeys are derived from `SELECT DISTINCT tile_qk FROM record_tiles`. URLs are deterministic: `{base_url}/{qk[:6]}/{qk}.json.gz`.
 
 - [ ] **Step 1:** Write `fsq_export_tiles.sql` — match field names from database.py process_record for FSQ
 - [ ] **Step 2:** Write `overture_export_tiles.sql` — match field names from database.py process_record for Overture
@@ -495,9 +510,9 @@ The manifest stores the list of quadkeys. URLs are deterministic: `{base_url}/{q
 - [ ] **Step 9:** Run test, verify fail
 - [ ] **Step 10:** Implement run_pipeline
 - [ ] **Step 11:** Run test, verify pass
-- [ ] **Step 12:** Write failing test for write_manifest
+- [ ] **Step 12:** Write failing test for write_manifest_db — verify manifest.duckdb contains record_tiles and metadata tables with expected contents
 - [ ] **Step 13:** Run test, verify fail
-- [ ] **Step 14:** Implement write_manifest
+- [ ] **Step 14:** Implement write_manifest_db
 - [ ] **Step 15:** Run test, verify pass
 - [ ] **Step 16:** Commit: `feat: add DuckDB-native tile JSON export pipeline`
 
@@ -598,12 +613,15 @@ garganorn = ["sql/**/*.sql"]
 
 > **TODO:** The naive linear scan over all quadkeys is O(n) per request. Before implementing, research spatial index options for fast bbox→quadkey lookup. Check PyPI for quadtree/spatial index packages (e.g. `pyquadkey2`, `mercantile`, or similar). A simple alternative: build a dict keyed by zoom-6 prefix, so `get_tiles_for_bbox` only scans tiles whose zoom-6 ancestor intersects the query bbox. Pick the approach during implementation.
 
+Reads quadkeys from `manifest.duckdb` at startup (the same DB that stores record→tile lookups, written by `write_manifest_db()` in Task 4). No separate `manifest.json` file.
+
 ```python
 class TileManifest:
-    def __init__(self, manifest_path: str, base_url: str):
-        with open(manifest_path) as f:
-            data = json.load(f)
-        self.quadkeys = set(data["quadkeys"])
+    def __init__(self, manifest_db_path: str, base_url: str):
+        con = duckdb.connect(manifest_db_path, read_only=True)
+        rows = con.execute("SELECT DISTINCT tile_qk FROM record_tiles").fetchall()
+        self.quadkeys = set(row[0] for row in rows)
+        con.close()
         self.base_url = base_url.rstrip("/")
 
     def get_tiles_for_bbox(self, xmin, ymin, xmax, ymax, max_tiles=50):
@@ -668,26 +686,30 @@ def _get_coverage(self, params):
 tiles:
   max_per_tile: 1000
   memory_limit: 48GB
+  serve_dir: tiles
   collections:
     org.atgeo.places.foursquare:
-      manifest: tiles/fsq/manifest.json
+      manifest: tiles/fsq/manifest.duckdb
+      tiles_dir: tiles/fsq
       base_url: https://places.atgeo.org/tiles/fsq
       cache_ttl: 86400
     org.atgeo.places.overture:
-      manifest: tiles/overture/manifest.json
+      manifest: tiles/overture/manifest.duckdb
+      tiles_dir: tiles/overture
       base_url: https://places.atgeo.org/tiles/overture
       cache_ttl: 86400
     org.atgeo.places.osm:
-      manifest: tiles/osm/manifest.json
+      manifest: tiles/osm/manifest.duckdb
+      tiles_dir: tiles/osm
       base_url: https://places.atgeo.org/tiles/osm
       cache_ttl: 86400
   max_coverage_tiles: 50
 ```
 
-`max_per_tile` and `memory_limit` are used by the export pipeline (Task 4/5). `collections` and `max_coverage_tiles` are used by the server (Task 6). All live under `tiles` since they're part of the same feature.
+`max_per_tile` and `memory_limit` are used by the export pipeline (Task 4/5). `serve_dir` is used by the tile serving route (Task 7). `collections` and `max_coverage_tiles` are used by the server (Tasks 6 and 8d). `manifest` points to the `manifest.duckdb` file that contains both the tile quadkey list (for getCoverage) and the rkey→tile_qk lookup (for tile-backed getRecord). `tiles_dir` is the directory containing the `.json.gz` tile files (for tile-backed getRecord). All live under `tiles` since they're part of the same feature.
 
 Update `config.py` to parse tiles config. Currently `load_config()` returns a 3-tuple `(repo, dbs, boundaries_path)`. Extend to 4-tuple `(repo, dbs, boundaries_path, tiles_config)` and update the unpacking in `__main__.py`.
-Update `__main__.py` to create TileManifest instances from tiles_config and pass to Server.
+Update `__main__.py` to create TileManifest instances from tiles_config and pass to Server. TileManifest reads quadkeys from `manifest.duckdb` (see `TileManifest.__init__` above).
 
 - [ ] **Step 1:** Write failing test for `quadkey_to_bbox` (known quadkey → known bbox)
 - [ ] **Step 2:** Run test, verify fail
@@ -713,7 +735,217 @@ Update `__main__.py` to create TileManifest instances from tiles_config and pass
 
 ---
 
-## Task 7: Integration Tests
+## Task 7: Static Tile Serving
+
+**Files:**
+- Modify: `garganorn/server.py` — add Flask route to serve tile files
+- Modify: `garganorn/config.py` — parse `tiles.serve_dir` config
+- Modify: `garganorn/__main__.py` — wire tile serving directory
+- Modify: `config.yaml` — add `serve_dir` to tiles config
+
+The `getCoverage` endpoint returns tile URLs, but nothing serves the actual `.json.gz` files. Add a Flask route that serves tiles from the local filesystem with correct `Content-Encoding: gzip` and `Content-Type: application/json` headers.
+
+**Design:** A single catch-all route under `/tiles/` serves any `{collection}/{prefix}/{quadkey}.json.gz` path from a configured directory. This avoids per-collection route registration and keeps serving logic minimal. In production this will eventually be fronted by nginx or a CDN, but the Flask route provides a working default for development and small deployments.
+
+**Route:**
+```python
+from werkzeug.utils import safe_join
+
+@app.route("/tiles/<path:tile_path>")
+def serve_tile(tile_path):
+    """Serve a gzipped JSON tile file with correct headers."""
+    # tile_path is e.g. "fsq/012301/0123012301230123.json.gz"
+    full_path = safe_join(serve_dir, tile_path)
+    if full_path is None or not os.path.isfile(full_path):
+        return ("Not found", 404)
+    response = send_file(full_path, mimetype="application/json")
+    response.headers["Content-Encoding"] = "gzip"
+    return response
+```
+
+`safe_join` (from `werkzeug.utils`) prevents path traversal by rejecting paths that escape the base directory. `Content-Encoding: gzip` tells clients to decompress transparently — this is correct for programmatic API clients. (In production behind nginx, nginx would handle this; the Flask route is for dev and small deployments.)
+
+`base_url` in collection configs should match the route prefix (e.g. `http://localhost:5000/tiles/fsq` for local dev, `https://places.atgeo.org/tiles/fsq` for production). The serve route is dumb — it doesn't know about collections or manifests. It just serves files from the directory.
+
+- [x] **Step 1:** Write failing test — request a tile URL, expect 200 with correct content and headers
+- [x] **Step 2:** Run test, verify fail
+- [x] **Step 3:** Implement tile serving route in __main__.py (plan says server.py — route belongs in __main__.py with other Flask routes)
+- [x] **Step 4:** config.py already returns raw tiles dict; no change needed (plan said parse serve_dir — it's accessible via tiles_config.get("serve_dir"))
+- [x] **Step 5:** Wire serve_dir in __main__.py
+- [x] **Step 6:** Run test, verify pass
+- [x] **Step 7:** Write test for 404 on missing tile
+- [x] **Step 8:** Write test for path traversal rejection
+- [x] **Step 9:** Run tests, verify pass (348 tests pass)
+- [ ] **Step 10:** Commit: `feat: add Flask route for serving static tile files`
+
+---
+
+## Task 8: Tile-Backed getRecord
+
+**Files:**
+- Create: `garganorn/tile_reader.py` — `TileBackedCollection` class
+- Modify: `garganorn/server.py` — add `tile_collections` dict, use for getRecord, reject searchRecords
+- Modify: `garganorn/__main__.py` — instantiate `TileBackedCollection` from tiles config, pass to Server
+
+The `manifest.duckdb` written by `write_manifest_db()` (Task 4) already contains the `record_tiles` table mapping `rkey → tile_qk`. This task adds the server-side code to use it for getRecord.
+
+**Design:** `TileBackedCollection` instances live in a separate `self.tile_collections` dict on Server, not in `self.db`. This keeps `searchRecords` working for collections that have a full-import DuckDB in `self.db`, while `getRecord` checks `self.tile_collections` first and falls back to `self.db`. Collections that only have tile-backed serving return an error for `searchRecords`.
+
+**TileBackedCollection** (in `garganorn/tile_reader.py`):
+
+```python
+import duckdb
+import gzip
+import json
+import os
+import threading
+from functools import lru_cache
+
+class TileBackedCollection:
+    """Serves getRecord from static tile files + manifest.duckdb."""
+
+    def __init__(self, collection: str, manifest_db_path: str,
+                 tiles_dir: str, attribution: str):
+        self.collection = collection
+        self.attribution = attribution
+        self.tiles_dir = tiles_dir
+        self._db_path = manifest_db_path
+        self._local = threading.local()
+
+    @property
+    def _con(self):
+        """Per-thread DuckDB connection (DuckDB connections are not thread-safe)."""
+        if not hasattr(self._local, "con"):
+            self._local.con = duckdb.connect(self._db_path, read_only=True)
+        return self._local.con
+
+    def get_record(self, _repo: str, _collection: str, rkey: str):
+        """Look up which tile contains this rkey, read the tile, find the record."""
+        result = self._con.execute(
+            "SELECT tile_qk FROM record_tiles WHERE rkey = ?", [rkey]
+        ).fetchone()
+        if result is None:
+            return None
+        tile_qk = result[0]
+        tile_data = self._read_tile(tile_qk)
+        # Find the record in the tile's records array
+        target_uri_suffix = f"/{self.collection}/{rkey}"
+        for record in tile_data["records"]:
+            if record["uri"].endswith(target_uri_suffix):
+                return record["value"]
+        return None
+
+    def _read_tile(self, tile_qk: str) -> dict:
+        """Read and decompress a tile file. Uses LRU cache to amortize repeated access."""
+        tile_path = os.path.join(self.tiles_dir, tile_qk[:6], f"{tile_qk}.json.gz")
+        return self._cached_read_tile(tile_path)
+
+    @staticmethod
+    @lru_cache(maxsize=256)
+    def _cached_read_tile(tile_path: str) -> dict:
+        with gzip.open(tile_path, "rt") as f:
+            return json.load(f)
+```
+
+Key design points:
+- **Thread safety:** Uses `threading.local()` for per-thread DuckDB connections. DuckDB connections are not thread-safe; sharing one across Flask request threads causes corruption.
+- **Tile caching:** `lru_cache(maxsize=256)` on tile reads. getRecord traffic is bursty by geography — repeated lookups in the same tile amortize the decompression cost. 256 tiles × ~100-500KB ≈ 25-128MB cache footprint.
+- **Return shape:** Returns `record["value"]` to match `Database.get_record` output shape. `Server.get_record` wraps it with `uri`, `attribution`, `_query` identically.
+
+**Server changes:**
+
+```python
+class Server:
+    def __init__(self, repo, dbs, logger, boundaries=None,
+                 tile_manifests=None, tile_collections=None,
+                 max_coverage_tiles=50):
+        # ... existing init ...
+        self.tile_collections = tile_collections or {}
+
+    def record_uri(self, collection, rkey):
+        # Updated: no longer asserts collection in self.db
+        return f"https://{self.repo}/{collection}/{rkey}"
+
+    def get_record(self, _, repo, collection, rkey):
+        # ... lexicon schema handling unchanged ...
+
+        # Check tile-backed collections first, fall back to full-import DB
+        source = self.tile_collections.get(collection) or self.db.get(collection)
+        if source is None:
+            raise XrpcError(f"Collection {collection} not found", "CollectionNotFound")
+
+        record = source.get_record(repo, collection, rkey)
+        # ... boundary lookup unchanged ...
+
+        # Use source.attribution (works for both Database and TileBackedCollection)
+        return {
+            "uri": self.record_uri(collection, record["rkey"]),
+            "attribution": source.attribution,
+            # ... importance, value, _query as before ...
+        }
+
+    def search_records(self, _, collection, **kwargs):
+        if collection not in self.db:
+            raise XrpcError(
+                f"Collection {collection} not found on server {self.repo}",
+                "CollectionNotFound",
+            )
+        # ... rest unchanged ...
+```
+
+`searchRecords` only checks `self.db` — if a collection has tile-backed serving but no full-import DuckDB, search returns `CollectionNotFound`. This is intentional: search requires the full trigram index, which only the full-import DB provides.
+
+**Boundary/relations:** The existing `Server.get_record` boundary lookup still works — the tile-backed record value includes `locations` with geo objects, so `self.boundaries.containment()` proceeds identically. The tile record's empty `relations: {}` is overwritten if boundaries inject `within`.
+
+**__main__.py changes:**
+
+```python
+tile_collections = {}
+if tiles_config:
+    from garganorn.tile_reader import TileBackedCollection
+    for collection, coll_cfg in tiles_config.get("collections", {}).items():
+        if "manifest" in coll_cfg and "tiles_dir" in coll_cfg:
+            tile_collections[collection] = TileBackedCollection(
+                collection=collection,
+                manifest_db_path=coll_cfg["manifest"],
+                tiles_dir=coll_cfg["tiles_dir"],
+                attribution=ATTRIBUTION_URLS.get(collection, ""),
+            )
+```
+
+Attribution URLs need to be available to `__main__.py`. Either import from `quadtree.py`, define in config, or add to the collection config YAML. The simplest approach: add `attribution` to each collection's config:
+```yaml
+tiles:
+  collections:
+    org.atgeo.places.foursquare:
+      manifest: tiles/fsq/manifest.duckdb
+      tiles_dir: tiles/fsq
+      base_url: https://places.atgeo.org/tiles/fsq
+      attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
+```
+
+- [ ] **Step 1:** Write failing test for `TileBackedCollection.get_record` — create manifest.duckdb + tile file fixture, query by rkey, verify correct record value returned
+- [ ] **Step 2:** Run test, verify fail
+- [ ] **Step 3:** Implement `TileBackedCollection` in `tile_reader.py`
+- [ ] **Step 4:** Run test, verify pass
+- [ ] **Step 5:** Write failing test for missing rkey → returns None
+- [ ] **Step 6:** Run test, verify pass (or fix)
+- [ ] **Step 7:** Write failing test for tile caching — read same tile twice, verify only one file read
+- [ ] **Step 8:** Run test, verify pass (or fix)
+- [ ] **Step 9:** Write failing test for `Server.get_record` using tile-backed path — verify response shape (uri, attribution, value, _query)
+- [ ] **Step 10:** Run test, verify fail
+- [ ] **Step 11:** Add `tile_collections` to Server, update `get_record` to check it first
+- [ ] **Step 12:** Run test, verify pass
+- [ ] **Step 13:** Write failing test for `searchRecords` on tile-only collection → CollectionNotFound
+- [ ] **Step 14:** Run test, verify pass (should already work — tile collections aren't in `self.db`)
+- [ ] **Step 15:** Write test verifying old DuckDB getRecord path still works when configured
+- [ ] **Step 16:** Wire `TileBackedCollection` in `__main__.py`
+- [ ] **Step 17:** Run all tests, verify pass
+- [ ] **Step 18:** Commit: `feat: add tile-backed getRecord using manifest.duckdb`
+
+---
+
+## Task 9: Integration Tests
 
 **Files:**
 - Create: `tests/test_integration_quadtree.py`
@@ -722,7 +954,7 @@ End-to-end test using small fixture data (follow patterns from `tests/conftest.p
 1. Create in-memory DuckDB with test places for FSQ
 2. Run full pipeline (import → importance → variants → tile assignment → JSON export)
 3. Verify tile files exist, are valid gzipped JSON, match expected schema
-4. Verify manifest lists correct quadkeys
+4. Verify manifest.duckdb contains correct record_tiles and metadata
 5. Verify getCoverage returns correct URLs for test bbox
 
 Edge cases:

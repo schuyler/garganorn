@@ -2,6 +2,7 @@ import argparse
 import gzip
 import json
 import logging
+import math
 import os
 import string
 import time
@@ -115,6 +116,50 @@ def write_manifest(manifest, output_dir, source):
     }
     with open(os.path.join(output_dir, "manifest.json"), "w") as f:
         json.dump(data, f, indent=2)
+
+
+class BboxTooLarge(Exception):
+    pass
+
+
+def quadkey_to_bbox(quadkey: str) -> tuple[float, float, float, float]:
+    x, y, level = 0, 0, len(quadkey)
+    for i, ch in enumerate(quadkey):
+        bit = level - i - 1
+        mask = 1 << bit
+        digit = int(ch)
+        if digit & 1:
+            x |= mask
+        if digit & 2:
+            y |= mask
+    n = 2 ** level if level > 0 else 1
+    lon_min = x / n * 360 - 180
+    lon_max = (x + 1) / n * 360 - 180
+    lat_max = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n)))) if n > 0 else 85.05112877980659
+    lat_min = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n)))) if n > 0 else -85.05112877980659
+    return (lon_min, lat_min, lon_max, lat_max)
+
+
+def bboxes_intersect(a, b):
+    return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
+
+
+class TileManifest:
+    def __init__(self, manifest_path: str, base_url: str):
+        with open(manifest_path) as f:
+            data = json.load(f)
+        self.quadkeys = set(data["quadkeys"])
+        self.base_url = base_url.rstrip("/")
+
+    def get_tiles_for_bbox(self, xmin, ymin, xmax, ymax, max_tiles=50):
+        urls = []
+        for qk in self.quadkeys:
+            tile_bbox = quadkey_to_bbox(qk)
+            if bboxes_intersect(tile_bbox, (xmin, ymin, xmax, ymax)):
+                urls.append(f"{self.base_url}/{qk[:6]}/{qk}.json.gz")
+                if len(urls) > max_tiles:
+                    raise BboxTooLarge(f"Bounding box covers more than {max_tiles} tiles")
+        return urls
 
 
 def main():
