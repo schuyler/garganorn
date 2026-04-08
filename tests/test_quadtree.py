@@ -3264,3 +3264,99 @@ class TestQuadtreeMainCLI:
         assert abs(ymin - 40.6) < 1e-9
         assert abs(xmax - (-73.8)) < 1e-9
         assert abs(ymax - 40.9) < 1e-9
+
+
+# ---------------------------------------------------------------------------
+# Tests: run_pipeline resilience — pre-existing `places` table
+# ---------------------------------------------------------------------------
+
+class TestRunPipelineStaleDb:
+    """run_pipeline must succeed even when a `places` table already exists in the
+    work db (simulating a crashed prior run that left the table behind).
+
+    Each test:
+      1. Creates the work db directory and pre-populates the work db file with a
+         `places` table — the same situation a failed previous run would leave.
+      2. Calls run_pipeline with the real parquet fixtures and a small bbox.
+      3. Asserts the call completes without raising an exception.
+
+    These tests FAIL in the Red phase because the import SQL files do not yet
+    contain `DROP TABLE IF EXISTS places;`, so DuckDB raises CatalogException
+    when it tries to CREATE TABLE places on the second run.
+    """
+
+    def test_fsq_pipeline_succeeds_with_stale_places_table(self, fsq_parquet, tmp_path):
+        """FSQ pipeline must not raise when a stale `places` table exists in the work db."""
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "fsq_restart_out"
+        output_dir.mkdir()
+
+        # Pre-create the work db directory and insert a stale `places` table,
+        # simulating a prior crashed run.
+        work_db_dir = output_dir / "fsq"
+        work_db_dir.mkdir()
+        work_db_path = work_db_dir / ".fsq_work.duckdb"
+        stale_con = duckdb.connect(str(work_db_path))
+        stale_con.execute("CREATE TABLE places (id VARCHAR, name VARCHAR)")
+        stale_con.close()
+
+        # Second run must succeed without raising CatalogException.
+        run_pipeline(
+            "fsq",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+    def test_overture_pipeline_succeeds_with_stale_places_table(self, overture_parquet, tmp_path):
+        """Overture pipeline must not raise when a stale `places` table exists in the work db."""
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "overture_restart_out"
+        output_dir.mkdir()
+
+        # Pre-create the work db directory and insert a stale `places` table.
+        work_db_dir = output_dir / "overture"
+        work_db_dir.mkdir()
+        work_db_path = work_db_dir / ".overture_work.duckdb"
+        stale_con = duckdb.connect(str(work_db_path))
+        stale_con.execute("CREATE TABLE places (id VARCHAR, name VARCHAR)")
+        stale_con.close()
+
+        # Second run must succeed without raising CatalogException.
+        run_pipeline(
+            "overture",
+            overture_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+    def test_osm_pipeline_succeeds_with_stale_places_table(self, osm_parquet, tmp_path):
+        """OSM pipeline must not raise when a stale `places` table exists in the work db."""
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "osm_restart_out"
+        output_dir.mkdir()
+
+        # Pre-create the work db directory and insert a stale `places` table.
+        work_db_dir = output_dir / "osm"
+        work_db_dir.mkdir()
+        work_db_path = work_db_dir / ".osm_work.duckdb"
+        stale_con = duckdb.connect(str(work_db_path))
+        stale_con.execute("CREATE TABLE places (id VARCHAR, name VARCHAR)")
+        stale_con.close()
+
+        # Second run must succeed without raising CatalogException.
+        run_pipeline(
+            "osm",
+            (osm_parquet["node"], osm_parquet["way"]),
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
