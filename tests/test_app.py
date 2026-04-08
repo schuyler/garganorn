@@ -1,4 +1,7 @@
 """Tests for Flask app routes in garganorn.__main__."""
+import gzip
+import json
+import os
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -131,3 +134,89 @@ def test_did_document(client):
     assert "#atproto_pds" in services
     assert services["#atproto_pds"]["type"] == "AtprotoPersonalDataServer"
     assert services["#atproto_pds"]["serviceEndpoint"] == "https://places.atgeo.org"
+
+
+# ---------------------------------------------------------------------------
+# Tile serving tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def tile_client(tmp_path):
+    """Flask test client configured with a real gzipped tile file on disk."""
+    tile_subdir = tmp_path / "fsq" / "012301"
+    tile_subdir.mkdir(parents=True)
+    tile_file = tile_subdir / "012301.json.gz"
+    content = b'{"attribution": "https://example.com", "records": []}'
+    with gzip.open(tile_file, "wb") as f:
+        f.write(content)
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = {"serve_dir": str(tmp_path)}
+    with patch("garganorn.__main__.load_config") as mock_load:
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
+        app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+@pytest.fixture
+def tile_client_empty(tmp_path):
+    """Flask test client with an empty tile directory (no files)."""
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = {"serve_dir": str(tmp_path)}
+    with patch("garganorn.__main__.load_config") as mock_load:
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
+        app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as c:
+        yield c
+
+
+def test_tile_served_successfully(tile_client):
+    """GET /tiles/<path> returns 200 with gzip content-encoding and JSON content-type."""
+    resp = tile_client.get("/tiles/fsq/012301/012301.json.gz")
+    assert resp.status_code == 200
+    assert resp.headers.get("Content-Encoding") == "gzip"
+    assert "application/json" in resp.content_type
+    body = gzip.decompress(resp.data)
+    data = json.loads(body)
+    assert "records" in data
+
+
+def test_tile_missing_returns_404(tile_client_empty):
+    """GET /tiles/<path> for a nonexistent tile returns 404."""
+    resp = tile_client_empty.get("/tiles/fsq/000000/nonexistent.json.gz")
+    assert resp.status_code == 404
+
+
+def test_tile_path_traversal_rejected(tmp_path):
+    """safe_join blocks paths that escape serve_dir."""
+    # Set up a fresh serve_dir with a tile
+    serve_dir = tmp_path / "serve"
+    serve_dir.mkdir()
+    tile_subdir = serve_dir / "fsq" / "012301"
+    tile_subdir.mkdir(parents=True)
+    tile_file = tile_subdir / "012301.json.gz"
+    with gzip.open(tile_file, "wb") as f:
+        f.write(b'{"attribution": "https://example.com", "records": []}')
+
+    # Create a "secret" file one level above serve_dir — reachable via ../
+    secret = tmp_path / "secret.json.gz"
+    with gzip.open(secret, "wb") as f:
+        f.write(b'{"secret": true}')
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = {"serve_dir": str(serve_dir)}
+    with patch("garganorn.__main__.load_config") as mock_load:
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
+        app = create_app()
+    app.config["TESTING"] = True
+
+    with app.test_client() as client:
+        # serve_dir is tmp_path/serve/; secret is tmp_path/secret.json.gz
+        # Traversal: serve_dir/../secret.json.gz = tmp_path/secret.json.gz
+        for path in ["/tiles/../secret.json.gz", "/tiles/%2e%2e/secret.json.gz"]:
+            resp = client.get(path)
+            assert resp.status_code == 404, (
+                f"Expected 404 for traversal path {path!r}, got {resp.status_code}"
+            )

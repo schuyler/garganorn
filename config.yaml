@@ -4,3 +4,25 @@ databases:
     path: db/fsq-osp.duckdb
   - type: overture
     path: db/overture-maps.duckdb
+
+tiles:
+  max_per_tile: 1000
+  memory_limit: 48GB
+  serve_dir: tiles
+  collections:
+    org.atgeo.places.foursquare:
+      manifest: tiles/fsq/manifest.duckdb
+      tiles_dir: tiles/fsq
+      base_url: https://places.atgeo.org/tiles/fsq
+      cache_ttl: 86400
+    org.atgeo.places.overture:
+      manifest: tiles/overture/manifest.duckdb
+      tiles_dir: tiles/overture
+      base_url: https://places.atgeo.org/tiles/overture
+      cache_ttl: 86400
+    org.atgeo.places.osm:
+      manifest: tiles/osm/manifest.duckdb
+      tiles_dir: tiles/osm
+      base_url: https://places.atgeo.org/tiles/osm
+      cache_ttl: 86400
+  max_coverage_tiles: 50

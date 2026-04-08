@@ -1,5 +1,6 @@
 import os, logging
-from flask import Flask, abort
+from flask import Flask, abort, send_file
+from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
 from garganorn import Server
@@ -61,6 +62,22 @@ def create_app():
         except XrpcError as e:
             status = 404 if e.name in ("CollectionNotFound", "RecordNotFound") else 400
             return {"error": e.name, "message": str(e)}, status
+
+    serve_dir = None
+    if tiles_config:
+        serve_dir = tiles_config.get("serve_dir")
+
+    @app.route("/tiles/<path:tile_path>")
+    def serve_tile(tile_path):
+        """Serve a gzipped JSON tile file with correct headers."""
+        if serve_dir is None:
+            return ("Not found", 404)
+        full_path = safe_join(serve_dir, tile_path)
+        if full_path is None or not os.path.isfile(full_path):
+            return ("Not found", 404)
+        response = send_file(full_path, mimetype="application/json")
+        response.headers["Content-Encoding"] = "gzip"
+        return response
 
     return app
 
