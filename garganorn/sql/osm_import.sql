@@ -14,7 +14,8 @@ CREATE TABLE places (
     primary_category VARCHAR,
     tags             MAP(VARCHAR, VARCHAR),
     bbox             STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-    importance       INTEGER DEFAULT 0
+    importance       INTEGER DEFAULT 0,
+    qk17             VARCHAR               -- quadkey at zoom 17; computed inline during INSERT
 );
 
 INSERT INTO places
@@ -129,7 +130,8 @@ SELECT
      'ymin': latitude - 0.0001,
      'xmax': longitude + 0.0001,
      'ymax': latitude + 0.0001} AS bbox,
-    0 AS importance
+    0 AS importance,
+    ST_QuadKey(longitude, latitude, 17) AS qk17
 FROM filtered
 WHERE primary_category IS NOT NULL
   AND name IS NOT NULL
@@ -270,7 +272,8 @@ SELECT
      'ymin': wc.latitude - 0.0001,
      'xmax': wc.longitude + 0.0001,
      'ymax': wc.latitude + 0.0001} AS bbox,
-    0 AS importance
+    0 AS importance,
+    ST_QuadKey(wc.longitude, wc.latitude, 17) AS qk17
 -- NOTE: INNER JOIN silently drops ways whose member nodes are absent from
 -- ${node_parquet} (e.g. cross-shard references or null-coordinate nodes).
 -- This is expected behavior for bounded-region imports.
@@ -282,9 +285,5 @@ WHERE qw.primary_category IS NOT NULL
   AND wc.latitude >= ${ymin} AND wc.latitude <= ${ymax};
 
 DELETE FROM places WHERE geom IS NULL;
-
--- Compute quadkey at max zoom (used for density, tile assignment, and export)
-ALTER TABLE places ADD COLUMN qk17 VARCHAR;
-UPDATE places SET qk17 = ST_QuadKey(longitude, latitude, 17);
 
 CREATE INDEX idx_rkey ON places(rkey);

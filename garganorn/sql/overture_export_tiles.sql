@@ -4,28 +4,29 @@
 --   tile_assignments — columns: place_id VARCHAR, tile_qk VARCHAR
 -- Substitution params: ${attribution}, ${repo}
 
+-- Pre-materialize address aggregation to avoid re-evaluation inside the VIEW's GROUP BY.
+DROP TABLE IF EXISTS place_addresses;
+CREATE TEMP TABLE place_addresses AS
+SELECT
+    p.id AS place_id,
+    list({
+        "$type": 'community.lexicon.location.address',
+        country: addr.country,
+        region: CASE
+                    WHEN position('-' IN addr.region) > 0
+                    THEN substr(addr.region, position('-' IN addr.region) + 1)
+                    ELSE addr.region
+                END,
+        locality: addr.locality,
+        street: addr.freeform,
+        postalCode: addr.postcode
+    } ORDER BY addr.country) AS address_locations
+FROM places p,
+     unnest(p.addresses) AS t(addr)
+WHERE addr.country IS NOT NULL
+GROUP BY p.id;
+
 CREATE OR REPLACE VIEW tile_export AS
-WITH place_addresses AS (
-    -- Flatten addresses per place; filter to rows where country IS NOT NULL.
-    SELECT
-        p.id AS place_id,
-        list({
-            "$type": 'community.lexicon.location.address',
-            country: addr.country,
-            region: CASE
-                        WHEN position('-' IN addr.region) > 0
-                        THEN substr(addr.region, position('-' IN addr.region) + 1)
-                        ELSE addr.region
-                    END,
-            locality: addr.locality,
-            street: addr.freeform,
-            postalCode: addr.postcode
-        } ORDER BY addr.country) AS address_locations
-    FROM places p,
-         unnest(p.addresses) AS t(addr)
-    WHERE addr.country IS NOT NULL
-    GROUP BY p.id
-)
 SELECT
     ta.tile_qk,
     to_json({
