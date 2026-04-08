@@ -14,15 +14,18 @@ tiles:
       manifest: tiles/fsq/manifest.duckdb
       tiles_dir: tiles/fsq
       base_url: https://places.atgeo.org/tiles/fsq
+      attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
       cache_ttl: 86400
     org.atgeo.places.overture:
       manifest: tiles/overture/manifest.duckdb
       tiles_dir: tiles/overture
       base_url: https://places.atgeo.org/tiles/overture
+      attribution: https://docs.overturemaps.org/attribution/
       cache_ttl: 86400
     org.atgeo.places.osm:
       manifest: tiles/osm/manifest.duckdb
       tiles_dir: tiles/osm
       base_url: https://places.atgeo.org/tiles/osm
+      attribution: https://www.openstreetmap.org/copyright
       cache_ttl: 86400
   max_coverage_tiles: 50

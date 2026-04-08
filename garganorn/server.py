@@ -39,11 +39,13 @@ class Server:
         "com.atproto.repo.listRecords": "list_records",
     }
 
-    def __init__(self, repo, dbs, logger, boundaries=None, tile_manifests=None, max_coverage_tiles=50):
+    def __init__(self, repo, dbs, logger, boundaries=None, tile_manifests=None,
+                 tile_collections=None, max_coverage_tiles=50):
         self.repo = repo
         self.db = dict([(db.collection, db) for db in dbs])
         self.boundaries = boundaries
         self.tile_manifests = tile_manifests or {}
+        self.tile_collections = tile_collections or {}
         self.max_coverage_tiles = max_coverage_tiles
         self.lexicons = load_lexicons()
         self.lexicon_map = {lex["id"]: lex for lex in self.lexicons}
@@ -56,7 +58,6 @@ class Server:
         self.server.register("org.atgeo.getCoverage", self.get_coverage)
 
     def record_uri(self, collection, rkey):
-        assert collection in self.db, f"Collection {collection} not found on server {self.repo}"
         return f"https://{self.repo}/{collection}/{rkey}"
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
@@ -74,9 +75,12 @@ class Server:
             }
 
         start_time = time.perf_counter()
-        if collection not in self.db:
+        source = self.tile_collections.get(collection)
+        if source is None:
+            source = self.db.get(collection)
+        if source is None:
             raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
-        record = self.db[collection].get_record(repo, collection, rkey)
+        record = source.get_record(repo, collection, rkey)
         if record is None:
             raise XrpcError(f"Record {rkey} not found in collection {collection}", "RecordNotFound")
 
@@ -107,7 +111,7 @@ class Server:
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "uri": self.record_uri(collection, record["rkey"]),
-            "attribution": self.db[collection].attribution,
+            "attribution": source.attribution,
             **({"importance": record.pop("importance")} if "importance" in record else {}),
             "value": record,
             "_query": {

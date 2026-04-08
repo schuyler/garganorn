@@ -19,7 +19,8 @@
 
 **Operational instructions:**
 
-- Branch all worktrees from, and merge back to, `feat/quadtree` *not* `main`.
+- Branch all worktrees from, and merge back to, `feat/quadtree` *not* `main`. BE SURE TO TELL ALL SUBAGENTS TO BRANCH FROM THE RIGHT TREE.
+- Remind ALL subagents to read files before writing to them.
 
 ---
 
@@ -776,7 +777,7 @@ def serve_tile(tile_path):
 - [x] **Step 7:** Write test for 404 on missing tile
 - [x] **Step 8:** Write test for path traversal rejection
 - [x] **Step 9:** Run tests, verify pass (348 tests pass)
-- [ ] **Step 10:** Commit: `feat: add Flask route for serving static tile files`
+- [x] **Step 10:** Commit: `feat: add Flask route for serving static tile files`
 
 ---
 
@@ -924,24 +925,24 @@ tiles:
       attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
 ```
 
-- [ ] **Step 1:** Write failing test for `TileBackedCollection.get_record` — create manifest.duckdb + tile file fixture, query by rkey, verify correct record value returned
-- [ ] **Step 2:** Run test, verify fail
-- [ ] **Step 3:** Implement `TileBackedCollection` in `tile_reader.py`
-- [ ] **Step 4:** Run test, verify pass
-- [ ] **Step 5:** Write failing test for missing rkey → returns None
-- [ ] **Step 6:** Run test, verify pass (or fix)
-- [ ] **Step 7:** Write failing test for tile caching — read same tile twice, verify only one file read
-- [ ] **Step 8:** Run test, verify pass (or fix)
-- [ ] **Step 9:** Write failing test for `Server.get_record` using tile-backed path — verify response shape (uri, attribution, value, _query)
-- [ ] **Step 10:** Run test, verify fail
-- [ ] **Step 11:** Add `tile_collections` to Server, update `get_record` to check it first
-- [ ] **Step 12:** Run test, verify pass
-- [ ] **Step 13:** Write failing test for `searchRecords` on tile-only collection → CollectionNotFound
-- [ ] **Step 14:** Run test, verify pass (should already work — tile collections aren't in `self.db`)
-- [ ] **Step 15:** Write test verifying old DuckDB getRecord path still works when configured
-- [ ] **Step 16:** Wire `TileBackedCollection` in `__main__.py`
-- [ ] **Step 17:** Run all tests, verify pass
-- [ ] **Step 18:** Commit: `feat: add tile-backed getRecord using manifest.duckdb`
+- [x] **Step 1:** Write failing test for `TileBackedCollection.get_record` — create manifest.duckdb + tile file fixture, query by rkey, verify correct record value returned
+- [x] **Step 2:** Run test, verify fail
+- [x] **Step 3:** Implement `TileBackedCollection` in `tile_reader.py`
+- [x] **Step 4:** Run test, verify pass
+- [x] **Step 5:** Write failing test for missing rkey → returns None
+- [x] **Step 6:** Run test, verify pass (or fix)
+- [x] **Step 7:** Write failing test for tile caching — read same tile twice, verify only one file read
+- [x] **Step 8:** Run test, verify pass (or fix)
+- [x] **Step 9:** Write failing test for `Server.get_record` using tile-backed path — verify response shape (uri, attribution, value, _query)
+- [x] **Step 10:** Run test, verify fail
+- [x] **Step 11:** Add `tile_collections` to Server, update `get_record` to check it first
+- [x] **Step 12:** Run test, verify pass
+- [x] **Step 13:** Write failing test for `searchRecords` on tile-only collection → CollectionNotFound
+- [x] **Step 14:** Run test, verify pass (should already work — tile collections aren't in `self.db`)
+- [x] **Step 15:** Write test verifying old DuckDB getRecord path still works when configured
+- [x] **Step 16:** Wire `TileBackedCollection` in `__main__.py`
+- [x] **Step 17:** Run all tests, verify pass
+- [x] **Step 18:** Commit: `feat: add tile-backed getRecord using manifest.duckdb`
 
 ---
 

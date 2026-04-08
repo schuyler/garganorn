@@ -4,7 +4,6 @@ BboxTooLarge, and TileManifest.
 Red phase: these names don't exist in garganorn/quadtree.py yet, so the
 module-level import raises ImportError at pytest collection time.
 """
-import json
 import math
 
 import duckdb
@@ -29,17 +28,18 @@ _MANIFEST_QUADKEYS = [
 ]
 
 
-def _make_manifest_file(tmp_path, quadkeys=None):
-    """Write a manifest.json (matching write_manifest() format) and return its path."""
+def _make_manifest_db(tmp_path, quadkeys=None):
+    """Create a manifest.duckdb with the given quadkeys and return its path."""
     if quadkeys is None:
         quadkeys = _MANIFEST_QUADKEYS
-    data = {
-        "source": "fsq",
-        "generated_at": "2026-01-01T00:00:00+00:00",
-        "quadkeys": sorted(quadkeys),
-    }
-    p = tmp_path / "manifest.json"
-    p.write_text(json.dumps(data))
+    p = tmp_path / "manifest.duckdb"
+    con = duckdb.connect(str(p))
+    con.execute("CREATE TABLE record_tiles (rkey VARCHAR, tile_qk VARCHAR)")
+    for i, qk in enumerate(quadkeys):
+        con.execute("INSERT INTO record_tiles VALUES (?, ?)", [f"place{i}", qk])
+    con.execute("CREATE TABLE metadata (source VARCHAR, generated_at VARCHAR)")
+    con.execute("INSERT INTO metadata VALUES ('test', '2026-01-01T00:00:00+00:00')")
+    con.close()
     return p
 
 
@@ -183,14 +183,14 @@ class TestTileManifest:
 
     def test_url_format(self, tmp_path):
         """URLs follow {base_url}/{qk[:6]}/{qk}.json.gz format."""
-        path = _make_manifest_file(tmp_path, quadkeys=["023010"])
+        path = _make_manifest_db(tmp_path, quadkeys=["023010"])
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert urls == [f"{_BASE_URL}/023010/023010.json.gz"]
 
     def test_returns_all_intersecting_urls(self, tmp_path):
         """All intersecting tiles are returned (caller is responsible for sorting)."""
-        path = _make_manifest_file(tmp_path)
+        path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in _MANIFEST_QUADKEYS}
@@ -202,7 +202,7 @@ class TestTileManifest:
         mid_lon = (xmin + xmax) / 2
         mid_lat = (ymin + ymax) / 2
         tiny = (mid_lon - 0.001, mid_lat - 0.001, mid_lon + 0.001, mid_lat + 0.001)
-        path = _make_manifest_file(tmp_path)
+        path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.get_tiles_for_bbox(*tiny)
         assert f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" in urls
@@ -211,7 +211,7 @@ class TestTileManifest:
 
     def test_raises_when_exceeds_max_tiles(self, tmp_path):
         """Raises BboxTooLarge when count exceeds max_tiles."""
-        path = _make_manifest_file(tmp_path)
+        path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         # 4 tiles match; max_tiles=2 should raise
         with pytest.raises(BboxTooLarge):
@@ -219,7 +219,7 @@ class TestTileManifest:
 
     def test_no_raise_when_exactly_max_tiles(self, tmp_path):
         """Does NOT raise when count equals max_tiles (> not >= semantics)."""
-        path = _make_manifest_file(tmp_path)
+        path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         # Exactly 4 tiles; max_tiles=4 must succeed
         urls = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=4)
@@ -227,14 +227,14 @@ class TestTileManifest:
 
     def test_empty_result_when_manifest_empty(self, tmp_path):
         """Empty manifest returns empty list."""
-        path = _make_manifest_file(tmp_path, quadkeys=[])
+        path = _make_manifest_db(tmp_path, quadkeys=[])
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert urls == []
 
     def test_default_max_tiles_is_50(self, tmp_path):
         """Default max_tiles=50; 4 tiles don't raise."""
-        path = _make_manifest_file(tmp_path)
+        path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert isinstance(urls, list)

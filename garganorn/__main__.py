@@ -17,14 +17,31 @@ def create_app():
     app.logger.setLevel(logging.INFO)
     boundaries = BoundaryLookup(boundaries_path) if boundaries_path else None
     tile_manifests = {}
+    tile_collections = {}
     max_coverage_tiles = 50
     if tiles_config:
         from garganorn.quadtree import TileManifest
+        from garganorn.tile_reader import TileBackedCollection
         for collection, coll_cfg in tiles_config.get("collections", {}).items():
-            tile_manifests[collection] = TileManifest(coll_cfg["manifest"], coll_cfg["base_url"])
+            manifest_path = coll_cfg.get("manifest")
+            if manifest_path and not os.path.isfile(manifest_path):
+                app.logger.warning(
+                    "Tile manifest configured for %s but not found: %s (tile serving disabled for this collection)",
+                    collection, manifest_path,
+                )
+            if manifest_path and os.path.isfile(manifest_path):
+                tile_manifests[collection] = TileManifest(manifest_path, coll_cfg["base_url"])
+                if "tiles_dir" in coll_cfg:
+                    tile_collections[collection] = TileBackedCollection(
+                        collection=collection,
+                        manifest_db_path=manifest_path,
+                        tiles_dir=coll_cfg["tiles_dir"],
+                        attribution=coll_cfg.get("attribution", ""),
+                    )
         max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
     gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries,
-                       tile_manifests=tile_manifests, max_coverage_tiles=max_coverage_tiles)
+                       tile_manifests=tile_manifests, tile_collections=tile_collections,
+                       max_coverage_tiles=max_coverage_tiles)
     init_flask(gazetteer.server, app)
 
     lexicon_map = gazetteer.lexicon_map

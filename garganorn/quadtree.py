@@ -146,9 +146,12 @@ def bboxes_intersect(a, b):
 
 class TileManifest:
     def __init__(self, manifest_path: str, base_url: str):
-        with open(manifest_path) as f:
-            data = json.load(f)
-        self.quadkeys = set(data["quadkeys"])
+        con = duckdb.connect(manifest_path, read_only=True)
+        try:
+            rows = con.execute("SELECT DISTINCT tile_qk FROM record_tiles").fetchall()
+            self.quadkeys = set(row[0] for row in rows)
+        finally:
+            con.close()
         self.base_url = base_url.rstrip("/")
 
     def get_tiles_for_bbox(self, xmin, ymin, xmax, ymax, max_tiles=50):
