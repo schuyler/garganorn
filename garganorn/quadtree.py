@@ -100,12 +100,40 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
              sum(manifest.values()), time.monotonic() - t0)
 
     write_manifest(manifest, output_dir, source)
+    write_manifest_db(con, output_dir, source)
     con.close()
     try:
         os.remove(db_path)
     except OSError:
         pass
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
+
+
+def write_manifest_db(con, output_dir: str, source: str):
+    """Write manifest.duckdb with record_tiles and metadata tables.
+
+    Reads tile_assignments from the open working DuckDB connection and exports
+    rkey→tile_qk mappings plus source metadata to a separate manifest.duckdb file.
+    Writes atomically: builds in a .tmp file then renames into place.
+    Must be called before con.close() so tile_assignments is still accessible.
+    """
+    manifest_path = os.path.join(output_dir, "manifest.duckdb")
+    tmp_path = manifest_path + ".tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    con.execute(f"ATTACH '{tmp_path}' AS manifest")
+    con.execute("""
+        CREATE TABLE manifest.record_tiles AS
+        SELECT place_id AS rkey, tile_qk
+        FROM tile_assignments
+        ORDER BY place_id
+    """)
+    con.execute("""
+        CREATE TABLE manifest.metadata AS
+        SELECT ? AS source, ? AS generated_at
+    """, [source, datetime.now(timezone.utc).isoformat()])
+    con.execute("DETACH manifest")
+    os.rename(tmp_path, manifest_path)
 
 
 def write_manifest(manifest, output_dir, source):

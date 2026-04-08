@@ -708,22 +708,35 @@ def overture_parquet(tmp_path_factory):
             bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
             geometry    VARCHAR,
             names       STRUCT(
+                            "primary" VARCHAR,
                             common MAP(VARCHAR, VARCHAR),
                             rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                         ),
-            categories  STRUCT("primary" VARCHAR)
+            categories  STRUCT("primary" VARCHAR),
+            addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+            websites    VARCHAR[],
+            socials     VARCHAR[],
+            emails      VARCHAR[],
+            phones      VARCHAR[],
+            brand       VARCHAR,
+            confidence  DOUBLE,
+            version     INTEGER,
+            sources     VARCHAR[]
         )
     """)
 
-    # ov001 — in-bbox, names.common has one entry (language 'en')
+    # ov001 — in-bbox, names.common has one entry (language 'en'); has address data
     conn.execute("""
         INSERT INTO tmp_ov VALUES (
             'ov001',
             {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
             'POINT(-122.419 37.775)',
-            {'common': map(['en'], ['Blue Bottle Coffee']),
+            {'primary': 'Blue Bottle Coffee',
+             'common': map(['en'], ['Blue Bottle Coffee']),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'}
+            {'primary': 'coffee_shop'},
+            [{'country': 'US', 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '66 Mint St', 'region': 'US-CA'}],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
 
@@ -733,9 +746,11 @@ def overture_parquet(tmp_path_factory):
             'ov002',
             {'xmin': -122.487, 'ymin': 37.768, 'xmax': -122.485, 'ymax': 37.770},
             'POINT(-122.486 37.769)',
-            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+            {'primary': 'GG Park',
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  [{'language': 'en', 'value': 'GG Park', 'variant': 'short'}]},
-            {'primary': 'park'}
+            {'primary': 'park'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
 
@@ -746,7 +761,8 @@ def overture_parquet(tmp_path_factory):
             {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
             'POINT(-122.410 37.770)',
             NULL,
-            {'primary': 'coffee_shop'}
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
 
@@ -756,9 +772,11 @@ def overture_parquet(tmp_path_factory):
             'ov004',
             {'xmin': -122.431, 'ymin': 37.779, 'xmax': -122.429, 'ymax': 37.781},
             'POINT(-122.430 37.780)',
-            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'}
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
 
@@ -768,9 +786,12 @@ def overture_parquet(tmp_path_factory):
             'ov005',
             {'xmin': -122.401, 'ymin': 37.779, 'xmax': -122.399, 'ymax': 37.781},
             'POINT(-122.400 37.780)',
-            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'unique_venue'}
+            {'primary': 'unique_venue'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+
         )
     """)
 
@@ -780,9 +801,11 @@ def overture_parquet(tmp_path_factory):
             'ov006',
             {'xmin': -123.001, 'ymin': 37.749, 'xmax': -122.999, 'ymax': 37.751},
             'POINT(-123.000 37.750)',
-            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'}
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
 
@@ -792,9 +815,11 @@ def overture_parquet(tmp_path_factory):
             'ov007',
             {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
             NULL,
-            {'common': map([]::VARCHAR[], []::VARCHAR[]),
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'}
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
 
@@ -2545,10 +2570,175 @@ class TestRunPipeline:
             f"manifest source must be 'fsq'; got {manifest['source']!r}"
         )
 
-        # No leftover .duckdb temp file
-        duckdb_files = list(output_dir.rglob("*.duckdb"))
+        # No leftover .duckdb temp file (manifest.duckdb is expected)
+        duckdb_files = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
         assert not duckdb_files, (
             f"run_pipeline must not leave .duckdb files behind: {duckdb_files}"
+        )
+
+    def test_fsq_manifest_db(self, fsq_parquet, tmp_path):
+        """run_pipeline must write manifest.duckdb with record_tiles and metadata tables."""
+        import duckdb as _duckdb
+        from datetime import datetime
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        output_dir = tmp_path / "manifest_db_out"
+        output_dir.mkdir()
+
+        run_pipeline(
+            "fsq",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+        fsq_dir = output_dir / "fsq"
+        gz_files = list(fsq_dir.rglob("*.json.gz")) if fsq_dir.exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {fsq_dir}"
+
+        manifest_path = output_dir / "fsq" / "manifest.duckdb"
+        assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
+
+        con = _duckdb.connect(str(manifest_path), read_only=True)
+        try:
+            count = con.execute("SELECT COUNT(*) FROM record_tiles").fetchone()[0]
+            assert count > 0, f"record_tiles must have rows; got {count}"
+
+            rkeys = [r[0] for r in con.execute("SELECT rkey FROM record_tiles").fetchall()]
+            assert all(rkeys), "all rkeys must be non-empty strings"
+
+            tile_qks = [r[0] for r in con.execute("SELECT tile_qk FROM record_tiles").fetchall()]
+            assert all(tile_qks), "all tile_qk values must be non-empty strings"
+            assert all(qk.isdigit() for qk in tile_qks), (
+                f"tile_qk values must be numeric quadkey strings; got {tile_qks[:5]!r}"
+            )
+
+            meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
+            assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
+            source, generated_at = meta[0]
+            assert source == "fsq", f"metadata source must be 'fsq'; got {source!r}"
+            datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
+        finally:
+            con.close()
+
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        assert not leftover_dbs, (
+            f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
+        )
+
+    def test_overture_manifest_db(self, overture_parquet, tmp_path):
+        """run_pipeline must write manifest.duckdb with record_tiles and metadata tables (Overture)."""
+        import duckdb as _duckdb
+        from datetime import datetime
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        output_dir = tmp_path / "overture_manifest_db_out"
+        output_dir.mkdir()
+
+        run_pipeline(
+            "overture",
+            overture_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+        ov_dir = output_dir / "overture"
+        gz_files = list(ov_dir.rglob("*.json.gz")) if ov_dir.exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {ov_dir}"
+
+        manifest_path = ov_dir / "manifest.duckdb"
+        assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
+
+        con = _duckdb.connect(str(manifest_path), read_only=True)
+        try:
+            count = con.execute("SELECT COUNT(*) FROM record_tiles").fetchone()[0]
+            assert count > 0, f"record_tiles must have rows; got {count}"
+
+            rkeys = [r[0] for r in con.execute("SELECT rkey FROM record_tiles").fetchall()]
+            assert all(rkeys), "all rkeys must be non-empty strings"
+
+            tile_qks = [r[0] for r in con.execute("SELECT tile_qk FROM record_tiles").fetchall()]
+            assert all(tile_qks), "all tile_qk values must be non-empty strings"
+            assert all(qk.isdigit() for qk in tile_qks), (
+                f"tile_qk values must be numeric quadkey strings; got {tile_qks[:5]!r}"
+            )
+
+            meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
+            assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
+            source, generated_at = meta[0]
+            assert source == "overture", f"metadata source must be 'overture'; got {source!r}"
+            datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
+        finally:
+            con.close()
+
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        assert not leftover_dbs, (
+            f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
+        )
+
+    def test_osm_manifest_db(self, osm_parquet, tmp_path):
+        """run_pipeline must write manifest.duckdb with record_tiles and metadata tables (OSM)."""
+        import duckdb as _duckdb
+        from datetime import datetime
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        output_dir = tmp_path / "osm_manifest_db_out"
+        output_dir.mkdir()
+
+        run_pipeline(
+            "osm",
+            (osm_parquet["node"], osm_parquet["way"]),
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+        osm_dir = output_dir / "osm"
+        gz_files = list(osm_dir.rglob("*.json.gz")) if osm_dir.exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {osm_dir}"
+
+        manifest_path = osm_dir / "manifest.duckdb"
+        assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
+
+        con = _duckdb.connect(str(manifest_path), read_only=True)
+        try:
+            count = con.execute("SELECT COUNT(*) FROM record_tiles").fetchone()[0]
+            assert count > 0, f"record_tiles must have rows; got {count}"
+
+            rkeys = [r[0] for r in con.execute("SELECT rkey FROM record_tiles").fetchall()]
+            assert all(rkeys), "all rkeys must be non-empty strings"
+
+            tile_qks = [r[0] for r in con.execute("SELECT tile_qk FROM record_tiles").fetchall()]
+            assert all(tile_qks), "all tile_qk values must be non-empty strings"
+            assert all(qk.isdigit() for qk in tile_qks), (
+                f"tile_qk values must be numeric quadkey strings; got {tile_qks[:5]!r}"
+            )
+
+            meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
+            assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
+            source, generated_at = meta[0]
+            assert source == "osm", f"metadata source must be 'osm'; got {source!r}"
+            datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
+        finally:
+            con.close()
+
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        assert not leftover_dbs, (
+            f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
         )
 
     @pytest.mark.xfail(

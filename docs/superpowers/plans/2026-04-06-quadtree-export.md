@@ -500,22 +500,25 @@ The manifest DB contains:
 
 Tile quadkeys are derived from `SELECT DISTINCT tile_qk FROM record_tiles`. URLs are deterministic: `{base_url}/{qk[:6]}/{qk}.json.gz`.
 
-- [ ] **Step 1:** Write `fsq_export_tiles.sql` — match field names from database.py process_record for FSQ
-- [ ] **Step 2:** Write `overture_export_tiles.sql` — match field names from database.py process_record for Overture
-- [ ] **Step 3:** Write `osm_export_tiles.sql` — match field names from database.py process_record for OSM
-- [ ] **Step 4:** Write failing test for export_tiles (create test DuckDB with fixture data + tile_assignments, run export, verify gzipped JSON structure)
-- [ ] **Step 5:** Run test, verify fail
-- [ ] **Step 6:** Implement export_tiles in quadtree.py
-- [ ] **Step 7:** Run test, verify pass
-- [ ] **Step 8:** Write failing test for run_pipeline (end-to-end with small fixture data)
-- [ ] **Step 9:** Run test, verify fail
-- [ ] **Step 10:** Implement run_pipeline
-- [ ] **Step 11:** Run test, verify pass
-- [ ] **Step 12:** Write failing test for write_manifest_db — verify manifest.duckdb contains record_tiles and metadata tables with expected contents
-- [ ] **Step 13:** Run test, verify fail
-- [ ] **Step 14:** Implement write_manifest_db
-- [ ] **Step 15:** Run test, verify pass
-- [ ] **Step 16:** Commit: `feat: add DuckDB-native tile JSON export pipeline`
+- [x] **Step 1:** Write `fsq_export_tiles.sql` — match field names from database.py process_record for FSQ
+- [x] **Step 2:** Write `overture_export_tiles.sql` — match field names from database.py process_record for Overture
+- [x] **Step 3:** Write `osm_export_tiles.sql` — match field names from database.py process_record for OSM
+- [x] **Step 4:** Write failing test for export_tiles (create test DuckDB with fixture data + tile_assignments, run export, verify gzipped JSON structure)
+- [x] **Step 5:** Run test, verify fail
+- [x] **Step 6:** Implement export_tiles in quadtree.py
+- [x] **Step 7:** Run test, verify pass
+- [x] **Step 8:** Write failing test for run_pipeline (end-to-end with small fixture data)
+- [x] **Step 9:** Run test, verify fail
+- [x] **Step 10:** Implement run_pipeline
+- [x] **Step 11:** Run test, verify pass
+- [x] **Step 12:** Write failing test for write_manifest_db — verify manifest.duckdb contains record_tiles and metadata tables with expected contents
+- [x] **Step 13:** Run test, verify fail
+- [x] **Step 14:** Implement write_manifest_db
+- [x] **Step 15:** Run test, verify pass
+- [x] **Step 15a:** Write failing test for FSQ manifest_db (`test_fsq_manifest_db`) — verify FSQ manifest.duckdb record_tiles and metadata; implement; verify pass
+- [x] **Step 15b:** Write failing test for Overture manifest_db (`test_overture_manifest_db`) — verify Overture manifest.duckdb record_tiles and metadata (required fixture fix for addresses, names.primary, and additional schema columns); implement; verify pass
+- [x] **Step 15c:** Write failing test for OSM manifest_db (`test_osm_manifest_db`) — verify OSM manifest.duckdb record_tiles and metadata; implement; verify pass
+- [x] **Step 16:** Commit: `feat: add DuckDB-native tile JSON export pipeline`
 
 ---
 
@@ -551,12 +554,12 @@ Update `pyproject.toml`:
 garganorn = ["sql/**/*.sql"]
 ```
 
-- [ ] **Step 1:** Write failing test for CLI argument parsing
-- [ ] **Step 2:** Run test, verify fail
-- [ ] **Step 3:** Implement `main()` with argparse
-- [ ] **Step 4:** Run test, verify pass
-- [ ] **Step 5:** Update pyproject.toml package-data
-- [ ] **Step 6:** Commit: `feat: add quadtree CLI entry point`
+- [x] **Step 1:** Write failing test for CLI argument parsing
+- [x] **Step 2:** Run test, verify fail
+- [x] **Step 3:** Implement `main()` with argparse
+- [x] **Step 4:** Run test, verify pass
+- [x] **Step 5:** Update pyproject.toml package-data
+- [x] **Step 6:** Commit: `feat: add quadtree CLI entry point`
 
 ---
 
@@ -712,27 +715,27 @@ tiles:
 Update `config.py` to parse tiles config. Currently `load_config()` returns a 3-tuple `(repo, dbs, boundaries_path)`. Extend to 4-tuple `(repo, dbs, boundaries_path, tiles_config)` and update the unpacking in `__main__.py`.
 Update `__main__.py` to create TileManifest instances from tiles_config and pass to Server. TileManifest reads quadkeys from `manifest.duckdb` (see `TileManifest.__init__` above).
 
-- [ ] **Step 1:** Write failing test for `quadkey_to_bbox` (known quadkey → known bbox)
-- [ ] **Step 2:** Run test, verify fail
-- [ ] **Step 3:** Implement `quadkey_to_bbox`
-- [ ] **Step 4:** Run test, verify pass
-- [ ] **Step 5:** Write failing test for `bboxes_intersect`
-- [ ] **Step 6:** Run test, verify fail
-- [ ] **Step 7:** Implement `bboxes_intersect`
-- [ ] **Step 8:** Run test, verify pass
-- [ ] **Step 9:** Write failing test for `TileManifest.get_tiles_for_bbox`
-- [ ] **Step 10:** Run test, verify fail
-- [ ] **Step 11:** Implement `TileManifest`
-- [ ] **Step 12:** Run test, verify pass
-- [ ] **Step 13:** Write `getCoverage.json` query lexicon
-- [ ] **Step 14:** Write `coverageResult.json` record lexicon
-- [ ] **Step 15:** Write failing test for getCoverage XRPC endpoint
-- [ ] **Step 16:** Run test, verify fail
-- [ ] **Step 17:** Implement getCoverage handler in server.py
-- [ ] **Step 18:** Update config.py to parse tiles config
-- [ ] **Step 19:** Update __main__.py to wire TileManifest
-- [ ] **Step 20:** Run all tests, verify pass
-- [ ] **Step 21:** Commit: `feat: add getCoverage XRPC endpoint with tile manifests`
+- [x] **Step 1:** Write failing test for `quadkey_to_bbox` (known quadkey → known bbox)
+- [x] **Step 2:** Run test, verify fail
+- [x] **Step 3:** Implement `quadkey_to_bbox`
+- [x] **Step 4:** Run test, verify pass
+- [x] **Step 5:** Write failing test for `bboxes_intersect`
+- [x] **Step 6:** Run test, verify fail
+- [x] **Step 7:** Implement `bboxes_intersect`
+- [x] **Step 8:** Run test, verify pass
+- [x] **Step 9:** Write failing test for `TileManifest.get_tiles_for_bbox`
+- [x] **Step 10:** Run test, verify fail
+- [x] **Step 11:** Implement `TileManifest`
+- [x] **Step 12:** Run test, verify pass
+- [x] **Step 13:** Write `getCoverage.json` query lexicon
+- [x] **Step 14:** Write `coverageResult.json` record lexicon
+- [x] **Step 15:** Write failing test for getCoverage XRPC endpoint
+- [x] **Step 16:** Run test, verify fail
+- [x] **Step 17:** Implement getCoverage handler in server.py
+- [x] **Step 18:** Update config.py to parse tiles config
+- [x] **Step 19:** Update __main__.py to wire TileManifest
+- [x] **Step 20:** Run all tests, verify pass
+- [x] **Step 21:** Commit: `feat: add getCoverage XRPC endpoint with tile manifests`
 
 ---
 
