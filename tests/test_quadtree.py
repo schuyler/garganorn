@@ -2516,6 +2516,192 @@ class TestExportTiles:
                 f"'records' must be a list in {gz}"
             )
 
+    def test_uses_fetchmany_not_fetchall(self, tmp_path):
+        """export_tiles must use cursor.fetchmany() in a loop, not fetchall().
+
+        Fails against the current fetchall() implementation: the mock cursor's
+        fetchall() raises AssertionError if called, verifying it is NOT used.
+        After the fix (fetchmany sentinel loop), fetchall() is never called so
+        the test passes.
+        """
+        import json
+        import gzip as _gzip
+        from unittest.mock import MagicMock, patch
+        from garganorn.quadtree import export_tiles
+
+        # Build two synthetic tile rows that a real cursor would return.
+        tile_qk_a = "023130" + "0" * 11  # 17-char quadkey
+        tile_qk_b = "023130" + "1" * 11
+        record_a = json.dumps({"attribution": "test", "records": [{"$type": "place"}]})
+        record_b = json.dumps({"attribution": "test", "records": [{"$type": "place"}, {"$type": "place"}]})
+        all_rows = [(tile_qk_a, record_a), (tile_qk_b, record_b)]
+
+        # Mock cursor: fetchmany returns rows in one batch, then [].
+        # fetchall raises AssertionError so the test fails immediately if called.
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [all_rows, []]
+        mock_cursor.fetchall.side_effect = AssertionError(
+            "export_tiles must not call fetchall(); use fetchmany() loop instead"
+        )
+
+        # Mock connection: execute() returns the mock cursor.
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_fetchmany"
+        output_dir.mkdir()
+
+        # Patch the SQL file read so we don't need the actual SQL file on disk.
+        fake_sql = "SELECT tile_qk, tile_json FROM tile_export"
+        with patch("pathlib.Path.read_text", return_value=fake_sql):
+            export_tiles(mock_con, str(output_dir), "fsq")
+
+        # Confirm fetchall was never called (the side_effect above would have
+        # raised already; this assertion is belt-and-suspenders).
+        mock_cursor.fetchall.assert_not_called()
+
+        # Confirm fetchmany was called at least once.
+        assert mock_cursor.fetchmany.called, (
+            "export_tiles must call cursor.fetchmany()"
+        )
+
+    def test_progress_log_format_no_total(self, tmp_path):
+        """Progress log at 1000-tile boundary must NOT include a total tile count.
+
+        The current implementation logs "export: wrote %d / %d tiles" (count + total).
+        The fix changes this to "export: wrote %d tiles" (running count only, no total).
+        This test fails against the current code and passes after the fix.
+        """
+        import json
+        import logging
+        from unittest.mock import patch, MagicMock
+
+        from garganorn.quadtree import export_tiles
+
+        # Build 1000 synthetic tile rows to trigger a progress log.
+        def _make_row(i):
+            qk = f"02313{i:012d}"  # unique-ish quadkey per row
+            payload = json.dumps({"attribution": "test", "records": [{"$type": "place"}]})
+            return (qk, payload)
+
+        all_rows = [_make_row(i) for i in range(1000)]
+
+        # Cursor returns all 1000 rows in first fetchmany call, then [].
+        # fetchall returns the list directly (as current code expects).
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [all_rows, []]
+        mock_cursor.fetchall.return_value = all_rows  # current code path
+
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_log_format"
+        output_dir.mkdir()
+
+        fake_sql = "SELECT tile_qk, tile_json FROM tile_export"
+        captured_messages = []
+
+        class _CapturingHandler(logging.Handler):
+            def emit(self, record):
+                captured_messages.append(record.getMessage())
+
+        handler = _CapturingHandler()
+        import garganorn.quadtree as _qt_module
+        logger = logging.getLogger(_qt_module.__name__)
+        logger.addHandler(handler)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        try:
+            with patch("pathlib.Path.read_text", return_value=fake_sql):
+                export_tiles(mock_con, str(output_dir), "fsq")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        # Find progress log messages that fire at the 1000-tile boundary.
+        progress_msgs = [m for m in captured_messages if "wrote" in m and "tiles" in m]
+        assert progress_msgs, (
+            "No 'wrote ... tiles' log message emitted at 1000-tile boundary"
+        )
+        # After the fix: messages must NOT contain a slash (no 'wrote X / Y tiles').
+        # The current code produces 'wrote 1000 / 1000 tiles', which contains '/'.
+        for msg in progress_msgs:
+            assert "/" not in msg, (
+                f"Progress log must not include a total (slash notation); got: {msg!r}. "
+                "Fix: log only the running tile count, not 'count / total'."
+            )
+
+    def test_post_loop_log_uses_manifest_len(self, tmp_path):
+        """After the tile-writing loop, export_tiles must log using len(manifest).
+
+        The current code logs 'export: queried %d tiles' BEFORE the loop using
+        len(result) (the full fetchall list).  The fix removes that pre-loop log
+        and instead logs after the loop using len(manifest).
+
+        This test asserts that the post-loop log message exists and that no
+        pre-loop 'queried' message is emitted.  Fails against current code
+        (which emits 'queried', not a post-loop manifest-based message) and
+        passes after the fix.
+        """
+        import json
+        import logging
+        from unittest.mock import patch, MagicMock
+
+        from garganorn.quadtree import export_tiles
+
+        tile_qk = "023130" + "0" * 11
+        payload = json.dumps({"attribution": "test", "records": [{"$type": "place"}]})
+        all_rows = [(tile_qk, payload)]
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [all_rows, []]
+        mock_cursor.fetchall.return_value = all_rows
+
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_postloop_log"
+        output_dir.mkdir()
+
+        fake_sql = "SELECT tile_qk, tile_json FROM tile_export"
+        captured_messages = []
+
+        class _CapturingHandler(logging.Handler):
+            def emit(self, record):
+                captured_messages.append(record.getMessage())
+
+        import garganorn.quadtree as _qt_module
+        logger = logging.getLogger(_qt_module.__name__)
+        handler = _CapturingHandler()
+        logger.addHandler(handler)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        try:
+            with patch("pathlib.Path.read_text", return_value=fake_sql):
+                export_tiles(mock_con, str(output_dir), "fsq")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        # Current code emits 'queried N tiles' before the loop.
+        # After the fix that message is gone; instead there's a post-loop message.
+        queried_msgs = [m for m in captured_messages if "queried" in m]
+        assert not queried_msgs, (
+            f"export_tiles must not emit a 'queried' pre-loop message; got: {queried_msgs!r}. "
+            "Fix: remove the pre-loop log and log tile count after the loop using len(manifest)."
+        )
+
+        # After the fix a post-loop summary log appears containing the tile count.
+        # The manifest has 1 tile; verify a message mentions '1' after the loop.
+        post_loop_msgs = [
+            m for m in captured_messages
+            if "export" in m and "1" in m and "queried" not in m
+        ]
+        assert post_loop_msgs, (
+            "export_tiles must emit a post-loop log message referencing the manifest tile count. "
+            f"Captured messages: {captured_messages!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: run_pipeline() Python function

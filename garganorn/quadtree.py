@@ -30,24 +30,30 @@ REPO = "places.atgeo.org"
 
 
 def export_tiles(con, output_dir: str, source: str) -> dict:
-    """Query DuckDB for per-tile JSON and write gzipped files. Returns {qk: record_count}."""
+    """Query DuckDB for per-tile JSON and write gzipped files; streams results via fetchmany(100). Returns {qk: record_count}."""
     sql_dir = Path(__file__).parent / "sql"
     raw = (sql_dir / f"{source}_export_tiles.sql").read_text()
     sql = string.Template(raw).safe_substitute(
         attribution=ATTRIBUTION[source], repo=REPO
     )
     con.execute(sql)  # creates tile_export view
-    result = con.execute("SELECT tile_qk, tile_json FROM tile_export").fetchall()
-    log.info("export: queried %d tiles from DuckDB", len(result))
+    cursor = con.execute("SELECT tile_qk, tile_json FROM tile_export")
     manifest = {}
-    for i, (tile_qk, tile_json) in enumerate(result):
-        subdir = os.path.join(output_dir, tile_qk[:6])
-        os.makedirs(subdir, exist_ok=True)
-        with gzip.open(os.path.join(subdir, f"{tile_qk}.json.gz"), "wb") as f:
-            f.write(tile_json.encode("utf-8"))
-        manifest[tile_qk] = len(json.loads(tile_json)["records"])
-        if (i + 1) % 1000 == 0:
-            log.info("export: wrote %d / %d tiles", i + 1, len(result))
+    tile_count = 0
+    while True:
+        batch = cursor.fetchmany(100)
+        if not batch:
+            break
+        for tile_qk, tile_json in batch:
+            subdir = os.path.join(output_dir, tile_qk[:6])
+            os.makedirs(subdir, exist_ok=True)
+            with gzip.open(os.path.join(subdir, f"{tile_qk}.json.gz"), "wb") as f:
+                f.write(tile_json.encode("utf-8"))
+            manifest[tile_qk] = len(json.loads(tile_json)["records"])
+            tile_count += 1
+            if tile_count % 1000 == 0:
+                log.info("export: wrote %d tiles", tile_count)
+    log.info("export: wrote %d tiles total", len(manifest))
     return manifest
 
 
