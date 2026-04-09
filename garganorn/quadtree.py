@@ -54,11 +54,15 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
     accumulated = []
 
     def flush_tile(qk, records):
-        envelope = {"attribution": ATTRIBUTION[source], "records": [json.loads(r) for r in records]}
+        # records are DuckDB to_json()::VARCHAR strings — already valid JSON.
+        # String concatenation avoids json.loads/json.dumps overhead.
+        # ATTRIBUTION values must be JSON-safe (no quotes, backslashes, or control chars).
+        joined = ",".join(records)
+        payload = f'{{"attribution":"{ATTRIBUTION[source]}","records":[{joined}]}}'
         subdir = os.path.join(output_dir, qk[:6])
         os.makedirs(subdir, exist_ok=True)
         with gzip.open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
-            f.write(json.dumps(envelope).encode("utf-8"))
+            f.write(payload.encode("utf-8"))
         manifest[qk] = len(records)
         if len(manifest) % 1000 == 0:
             log.info("export: wrote %d tiles", len(manifest))

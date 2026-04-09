@@ -18,8 +18,9 @@ SELECT
             locations: list_concat(
                 [{
                     "$type": 'community.lexicon.location.geo',
-                    latitude: st_y(st_centroid(p.geometry))::DECIMAL(10,6)::VARCHAR,
-                    longitude: st_x(st_centroid(p.geometry))::DECIMAL(10,6)::VARCHAR
+                    -- bbox mean avoids spatial function overhead; identical to centroid for point geometries (the vast majority)
+                    latitude: ((p.bbox.ymin + p.bbox.ymax) / 2)::DECIMAL(10,6)::VARCHAR,
+                    longitude: ((p.bbox.xmin + p.bbox.xmax) / 2)::DECIMAL(10,6)::VARCHAR
                 }],
                 list_transform(
                     list_filter(coalesce(p.addresses, []), addr -> addr.country IS NOT NULL),

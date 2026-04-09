@@ -723,6 +723,61 @@ class TestExportTiles:
                 f"{qk} tile: expected {expected_count} records, got {len(data['records'])}"
             )
 
+    def test_flush_tile_no_json_loads(self, tmp_path):
+        """flush_tile must not call json.loads — records are already valid JSON strings."""
+        import gzip as _gzip
+        from unittest.mock import MagicMock, patch
+        from garganorn.quadtree import export_tiles
+
+        qk_a = "023130" + "0" * 11
+        qk_b = "023131" + "0" * 11
+        record_a = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001",
+                                "value": {"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"}})
+        record_b = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq002",
+                                "value": {"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"}})
+        all_rows = [(qk_a, record_a), (qk_b, record_b)]
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [all_rows, []]
+        mock_cursor.fetchall.side_effect = AssertionError(
+            "export_tiles must not call fetchall()"
+        )
+
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_no_json_loads"
+        output_dir.mkdir()
+
+        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
+        with patch("pathlib.Path.read_text", return_value=fake_sql):
+            with patch("garganorn.quadtree.json.loads",
+                       side_effect=AssertionError(
+                           "flush_tile must not call json.loads; "
+                           "records are already valid JSON strings"
+                       )) as mock_loads:
+                export_tiles(mock_con, str(output_dir), "fsq")
+
+        mock_loads.assert_not_called()
+
+        # Verify output files contain valid JSON with the correct structure.
+        # (json.loads patch is no longer active here, so json.load works normally.)
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert gz_files, "export_tiles must have written at least one .json.gz file"
+        for gz in gz_files:
+            with _gzip.open(gz, "rt", encoding="utf-8") as f:
+                envelope = json.load(f)
+            assert "attribution" in envelope, (
+                f"Envelope missing 'attribution'; keys: {list(envelope)}"
+            )
+            assert "records" in envelope, (
+                f"Envelope missing 'records'; keys: {list(envelope)}"
+            )
+            assert isinstance(envelope["records"], list), "'records' must be a list"
+            for item in envelope["records"]:
+                assert "uri" in item, f"Record item missing 'uri': {list(item)}"
+                assert "value" in item, f"Record item missing 'value': {list(item)}"
+
 
 # ---------------------------------------------------------------------------
 # Tests: overture_export_tiles.sql
@@ -857,4 +912,59 @@ class TestOvertureExportTiles:
         )
         assert addr_entries[0]["region"] == "CA", (
             f"Expected region='CA' (trimmed); got {addr_entries[0]['region']!r}"
+        )
+
+    def test_overture_export_uses_bbox_mean_not_centroid(self):
+        """overture_export_tiles.sql must compute lat/lon from bbox mean, not st_centroid."""
+        import pathlib
+        sql_path = pathlib.Path(__file__).parent.parent / "garganorn" / "sql" / "overture_export_tiles.sql"
+        sql = sql_path.read_text()
+        assert "st_centroid" not in sql.lower(), (
+            "overture_export_tiles.sql must not use st_centroid; "
+            "use bbox mean ((bbox.ymin + bbox.ymax) / 2) instead"
+        )
+        assert "p.bbox.ymin" in sql, (
+            "overture_export_tiles.sql must use p.bbox.ymin for latitude computation"
+        )
+        assert "p.bbox.xmin" in sql, (
+            "overture_export_tiles.sql must use p.bbox.xmin for longitude computation"
+        )
+        assert "p.bbox.ymax" in sql, (
+            "overture_export_tiles.sql must use p.bbox.ymax for latitude computation"
+        )
+        assert "p.bbox.xmax" in sql, (
+            "overture_export_tiles.sql must use p.bbox.xmax for longitude computation"
+        )
+
+    def test_overture_export_latlon_matches_bbox_mean(self, overture_parquet, tmp_path):
+        """Exported latitude/longitude must equal bbox center coordinates.
+
+        Regression guard: passes against both old (st_centroid) and new (bbox mean)
+        code because ov001's geometry point coincides with its bbox center.
+        """
+        db_path = tmp_path / "test_ov_export_latlon.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet)
+        record = self._get_record(conn, "ov001")
+        conn.close()
+
+        assert record is not None, "ov001 must appear in tile_export"
+        locations = record["value"]["locations"]
+        geo_entries = [loc for loc in locations if loc.get("$type") == "community.lexicon.location.geo"]
+        assert len(geo_entries) >= 1, "ov001 must have at least one geo location"
+        geo = geo_entries[0]
+
+        # ov001 bbox: xmin=-122.420, ymin=37.774, xmax=-122.418, ymax=37.776
+        expected_lat = (37.774 + 37.776) / 2   # = 37.775
+        expected_lon = (-122.420 + -122.418) / 2  # = -122.419
+
+        actual_lat = float(geo["latitude"])
+        actual_lon = float(geo["longitude"])
+
+        assert abs(actual_lat - expected_lat) < 1e-6, (
+            f"latitude must match bbox mean {expected_lat}; got {actual_lat}"
+        )
+        assert abs(actual_lon - expected_lon) < 1e-6, (
+            f"longitude must match bbox mean {expected_lon}; got {actual_lon}"
         )
