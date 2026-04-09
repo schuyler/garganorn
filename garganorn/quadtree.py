@@ -40,6 +40,7 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
     raw = (sql_dir / f"{source}_export_tiles.sql").read_text()
     sql = string.Template(raw).safe_substitute(repo=REPO)  # attribution removed
     con.execute(sql)  # creates VIEW — no materialization
+    con.execute("SET enable_progress_bar = false")
     cursor = con.execute("SELECT tile_qk, record_json FROM tile_export ORDER BY tile_qk")
 
     manifest = {}
