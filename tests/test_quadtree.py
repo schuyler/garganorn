@@ -844,6 +844,41 @@ def overture_parquet(tmp_path_factory):
         )
     """)
 
+    # ov008 — in-bbox, non-NULL addresses array where ALL entries have NULL country.
+    # Placed in SW corner of bbox, far from other fixtures, so density scoring is unaffected.
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov008',
+            {'xmin': -122.501, 'ymin': 37.649, 'xmax': -122.499, 'ymax': 37.651},
+            'POINT(-122.500 37.650)',
+            {'primary': 'No Country Place',
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'null_country_venue'},
+            [{'country': NULL::VARCHAR, 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '1 Market St', 'region': 'US-CA'}],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov009 — in-bbox, mixed addresses: one NULL country, one non-NULL country.
+    # Placed in SE corner of bbox, far from other fixtures, so density scoring is unaffected.
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov009',
+            {'xmin': -122.351, 'ymin': 37.629, 'xmax': -122.349, 'ymax': 37.631},
+            'POINT(-122.350 37.630)',
+            {'primary': 'Mixed Address Place',
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'mixed_addr_venue'},
+            [
+              {'country': NULL::VARCHAR, 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '1 Market St', 'region': 'US-CA'},
+              {'country': 'US', 'postcode': '94105', 'locality': 'San Francisco', 'freeform': '2 Market St', 'region': 'US-CA'}
+            ],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
     conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
     conn.close()
 
@@ -1081,10 +1116,10 @@ class TestOvertureImportance:
     def test_unique_category_scores_higher(self, overture_parquet, tmp_path):
         """A place with a unique category should score higher than one with a common category (IDF).
 
-        ov001 has 'coffee_shop' which appears in 3 of 5 surviving rows
-        (ov001, ov003, ov004) → IDF = ln(5/3) ≈ 0.511.
-        ov005 has 'unique_venue' which appears in only 1 of 5 surviving rows
-        → IDF = ln(5/1) ≈ 1.609.
+        ov001 has 'coffee_shop' which appears in 3 of 7 surviving rows
+        (ov001, ov003, ov004) → IDF = ln(7/3) ≈ 0.847.
+        ov005 has 'unique_venue' which appears in only 1 of 7 surviving rows
+        → IDF = ln(7/1) ≈ 1.946.
         ov005 should score strictly higher than ov001.
         """
         db_path = tmp_path / "test_ov_idf.duckdb"
@@ -4006,8 +4041,8 @@ class TestQk17PipelineFixes:
     Fix 3 — compute_tile_assignments.sql: tile_assignments CTAS should have
              ORDER BY tile_qk so the output is sorted.
 
-    Fix 4 — overture_export_tiles.sql: place_addresses should be a TEMP TABLE
-             created before the view, not an inline CTE inside the WITH clause.
+    Fix 4 — overture_export_tiles.sql: place_addresses TEMP TABLE eliminated;
+             addresses rendered inline via list_transform/list_filter in the VIEW.
 
     OSM Fix — osm_import.sql: qk17 should be in the CREATE TABLE schema and
               computed inline in each INSERT SELECT; no ALTER TABLE ADD COLUMN.
@@ -4131,44 +4166,21 @@ class TestQk17PipelineFixes:
         )
 
     # ------------------------------------------------------------------
-    # Fix 4: overture_export_tiles.sql — place_addresses as TEMP TABLE
+    # Fix 4: overture_export_tiles.sql — eliminate place_addresses TEMP TABLE
     # ------------------------------------------------------------------
 
-    def test_fix4_export_tiles_no_inline_place_addresses_cte(self):
-        """overture_export_tiles.sql must NOT define place_addresses as an inline CTE.
+    def test_no_place_addresses_temp_table(self):
+        """overture_export_tiles.sql must NOT define place_addresses as a TEMP TABLE.
 
-        Currently place_addresses is defined inside the WITH clause of the VIEW
-        as: CREATE OR REPLACE VIEW tile_export AS\nWITH place_addresses AS (...
-        After the fix, it is a TEMP TABLE created before the VIEW definition.
-        FAILS until place_addresses is extracted from the inline WITH clause.
+        After the fix, place_addresses is eliminated entirely and replaced with
+        inline list_transform/list_filter in the VIEW. This test FAILS until the
+        TEMP TABLE is removed from the SQL file.
         """
         sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_export_tiles.sql"
         sql = sql_path.read_text()
-
-        # Detect the inline CTE form: a line containing "place_addresses AS ("
-        # that appears after a CREATE ... VIEW statement (not inside a CREATE TABLE).
-        # We track whether we've passed a VIEW creation statement.
-        in_view = False
-        for i, line in enumerate(sql.splitlines()):
-            upper = line.strip().upper()
-            # Entering a VIEW context
-            if "CREATE" in upper and "VIEW" in upper:
-                in_view = True
-            # A standalone CREATE TABLE would end the view context
-            if "CREATE" in upper and "TABLE" in upper and "VIEW" not in upper:
-                in_view = False
-            # Detect place_addresses as an inline CTE inside the VIEW's WITH clause
-            if in_view and "PLACE_ADDRESSES AS (" in upper:
-                assert False, (
-                    f"overture_export_tiles.sql defines place_addresses as an inline CTE "
-                    f"inside a VIEW's WITH clause (line {i+1}: {line.strip()!r}). "
-                    "Fix: extract place_addresses into a standalone CREATE TEMP TABLE "
-                    "before the VIEW definition."
-                )
-
-        assert "CREATE TEMP TABLE place_addresses" in sql, (
-            "overture_export_tiles.sql must define place_addresses as a CREATE TEMP TABLE "
-            "before the VIEW definition."
+        assert "CREATE TEMP TABLE place_addresses" not in sql, (
+            "overture_export_tiles.sql still defines place_addresses as a TEMP TABLE. "
+            "Fix: remove the TEMP TABLE and use inline list_transform/list_filter in the VIEW."
         )
 
     # ------------------------------------------------------------------
@@ -4246,4 +4258,141 @@ class TestQk17PipelineFixes:
         assert null_count == 0, (
             f"Expected 0 null qk17 values after osm_import; got {null_count}. "
             "Both the current UPDATE approach and the post-fix inline approach must produce non-null qk17."
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: overture_export_tiles.sql
+# ---------------------------------------------------------------------------
+
+class TestOvertureExportTiles:
+    """Tests for garganorn/sql/overture_export_tiles.sql.
+
+    Each test runs the full Overture pipeline:
+      overture_import → overture_importance → overture_variants →
+      compute_tile_assignments → overture_export_tiles
+    """
+
+    _SUBS = {"repo": "places.atgeo.org"}
+
+    def _run_full_pipeline(self, conn, parquet_glob):
+        """Run all Overture pipeline SQL stages on conn."""
+        # 1. Import
+        _run_overture_import(conn, parquet_glob)
+
+        # 2. Importance
+        raw = _load_sql("overture_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+
+        # 3. Variants
+        raw = _load_sql("overture_variants.sql", {})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+
+        # 4. Tile assignments (pk_expr='id' for Overture)
+        _run_tile_assignments(conn, pk_expr="id", min_zoom=6, max_zoom=17, max_per_tile=5000)
+
+        # 5. Export tiles
+        raw = _load_sql("overture_export_tiles.sql", self._SUBS)
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+
+    def _get_record(self, conn, place_id):
+        """Return parsed JSON record dict for a given place_id, or None if not found.
+
+        Fetches all rows from tile_export, parses each record_json, and returns
+        the first record whose value.rkey matches place_id.
+        """
+        import json as _json
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        for (record_json,) in rows:
+            parsed = _json.loads(record_json)
+            if parsed.get("value", {}).get("rkey") == place_id:
+                return parsed
+        return None
+
+    def test_overture_export_addresses_inline(self, overture_parquet, tmp_path):
+        """ov001 (one address entry with country='US', region='US-CA') must have an
+        address location entry with country='US' and region='CA' (trimmed at '-').
+
+        locations must contain: [geo_entry, address_entry].
+        """
+        db_path = tmp_path / "test_ov_export_addr.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet)
+        record = self._get_record(conn, "ov001")
+        conn.close()
+        assert record is not None, "ov001 must appear in tile_export"
+        locations = record["value"]["locations"]
+        addr_entries = [loc for loc in locations if loc.get("$type") == "community.lexicon.location.address"]
+        assert len(addr_entries) == 1, (
+            f"ov001 must have exactly 1 address location; got {len(addr_entries)}: {addr_entries}"
+        )
+        addr = addr_entries[0]
+        assert addr["country"] == "US", f"Expected country='US'; got {addr['country']!r}"
+        assert addr["region"] == "CA", (
+            f"Expected region='CA' (trimmed from 'US-CA'); got {addr['region']!r}"
+        )
+
+    def test_overture_export_no_addresses_no_error(self, overture_parquet, tmp_path):
+        """ov003 (addresses=NULL) must render without error with exactly 1 location (geo only)."""
+        db_path = tmp_path / "test_ov_export_no_addr.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet)
+        record = self._get_record(conn, "ov003")
+        conn.close()
+        assert record is not None, "ov003 must appear in tile_export"
+        locations = record["value"]["locations"]
+        assert len(locations) == 1, (
+            f"ov003 (null addresses) must have exactly 1 location (geo only); got {len(locations)}: {locations}"
+        )
+        assert locations[0]["$type"] == "community.lexicon.location.geo", (
+            f"Only location must be geo type; got {locations[0]['$type']!r}"
+        )
+
+    def test_overture_export_all_null_country_addresses(self, overture_parquet, tmp_path):
+        """ov008 (addresses=[{country:NULL,...}]) must render with exactly 1 location (geo only).
+
+        list_filter must remove all entries with NULL country, yielding an empty address list.
+        """
+        db_path = tmp_path / "test_ov_export_null_country.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet)
+        record = self._get_record(conn, "ov008")
+        conn.close()
+        assert record is not None, "ov008 must appear in tile_export"
+        locations = record["value"]["locations"]
+        assert len(locations) == 1, (
+            f"ov008 (all null-country addresses) must have exactly 1 location (geo only); "
+            f"got {len(locations)}: {locations}"
+        )
+        assert locations[0]["$type"] == "community.lexicon.location.geo", (
+            f"Only location must be geo type; got {locations[0]['$type']!r}"
+        )
+
+    def test_overture_export_mixed_null_country_addresses(self, overture_parquet, tmp_path):
+        """ov009 (one null-country entry + one non-null-country entry) must render with
+        exactly 1 address location — the non-null-country entry only.
+
+        This validates list_filter drops null-country entries without dropping valid ones.
+        """
+        db_path = tmp_path / "test_ov_export_mixed.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet)
+        record = self._get_record(conn, "ov009")
+        conn.close()
+        assert record is not None, "ov009 must appear in tile_export"
+        locations = record["value"]["locations"]
+        addr_entries = [loc for loc in locations if loc.get("$type") == "community.lexicon.location.address"]
+        assert len(addr_entries) == 1, (
+            f"ov009 (one null, one non-null country) must have exactly 1 address location; "
+            f"got {len(addr_entries)}: {addr_entries}"
+        )
+        assert addr_entries[0]["country"] == "US", (
+            f"Surviving address entry must have country='US'; got {addr_entries[0]['country']!r}"
+        )
+        assert addr_entries[0]["region"] == "CA", (
+            f"Expected region='CA' (trimmed); got {addr_entries[0]['region']!r}"
         )
