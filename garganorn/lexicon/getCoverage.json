@@ -29,6 +29,7 @@
             },
             "errors": [
                 {"name": "BboxTooLarge", "description": "The bounding box covers too many tiles"},
+                {"name": "BboxTooPrecise", "description": "One or more bbox coordinates have more than 2 decimal places (finer than 0.01° precision)"},
                 {"name": "CollectionNotFound", "description": "The specified collection does not exist on this server"},
                 {"name": "InvalidBbox", "description": "The bbox parameter must be four comma-separated numbers with xmin < xmax and ymin < ymax"}
             ]

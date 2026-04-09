@@ -116,3 +116,111 @@ class TestGetCoverage:
         assert call_args.kwargs.get("max_tiles") == 7, (
             f"Expected max_tiles=7 in kwargs; got {call_args.kwargs}"
         )
+
+
+class TestBboxPrecision:
+    """Tests for BboxTooPrecise validation in get_coverage.
+
+    Verifies that _check_bbox_precision enforces the 0.01° grid policy:
+    coordinates with more than 2 decimal places (including trailing zeros)
+    or scientific notation are rejected. Coordinates with ≤2 decimal places pass.
+    search_records is excluded from this check.
+    """
+
+    # ------------------------------------------------------------------
+    # Valid cases — must NOT raise BboxTooPrecise
+    # ------------------------------------------------------------------
+
+    def test_two_decimal_places_passes(self):
+        """bbox with ≤2 decimal places on every coordinate is accepted."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        # Should not raise — just return tiles
+        result = server.get_coverage({}, collection=FSQ_COLLECTION,
+                                     bbox="-122.41,37.77,-122.30,37.85")
+        assert "tiles" in result
+
+    def test_integer_coordinates_pass(self):
+        """Integer coordinates (0 decimal places) are accepted."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        result = server.get_coverage({}, collection=FSQ_COLLECTION,
+                                     bbox="-122,37,-121,38")
+        assert "tiles" in result
+
+    def test_one_decimal_place_passes(self):
+        """Coordinates with exactly 1 decimal place are accepted."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        result = server.get_coverage({}, collection=FSQ_COLLECTION,
+                                     bbox="-122.4,37.7,-122.3,37.8")
+        assert "tiles" in result
+
+    def test_bare_decimal_point_passes(self):
+        """Coordinates like '37.' (bare decimal, 0 chars after '.') are accepted."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        result = server.get_coverage({}, collection=FSQ_COLLECTION,
+                                     bbox="-122.,37.,-121.,38.")
+        assert "tiles" in result
+
+    # ------------------------------------------------------------------
+    # Rejection cases — must raise XrpcError("BboxTooPrecise")
+    # ------------------------------------------------------------------
+
+    def test_three_decimal_places_rejected(self):
+        """A coordinate with 3 decimal places raises BboxTooPrecise."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        with pytest.raises(XrpcError) as exc_info:
+            server.get_coverage({}, collection=FSQ_COLLECTION,
+                                bbox="-122.419,37.77,-122.30,37.85")
+        assert exc_info.value.name == "BboxTooPrecise"
+
+    def test_many_decimal_places_rejected(self):
+        """A coordinate with many decimal places raises BboxTooPrecise."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        with pytest.raises(XrpcError) as exc_info:
+            server.get_coverage({}, collection=FSQ_COLLECTION,
+                                bbox="-122.41942,37.77493,-122.30,37.85")
+        assert exc_info.value.name == "BboxTooPrecise"
+
+    def test_trailing_zeros_rejected(self):
+        """Trailing zeros count toward decimal length: '37.770' has 3 chars → rejected."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        with pytest.raises(XrpcError) as exc_info:
+            server.get_coverage({}, collection=FSQ_COLLECTION,
+                                bbox="-122.410,37.770,-122.300,37.850")
+        assert exc_info.value.name == "BboxTooPrecise"
+
+    def test_scientific_notation_rejected(self):
+        """A coordinate in scientific notation (contains 'e') raises BboxTooPrecise."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        with pytest.raises(XrpcError) as exc_info:
+            server.get_coverage({}, collection=FSQ_COLLECTION,
+                                bbox="1e2,37.77,101.00,37.85")
+        assert exc_info.value.name == "BboxTooPrecise"
+
+    def test_precision_checked_before_parse(self):
+        """Precision check fires before _parse_bbox: too-precise + unparseable → BboxTooPrecise."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        with pytest.raises(XrpcError) as exc_info:
+            server.get_coverage({}, collection=FSQ_COLLECTION,
+                                bbox="-122.419,37.77,not_a_number,37.85")
+        assert exc_info.value.name == "BboxTooPrecise"
+
+    def test_one_bad_coordinate_rejects_whole_bbox(self):
+        """Three valid coordinates plus one with 3 decimal places still raises BboxTooPrecise."""
+        server = _make_server(tile_manifests={FSQ_COLLECTION: _make_mock_manifest()})
+        with pytest.raises(XrpcError) as exc_info:
+            # Only the third coordinate (-122.419) is too precise
+            server.get_coverage({}, collection=FSQ_COLLECTION,
+                                bbox="-122.41,37.77,-122.419,37.85")
+        assert exc_info.value.name == "BboxTooPrecise"
+
+    # ------------------------------------------------------------------
+    # searchRecords must NOT apply the precision check
+    # ------------------------------------------------------------------
+
+    def test_search_records_precise_bbox_not_rejected(self):
+        """search_records accepts a bbox with >2 decimal places (no precision check)."""
+        server = _make_server()
+        # Must not raise BboxTooPrecise — search_records doesn't enforce precision
+        result = server.search_records({}, collection=FSQ_COLLECTION,
+                                       bbox="-122.41942,37.77493,-122.30,37.85")
+        assert "records" in result

@@ -175,7 +175,44 @@ class Server:
             raise XrpcError("bbox requires xmin < xmax and ymin < ymax", "InvalidBbox")
         return (xmin, ymin, xmax, ymax)
 
+    def _check_bbox_precision(self, bbox_str: str):
+        """Raise XrpcError BboxTooPrecise if any bbox coordinate exceeds 2 decimal places.
+
+        Enforces the 0.01° grid required by the tile-based privacy model: clients must
+        snap bounding boxes to coarse grid boundaries so the server cannot infer precise
+        user location from getCoverage requests. See docs/tile-privacy-design.md.
+
+        Precision is checked by string inspection, not float comparison, so
+        '37.770' (3 chars after '.') and '1e2' (scientific notation) are both rejected.
+        """
+        parts = bbox_str.split(",")
+        if len(parts) != 4:
+            return
+        for part in parts:
+            part = part.strip()
+            if 'e' in part or 'E' in part:
+                raise XrpcError(
+                    "bbox coordinate has more than 2 decimal places; snap to 0.01° grid",
+                    "BboxTooPrecise",
+                )
+            dot_pos = part.find('.')
+            if dot_pos == -1:
+                continue
+            if len(part) - dot_pos - 1 > 2:
+                raise XrpcError(
+                    "bbox coordinate has more than 2 decimal places; snap to 0.01° grid",
+                    "BboxTooPrecise",
+                )
+
     def get_coverage(self, _, collection: str, bbox: str):
+        """Return tile URLs covering bbox for the given collection.
+
+        Raises BboxTooPrecise if any coordinate exceeds 2 decimal places,
+        BboxTooLarge if the bbox spans more tiles than max_coverage_tiles,
+        CollectionNotFound if collection has no tile manifest, or InvalidBbox
+        if the bbox string is malformed.
+        """
+        self._check_bbox_precision(bbox)
         parsed_bbox = self._parse_bbox(bbox)
         manifest = self.tile_manifests.get(collection)
         if manifest is None:
