@@ -11,21 +11,21 @@ tiles:
   serve_dir: tiles
   collections:
     org.atgeo.places.foursquare:
-      manifest: tiles/fsq/manifest.duckdb
-      tiles_dir: tiles/fsq
-      base_url: https://places.atgeo.org/tiles/fsq
+      manifest: tiles/fsq/current/manifest.duckdb
+      tiles_dir: tiles/fsq/current
+      base_url: https://places.atgeo.org/tiles/fsq/current
       attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
       cache_ttl: 86400
     org.atgeo.places.overture:
-      manifest: tiles/overture/manifest.duckdb
-      tiles_dir: tiles/overture
-      base_url: https://places.atgeo.org/tiles/overture
+      manifest: tiles/overture/current/manifest.duckdb
+      tiles_dir: tiles/overture/current
+      base_url: https://places.atgeo.org/tiles/overture/current
       attribution: https://docs.overturemaps.org/attribution/
       cache_ttl: 86400
     org.atgeo.places.osm:
-      manifest: tiles/osm/manifest.duckdb
-      tiles_dir: tiles/osm
-      base_url: https://places.atgeo.org/tiles/osm
+      manifest: tiles/osm/current/manifest.duckdb
+      tiles_dir: tiles/osm/current
+      base_url: https://places.atgeo.org/tiles/osm/current
       attribution: https://www.openstreetmap.org/copyright
       cache_ttl: 86400
   max_coverage_tiles: 50

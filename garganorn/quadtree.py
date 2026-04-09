@@ -4,6 +4,8 @@ import json
 import logging
 import math
 import os
+import re
+import shutil
 import string
 import time
 from datetime import datetime, timezone
@@ -27,6 +29,8 @@ ATTRIBUTION = {
 }
 
 REPO = "places.atgeo.org"
+
+_TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
 
 def export_tiles(con, output_dir: str, source: str) -> dict:
@@ -79,60 +83,87 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
 
 
 def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000):
-    output_dir = os.path.join(output_dir, source)
-    os.makedirs(output_dir, exist_ok=True)
-    db_path = os.path.join(output_dir, f".{source}_work.duckdb")
+    source_dir = os.path.join(output_dir, source)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    tile_dir = os.path.join(source_dir, timestamp)
+    os.makedirs(tile_dir, exist_ok=True)
+    db_path = os.path.join(tile_dir, f".{source}_work.duckdb")
     con = duckdb.connect(db_path)
     sql_dir = Path(__file__).parent / "sql"
     t0 = time.monotonic()
 
-    def run_sql(stage, filename, **params):
-        log.info("[%s] %s: starting", source, stage)
-        sql = (sql_dir / filename).read_text()
-        for k, v in params.items():
-            sql = sql.replace(f"${{{k}}}", str(v))
-        con.execute(sql)
-        count = con.execute("SELECT count(*) FROM places").fetchone()[0]
-        log.info("[%s] %s: done (%.1fs, %d places)",
-                 source, stage, time.monotonic() - t0, count)
+    try:
+        def run_sql(stage, filename, **params):
+            log.info("[%s] %s: starting", source, stage)
+            sql = (sql_dir / filename).read_text()
+            for k, v in params.items():
+                sql = sql.replace(f"${{{k}}}", str(v))
+            con.execute(sql)
+            count = con.execute("SELECT count(*) FROM places").fetchone()[0]
+            log.info("[%s] %s: done (%.1fs, %d places)",
+                     source, stage, time.monotonic() - t0, count)
 
-    xmin, ymin, xmax, ymax = bbox if bbox is not None else (-180, -90, 180, 90)
+        xmin, ymin, xmax, ymax = bbox if bbox is not None else (-180, -90, 180, 90)
 
-    # Import stage — OSM needs two separate parquet paths
-    if source == "osm":
-        node_parquet, way_parquet = parquet_glob
-        run_sql("import", "osm_import.sql",
-                memory_limit=memory_limit,
-                node_parquet=node_parquet,
-                way_parquet=way_parquet,
-                xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
-    else:
-        run_sql("import", f"{source}_import.sql",
-                memory_limit=memory_limit,
-                parquet_glob=parquet_glob,
-                xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
+        # Import stage — OSM needs two separate parquet paths
+        if source == "osm":
+            node_parquet, way_parquet = parquet_glob
+            run_sql("import", "osm_import.sql",
+                    memory_limit=memory_limit,
+                    node_parquet=node_parquet,
+                    way_parquet=way_parquet,
+                    xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
+        else:
+            run_sql("import", f"{source}_import.sql",
+                    memory_limit=memory_limit,
+                    parquet_glob=parquet_glob,
+                    xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
-    run_sql("importance", f"{source}_importance.sql",
-            density_norm=10.0, idf_norm=18.0)
-    run_sql("variants", f"{source}_variants.sql")
+        run_sql("importance", f"{source}_importance.sql",
+                density_norm=10.0, idf_norm=18.0)
+        run_sql("variants", f"{source}_variants.sql")
 
-    pk_expr = SOURCE_PK[source]
-    run_sql("tile assignment", "compute_tile_assignments.sql",
-            pk_expr=pk_expr, min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
+        pk_expr = SOURCE_PK[source]
+        run_sql("tile assignment", "compute_tile_assignments.sql",
+                pk_expr=pk_expr, min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
 
-    log.info("[%s] export: starting", source)
-    manifest = export_tiles(con, output_dir, source)
-    log.info("[%s] export: %d tiles, %d records (%.1fs)",
-             source, len(manifest),
-             sum(manifest.values()), time.monotonic() - t0)
+        log.info("[%s] export: starting", source)
+        manifest = export_tiles(con, tile_dir, source)
+        log.info("[%s] export: %d tiles, %d records (%.1fs)",
+                 source, len(manifest),
+                 sum(manifest.values()), time.monotonic() - t0)
 
-    write_manifest(manifest, output_dir, source)
-    write_manifest_db(con, output_dir, source)
+        write_manifest(manifest, tile_dir, source)
+        write_manifest_db(con, tile_dir, source)
+    except Exception:
+        con.close()
+        raise
     con.close()
     try:
         os.remove(db_path)
     except OSError:
         pass
+
+    # Atomically swap the `current` symlink to the new timestamped directory
+    link_path = os.path.join(source_dir, "current")
+    tmp_link = link_path + ".tmp"
+    try:
+        os.remove(tmp_link)
+    except OSError:
+        pass
+    os.symlink(timestamp, tmp_link)
+    os.rename(tmp_link, link_path)
+
+    # Clean up old timestamped dirs: keep current + previous, delete older
+    ts_dirs = sorted(
+        d for d in os.listdir(source_dir)
+        if _TIMESTAMP_RE.match(d)
+        and os.path.isdir(os.path.join(source_dir, d))
+        and not os.path.islink(os.path.join(source_dir, d))
+    )
+    for old_dir in ts_dirs[:-2]:
+        shutil.rmtree(os.path.join(source_dir, old_dir), ignore_errors=True)
+
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
 
 

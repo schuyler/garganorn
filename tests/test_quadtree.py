@@ -12,10 +12,13 @@ attempts to load one will raise FileNotFoundError.  That is the expected
 failure mode.
 """
 
+import gzip
 import os
 import pathlib
+import re
 import string
 import tempfile
+import time
 
 import duckdb
 import pytest
@@ -2948,15 +2951,16 @@ class TestRunPipeline:
             max_per_tile=100,
         )
 
-        # At least one tile file under output_dir/fsq/
+        # At least one tile file under output_dir/fsq/current/
         fsq_dir = output_dir / "fsq"
-        gz_files = list(fsq_dir.rglob("*.json.gz")) if fsq_dir.exists() else []
+        current_dir = fsq_dir / "current"
+        gz_files = list(current_dir.rglob("*.json.gz")) if current_dir.exists() else []
         assert gz_files, (
-            f"run_pipeline must write at least one .json.gz under {fsq_dir}"
+            f"run_pipeline must write at least one .json.gz under {current_dir}"
         )
 
-        # manifest.json must exist
-        manifest_path = fsq_dir / "manifest.json"
+        # manifest.json must exist under current/
+        manifest_path = current_dir / "manifest.json"
         assert manifest_path.exists(), (
             f"run_pipeline must write manifest.json at {manifest_path}"
         )
@@ -2995,10 +2999,10 @@ class TestRunPipeline:
         )
 
         fsq_dir = output_dir / "fsq"
-        gz_files = list(fsq_dir.rglob("*.json.gz")) if fsq_dir.exists() else []
-        assert gz_files, f"run_pipeline must write at least one .json.gz under {fsq_dir}"
+        gz_files = list((fsq_dir / "current").rglob("*.json.gz")) if (fsq_dir / "current").exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {fsq_dir / 'current'}"
 
-        manifest_path = output_dir / "fsq" / "manifest.duckdb"
+        manifest_path = output_dir / "fsq" / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -3050,10 +3054,10 @@ class TestRunPipeline:
         )
 
         ov_dir = output_dir / "overture"
-        gz_files = list(ov_dir.rglob("*.json.gz")) if ov_dir.exists() else []
-        assert gz_files, f"run_pipeline must write at least one .json.gz under {ov_dir}"
+        gz_files = list((ov_dir / "current").rglob("*.json.gz")) if (ov_dir / "current").exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {ov_dir / 'current'}"
 
-        manifest_path = ov_dir / "manifest.duckdb"
+        manifest_path = ov_dir / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -3105,10 +3109,10 @@ class TestRunPipeline:
         )
 
         osm_dir = output_dir / "osm"
-        gz_files = list(osm_dir.rglob("*.json.gz")) if osm_dir.exists() else []
-        assert gz_files, f"run_pipeline must write at least one .json.gz under {osm_dir}"
+        gz_files = list((osm_dir / "current").rglob("*.json.gz")) if (osm_dir / "current").exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {osm_dir / 'current'}"
 
-        manifest_path = osm_dir / "manifest.duckdb"
+        manifest_path = osm_dir / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -3756,6 +3760,233 @@ class TestRunPipelineStaleDb:
             str(output_dir),
             memory_limit="4GB",
             max_per_tile=100,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: atomic tile export with timestamped directories (Red phase)
+# ---------------------------------------------------------------------------
+
+class TestTimestampedExport:
+    """run_pipeline must write tiles into a timestamped subdirectory and maintain
+    a `current` symlink pointing to the latest run.
+
+    All tests FAIL in the Red phase because run_pipeline writes directly into
+    output_dir/source/ without creating a timestamped subdirectory or symlink.
+    """
+
+    _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
+
+    def _run(self, fsq_parquet, output_dir):
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+        run_pipeline(
+            "fsq",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+    def test_creates_timestamped_subdir(self, fsq_parquet, tmp_path):
+        """run_pipeline must create a timestamped subdirectory under output_dir/fsq/."""
+        output_dir = tmp_path / "ts_subdir_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        fsq_dir = output_dir / "fsq"
+        assert fsq_dir.exists(), f"output_dir/fsq/ must exist; got {list(output_dir.iterdir())}"
+
+        ts_dirs = [
+            d for d in fsq_dir.iterdir()
+            if d.is_dir() and not d.is_symlink() and self._TIMESTAMP_RE.match(d.name)
+        ]
+        assert ts_dirs, (
+            f"run_pipeline must create a timestamped subdir matching {self._TIMESTAMP_RE.pattern!r} "
+            f"under {fsq_dir}; found: {[d.name for d in fsq_dir.iterdir()]}"
+        )
+
+        gz_files = list(ts_dirs[0].rglob("*.json.gz"))
+        assert gz_files, (
+            f"Timestamped dir {ts_dirs[0]} must contain at least one .json.gz file"
+        )
+
+    def test_creates_current_symlink(self, fsq_parquet, tmp_path):
+        """run_pipeline must create a `current` symlink under output_dir/fsq/."""
+        output_dir = tmp_path / "ts_symlink_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        fsq_dir = output_dir / "fsq"
+        current = fsq_dir / "current"
+        assert os.path.islink(str(current)), (
+            f"output_dir/fsq/current must be a symlink; got {list(fsq_dir.iterdir())}"
+        )
+
+        target = os.readlink(str(current))
+        assert self._TIMESTAMP_RE.match(target), (
+            f"current symlink target must match {self._TIMESTAMP_RE.pattern!r}; got {target!r}"
+        )
+
+    def test_second_run_swaps_symlink(self, fsq_parquet, tmp_path):
+        """A second run must update `current` to point to the new timestamped dir."""
+        output_dir = tmp_path / "ts_swap_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        fsq_dir = output_dir / "fsq"
+        first_target = os.readlink(str(fsq_dir / "current"))
+
+        time.sleep(1)
+        self._run(fsq_parquet, output_dir)
+
+        second_target = os.readlink(str(fsq_dir / "current"))
+        assert second_target != first_target, (
+            f"After second run, current symlink must point to a different dir; "
+            f"both runs produced {second_target!r}"
+        )
+
+        # First run's dir must still exist (kept as previous)
+        first_dir = fsq_dir / first_target
+        assert first_dir.exists(), (
+            f"First run's dir {first_dir} must still exist after second run"
+        )
+
+        # Tiles accessible through current
+        gz_files = list((fsq_dir / "current").rglob("*.json.gz"))
+        assert gz_files, "Tiles must be accessible through the current symlink after second run"
+
+    def test_third_run_cleans_oldest(self, fsq_parquet, tmp_path):
+        """A third run must delete the oldest timestamped dir, keeping only 2."""
+        output_dir = tmp_path / "ts_clean_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        fsq_dir = output_dir / "fsq"
+        first_target = os.readlink(str(fsq_dir / "current"))
+
+        time.sleep(1)
+        self._run(fsq_parquet, output_dir)
+
+        time.sleep(1)
+        self._run(fsq_parquet, output_dir)
+
+        ts_dirs = [
+            d for d in fsq_dir.iterdir()
+            if d.is_dir() and not d.is_symlink() and self._TIMESTAMP_RE.match(d.name)
+        ]
+        assert len(ts_dirs) == 2, (
+            f"After three runs, exactly 2 timestamped dirs must remain; "
+            f"found {len(ts_dirs)}: {[d.name for d in ts_dirs]}"
+        )
+
+        first_dir = fsq_dir / first_target
+        assert not first_dir.exists(), (
+            f"First run's dir {first_dir} must have been deleted after third run"
+        )
+
+    def test_tiles_accessible_through_current(self, fsq_parquet, tmp_path):
+        """Tiles must be readable via the current symlink."""
+        output_dir = tmp_path / "ts_readable_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        current_dir = output_dir / "fsq" / "current"
+        gz_files = list(current_dir.rglob("*.json.gz"))
+        assert gz_files, f"No .json.gz files found under {current_dir}"
+
+        for gz_file in gz_files:
+            try:
+                with gzip.open(gz_file, "rb") as fh:
+                    fh.read(1)
+            except Exception as exc:
+                pytest.fail(f"Could not read {gz_file} via gzip.open: {exc}")
+
+    def test_manifest_accessible_through_current(self, fsq_parquet, tmp_path):
+        """manifest.json and manifest.duckdb must be accessible via current symlink."""
+        import json as _json
+        output_dir = tmp_path / "ts_manifest_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        current_dir = output_dir / "fsq" / "current"
+
+        manifest_json = current_dir / "manifest.json"
+        assert manifest_json.exists(), f"manifest.json must exist at {manifest_json}"
+        with open(manifest_json) as fh:
+            data = _json.load(fh)
+        assert isinstance(data, dict), f"manifest.json must be valid JSON dict; got {type(data)}"
+
+        manifest_db = current_dir / "manifest.duckdb"
+        assert manifest_db.exists(), f"manifest.duckdb must exist at {manifest_db}"
+
+    def test_failed_run_leaves_partial_dir(self, fsq_parquet, tmp_path):
+        """A failed run must leave partial timestamped dir for debugging, and not swap the symlink."""
+        from unittest.mock import patch
+
+        try:
+            from garganorn.quadtree import run_pipeline
+        except (ImportError, ModuleNotFoundError):
+            pytest.skip("garganorn.quadtree not available")
+
+        output_dir = tmp_path / "ts_cleanup_out"
+        output_dir.mkdir()
+
+        with pytest.raises(RuntimeError, match="boom"):
+            with patch("garganorn.quadtree.export_tiles", side_effect=RuntimeError("boom")):
+                run_pipeline(
+                    "fsq",
+                    fsq_parquet,
+                    (-122.55, 37.60, -122.30, 37.85),
+                    str(output_dir),
+                    memory_limit="4GB",
+                    max_per_tile=100,
+                )
+
+        fsq_dir = output_dir / "fsq"
+        assert fsq_dir.exists(), "source dir must exist even after failed run"
+
+        # Partial timestamped dir should be left for debugging
+        ts_dirs = [
+            d for d in fsq_dir.iterdir()
+            if d.is_dir() and not d.is_symlink() and self._TIMESTAMP_RE.match(d.name)
+        ]
+        assert len(ts_dirs) == 1, (
+            f"Failed run must leave exactly one partial timestamped dir for debugging; "
+            f"found: {[d.name for d in ts_dirs]}"
+        )
+
+        # current symlink must NOT exist — swap didn't happen
+        current_link = fsq_dir / "current"
+        assert not current_link.is_symlink(), (
+            "current symlink must not exist after a failed run"
+        )
+
+        # Work .duckdb must be present in the partial dir for debugging
+        partial_dir = ts_dirs[0]
+        work_dbs = list(partial_dir.glob(".*_work.duckdb"))
+        assert work_dbs, (
+            f"Failed run must leave the work .duckdb in the partial dir for debugging; "
+            f"found nothing under {partial_dir}"
+        )
+
+    def test_work_db_in_timestamped_dir(self, fsq_parquet, tmp_path):
+        """No .duckdb files should remain under output_dir/fsq/ except manifest.duckdb."""
+        output_dir = tmp_path / "ts_workdb_out"
+        output_dir.mkdir()
+        self._run(fsq_parquet, output_dir)
+
+        fsq_dir = output_dir / "fsq"
+        leftover_dbs = [
+            f for f in fsq_dir.rglob("*.duckdb")
+            if f.name != "manifest.duckdb"
+        ]
+        assert not leftover_dbs, (
+            f"run_pipeline must not leave non-manifest .duckdb files under {fsq_dir}: "
+            f"{leftover_dbs}"
         )
 
 
