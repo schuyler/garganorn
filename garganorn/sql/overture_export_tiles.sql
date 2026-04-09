@@ -52,9 +52,10 @@ SELECT
                 version: p.version,
                 sources: p.sources
             },
-            relations: '{}'::JSON
+            relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
         }
     })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.id
+LEFT JOIN place_containment pc ON pc.place_id = p.id
 ORDER BY ta.tile_qk;

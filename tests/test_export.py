@@ -1,13 +1,14 @@
 """Tests for fsq_export_tiles.sql, overture_export_tiles.sql, and export_tiles()."""
 
 import gzip
+import inspect
 import json
 
 import duckdb
 import pytest
 from tests.quadtree_helpers import (
     REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit,
-    run_overture_import, run_tile_assignments,
+    run_overture_import, run_tile_assignments, run_osm_import,
 )
 
 
@@ -96,6 +97,13 @@ def _make_fsq_export_db(conn, places_rows=None):
             "INSERT INTO tile_assignments VALUES (?, ?)",
             [fsq_id, _EXPORT_TILE_QK],
         )
+
+    conn.execute("""
+        CREATE TABLE place_containment (
+            place_id       VARCHAR,
+            relations_json VARCHAR
+        )
+    """)
 
 
 # ---------------------------------------------------------------------------
@@ -809,6 +817,14 @@ class TestOvertureExportTiles:
         # 4. Tile assignments (pk_expr='id' for Overture)
         run_tile_assignments(conn, pk_expr="id", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
+        # 4b. Empty place_containment (no boundaries in pipeline tests)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS place_containment (
+                place_id       VARCHAR,
+                relations_json VARCHAR
+            )
+        """)
+
         # 5. Export tiles
         raw = _load_sql("overture_export_tiles.sql", self._SUBS)
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
@@ -968,3 +984,451 @@ class TestOvertureExportTiles:
         assert abs(actual_lon - expected_lon) < 1e-6, (
             f"longitude must match bbox mean {expected_lon}; got {actual_lon}"
         )
+
+
+# ---------------------------------------------------------------------------
+# WoF containment relations JSON for test fixtures
+# ---------------------------------------------------------------------------
+
+# The four WoF boundaries that contain SF places (lat ~37.77, lon ~-122.42),
+# ordered by level ascending (continent first — matches ORDER BY level ASC).
+_SF_WITHIN_JSON = json.dumps({
+    "within": [
+        {"rkey": "org.atgeo.places.wof:102191575", "name": "North America", "level": 0},
+        {"rkey": "org.atgeo.places.wof:85633793", "name": "United States", "level": 10},
+        {"rkey": "org.atgeo.places.wof:85688637", "name": "California", "level": 25},
+        {"rkey": "org.atgeo.places.wof:85922583", "name": "San Francisco", "level": 50},
+    ]
+})
+
+
+def _create_place_containment(conn, entries):
+    """Create the place_containment table and insert given (place_id, relations_json) rows.
+
+    `entries` is a list of (place_id, relations_json) tuples.
+    Pass an empty list to create an empty table.
+    """
+    conn.execute("""
+        CREATE OR REPLACE TABLE place_containment (
+            place_id      VARCHAR,
+            relations_json VARCHAR
+        )
+    """)
+    for place_id, relations_json in entries:
+        conn.execute(
+            "INSERT INTO place_containment VALUES (?, ?)",
+            [place_id, relations_json],
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: WoF containment in tile export pipelines (Red phase)
+# ---------------------------------------------------------------------------
+
+class TestContainmentInExport:
+    """Tests specifying WoF containment in tile export output.
+
+    All tests in this class FAIL in the Red phase because:
+      - Tests 1-4: the export SQL files do not yet LEFT JOIN place_containment,
+        so relations.within is never populated.
+      - Tests 5-8: compute_containment() does not exist, run_pipeline() does not
+        accept boundaries_db, and main() does not accept --boundaries.
+    """
+
+    _FSQ_SUBS = {"repo": "places.atgeo.org"}
+    _OV_SUBS = {"repo": "places.atgeo.org"}
+    _OSM_SUBS = {"repo": "places.atgeo.org"}
+
+    # ------------------------------------------------------------------
+    # Test 1: FSQ export includes relations.within when containment present
+    # ------------------------------------------------------------------
+
+    def test_fsq_relations_with_containment(self, tmp_path):
+        """FSQ export must include relations.within for exp001 when place_containment populated.
+
+        Fails in Red phase because fsq_export_tiles.sql has `relations: MAP {}`
+        and does not LEFT JOIN place_containment.
+        """
+        db_path = tmp_path / "fsq_containment_with.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        _create_place_containment(conn, [("exp001", _SF_WITHIN_JSON)])
+
+        raw_sql = _load_sql("fsq_export_tiles.sql", self._FSQ_SUBS)
+        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+        conn.execute(sql)
+
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        conn.close()
+
+        record = None
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            if parsed.get("value", {}).get("rkey") == "exp001":
+                record = parsed
+                break
+
+        assert record is not None, "exp001 must appear in tile_export"
+        relations = record["value"].get("relations", {})
+        assert "within" in relations, (
+            f"relations must have 'within' key when place_containment populated; "
+            f"got relations={relations!r}"
+        )
+        within = relations["within"]
+        assert isinstance(within, list), (
+            f"relations.within must be a list; got {type(within)}"
+        )
+        assert len(within) == 4, (
+            f"relations.within must have 4 entries (NA, US, CA, SF); got {len(within)}: {within}"
+        )
+        for entry in within:
+            assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
+            assert "name" in entry, f"within entry missing 'name': {entry}"
+            assert "level" in entry, f"within entry missing 'level': {entry}"
+        levels = [entry["level"] for entry in within]
+        assert levels == sorted(levels), (
+            f"within entries must be ordered by level ascending; got levels={levels}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 2: FSQ export produces empty relations when containment table is empty
+    # ------------------------------------------------------------------
+
+    def test_fsq_relations_empty_containment(self, tmp_path):
+        """FSQ export must produce relations={{}} when place_containment table is empty.
+
+        Fails in Red phase because fsq_export_tiles.sql does not LEFT JOIN
+        place_containment at all — it uses the hardcoded `relations: MAP {}`.
+        After the implementation, the SQL must reference place_containment via
+        a LEFT JOIN so this test (and test 1) both work against the same SQL.
+
+        Verified by asserting that fsq_export_tiles.sql contains a reference to
+        'place_containment': if the LEFT JOIN is missing, the SQL never touches
+        the table and this test fails.
+        """
+        import pathlib
+        sql_path = pathlib.Path(REPO_ROOT) / "garganorn" / "sql" / "fsq_export_tiles.sql"
+        sql_text = sql_path.read_text()
+        assert "place_containment" in sql_text, (
+            "fsq_export_tiles.sql must reference 'place_containment' via a LEFT JOIN; "
+            "the current SQL has no such reference. "
+            "Add: LEFT JOIN place_containment pc ON pc.place_id = p.fsq_place_id"
+        )
+
+        db_path = tmp_path / "fsq_containment_empty.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        _create_place_containment(conn, [])  # empty table, same schema
+
+        raw_sql = _load_sql("fsq_export_tiles.sql", self._FSQ_SUBS)
+        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+        conn.execute(sql)
+
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        conn.close()
+
+        assert rows, "tile_export must produce rows even with empty place_containment"
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            relations = parsed.get("value", {}).get("relations", {})
+            assert relations == {}, (
+                f"relations must be {{}} when place_containment is empty; got {relations!r}"
+            )
+
+    # ------------------------------------------------------------------
+    # Test 3: Overture export includes relations.within when containment present
+    # ------------------------------------------------------------------
+
+    def test_overture_relations_with_containment(self, overture_parquet, tmp_path):
+        """Overture export must include relations.within when place_containment populated.
+
+        Fails in Red phase because overture_export_tiles.sql has `relations: '{{}}'::JSON`
+        and does not LEFT JOIN place_containment.
+        """
+        db_path = tmp_path / "ov_containment_with.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        # Run the full Overture pipeline to get places + tile_assignments
+        run_overture_import(conn, overture_parquet)
+        raw = _load_sql("overture_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+        raw = _load_sql("overture_variants.sql", {})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+        run_tile_assignments(conn, pk_expr="id", min_zoom=6, max_zoom=17, max_per_tile=5000)
+
+        # Populate place_containment for ov001
+        _create_place_containment(conn, [("ov001", _SF_WITHIN_JSON)])
+
+        # Run export
+        raw_sql = _load_sql("overture_export_tiles.sql", self._OV_SUBS)
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        conn.close()
+
+        record = None
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            if parsed.get("value", {}).get("rkey") == "ov001":
+                record = parsed
+                break
+
+        assert record is not None, "ov001 must appear in tile_export"
+        relations = record["value"].get("relations", {})
+        assert "within" in relations, (
+            f"overture relations must have 'within' when place_containment populated; "
+            f"got relations={relations!r}"
+        )
+        within = relations["within"]
+        assert isinstance(within, list), f"relations.within must be a list; got {type(within)}"
+        assert len(within) == 4, (
+            f"relations.within must have 4 entries; got {len(within)}: {within}"
+        )
+        for entry in within:
+            assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
+            assert "name" in entry, f"within entry missing 'name': {entry}"
+            assert "level" in entry, f"within entry missing 'level': {entry}"
+        levels = [entry["level"] for entry in within]
+        assert levels == sorted(levels), (
+            f"within entries must be ordered by level ascending; got levels={levels}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 4: OSM export includes relations.within when containment present
+    # ------------------------------------------------------------------
+
+    def test_osm_relations_with_containment(self, osm_parquet, tmp_path):
+        """OSM export must include relations.within when place_containment populated.
+
+        Fails in Red phase because osm_export_tiles.sql has `relations: '{{}}'::JSON`
+        and does not LEFT JOIN place_containment.
+        """
+        db_path = tmp_path / "osm_containment_with.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        # Run the full OSM pipeline
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        raw = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+        raw = _load_sql("osm_variants.sql", {})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
+        run_tile_assignments(conn, pk_expr="rkey", min_zoom=6, max_zoom=17, max_per_tile=5000)
+
+        # Get a valid rkey from the imported places to use for containment
+        rkeys = conn.execute("SELECT rkey FROM places ORDER BY rkey LIMIT 1").fetchall()
+        assert rkeys, "OSM import must produce at least one place"
+        target_rkey = rkeys[0][0]
+
+        _create_place_containment(conn, [(target_rkey, _SF_WITHIN_JSON)])
+
+        # Run export
+        raw_sql = _load_sql("osm_export_tiles.sql", self._OSM_SUBS)
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        conn.close()
+
+        record = None
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            # OSM rkeys are rewritten in the SQL (e.g. 'n1001' → 'node:1001')
+            # Check original rkey match by looking at the URI tail
+            uri = parsed.get("uri", "")
+            if uri.endswith(
+                target_rkey.replace("n", "node:", 1)
+                if target_rkey.startswith("n")
+                else target_rkey.replace("w", "way:", 1)
+                if target_rkey.startswith("w")
+                else target_rkey
+            ):
+                record = parsed
+                break
+
+        assert record is not None, (
+            f"place with rkey={target_rkey!r} must appear in tile_export"
+        )
+        relations = record["value"].get("relations", {})
+        assert "within" in relations, (
+            f"osm relations must have 'within' when place_containment populated; "
+            f"got relations={relations!r}"
+        )
+        within = relations["within"]
+        assert isinstance(within, list), f"relations.within must be a list; got {type(within)}"
+        assert len(within) == 4, (
+            f"relations.within must have 4 entries; got {len(within)}: {within}"
+        )
+        for entry in within:
+            assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
+            assert "name" in entry, f"within entry missing 'name': {entry}"
+            assert "level" in entry, f"within entry missing 'level': {entry}"
+        levels = [entry["level"] for entry in within]
+        assert levels == sorted(levels), (
+            f"within entries must be ordered by level ascending; got levels={levels}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 5: compute_containment import
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_function_exists(self):
+        """compute_containment must be importable from garganorn.quadtree.
+
+        Fails in Red phase because the function does not exist yet.
+        """
+        from garganorn.quadtree import compute_containment  # noqa: F401
+
+    # ------------------------------------------------------------------
+    # Test 6: compute_containment produces place_containment table
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_produces_table(self, tmp_path, wof_db_path):
+        """compute_containment must create place_containment with correct columns and rows.
+
+        Fails in Red phase because compute_containment does not exist yet.
+        """
+        try:
+            from garganorn.quadtree import compute_containment
+        except (ImportError, AttributeError):
+            pytest.fail(
+                "compute_containment not importable from garganorn.quadtree; "
+                "implement the function to make this test pass"
+            )
+
+        db_path = tmp_path / "containment_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        # Build a minimal places table with SF coordinates
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('exp001', 37.7749, -122.4194, ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+        conn.execute(
+            "INSERT INTO places VALUES ('exp002', 37.7694, -122.4862, ST_QuadKey(-122.4862, 37.7694, 17))"
+        )
+
+        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        # Verify the table was created
+        tables = conn.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_name = 'place_containment'"
+        ).fetchall()
+        assert tables, "compute_containment must create a place_containment table"
+
+        # Verify schema
+        cols = {
+            row[0]: row[1]
+            for row in conn.execute(
+                "SELECT column_name, data_type FROM information_schema.columns "
+                "WHERE table_name = 'place_containment'"
+            ).fetchall()
+        }
+        assert "place_id" in cols, (
+            f"place_containment must have 'place_id' column; got columns: {list(cols)}"
+        )
+        assert "relations_json" in cols, (
+            f"place_containment must have 'relations_json' column; got columns: {list(cols)}"
+        )
+
+        # Verify rows exist for SF places (they fall inside NA/US/CA/SF boundaries)
+        rows = conn.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
+        conn.close()
+
+        assert len(rows) >= 1, (
+            "compute_containment must produce at least one row for SF test places "
+            f"that fall inside the WoF boundaries; got {len(rows)} rows"
+        )
+        for place_id, relations_json in rows:
+            parsed = json.loads(relations_json)
+            assert "within" in parsed, (
+                f"relations_json for {place_id!r} must have 'within' key; got {parsed!r}"
+            )
+            within = parsed["within"]
+            assert isinstance(within, list), f"within must be a list for {place_id}; got {type(within)}"
+            assert len(within) >= 1, f"SF coordinates should be contained by at least 1 WoF boundary"
+            for entry in within:
+                assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
+                assert entry["rkey"].startswith("org.atgeo.places.wof:"), \
+                    f"rkey must be collection-qualified; got {entry['rkey']!r}"
+                assert "name" in entry, f"within entry missing 'name': {entry}"
+                assert "level" in entry, f"within entry missing 'level': {entry}"
+            levels = [e["level"] for e in within]
+            assert levels == sorted(levels), f"within must be ordered by level ASC; got {levels}"
+
+    # ------------------------------------------------------------------
+    # Test 7: run_pipeline accepts boundaries_db keyword argument
+    # ------------------------------------------------------------------
+
+    def test_run_pipeline_accepts_boundaries_db(self):
+        """run_pipeline must accept a boundaries_db keyword argument.
+
+        Fails in Red phase because run_pipeline has no boundaries_db parameter.
+        """
+        from garganorn.quadtree import run_pipeline
+        sig = inspect.signature(run_pipeline)
+        assert "boundaries_db" in sig.parameters, (
+            f"run_pipeline must have a 'boundaries_db' parameter; "
+            f"current parameters: {list(sig.parameters)}"
+        )
+
+    # ------------------------------------------------------------------
+    # Test 8: main() accepts --boundaries CLI argument
+    # ------------------------------------------------------------------
+
+    def test_main_accepts_boundaries_arg(self):
+        """main() argparse must accept a --boundaries CLI argument.
+
+        Fails in Red phase because main() does not define --boundaries.
+        """
+        import argparse
+        import sys
+        from unittest.mock import patch
+
+        # Parse a minimal valid invocation that includes --boundaries.
+        # If --boundaries is not defined, argparse will raise SystemExit(2).
+        test_args = [
+            "--source", "fsq",
+            "--parquet", "/tmp/test.parquet",
+            "--output", "/tmp/output",
+            "--boundaries", "/tmp/wof.duckdb",
+        ]
+        with patch.object(sys, "argv", ["quadtree"] + test_args):
+            try:
+                # Re-parse using a fresh parser by importing and calling main's
+                # internal parser logic. We do this by inspecting the source
+                # rather than calling main() (which would trigger run_pipeline).
+                # Instead, verify that argparse accepts --boundaries by constructing
+                # the same parser that main() uses, which must include the argument.
+                from garganorn import quadtree as _qt
+                # Build the parser the same way main() does, then parse our args.
+                # Since we can't easily extract the parser, we verify by calling
+                # parse_known_args: if --boundaries is unrecognized it lands in extras.
+                import argparse as _ap
+                test_parser = _ap.ArgumentParser()
+                # Minimal args that main() would define; add --boundaries.
+                # The real test: does the actual main() parser accept it?
+                # We simulate by running the whole argparse block.
+                # Easiest approach: mock run_pipeline and call main() directly.
+                with patch.object(_qt, "run_pipeline", return_value=None):
+                    # Suppress SystemExit if --boundaries triggers an error
+                    try:
+                        _qt.main()
+                    except SystemExit as exc:
+                        # SystemExit(0) = success (e.g. --help); others = failure
+                        # SystemExit(2) = argument parsing error (unrecognized --boundaries)
+                        if exc.code == 2:
+                            pytest.fail(
+                                "main() argparse does not accept --boundaries; "
+                                "add parser.add_argument('--boundaries', ...) to main()"
+                            )
+            except Exception:
+                raise  # Don't swallow unexpected exceptions

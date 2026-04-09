@@ -33,6 +33,55 @@ REPO = "places.atgeo.org"
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
 
+def _coord_exprs(source):
+    """Return (lon_expr, lat_expr) SQL expressions for the given source."""
+    if source == "overture":
+        return "(bbox.xmin + bbox.xmax) / 2.0", "(bbox.ymin + bbox.ymax) / 2.0"
+    return "longitude", "latitude"
+
+
+def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
+    """Populate the place_containment table with WoF containment data.
+
+    Creates place_containment(place_id VARCHAR, relations_json VARCHAR).
+    If boundaries_db is None, creates an empty table and returns.
+    Uses z6 quadkey partitioning to keep each spatial join manageable.
+    """
+    con.execute("LOAD spatial")
+    con.execute("""
+        CREATE TABLE place_containment (
+            place_id       VARCHAR,
+            relations_json VARCHAR
+        )
+    """)
+
+    if boundaries_db is None:
+        return
+
+    con.execute(f"ATTACH '{boundaries_db}' AS wof (READ_ONLY)")
+    try:
+        z6_tiles = [
+            row[0]
+            for row in con.execute("SELECT DISTINCT LEFT(qk17, 6) FROM places").fetchall()
+        ]
+        log.info("compute_containment: processing %d z6 tiles", len(z6_tiles))
+        for z6 in z6_tiles:
+            con.execute(f"""
+                INSERT INTO place_containment
+                SELECT p.{pk_expr}, to_json({{within: list(
+                    {{rkey: 'org.atgeo.places.wof:' || b.rkey, name: b.name, level: b.level}}
+                    ORDER BY b.level ASC
+                )}})::VARCHAR
+                FROM places p
+                JOIN wof.boundaries b
+                    ON ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
+                WHERE LEFT(p.qk17, 6) = ?
+                GROUP BY p.{pk_expr}
+            """, [z6])
+    finally:
+        con.execute("DETACH wof")
+
+
 def export_tiles(con, output_dir: str, source: str) -> dict:
     """Query DuckDB for per-record JSON, group by tile_qk, write gzipped files.
 
@@ -86,7 +135,7 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
     return manifest
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None):
     source_dir = os.path.join(output_dir, source)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     tile_dir = os.path.join(source_dir, timestamp)
@@ -130,6 +179,9 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         pk_expr = SOURCE_PK[source]
         run_sql("tile assignment", "compute_tile_assignments.sql",
                 pk_expr=pk_expr, min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
+
+        lon_expr, lat_expr = _coord_exprs(source)
+        compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr)
 
         log.info("[%s] export: starting", source)
         manifest = export_tiles(con, tile_dir, source)
@@ -277,6 +329,8 @@ def main():
                         help="DuckDB memory limit (e.g. 48GB)")
     parser.add_argument("--max-per-tile", default=None, type=int, dest="max_per_tile",
                         help="Maximum records per tile")
+    parser.add_argument("--boundaries", default=None,
+                        help="Path to WoF boundaries DuckDB for containment enrichment")
 
     args = parser.parse_args()
 
@@ -294,12 +348,14 @@ def main():
     # Load config defaults
     config_memory_limit = None
     config_max_per_tile = None
+    config_boundaries = None
     if args.config is not None:
         with open(args.config) as f:
             cfg = yaml.safe_load(f)
         tiles_cfg = cfg.get("tiles", {}) if cfg else {}
         config_memory_limit = tiles_cfg.get("memory_limit")
         config_max_per_tile = tiles_cfg.get("max_per_tile")
+        config_boundaries = tiles_cfg.get("boundaries")
 
     # Resolve memory_limit: CLI > config > hardcoded default
     memory_limit = args.memory_limit if args.memory_limit is not None else (
@@ -310,6 +366,9 @@ def main():
     max_per_tile = args.max_per_tile if args.max_per_tile is not None else (
         config_max_per_tile if config_max_per_tile is not None else 1000
     )
+
+    # Resolve boundaries_db: CLI > config > None
+    boundaries_db = args.boundaries if args.boundaries is not None else config_boundaries
 
     # Build bbox: None means no filter
     bbox = tuple(args.bbox) if args.bbox is not None else None
@@ -330,6 +389,7 @@ def main():
         args.output,
         memory_limit=memory_limit,
         max_per_tile=max_per_tile,
+        boundaries_db=boundaries_db,
     )
 
 

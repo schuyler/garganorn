@@ -41,9 +41,10 @@ SELECT
                 fsq_category_labels: p.fsq_category_labels,
                 placemaker_url: p.placemaker_url
             },
-            relations: MAP {}
+            relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
         }
     })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.fsq_place_id
+LEFT JOIN place_containment pc ON pc.place_id = p.fsq_place_id
 ORDER BY ta.tile_qk;

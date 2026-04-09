@@ -36,9 +36,10 @@ SELECT
                 )
                 ELSE coalesce(p.tags, MAP([], []))
             END,
-            relations: '{}'::JSON
+            relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
         }
     })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.rkey
+LEFT JOIN place_containment pc ON pc.place_id = p.rkey
 ORDER BY ta.tile_qk;
