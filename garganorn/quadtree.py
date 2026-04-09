@@ -39,6 +39,8 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
     sql_dir = Path(__file__).parent / "sql"
     raw = (sql_dir / f"{source}_export_tiles.sql").read_text()
     sql = string.Template(raw).safe_substitute(repo=REPO)  # attribution removed
+    total_tiles = con.execute("SELECT COUNT(DISTINCT tile_qk) FROM tile_assignments").fetchone()[0]
+    log.info("export: %d tiles to write", total_tiles)
     con.execute(sql)  # creates VIEW — no materialization
     con.execute("SET enable_progress_bar = false")
     cursor = con.execute("SELECT tile_qk, record_json FROM tile_export ORDER BY tile_qk")
