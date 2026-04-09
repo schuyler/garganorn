@@ -2,9 +2,9 @@
 -- Inputs:
 --   places          — Overture places table (imported via import-overture-extract.sh)
 --   tile_assignments — columns: place_id VARCHAR, tile_qk VARCHAR
--- Substitution params: ${attribution}, ${repo}
+-- Substitution params: ${repo}
 
--- Pre-materialize address aggregation to avoid re-evaluation inside the VIEW's GROUP BY.
+-- Pre-materialize per-place address aggregation to avoid re-evaluation per tile in the VIEW.
 DROP TABLE IF EXISTS place_addresses;
 CREATE TEMP TABLE place_addresses AS
 SELECT
@@ -30,41 +30,38 @@ CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
     to_json({
-        attribution: '${attribution}',
-        records: list({
-            uri: 'https://${repo}/org.atgeo.places.overture/' || p.id,
-            value: {
-                "$type": 'org.atgeo.place',
-                rkey: p.id,
-                name: p.names."primary",
-                importance: p.importance,
-                locations: list_concat(
-                    [{
-                        "$type": 'community.lexicon.location.geo',
-                        latitude: st_y(st_centroid(p.geometry))::DECIMAL(10,6)::VARCHAR,
-                        longitude: st_x(st_centroid(p.geometry))::DECIMAL(10,6)::VARCHAR
-                    }],
-                    coalesce(pa.address_locations, [])
-                ),
-                variants: coalesce(p.variants, []),
-                attributes: {
-                    id: p.id,
-                    names: p.names,
-                    categories: p.categories,
-                    websites: p.websites,
-                    socials: p.socials,
-                    emails: p.emails,
-                    phones: p.phones,
-                    brand: p.brand,
-                    confidence: p.confidence::DECIMAL(4,3)::VARCHAR,
-                    version: p.version,
-                    sources: p.sources
-                },
-                relations: '{}'::JSON
-            }
-        })
-    })::VARCHAR AS tile_json
+        uri: 'https://${repo}/org.atgeo.places.overture/' || p.id,
+        value: {
+            "$type": 'org.atgeo.place',
+            rkey: p.id,
+            name: p.names."primary",
+            importance: p.importance,
+            locations: list_concat(
+                [{
+                    "$type": 'community.lexicon.location.geo',
+                    latitude: st_y(st_centroid(p.geometry))::DECIMAL(10,6)::VARCHAR,
+                    longitude: st_x(st_centroid(p.geometry))::DECIMAL(10,6)::VARCHAR
+                }],
+                coalesce(pa.address_locations, [])
+            ),
+            variants: coalesce(p.variants, []),
+            attributes: {
+                id: p.id,
+                names: p.names,
+                categories: p.categories,
+                websites: p.websites,
+                socials: p.socials,
+                emails: p.emails,
+                phones: p.phones,
+                brand: p.brand,
+                confidence: p.confidence::DECIMAL(4,3)::VARCHAR,
+                version: p.version,
+                sources: p.sources
+            },
+            relations: '{}'::JSON
+        }
+    })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.id
 LEFT JOIN place_addresses pa ON pa.place_id = p.id
-GROUP BY ta.tile_qk;
+ORDER BY ta.tile_qk;

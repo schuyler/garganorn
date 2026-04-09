@@ -2295,64 +2295,71 @@ class TestFsqExportTiles:
         conn = duckdb.connect(str(db_path))
         _make_fsq_export_db(conn)
         self._run_export(conn)
-        rows = conn.execute("SELECT * FROM tile_export").fetchall()
+        rows = conn.execute("SELECT tile_qk, record_json FROM tile_export").fetchall()
         conn.close()
-        assert len(rows) >= 1, "fsq_export_tiles.sql must produce at least one row"
+        assert len(rows) >= len(_FSQ_EXPORT_PLACES), (
+            f"fsq_export_tiles.sql must produce at least one row per fixture place (>=4); got {len(rows)}"
+        )
 
-    def test_tile_json_structure(self, tmp_path):
-        """tile_json must be valid JSON with top-level 'attribution' and 'records' keys."""
+    def test_record_json_structure(self, tmp_path):
+        """record_json must be valid JSON with top-level 'uri' and 'value' keys."""
         import json
         db_path = tmp_path / "test_fsq_export_struct.duckdb"
         conn = duckdb.connect(str(db_path))
         _make_fsq_export_db(conn)
         self._run_export(conn)
-        rows = conn.execute("SELECT tile_qk, tile_json FROM tile_export").fetchall()
+        rows = conn.execute("SELECT tile_qk, record_json FROM tile_export").fetchall()
         conn.close()
         assert rows, "No rows returned from tile_export"
-        for tile_qk, tile_json in rows:
-            parsed = json.loads(tile_json)
-            assert "attribution" in parsed, (
-                f"tile_json for {tile_qk} missing 'attribution' key; keys={list(parsed)}"
+        for tile_qk, record_json in rows:
+            parsed = json.loads(record_json)
+            assert "uri" in parsed, (
+                f"record_json for {tile_qk} missing 'uri' key; keys={list(parsed)}"
             )
-            assert "records" in parsed, (
-                f"tile_json for {tile_qk} missing 'records' key; keys={list(parsed)}"
+            assert parsed["uri"].startswith("https://"), (
+                f"record_json uri must start with 'https://'; got {parsed['uri']!r}"
+            )
+            assert "value" in parsed, (
+                f"record_json for {tile_qk} missing 'value' key; keys={list(parsed)}"
+            )
+            assert parsed["value"].get("$type") == "org.atgeo.place", (
+                f"record_json value.$type must be 'org.atgeo.place'; got {parsed['value'].get('$type')!r}"
             )
 
     def test_record_schema(self, tmp_path):
-        """Each record must have the expected top-level fields."""
+        """Each record_json row must have the expected top-level fields."""
         import json
         db_path = tmp_path / "test_fsq_export_rec_schema.duckdb"
         conn = duckdb.connect(str(db_path))
         _make_fsq_export_db(conn)
         self._run_export(conn)
-        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         conn.close()
-        for (tile_json,) in rows:
-            parsed = json.loads(tile_json)
-            for rec in parsed["records"]:
-                assert "uri" in rec, f"Record missing 'uri': {list(rec)}"
-                assert isinstance(rec["uri"], str), "uri must be a string"
-                assert rec["uri"].startswith("https://"), (
-                    f"uri must start with 'https://': {rec['uri']!r}"
-                )
-                val = rec.get("value", {})
-                assert "rkey" in val, f"value missing 'rkey': {list(val)}"
-                assert val.get("$type") == "org.atgeo.place", (
-                    f"value.$type must be 'org.atgeo.place'; got {val.get('$type')!r}"
-                )
-                assert "name" in val, f"value missing 'name': {list(val)}"
-                assert "importance" in val, f"value missing 'importance': {list(val)}"
-                assert isinstance(val["importance"], int), (
-                    f"importance must be int; got {type(val['importance'])}"
-                )
-                assert "locations" in val, f"value missing 'locations': {list(val)}"
-                assert isinstance(val["locations"], list), "locations must be a list"
-                assert "variants" in val, f"value missing 'variants': {list(val)}"
-                assert isinstance(val["variants"], list), "variants must be a list"
-                assert "attributes" in val, f"value missing 'attributes': {list(val)}"
-                assert isinstance(val["attributes"], dict), "attributes must be a dict"
-                assert "relations" in val, f"value missing 'relations': {list(val)}"
-                assert isinstance(val["relations"], dict), "relations must be a dict"
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            assert "uri" in parsed, f"Record missing 'uri': {list(parsed)}"
+            assert isinstance(parsed["uri"], str), "uri must be a string"
+            assert parsed["uri"].startswith("https://"), (
+                f"uri must start with 'https://': {parsed['uri']!r}"
+            )
+            val = parsed.get("value", {})
+            assert "rkey" in val, f"value missing 'rkey': {list(val)}"
+            assert val.get("$type") == "org.atgeo.place", (
+                f"value.$type must be 'org.atgeo.place'; got {val.get('$type')!r}"
+            )
+            assert "name" in val, f"value missing 'name': {list(val)}"
+            assert "importance" in val, f"value missing 'importance': {list(val)}"
+            assert isinstance(val["importance"], int), (
+                f"importance must be int; got {type(val['importance'])}"
+            )
+            assert "locations" in val, f"value missing 'locations': {list(val)}"
+            assert isinstance(val["locations"], list), "locations must be a list"
+            assert "variants" in val, f"value missing 'variants': {list(val)}"
+            assert isinstance(val["variants"], list), "variants must be a list"
+            assert "attributes" in val, f"value missing 'attributes': {list(val)}"
+            assert isinstance(val["attributes"], dict), "attributes must be a dict"
+            assert "relations" in val, f"value missing 'relations': {list(val)}"
+            assert isinstance(val["relations"], dict), "relations must be a dict"
 
     def test_geo_location(self, tmp_path):
         """First location entry must be a geo location with string lat/lon."""
@@ -2361,25 +2368,24 @@ class TestFsqExportTiles:
         conn = duckdb.connect(str(db_path))
         _make_fsq_export_db(conn)
         self._run_export(conn)
-        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         conn.close()
-        for (tile_json,) in rows:
-            parsed = json.loads(tile_json)
-            for rec in parsed["records"]:
-                locations = rec["value"]["locations"]
-                assert len(locations) >= 1, "Each record must have at least one location"
-                geo = locations[0]
-                assert geo.get("$type") == "community.lexicon.location.geo", (
-                    f"First location must be geo type; got {geo.get('$type')!r}"
-                )
-                assert "latitude" in geo, "Geo location missing 'latitude'"
-                assert "longitude" in geo, "Geo location missing 'longitude'"
-                assert isinstance(geo["latitude"], str), (
-                    f"geo latitude must be a string; got {type(geo['latitude'])}"
-                )
-                assert isinstance(geo["longitude"], str), (
-                    f"geo longitude must be a string; got {type(geo['longitude'])}"
-                )
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            locations = parsed["value"]["locations"]
+            assert len(locations) >= 1, "Each record must have at least one location"
+            geo = locations[0]
+            assert geo.get("$type") == "community.lexicon.location.geo", (
+                f"First location must be geo type; got {geo.get('$type')!r}"
+            )
+            assert "latitude" in geo, "Geo location missing 'latitude'"
+            assert "longitude" in geo, "Geo location missing 'longitude'"
+            assert isinstance(geo["latitude"], str), (
+                f"geo latitude must be a string; got {type(geo['latitude'])}"
+            )
+            assert isinstance(geo["longitude"], str), (
+                f"geo longitude must be a string; got {type(geo['longitude'])}"
+            )
 
     def test_address_location_when_country_present(self, tmp_path):
         """A place with a non-null country must have an address location as the second entry."""
@@ -2388,27 +2394,26 @@ class TestFsqExportTiles:
         conn = duckdb.connect(str(db_path))
         _make_fsq_export_db(conn)
         self._run_export(conn)
-        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         conn.close()
 
         found = False
-        for (tile_json,) in rows:
-            parsed = json.loads(tile_json)
-            for rec in parsed["records"]:
-                if rec["value"].get("name") in ("Blue Bottle Coffee", "Golden Gate Park", "Tartine Bakery"):
-                    locations = rec["value"]["locations"]
-                    assert len(locations) >= 2, (
-                        f"Place with country must have address location; "
-                        f"got {len(locations)} location(s) for {rec['value']['name']}"
-                    )
-                    addr = locations[1]
-                    assert addr.get("$type") == "community.lexicon.location.address", (
-                        f"Second location must be address type; got {addr.get('$type')!r}"
-                    )
-                    assert addr.get("country") == "US", (
-                        f"Address country should be 'US'; got {addr.get('country')!r}"
-                    )
-                    found = True
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            if parsed["value"].get("name") in ("Blue Bottle Coffee", "Golden Gate Park", "Tartine Bakery"):
+                locations = parsed["value"]["locations"]
+                assert len(locations) >= 2, (
+                    f"Place with country must have address location; "
+                    f"got {len(locations)} location(s) for {parsed['value']['name']}"
+                )
+                addr = locations[1]
+                assert addr.get("$type") == "community.lexicon.location.address", (
+                    f"Second location must be address type; got {addr.get('$type')!r}"
+                )
+                assert addr.get("country") == "US", (
+                    f"Address country should be 'US'; got {addr.get('country')!r}"
+                )
+                found = True
         assert found, "No records with country found in export output"
 
     def test_no_address_when_country_null(self, tmp_path):
@@ -2418,29 +2423,26 @@ class TestFsqExportTiles:
         conn = duckdb.connect(str(db_path))
         _make_fsq_export_db(conn)
         self._run_export(conn)
-        rows = conn.execute("SELECT tile_json FROM tile_export").fetchall()
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         conn.close()
 
         found = False
-        for (tile_json,) in rows:
-            parsed = json.loads(tile_json)
-            for rec in parsed["records"]:
-                if rec["value"].get("name") == "Mystery Spot":
-                    locations = rec["value"]["locations"]
-                    assert len(locations) == 1, (
-                        f"Place with null country must have exactly 1 location; "
-                        f"got {len(locations)}"
-                    )
-                    found = True
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            if parsed["value"].get("name") == "Mystery Spot":
+                locations = parsed["value"]["locations"]
+                assert len(locations) == 1, (
+                    f"Place with null country must have exactly 1 location; "
+                    f"got {len(locations)}"
+                )
+                found = True
         assert found, "Mystery Spot (null country place) not found in export output"
 
-    def test_tile_export_is_table_not_view(self, tmp_path):
-        """tile_export must be a BASE TABLE, not a VIEW.
+    def test_tile_export_is_view_not_table(self, tmp_path):
+        """tile_export must be a VIEW, not a BASE TABLE.
 
-        Fails at Red phase because fsq_export_tiles.sql currently creates a
-        VIEW (CREATE OR REPLACE VIEW tile_export ...).  After the implementation
-        converts it to a TABLE (DROP TABLE IF EXISTS + CREATE TABLE AS), this
-        test will pass.
+        Fails because fsq_export_tiles.sql currently creates a TABLE.
+        After the implementation changes to CREATE OR REPLACE VIEW, this test will pass.
         """
         db_path = tmp_path / "test_tile_export_table_type.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -2451,8 +2453,8 @@ class TestFsqExportTiles:
         ).fetchone()
         conn.close()
         assert row is not None, "tile_export not found in information_schema.tables"
-        assert row[0] == "BASE TABLE", (
-            f"tile_export must be a BASE TABLE; got {row[0]!r}"
+        assert row[0] == "VIEW", (
+            f"tile_export must be a VIEW; got {row[0]!r}"
         )
 
 
@@ -2571,8 +2573,10 @@ class TestExportTiles:
         # Build two synthetic tile rows that a real cursor would return.
         tile_qk_a = "023130" + "0" * 11  # 17-char quadkey
         tile_qk_b = "023130" + "1" * 11
-        record_a = json.dumps({"attribution": "test", "records": [{"$type": "place"}]})
-        record_b = json.dumps({"attribution": "test", "records": [{"$type": "place"}, {"$type": "place"}]})
+        record_a = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001",
+                                "value": {"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"}})
+        record_b = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq002",
+                                "value": {"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"}})
         all_rows = [(tile_qk_a, record_a), (tile_qk_b, record_b)]
 
         # Mock cursor: fetchmany returns rows in one batch, then [].
@@ -2591,7 +2595,7 @@ class TestExportTiles:
         output_dir.mkdir()
 
         # Patch the SQL file read so we don't need the actual SQL file on disk.
-        fake_sql = "SELECT tile_qk, tile_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
             export_tiles(mock_con, str(output_dir), "fsq")
 
@@ -2603,6 +2607,23 @@ class TestExportTiles:
         assert mock_cursor.fetchmany.called, (
             "export_tiles must call cursor.fetchmany()"
         )
+
+        # Verify envelope structure in written files.
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert gz_files, "export_tiles must have written at least one .json.gz file"
+        gz_files.sort()
+        with _gzip.open(gz_files[0], "rt") as f:
+            envelope = json.load(f)
+        assert "attribution" in envelope, (
+            f"Envelope missing 'attribution'; keys: {list(envelope)}"
+        )
+        assert "records" in envelope, (
+            f"Envelope missing 'records'; keys: {list(envelope)}"
+        )
+        assert isinstance(envelope["records"], list), "'records' must be a list"
+        for item in envelope["records"]:
+            assert "uri" in item, f"Record item missing 'uri': {list(item)}"
+            assert "value" in item, f"Record item missing 'value': {list(item)}"
 
     def test_progress_log_format_no_total(self, tmp_path):
         """Progress log at 1000-tile boundary must NOT include a total tile count.
@@ -2618,9 +2639,12 @@ class TestExportTiles:
         from garganorn.quadtree import export_tiles
 
         # Build 1000 synthetic tile rows to trigger a progress log.
+        # Each row has a UNIQUE tile_qk so we get 1000 distinct tiles — the
+        # tile_count % 1000 boundary fires when tile_count reaches 1000.
         def _make_row(i):
-            qk = f"02313{i:012d}"  # unique-ish quadkey per row
-            payload = json.dumps({"attribution": "test", "records": [{"$type": "place"}]})
+            qk = f"02313{i:012d}"  # unique quadkey per row
+            payload = json.dumps({"uri": f"https://example.com/{i}",
+                                   "value": {"$type": "org.atgeo.place", "rkey": str(i), "name": f"Place {i}"}})
             return (qk, payload)
 
         all_rows = [_make_row(i) for i in range(1000)]
@@ -2637,7 +2661,7 @@ class TestExportTiles:
         output_dir = tmp_path / "output_log_format"
         output_dir.mkdir()
 
-        fake_sql = "SELECT tile_qk, tile_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
         captured_messages = []
 
         class _CapturingHandler(logging.Handler):
@@ -2689,7 +2713,8 @@ class TestExportTiles:
         from garganorn.quadtree import export_tiles
 
         tile_qk = "023130" + "0" * 11
-        payload = json.dumps({"attribution": "test", "records": [{"$type": "place"}]})
+        payload = json.dumps({"uri": "https://example.com/fsq001",
+                               "value": {"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test"}})
         all_rows = [(tile_qk, payload)]
 
         mock_cursor = MagicMock()
@@ -2702,7 +2727,7 @@ class TestExportTiles:
         output_dir = tmp_path / "output_postloop_log"
         output_dir.mkdir()
 
-        fake_sql = "SELECT tile_qk, tile_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
         captured_messages = []
 
         class _CapturingHandler(logging.Handler):
@@ -2740,6 +2765,153 @@ class TestExportTiles:
             "export_tiles must emit a post-loop log message referencing the manifest tile count. "
             f"Captured messages: {captured_messages!r}"
         )
+
+
+    def test_python_groups_records_by_tile_qk(self, tmp_path):
+        """export_tiles groups per-record rows by tile_qk into separate .json.gz files."""
+        import json
+        import gzip
+        from unittest.mock import MagicMock, patch
+        from garganorn.quadtree import export_tiles
+
+        qk_a = "023130" + "0" * 11
+        qk_b = "023131" + "0" * 11
+        rec1 = json.dumps({"uri": "https://x/1", "value": {"$type": "org.atgeo.place", "rkey": "1", "name": "A1"}})
+        rec2 = json.dumps({"uri": "https://x/2", "value": {"$type": "org.atgeo.place", "rkey": "2", "name": "A2"}})
+        rec3 = json.dumps({"uri": "https://x/3", "value": {"$type": "org.atgeo.place", "rkey": "3", "name": "B1"}})
+        all_rows = [(qk_a, rec1), (qk_a, rec2), (qk_b, rec3)]
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [all_rows, []]
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_group"
+        output_dir.mkdir()
+
+        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+            result = export_tiles(mock_con, str(output_dir), "fsq")
+
+        assert len(result) == 2, f"Expected 2 tiles, got {len(result)}"
+        assert result[qk_a] == 2, f"qk_a tile should have 2 records, got {result[qk_a]}"
+        assert result[qk_b] == 1, f"qk_b tile should have 1 record, got {result[qk_b]}"
+
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert len(gz_files) == 2, f"Expected 2 .json.gz files, got {len(gz_files)}"
+
+        for gz in gz_files:
+            with gzip.open(gz, "rt") as f:
+                data = json.load(f)
+            assert "attribution" in data
+            assert "records" in data
+            assert isinstance(data["records"], list)
+            for rec in data["records"]:
+                assert "uri" in rec
+                assert "value" in rec
+
+    def test_attribution_in_envelope(self, tmp_path):
+        """export_tiles writes attribution from ATTRIBUTION[source] into the envelope."""
+        import json
+        import gzip
+        from unittest.mock import MagicMock, patch
+        from garganorn.quadtree import export_tiles, ATTRIBUTION
+
+        qk = "023130" + "0" * 11
+        rec = json.dumps({"uri": "https://x/1", "value": {"$type": "org.atgeo.place", "rkey": "1", "name": "Test"}})
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [[(qk, rec)], []]
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_attr"
+        output_dir.mkdir()
+
+        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+            export_tiles(mock_con, str(output_dir), "fsq")
+
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert gz_files, "No .json.gz written"
+        with gzip.open(gz_files[0], "rt") as f:
+            data = json.load(f)
+
+        assert "attribution" in data, f"Envelope missing 'attribution'; keys: {list(data)}"
+        assert data["attribution"] == ATTRIBUTION["fsq"], (
+            f"attribution must be ATTRIBUTION['fsq'] = {ATTRIBUTION['fsq']!r}; "
+            f"got {data['attribution']!r}"
+        )
+
+    def test_single_record_tile(self, tmp_path):
+        """A tile with exactly one record is correctly written."""
+        import json
+        import gzip
+        from unittest.mock import MagicMock, patch
+        from garganorn.quadtree import export_tiles
+
+        qk = "023130" + "0" * 11
+        rec = json.dumps({"uri": "https://x/1", "value": {"$type": "org.atgeo.place", "rkey": "1", "name": "Solo"}})
+
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [[(qk, rec)], []]
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_single"
+        output_dir.mkdir()
+
+        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+            result = export_tiles(mock_con, str(output_dir), "fsq")
+
+        assert result == {qk: 1}, f"Expected {{qk: 1}}, got {result}"
+
+        gz_files = list(output_dir.rglob("*.json.gz"))
+        assert len(gz_files) == 1
+        with gzip.open(gz_files[0], "rt") as f:
+            data = json.load(f)
+        assert len(data["records"]) == 1
+        assert data["records"][0]["uri"] == "https://x/1"
+
+    def test_tile_boundary_across_fetchmany_batches(self, tmp_path):
+        """Tile spanning two fetchmany batches is written correctly."""
+        import json
+        import gzip
+        from unittest.mock import MagicMock, patch
+        from garganorn.quadtree import export_tiles
+
+        qk_a = "023130" + "0" * 11
+        qk_b = "023131" + "0" * 11
+        rec1 = json.dumps({"uri": "https://x/1", "value": {"$type": "org.atgeo.place", "rkey": "1", "name": "A1"}})
+        rec2 = json.dumps({"uri": "https://x/2", "value": {"$type": "org.atgeo.place", "rkey": "2", "name": "A2"}})
+        rec3 = json.dumps({"uri": "https://x/3", "value": {"$type": "org.atgeo.place", "rkey": "3", "name": "B1"}})
+
+        # batch 1: first record of qk_a only
+        # batch 2: second record of qk_a + first record of qk_b (forces boundary split)
+        mock_cursor = MagicMock()
+        mock_cursor.fetchmany.side_effect = [
+            [(qk_a, rec1)],
+            [(qk_a, rec2), (qk_b, rec3)],
+            [],
+        ]
+        mock_con = MagicMock()
+        mock_con.execute.return_value = mock_cursor
+
+        output_dir = tmp_path / "output_boundary"
+        output_dir.mkdir()
+
+        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+            result = export_tiles(mock_con, str(output_dir), "fsq")
+
+        assert result[qk_a] == 2, f"qk_a must have 2 records (spanning batches); got {result[qk_a]}"
+        assert result[qk_b] == 1, f"qk_b must have 1 record; got {result[qk_b]}"
+
+        for qk, expected_count in [(qk_a, 2), (qk_b, 1)]:
+            gz = output_dir / qk[:6] / f"{qk}.json.gz"
+            assert gz.exists(), f"{gz} not written"
+            with gzip.open(gz, "rt") as f:
+                data = json.load(f)
+            assert len(data["records"]) == expected_count, (
+                f"{qk} tile: expected {expected_count} records, got {len(data['records'])}"
+            )
 
 
 # ---------------------------------------------------------------------------

@@ -30,29 +30,47 @@ REPO = "places.atgeo.org"
 
 
 def export_tiles(con, output_dir: str, source: str) -> dict:
-    """Query DuckDB for per-tile JSON and write gzipped files; streams results via fetchmany(100). Returns {qk: record_count}."""
+    """Query DuckDB for per-record JSON, group by tile_qk, write gzipped files.
+
+    Streams results via fetchmany(1000) to keep memory bounded. One tile's
+    records are accumulated in-memory at a time; on tile boundary, flushes to disk.
+    Returns {qk: record_count}.
+    """
     sql_dir = Path(__file__).parent / "sql"
     raw = (sql_dir / f"{source}_export_tiles.sql").read_text()
-    sql = string.Template(raw).safe_substitute(
-        attribution=ATTRIBUTION[source], repo=REPO
-    )
-    con.execute(sql)  # materializes tile_export table
-    cursor = con.execute("SELECT tile_qk, tile_json FROM tile_export")
+    sql = string.Template(raw).safe_substitute(repo=REPO)  # attribution removed
+    con.execute(sql)  # creates VIEW — no materialization
+    cursor = con.execute("SELECT tile_qk, record_json FROM tile_export ORDER BY tile_qk")
+
     manifest = {}
-    tile_count = 0
+    current_qk = None
+    accumulated = []
+
+    def flush_tile(qk, records):
+        envelope = {"attribution": ATTRIBUTION[source], "records": [json.loads(r) for r in records]}
+        subdir = os.path.join(output_dir, qk[:6])
+        os.makedirs(subdir, exist_ok=True)
+        with gzip.open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
+            f.write(json.dumps(envelope).encode("utf-8"))
+        manifest[qk] = len(records)
+        if len(manifest) % 1000 == 0:
+            log.info("export: wrote %d tiles", len(manifest))
+
     while True:
-        batch = cursor.fetchmany(100)
+        batch = cursor.fetchmany(1000)
         if not batch:
             break
-        for tile_qk, tile_json in batch:
-            subdir = os.path.join(output_dir, tile_qk[:6])
-            os.makedirs(subdir, exist_ok=True)
-            with gzip.open(os.path.join(subdir, f"{tile_qk}.json.gz"), "wb") as f:
-                f.write(tile_json.encode("utf-8"))
-            manifest[tile_qk] = len(json.loads(tile_json)["records"])
-            tile_count += 1
-            if tile_count % 1000 == 0:
-                log.info("export: wrote %d tiles", tile_count)
+        for tile_qk, record_json in batch:
+            if tile_qk != current_qk:
+                if current_qk is not None:
+                    flush_tile(current_qk, accumulated)
+                current_qk = tile_qk
+                accumulated = []
+            accumulated.append(record_json)
+
+    if current_qk is not None:
+        flush_tile(current_qk, accumulated)
+
     log.info("export: wrote %d tiles total", len(manifest))
     return manifest
 
