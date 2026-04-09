@@ -3,6 +3,7 @@ import pytest
 import duckdb
 
 from garganorn.database import FoursquareOSP, OvertureMaps, OpenStreetMap
+from tests.quadtree_helpers import FSQ_ROWS
 
 
 # ---------------------------------------------------------------------------
@@ -612,3 +613,375 @@ def wof_db(wof_db_path):
     db.connect()
     yield db
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Quadtree parquet fixtures (session-scoped)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="session")
+def fsq_parquet(tmp_path_factory):
+    """Write a single FSQ-schema parquet file and return a glob path for it."""
+
+    base = tmp_path_factory.mktemp("fsq_parquet")
+    parquet_path = base / "fsq_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE tmp_fsq (
+            fsq_place_id        VARCHAR,
+            name                VARCHAR,
+            latitude            DOUBLE,
+            longitude           DOUBLE,
+            bbox                STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            geom                VARCHAR,
+            date_refreshed      DATE,
+            date_closed         DATE,
+            date_created        DATE,
+            address             VARCHAR,
+            locality            VARCHAR,
+            region              VARCHAR,
+            postcode            VARCHAR,
+            country             VARCHAR,
+            admin_region        VARCHAR,
+            post_town           VARCHAR,
+            po_box              VARCHAR,
+            tel                 VARCHAR,
+            website             VARCHAR,
+            email               VARCHAR,
+            facebook_id         VARCHAR,
+            instagram           VARCHAR,
+            twitter             VARCHAR,
+            fsq_category_ids    VARCHAR[],
+            fsq_category_labels VARCHAR[],
+            placemaker_url      VARCHAR
+        )
+    """)
+
+    for row in FSQ_ROWS:
+        fsq_id, name, lat, lon, date_ref, date_closed, geom_wkt, cat_ids, _ = row
+        bbox_xmin = lon - 0.001
+        bbox_xmax = lon + 0.001
+        bbox_ymin = lat - 0.001
+        bbox_ymax = lat + 0.001
+        cat_str = "[" + ", ".join(f"'{c}'" for c in cat_ids) + "]"
+
+        closed_val = f"'{date_closed}'" if date_closed else "NULL"
+        geom_val = f"'{geom_wkt}'" if geom_wkt else "NULL"
+
+        conn.execute(f"""
+            INSERT INTO tmp_fsq VALUES (
+                '{fsq_id}', '{name}', {lat}, {lon},
+                {{'xmin': {bbox_xmin}, 'ymin': {bbox_ymin},
+                  'xmax': {bbox_xmax}, 'ymax': {bbox_ymax}}},
+                {geom_val},
+                '{date_ref}',
+                {closed_val},
+                NULL,
+                NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL, NULL,
+                NULL, NULL, NULL, NULL,
+                {cat_str}::VARCHAR[],
+                NULL::VARCHAR[], NULL
+            )
+        """)
+
+    conn.execute(f"COPY tmp_fsq TO '{parquet_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return str(base / "*.parquet")
+
+
+@pytest.fixture(scope="session")
+def overture_parquet(tmp_path_factory):
+    """Write a single Overture-schema parquet file and return a glob path for it."""
+
+    base = tmp_path_factory.mktemp("overture_parquet")
+    parquet_path = base / "overture_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE tmp_ov (
+            id          VARCHAR,
+            bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            geometry    VARCHAR,
+            names       STRUCT(
+                            "primary" VARCHAR,
+                            common MAP(VARCHAR, VARCHAR),
+                            rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                        ),
+            categories  STRUCT("primary" VARCHAR),
+            addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+            websites    VARCHAR[],
+            socials     VARCHAR[],
+            emails      VARCHAR[],
+            phones      VARCHAR[],
+            brand       VARCHAR,
+            confidence  DOUBLE,
+            version     INTEGER,
+            sources     VARCHAR[]
+        )
+    """)
+
+    # ov001 — in-bbox, names.common has one entry (language 'en'); has address data
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov001',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Blue Bottle Coffee',
+             'common': map(['en'], ['Blue Bottle Coffee']),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'},
+            [{'country': 'US', 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '66 Mint St', 'region': 'US-CA'}],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov002 — in-bbox, names.rules has one entry
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov002',
+            {'xmin': -122.487, 'ymin': 37.768, 'xmax': -122.485, 'ymax': 37.770},
+            'POINT(-122.486 37.769)',
+            {'primary': 'GG Park',
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  [{'language': 'en', 'value': 'GG Park', 'variant': 'short'}]},
+            {'primary': 'park'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov003 — in-bbox, names IS NULL
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov003',
+            {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
+            'POINT(-122.410 37.770)',
+            NULL,
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov004 — in-bbox, same category as ov001
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov004',
+            {'xmin': -122.431, 'ymin': 37.779, 'xmax': -122.429, 'ymax': 37.781},
+            'POINT(-122.430 37.780)',
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov005 — in-bbox, unique category
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov005',
+            {'xmin': -122.401, 'ymin': 37.779, 'xmax': -122.399, 'ymax': 37.781},
+            'POINT(-122.400 37.780)',
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'unique_venue'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+
+        )
+    """)
+
+    # ov006 — out of bbox
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov006',
+            {'xmin': -123.001, 'ymin': 37.749, 'xmax': -122.999, 'ymax': 37.751},
+            'POINT(-123.000 37.750)',
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov007 — geometry IS NULL
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov007',
+            {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
+            NULL,
+            {'primary': NULL::VARCHAR,
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov008 — in-bbox, all-NULL-country addresses
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov008',
+            {'xmin': -122.501, 'ymin': 37.649, 'xmax': -122.499, 'ymax': 37.651},
+            'POINT(-122.500 37.650)',
+            {'primary': 'No Country Place',
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'null_country_venue'},
+            [{'country': NULL::VARCHAR, 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '1 Market St', 'region': 'US-CA'}],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov009 — in-bbox, mixed addresses
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov009',
+            {'xmin': -122.351, 'ymin': 37.629, 'xmax': -122.349, 'ymax': 37.631},
+            'POINT(-122.350 37.630)',
+            {'primary': 'Mixed Address Place',
+             'common': map([]::VARCHAR[], []::VARCHAR[]),
+             'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'mixed_addr_venue'},
+            [
+              {'country': NULL::VARCHAR, 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '1 Market St', 'region': 'US-CA'},
+              {'country': 'US', 'postcode': '94105', 'locality': 'San Francisco', 'freeform': '2 Market St', 'region': 'US-CA'}
+            ],
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return str(base / "*.parquet")
+
+
+@pytest.fixture(scope="session")
+def osm_parquet(tmp_path_factory):
+    """Write OSM-schema node and way parquet files; return dict with 'node' and 'way' globs."""
+
+    base = tmp_path_factory.mktemp("osm_parquet")
+    node_path = base / "node_data.parquet"
+    way_path = base / "way_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    # --- Node parquet ---
+    conn.execute("""
+        CREATE TABLE tmp_nodes (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            lat     DOUBLE,
+            lon     DOUBLE
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1001,
+            map(['name','amenity'], ['Tartine Manufactory','cafe']),
+            37.7612, -122.4195
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1002,
+            map(['name','leisure'], ['Dolores Park','park']),
+            37.7596, -122.4269
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1003,
+            map(['amenity'], ['cafe']),
+            37.7700, -122.4100
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1004,
+            map(['name','shop'], ['Faraway Place','bakery']),
+            37.9000, -123.5000
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1005,
+            map(['name','amenity','alt_name','name:fr'],
+                ['Alt Name Cafe','cafe','The Old Spot','Café Alt']),
+            37.7750, -122.4200
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            9001,
+            map([]::VARCHAR[], []::VARCHAR[]),
+            37.8199, -122.4786
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            9002,
+            map([]::VARCHAR[], []::VARCHAR[]),
+            37.8197, -122.4788
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1006,
+            map(['name','highway'], ['No Category Node','crossing']),
+            37.7760, -122.4150
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1007,
+            map(['name','old_name','official_name','short_name','loc_name','int_name','amenity'],
+                ['Multi Variant Place','Former Name','Official Title','MVP','Local Spot','International Name','cafe']),
+            37.7770, -122.4160
+        )
+    """)
+
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+
+    # --- Way parquet ---
+    conn.execute("""
+        CREATE TABLE tmp_ways (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            nds     STRUCT(ref BIGINT)[]
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_ways VALUES (
+            2001,
+            map(['name','bridge','tourism'], ['Golden Gate Bridge','yes','attraction']),
+            [{'ref': 9001}, {'ref': 9002}]::STRUCT(ref BIGINT)[]
+        )
+    """)
+
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return {
+        "node": str(base / "node_data.parquet"),
+        "way": str(base / "way_data.parquet"),
+    }
