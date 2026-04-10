@@ -81,19 +81,27 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
             row[0]
             for row in con.execute("SELECT DISTINCT LEFT(qk17, 6) FROM places").fetchall()
         ]
-        log.info("compute_containment: processing %d z6 tiles", len(z6_tiles))
-        for z6 in z6_tiles:
+        total = len(z6_tiles)
+        log.info("compute_containment: processing %d z6 tiles", total)
+        for i, z6 in enumerate(z6_tiles, 1):
             bbox = quadkey_to_bbox(z6)
-            # Two-phase containment: phase 1 finds boundaries that fully contain
-            # the tile bbox (R-tree indexed), phase 2 does per-point containment
-            # only for edge boundaries not already matched in phase 1.
+            t_tile = time.monotonic()
+
+            # Phase 1: standalone query — R-tree index activates for top-level WHERE
+            con.execute("""
+                CREATE OR REPLACE TEMP TABLE phase1 AS
+                SELECT rkey, name, level FROM wof.boundaries
+                WHERE ST_Contains(geom, ST_MakeEnvelope(?, ?, ?, ?))
+            """, [bbox[0], bbox[1], bbox[2], bbox[3]])
+
+            phase1_count = con.execute("SELECT count(*) FROM phase1").fetchone()[0]
+
+            # Phase 1 bulk assignment: CROSS JOIN all tile places with phase1 boundaries
+            # Phase 2: per-point ST_Contains only for boundaries NOT in phase1
+            # Combine and insert into place_containment
             con.execute(f"""
                 INSERT INTO place_containment
-                WITH phase1 AS (
-                    SELECT rkey, name, level FROM wof.boundaries
-                    WHERE ST_Contains(geom, ST_MakeEnvelope(?, ?, ?, ?))
-                ),
-                bulk_assign AS (
+                WITH bulk_assign AS (
                     SELECT p.{pk_expr} AS pk,
                            'org.atgeo.places.wof:' || ph.rkey AS rkey,
                            ph.name, ph.level
@@ -126,8 +134,13 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
                 )}})::VARCHAR
                 FROM all_matches
                 GROUP BY pk
-            """, [bbox[0], bbox[1], bbox[2], bbox[3], z6, z6])
+            """, [z6, z6])
+
+            elapsed = time.monotonic() - t_tile
+            log.info("compute_containment: tile %d/%d z6=%s phase1=%d (%.1fs)",
+                     i, total, z6, phase1_count, elapsed)
     finally:
+        con.execute("DROP TABLE IF EXISTS phase1")
         con.execute("DETACH wof")
 
 
