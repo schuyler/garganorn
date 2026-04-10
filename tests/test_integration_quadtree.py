@@ -400,3 +400,64 @@ class TestEdgeCases:
             assert len(tile["records"]) <= 1, \
                 f"Tile {gz_path.name} has {len(tile['records'])} records; expected <= 1"
 
+
+# ---------------------------------------------------------------------------
+# TestExportWorkersParity
+# ---------------------------------------------------------------------------
+
+class TestExportWorkersParity:
+    """Verify that export_workers=1 and export_workers=4 produce identical output."""
+
+    def setup_method(self):
+        """Clear LRU cache between tests to prevent cross-test tile data bleed."""
+        TileBackedCollection._cached_read_tile.cache_clear()
+
+    def test_workers_produce_identical_output(self, fsq_parquet, tmp_path):
+        """run_pipeline with export_workers=1 and export_workers=4 produce the same tiles."""
+        bbox = (-122.55, 37.60, -122.30, 37.85)
+
+        out1 = tmp_path / "workers1"
+        out1.mkdir()
+        run_pipeline("fsq", fsq_parquet, bbox, str(out1),
+                     memory_limit="4GB", max_per_tile=100, export_workers=1)
+        current1 = out1 / "fsq" / "current"
+        assert current1.exists(), "current symlink must exist for export_workers=1 run"
+
+        out4 = tmp_path / "workers4"
+        out4.mkdir()
+        run_pipeline("fsq", fsq_parquet, bbox, str(out4),
+                     memory_limit="4GB", max_per_tile=100, export_workers=4)
+        current4 = out4 / "fsq" / "current"
+        assert current4.exists(), "current symlink must exist for export_workers=4 run"
+
+        # Collect relative path → content for each run
+        def _tile_contents(pipeline_dir):
+            tiles = {}
+            for gz_path in pipeline_dir.rglob("*.json.gz"):
+                rel = gz_path.relative_to(pipeline_dir)
+                with gzip.open(gz_path, "rt") as f:
+                    tiles[str(rel)] = json.load(f)
+            return tiles
+
+        tiles1 = _tile_contents(current1)
+        tiles4 = _tile_contents(current4)
+
+        assert set(tiles1.keys()) == set(tiles4.keys()), (
+            f"Tile path sets differ.\n"
+            f"  workers=1: {sorted(tiles1.keys())}\n"
+            f"  workers=4: {sorted(tiles4.keys())}"
+        )
+
+        for rel_path in sorted(tiles1.keys()):
+            content1 = tiles1[rel_path]
+            content4 = tiles4[rel_path]
+            assert content1["attribution"] == content4["attribution"], (
+                f"Attribution differs in tile {rel_path}"
+            )
+            # Sort records by rkey for deterministic comparison
+            records1 = sorted(content1["records"], key=lambda r: r["value"]["rkey"])
+            records4 = sorted(content4["records"], key=lambda r: r["value"]["rkey"])
+            assert records1 == records4, (
+                f"Records differ in tile {rel_path}"
+            )
+

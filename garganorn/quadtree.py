@@ -8,6 +8,8 @@ import re
 import shutil
 import string
 import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -82,25 +84,22 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
         con.execute("DETACH wof")
 
 
-def export_tiles(con, output_dir: str, source: str) -> dict:
+def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> dict:
     """Query DuckDB for per-record JSON, group by tile_qk, write gzipped files.
 
     Streams results via fetchmany(1000) to keep memory bounded. One tile's
-    records are accumulated in-memory at a time; on tile boundary, flushes to disk.
-    Returns {qk: record_count}.
+    records are accumulated in-memory at a time; on tile boundary, submits a
+    flush job to a ThreadPoolExecutor. Backpressure limits inflight futures to
+    2 * max_workers. Returns {qk: record_count}.
     """
     sql_dir = Path(__file__).parent / "sql"
     raw = (sql_dir / f"{source}_export_tiles.sql").read_text()
-    sql = string.Template(raw).safe_substitute(repo=REPO)  # attribution removed
+    sql = string.Template(raw).safe_substitute(repo=REPO)
     total_tiles = con.execute("SELECT COUNT(DISTINCT tile_qk) FROM tile_assignments").fetchone()[0]
     log.info("export: %d tiles to write", total_tiles)
-    con.execute(sql)  # creates VIEW — no materialization
+    con.execute(sql)
     con.execute("SET enable_progress_bar = false")
     cursor = con.execute("SELECT tile_qk, record_json FROM tile_export ORDER BY tile_qk")
-
-    manifest = {}
-    current_qk = None
-    accumulated = []
 
     def flush_tile(qk, records):
         # records are DuckDB to_json()::VARCHAR strings — already valid JSON.
@@ -112,30 +111,48 @@ def export_tiles(con, output_dir: str, source: str) -> dict:
         os.makedirs(subdir, exist_ok=True)
         with gzip.open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
             f.write(payload.encode("utf-8"))
-        manifest[qk] = len(records)
+        return (qk, len(records))
+
+    manifest = {}
+    current_qk = None
+    accumulated = []
+    futures = deque()
+    max_inflight = 2 * (max_workers or os.cpu_count() or 4)
+
+    def _drain_oldest():
+        """Wait on oldest future, collect result into manifest, log progress."""
+        qk, count = futures.popleft().result()
+        manifest[qk] = count
         if len(manifest) % 1000 == 0:
             log.info("export: wrote %d tiles", len(manifest))
 
-    while True:
-        batch = cursor.fetchmany(1000)
-        if not batch:
-            break
-        for tile_qk, record_json in batch:
-            if tile_qk != current_qk:
-                if current_qk is not None:
-                    flush_tile(current_qk, accumulated)
-                current_qk = tile_qk
-                accumulated = []
-            accumulated.append(record_json)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        while True:
+            batch = cursor.fetchmany(1000)
+            if not batch:
+                break
+            for tile_qk, record_json in batch:
+                if tile_qk != current_qk:
+                    if current_qk is not None:
+                        if len(futures) >= max_inflight:
+                            _drain_oldest()
+                        futures.append(executor.submit(flush_tile, current_qk, accumulated))
+                    current_qk = tile_qk
+                    accumulated = []  # rebind, not .clear() — workers hold a ref to the old list
+                accumulated.append(record_json)
 
-    if current_qk is not None:
-        flush_tile(current_qk, accumulated)
+        if current_qk is not None:
+            futures.append(executor.submit(flush_tile, current_qk, accumulated))
+
+        # Drain remaining futures
+        while futures:
+            _drain_oldest()
 
     log.info("export: wrote %d tiles total", len(manifest))
     return manifest
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None):
     source_dir = os.path.join(output_dir, source)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     tile_dir = os.path.join(source_dir, timestamp)
@@ -184,7 +201,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr)
 
         log.info("[%s] export: starting", source)
-        manifest = export_tiles(con, tile_dir, source)
+        manifest = export_tiles(con, tile_dir, source, max_workers=export_workers)
         log.info("[%s] export: %d tiles, %d records (%.1fs)",
                  source, len(manifest),
                  sum(manifest.values()), time.monotonic() - t0)
@@ -331,6 +348,8 @@ def main():
                         help="Maximum records per tile")
     parser.add_argument("--boundaries", default=None,
                         help="Path to WoF boundaries DuckDB for containment enrichment")
+    parser.add_argument("--export-workers", default=None, type=int, dest="export_workers",
+                        help="Number of threads for tile gzip compression (default: CPU count)")
 
     args = parser.parse_args()
 
@@ -390,6 +409,7 @@ def main():
         memory_limit=memory_limit,
         max_per_tile=max_per_tile,
         boundaries_db=boundaries_db,
+        export_workers=args.export_workers,
     )
 
 
