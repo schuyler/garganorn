@@ -106,14 +106,11 @@ rm -f "$output_db_tmp"
 
 echo "Building boundary database..."
 
-import_sql=$(cat <<EOSQL
-.bail on
+duckdb -bail "$output_db_tmp" <<EOSQL
 INSTALL sqlite;
 LOAD sqlite;
 INSTALL spatial;
 LOAD spatial;
-.headers off
-.mode list
 
 ATTACH '${source_db}' AS wof (TYPE sqlite, READ_ONLY);
 
@@ -230,9 +227,6 @@ DROP TABLE placetype_levels;
 ANALYZE;
 SELECT printf('[%s] Import complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 EOSQL
-)
-
-echo "$import_sql" | duckdb "$output_db_tmp"
 
 # Atomic swap
 mv "$output_db_tmp" "$output_db"
