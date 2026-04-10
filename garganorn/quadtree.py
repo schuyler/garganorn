@@ -43,11 +43,26 @@ def _coord_exprs(source):
 
 
 def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
-    """Populate the place_containment table with WoF containment data.
+    """Populate place_containment with WoF boundary relations for each place.
 
-    Creates place_containment(place_id VARCHAR, relations_json VARCHAR).
-    If boundaries_db is None, creates an empty table and returns.
-    Uses z6 quadkey partitioning to keep each spatial join manageable.
+    Creates place_containment(place_id, relations_json). Returns an empty
+    table if boundaries_db is None.
+
+    Places are grouped by z6 quadkey tile so each spatial join operates on
+    a small spatial partition. Within each tile, a two-phase approach avoids
+    running expensive per-point ST_Contains against every boundary:
+
+      Phase 1: R-tree indexed ST_Contains finds boundaries whose geometry
+      fully contains the tile bbox. Every place in the tile is assigned to
+      these boundaries via a CROSS JOIN (no per-point geometry test).
+
+      Phase 2: ST_Contains runs per-point only for "edge" boundaries --
+      those whose bbox overlaps the tile but were not matched in phase 1.
+
+    Correctness depends on each place belonging to exactly one z6 tile
+    (determined by its qk17 prefix). The CROSS JOIN in phase 1 assigns
+    all phase-1 boundaries to every place in that tile; if a place appeared
+    in multiple tiles, it would receive duplicate boundary assignments.
     """
     con.execute("LOAD spatial")
     con.execute("""
@@ -68,23 +83,50 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
         ]
         log.info("compute_containment: processing %d z6 tiles", len(z6_tiles))
         for z6 in z6_tiles:
+            bbox = quadkey_to_bbox(z6)
+            # Two-phase containment: phase 1 finds boundaries that fully contain
+            # the tile bbox (R-tree indexed), phase 2 does per-point containment
+            # only for edge boundaries not already matched in phase 1.
             con.execute(f"""
                 INSERT INTO place_containment
-                SELECT p.{pk_expr}, to_json({{within: list(
-                    {{rkey: 'org.atgeo.places.wof:' || b.rkey, name: b.name, level: b.level}}
-                    ORDER BY b.level ASC
+                WITH phase1 AS (
+                    SELECT rkey, name, level FROM wof.boundaries
+                    WHERE ST_Contains(geom, ST_MakeEnvelope(?, ?, ?, ?))
+                ),
+                bulk_assign AS (
+                    SELECT p.{pk_expr} AS pk,
+                           'org.atgeo.places.wof:' || ph.rkey AS rkey,
+                           ph.name, ph.level
+                    FROM places p
+                    CROSS JOIN phase1 ph
+                    WHERE LEFT(p.qk17, 6) = ?
+                ),
+                edge_matches AS (
+                    SELECT p.{pk_expr} AS pk,
+                           'org.atgeo.places.wof:' || b.rkey AS rkey,
+                           b.name, b.level
+                    FROM places p
+                    JOIN wof.boundaries b
+                        ON p.{lat_expr} BETWEEN b.min_latitude AND b.max_latitude
+                       AND p.{lon_expr} BETWEEN b.min_longitude AND b.max_longitude
+                       AND ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
+                    WHERE LEFT(p.qk17, 6) = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM phase1 ph WHERE ph.rkey = b.rkey
+                      )
+                ),
+                all_matches AS (
+                    SELECT * FROM bulk_assign
+                    UNION ALL
+                    SELECT * FROM edge_matches
+                )
+                SELECT pk, to_json({{within: list(
+                    {{rkey: rkey, name: name, level: level}}
+                    ORDER BY level ASC
                 )}})::VARCHAR
-                FROM places p
-                -- DuckDB's R-tree index cannot be probed with a per-row value from the
-                -- driving table, so the ST_Contains join scans all boundaries. The BETWEEN
-                -- pre-filter on bbox columns lets zone maps skip non-overlapping row groups.
-                JOIN wof.boundaries b
-                    ON p.{lat_expr} BETWEEN b.min_latitude AND b.max_latitude
-                   AND p.{lon_expr} BETWEEN b.min_longitude AND b.max_longitude
-                   AND ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
-                WHERE LEFT(p.qk17, 6) = ?
-                GROUP BY p.{pk_expr}
-            """, [z6])
+                FROM all_matches
+                GROUP BY pk
+            """, [bbox[0], bbox[1], bbox[2], bbox[3], z6, z6])
     finally:
         con.execute("DETACH wof")
 

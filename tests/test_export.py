@@ -1516,3 +1516,234 @@ class TestContainmentInExport:
                             )
             except Exception:
                 raise  # Don't swallow unexpected exceptions
+
+    # ------------------------------------------------------------------
+    # Test 9: compute_containment with None boundaries_db creates empty table
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_none_boundaries(self, tmp_path):
+        """compute_containment(conn, None, ...) must create an empty place_containment table.
+
+        When no boundaries DB is provided, the function should still create
+        the table (so downstream SQL can LEFT JOIN it) but insert no rows.
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "containment_none.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('p1', 37.7749, -122.4194, "
+            "ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+
+        compute_containment(conn, None, "fsq_place_id", "longitude", "latitude")
+
+        tables = conn.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_name = 'place_containment'"
+        ).fetchall()
+        assert tables, "place_containment table must exist even with None boundaries_db"
+
+        rows = conn.execute("SELECT * FROM place_containment").fetchall()
+        assert len(rows) == 0, (
+            f"place_containment must be empty when boundaries_db is None; got {len(rows)} rows"
+        )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 10: place outside all boundaries produces no containment row
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_place_outside_all_boundaries(self, tmp_path, wof_db_path):
+        """A place at (0, 0) in the ocean should produce no place_containment row.
+
+        All test WoF boundaries cover parts of North America. A point in the
+        Gulf of Guinea should not be contained by any of them. This validates
+        that compute_containment does not produce spurious containment rows
+        for places outside all boundaries.
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "containment_ocean.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        # Point at (0, 0) — Gulf of Guinea, outside all test boundaries
+        conn.execute(
+            "INSERT INTO places VALUES ('ocean001', 0.0, 0.0, "
+            "ST_QuadKey(0.0, 0.0, 17))"
+        )
+
+        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        rows = conn.execute(
+            "SELECT place_id FROM place_containment WHERE place_id = 'ocean001'"
+        ).fetchall()
+        assert len(rows) == 0, (
+            f"Place at (0, 0) should not be contained by any boundary; "
+            f"got {len(rows)} containment rows"
+        )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 11: two-phase split — tile-containing vs tile-straddling boundaries
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_two_phase_split(self, tmp_path, wof_db_path):
+        """Verify correct containment when some boundaries fully contain the z6
+        tile and others only partially overlap it.
+
+        The SF test point (37.7749, -122.4194) maps to z6 tile 023010, whose
+        bbox is approximately (-123.75, 36.6) to (-118.125, 41.0).
+
+        Phase 1 boundaries (fully contain the z6 tile):
+          - North America: (-130, 20) to (-60, 55)  — fully contains tile
+          - United States:  (-125, 24) to (-66, 50)  — fully contains tile
+          - California:     (-125, 34) to (-118, 42)  — fully contains tile
+
+        Phase 2 boundary (overlaps but does NOT fully contain the z6 tile):
+          - San Francisco:  (-122.55, 37.6) to (-122.3, 37.85)  — small polygon
+            inside the tile, must be evaluated per-point via ST_Contains
+
+        Non-overlapping boundary:
+          - Manhattan:      (-74.05, 40.68) to (-73.90, 40.88)  — different tile
+
+        The SF point should match exactly 4 boundaries (NA, US, CA, SF).
+        A Manhattan point should match exactly 3 (NA, US only — not CA or SF).
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "containment_two_phase.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        # SF point — should match NA, US, CA, SF (4 boundaries)
+        conn.execute(
+            "INSERT INTO places VALUES ('sf_center', 37.7749, -122.4194, "
+            "ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+        # Manhattan point — should match NA, US, Manhattan (3 boundaries)
+        conn.execute(
+            "INSERT INTO places VALUES ('nyc_center', 40.7831, -73.9712, "
+            "ST_QuadKey(-73.9712, 40.7831, 17))"
+        )
+
+        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        # Check SF point: 4 boundaries
+        sf_rows = conn.execute(
+            "SELECT relations_json FROM place_containment WHERE place_id = 'sf_center'"
+        ).fetchall()
+        assert len(sf_rows) == 1, f"Expected 1 row for sf_center; got {len(sf_rows)}"
+        sf_within = json.loads(sf_rows[0][0])["within"]
+        sf_names = {e["name"] for e in sf_within}
+        assert sf_names == {"North America", "United States", "California", "San Francisco"}, (
+            f"SF point should be in 4 boundaries; got {sorted(sf_names)}"
+        )
+
+        # Check Manhattan point: 2 boundaries (NA, US) + Manhattan
+        nyc_rows = conn.execute(
+            "SELECT relations_json FROM place_containment WHERE place_id = 'nyc_center'"
+        ).fetchall()
+        assert len(nyc_rows) == 1, f"Expected 1 row for nyc_center; got {len(nyc_rows)}"
+        nyc_within = json.loads(nyc_rows[0][0])["within"]
+        nyc_names = {e["name"] for e in nyc_within}
+        assert nyc_names == {"North America", "United States", "Manhattan"}, (
+            f"Manhattan point should be in NA, US, Manhattan; got {sorted(nyc_names)}"
+        )
+
+        # Verify level ordering for both
+        for label, within in [("sf", sf_within), ("nyc", nyc_within)]:
+            levels = [e["level"] for e in within]
+            assert levels == sorted(levels), (
+                f"{label} within entries must be ordered by level ASC; got {levels}"
+            )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 12: place near tile edge with boundary straddling the edge
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_place_near_tile_edge(self, tmp_path, wof_db_path):
+        """A place near the edge of the SF city boundary must still be correctly
+        contained when it falls inside the boundary polygon.
+
+        The SF boundary is POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85,
+        -122.3 37.6, -122.55 37.6)). We test:
+          - A point just inside the SW corner: (37.61, -122.54) — should be in SF
+          - A point just outside the SW corner: (37.59, -122.56) — should NOT be in SF
+            but should still be in NA, US, CA (the z6 tile is the same: 023010)
+
+        Both points are in the same z6 tile, so the two-phase optimization must
+        correctly distinguish between them using per-point ST_Contains in phase 2.
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "containment_edge.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        # Just inside SF boundary SW corner
+        conn.execute(
+            "INSERT INTO places VALUES ('edge_in', 37.61, -122.54, "
+            "ST_QuadKey(-122.54, 37.61, 17))"
+        )
+        # Just outside SF boundary SW corner (but still in CA)
+        conn.execute(
+            "INSERT INTO places VALUES ('edge_out', 37.59, -122.56, "
+            "ST_QuadKey(-122.56, 37.59, 17))"
+        )
+
+        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        # edge_in: should be in NA, US, CA, SF (4 boundaries)
+        in_rows = conn.execute(
+            "SELECT relations_json FROM place_containment WHERE place_id = 'edge_in'"
+        ).fetchall()
+        assert len(in_rows) == 1, f"Expected 1 row for edge_in; got {len(in_rows)}"
+        in_within = json.loads(in_rows[0][0])["within"]
+        in_names = {e["name"] for e in in_within}
+        assert in_names == {"North America", "United States", "California", "San Francisco"}, (
+            f"edge_in should be in 4 boundaries; got {sorted(in_names)}"
+        )
+
+        # edge_out: should be in NA, US, CA only (3 boundaries, not SF)
+        out_rows = conn.execute(
+            "SELECT relations_json FROM place_containment WHERE place_id = 'edge_out'"
+        ).fetchall()
+        assert len(out_rows) == 1, f"Expected 1 row for edge_out; got {len(out_rows)}"
+        out_within = json.loads(out_rows[0][0])["within"]
+        out_names = {e["name"] for e in out_within}
+        assert out_names == {"North America", "United States", "California"}, (
+            f"edge_out should be in 3 boundaries (not SF); got {sorted(out_names)}"
+        )
