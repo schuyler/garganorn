@@ -186,11 +186,11 @@ FROM (
             json_object(
                 'name', nm.name,
                 'language', nm.language,
-                'variant', nm.variant
+                'variant', nm.privateuse
             )
         )::VARCHAR AS names_json
     FROM wof.names nm
-    WHERE nm.variant IN ('preferred', 'variant')
+    WHERE nm.privateuse IN ('preferred', 'variant')
       AND nm.name IS NOT NULL
       AND length(nm.name) >= 1
       AND EXISTS (SELECT 1 FROM boundaries b2 WHERE b2.wof_id = nm.id)
