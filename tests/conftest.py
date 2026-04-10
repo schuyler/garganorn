@@ -280,7 +280,7 @@ def _create_overture_db(db_path):
 
     # Intentionally no RTREE index on the places table. All spatial filtering
     # uses bbox struct field comparisons, which do not require an explicit index.
-    # RTREE is only used on the WoF boundaries table (ST_Contains queries).
+    # RTREE is only used on the division boundaries table (ST_Contains queries).
 
     conn.execute("""
         CREATE TABLE name_index (
@@ -519,120 +519,61 @@ def osm_db(osm_db_path):
     db.close()
 
 
-from garganorn.boundaries import BoundaryLookup, WhosOnFirst
-
-# ---------------------------------------------------------------------------
-# WoF boundary test data
-# ---------------------------------------------------------------------------
-
-# wof_id, name, placetype, level, lat, lon, country, wkt_geom,
-# min_lat, min_lon, max_lat, max_lon, names_json, concordances
-WOF_BOUNDARIES = [
-    (102191575, "North America", "continent", 0, 40.0, -100.0, "XX",
-     "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
-     20.0, -130.0, 55.0, -60.0, None, None),
-    (85633793, "United States", "country", 10, 39.0, -98.0, "US",
-     "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
-     24.0, -125.0, 50.0, -66.0, None, '{"wk:id": "Q30"}'),
-    (85688637, "California", "region", 25, 37.0, -120.0, "US",
-     "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
-     34.0, -125.0, 42.0, -118.0,
-     '[{"name": "California", "language": "eng", "variant": "preferred"}, '
-     '{"name": "Californie", "language": "fra", "variant": "preferred"}]',
-     '{"wk:id": "Q99", "gn:id": "5332921"}'),
-    (85922583, "San Francisco", "locality", 50, 37.7749, -122.4194, "US",
-     "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
-     37.6, -122.55, 37.85, -122.3,
-     '[{"name": "San Francisco", "language": "eng", "variant": "preferred"}, '
-     '{"name": "\u65e7\u91d1\u5c71", "language": "zho", "variant": "preferred"}]',
-     '{"wk:id": "Q62", "gn:id": "5391959"}'),
-    (85977539, "Manhattan", "borough", 55, 40.7831, -73.9712, "US",
-     "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
-     40.68, -74.05, 40.88, -73.90, None, None),
-]
-
-
-def _create_wof_db(db_path):
-    """Create a WoF boundary DuckDB with test polygons."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("INSTALL spatial; LOAD spatial;")
-    conn.execute("""
-        CREATE TABLE boundaries (
-            wof_id BIGINT,
-            rkey VARCHAR,
-            name VARCHAR,
-            placetype VARCHAR,
-            level INTEGER,
-            latitude DOUBLE,
-            longitude DOUBLE,
-            geom GEOMETRY,
-            country VARCHAR,
-            min_latitude DOUBLE,
-            min_longitude DOUBLE,
-            max_latitude DOUBLE,
-            max_longitude DOUBLE,
-            names_json VARCHAR,
-            concordances VARCHAR
-        )
-    """)
-    for row in WOF_BOUNDARIES:
-        wof_id, name, placetype, level, lat, lon, country, wkt, \
-            min_lat, min_lon, max_lat, max_lon, names_json, concordances = row
-        conn.execute("""
-            INSERT INTO boundaries VALUES (
-                ?, ?::VARCHAR, ?, ?, ?, ?, ?,
-                ST_GeomFromText(?),
-                ?, ?, ?, ?, ?, ?, ?
-            )
-        """, [wof_id, wof_id, name, placetype, level, lat, lon, wkt,
-              country, min_lat, min_lon, max_lat, max_lon,
-              names_json, concordances])
-    conn.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
-    conn.execute("CREATE INDEX idx_rkey ON boundaries(rkey)")
-    conn.close()
-
-
-@pytest.fixture(scope="session")
-def wof_db_path(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("wof") / "wof.duckdb"
-    _create_wof_db(db_path)
-    return db_path
-
-
-@pytest.fixture
-def wof_db(wof_db_path):
-    db = WhosOnFirst(wof_db_path)
-    db.connect()
-    yield db
-    db.close()
+from garganorn.boundaries import BoundaryLookup, OvertureDivision
 
 
 # ---------------------------------------------------------------------------
 # Division boundary test data (Overture divisions schema)
 # ---------------------------------------------------------------------------
 
-# id, admin_level, lat, lon, wkt_geom, min_lat, min_lon, max_lat, max_lon
+# id, admin_level, wkt_geom, min_lat, min_lon, max_lat, max_lon,
+#   names (dict or None), subtype, country, region, wikidata, population, importance, variants
 DIVISION_BOUNDARIES = [
-    ("div_continent_na", 0, 40.0, -100.0,
-     "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
-     20.0, -130.0, 55.0, -60.0),
-    ("div_country_us", 1, 39.0, -98.0,
-     "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
-     24.0, -125.0, 50.0, -66.0),
-    ("div_region_ca", 2, 37.0, -120.0,
-     "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
-     34.0, -125.0, 42.0, -118.0),
-    ("div_locality_sf", 3, 37.7749, -122.4194,
-     "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
-     37.6, -122.55, 37.85, -122.3),
-    ("div_borough_manhattan", 4, 40.7831, -73.9712,
-     "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
-     40.68, -74.05, 40.88, -73.90),
+    (
+        "div_continent_na", 0,
+        "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
+        20.0, -130.0, 55.0, -60.0,
+        None,  # names=NULL (for test_null_names_returns_empty_name_and_variants)
+        None, None, None, None, None,
+        0, [],
+    ),
+    (
+        "div_country_us", 1,
+        "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
+        24.0, -125.0, 50.0, -66.0,
+        {"primary": "United States", "common": {}, "rules": []},
+        "country", "US", None, "Q30", 331000000,
+        0, [],
+    ),
+    (
+        "div_region_ca", 2,
+        "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
+        34.0, -125.0, 42.0, -118.0,
+        {"primary": "California", "common": {"fr": "Californie"}, "rules": []},
+        "region", "US", "US-CA", "Q99", 39000000,
+        0, [],
+    ),
+    (
+        "div_locality_sf", 3,
+        "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
+        37.6, -122.55, 37.85, -122.3,
+        {"primary": "San Francisco", "common": {"es": "San Francisco", "zh": "\u65e7\u91d1\u5c71"}, "rules": []},
+        "locality", "US", "US-CA", "Q62", 874961,
+        0, [],
+    ),
+    (
+        "div_borough_manhattan", 4,
+        "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
+        40.68, -74.05, 40.88, -73.90,
+        {"primary": "Manhattan", "common": {}, "rules": []},
+        "locality", "US", "US-NY", "Q11299", 1629153,
+        0, [],
+    ),
 ]
 
 
 def _create_division_db(db_path):
-    """Create a division-schema boundary DB (table 'places' with id, geometry, admin_level)."""
+    """Create a division-schema boundary DB (enriched places table for OvertureDivision)."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
     conn.execute("""
@@ -640,19 +581,84 @@ def _create_division_db(db_path):
             id VARCHAR,
             geometry GEOMETRY,
             admin_level INTEGER,
+            names STRUCT(
+                "primary" VARCHAR,
+                common MAP(VARCHAR, VARCHAR),
+                rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+            ),
+            subtype VARCHAR,
+            country VARCHAR,
+            region VARCHAR,
+            wikidata VARCHAR,
+            population BIGINT,
             min_latitude DOUBLE,
             max_latitude DOUBLE,
             min_longitude DOUBLE,
-            max_longitude DOUBLE
+            max_longitude DOUBLE,
+            importance INTEGER,
+            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
         )
     """)
     for row in DIVISION_BOUNDARIES:
-        bid, admin_level, lat, lon, wkt, min_lat, min_lon, max_lat, max_lon = row
-        conn.execute("""
-            INSERT INTO places VALUES (
-                ?, ST_GeomFromText(?), ?, ?, ?, ?, ?
-            )
-        """, [bid, wkt, admin_level, min_lat, max_lat, min_lon, max_lon])
+        (bid, admin_level, wkt, min_lat, min_lon, max_lat, max_lon,
+         names, subtype, country, region, wikidata, population,
+         importance, variants) = row
+
+        if names is None:
+            names_sql = "NULL"
+            names_params = []
+        else:
+            # Build the common MAP from the dict
+            common_dict = names.get("common", {})
+            if common_dict:
+                keys_list = list(common_dict.keys())
+                vals_list = list(common_dict.values())
+                common_sql = "map(" + str(keys_list) + "::VARCHAR[], " + str(vals_list) + "::VARCHAR[])"
+                # Use DuckDB literal for simplicity
+                keys_literal = "[" + ", ".join(f"'{k}'" for k in keys_list) + "]"
+                vals_literal = "[" + ", ".join(f"'{v}'" for v in vals_list) + "]"
+                common_sql = f"map({keys_literal}::VARCHAR[], {vals_literal}::VARCHAR[])"
+            else:
+                common_sql = "map([]::VARCHAR[], []::VARCHAR[])"
+            primary_val = names.get("primary")
+            names_sql = f"{{'primary': ?, 'common': {common_sql}, 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]}}"
+            names_params = [primary_val]
+
+        if not names_params:
+            conn.execute(f"""
+                INSERT INTO places (id, geometry, admin_level, names, subtype, country, region,
+                    wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
+                    importance, variants)
+                VALUES (
+                    ?, ST_GeomFromText(?), ?,
+                    {names_sql},
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?,
+                    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
+                )
+            """, [bid, wkt, admin_level,
+                  subtype, country, region, wikidata, population,
+                  min_lat, max_lat, min_lon, max_lon,
+                  importance])
+        else:
+            conn.execute(f"""
+                INSERT INTO places (id, geometry, admin_level, names, subtype, country, region,
+                    wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
+                    importance, variants)
+                VALUES (
+                    ?, ST_GeomFromText(?), ?,
+                    {names_sql},
+                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?,
+                    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
+                )
+            """, [bid, wkt, admin_level] + names_params + [
+                  subtype, country, region, wikidata, population,
+                  min_lat, max_lat, min_lon, max_lon,
+                  importance])
+
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
 
@@ -670,6 +676,14 @@ def boundary_lookup(division_db_path):
     bl.connect()
     yield bl
     bl.close()
+
+
+@pytest.fixture
+def division_db(division_db_path):
+    db = OvertureDivision(division_db_path)
+    db.connect()
+    yield db
+    db.close()
 
 
 # ---------------------------------------------------------------------------

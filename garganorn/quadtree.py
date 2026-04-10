@@ -388,8 +388,10 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             con.execute("""
                 CREATE TABLE bnd.places AS
                 SELECT id, geometry, admin_level,
+                       names, subtype, country, region, wikidata, population,
                        min_latitude, max_latitude,
-                       min_longitude, max_longitude
+                       min_longitude, max_longitude,
+                       importance, variants
                 FROM places
                 ORDER BY ST_Hilbert(geometry,
                     {'min_x': -180.0, 'min_y': -90.0,

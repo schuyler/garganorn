@@ -71,6 +71,10 @@ class OvertureDivision(Database):
             self.conn = duckdb.connect(str(self.db_path), read_only=True)
             self.temp_dir = tempfile.mkdtemp(prefix='duckdb_temp_')
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
+            # Spatial extension is required to open files containing GEOMETRY
+            # columns — DuckDB cannot deserialize the type without it, even if
+            # no ST_* functions are called.
+            self._load_extension("spatial")
         return self.conn
 
     def record_columns(self):
@@ -255,7 +259,9 @@ class TestOvertureDivisionGetRecord:
 
 - Enrich `DIVISION_BOUNDARIES` data to include `names`, `subtype`, `country`, `region`, `wikidata`, `population`, `importance`, `variants`
 - Include at least one row with `names=NULL` for the null-names test case
-- Enrich `_create_division_db()` to create the full schema (all columns from boundary DB export)
+- Enrich `_create_division_db()` to create the full schema. The `CREATE TABLE` column order **must exactly match** the enriched boundary DB export SQL above:
+  `id, geometry, admin_level, names, subtype, country, region, wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude, importance, variants`
+  INSERT statements **must use named-column syntax** (`INSERT INTO places (id, geometry, ...) VALUES (...)`) rather than positional syntax. The existing positional INSERT in `_create_division_db()` must be replaced. Positional INSERT with mismatched column order will cause `record_columns()` to silently read wrong values.
 - Add `division_db` fixture (function-scoped, parallel to existing `wof_db`) yielding an `OvertureDivision` instance backed by `division_db_path`
 - Remove `WOF_BOUNDARIES`, `_create_wof_db`, `wof_db_path`, `wof_db`
 

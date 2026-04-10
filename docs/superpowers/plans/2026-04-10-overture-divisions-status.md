@@ -58,23 +58,29 @@ Tests: `tests/test_phase3_containment.py` (7 tests)
 - Re-review #2: FAIL — remaining stale wof_path in test_coord_exprs_bug.py (2nd test), stale heading/docstring in test_export.py
 - Fix #3 (applied directly): Renamed wof_path→division_path in test_coord_exprs_bug.py, updated heading and docstring in test_export.py
 
-## Phase 4: Division Database Class and Server Integration — DESIGN IN REVIEW
+## Phase 4: Division Database Class and Server Integration — COMPLETE ✓
 
-**Design complete at `~/.claude/plans/phase4-design.md`.** Design review found 2 critical (missing __init__.py and test_config.py in removal scope) and 4 important issues. Fix #1 applied. Re-review #1 found 2 more issues (shared fixture note needed). Fix #2 applied (shared fixture callout added to design). Pending final design gate.
+**Implementation complete, not yet committed.**
 
-Key design decisions:
-- `OvertureDivision(Database)` class in `boundaries.py` — get_record() only, no search
-- Boundary DB enriched with record-serving columns (names, subtype, etc.)
-- Names struct parsed at query time (single source of truth, ignore pre-computed variants column)
-- WhosOnFirst removed (class, config, fixtures, tests)
-- `garganorn/__init__.py` updated (WhosOnFirst→OvertureDivision)
-- `tests/test_config.py` updated (wof test→overture_division test)
-- `test_config.yaml` / `test_config_missing_boundaries.yaml` paths updated
-- Shared `_create_division_db()` fixture preserved for both boundary_lookup and division_db
+Files modified:
+- `garganorn/boundaries.py` — `OvertureDivision(Database)` class added, `get_record()` only (no search); `connect()` loads spatial extension; `process_record()` parses `names` STRUCT at query time
+- `garganorn/config.py` — `"overture_division": OvertureDivision` replaces `"wof": WhosOnFirst`
+- `garganorn/quadtree.py` — boundary DB export enriched with names, subtype, country, region, wikidata, population, importance, variants columns
+- `garganorn/__init__.py` — `OvertureDivision` exported, `WhosOnFirst` removed
+- `tests/conftest.py` — WoF fixtures removed, `division_db` fixture added, `_create_division_db()` enriched with full schema and named-column INSERT
+- `tests/test_boundaries.py` — `TestOvertureDivisionGetRecord` (9 tests) added, `TestWhosOnFirstGetRecord` removed
+- `tests/test_config.py` — `test_overture_division_type_creates_overture_division` added, WoF test removed
+- `test_config.yaml`, `test_config_missing_boundaries.yaml` — paths updated to `boundaries.duckdb`
+- `tests/test_export.py` — stale WoF references cleaned up
 
-Files to modify: `garganorn/boundaries.py`, `garganorn/config.py`, `garganorn/quadtree.py`, `garganorn/__init__.py`, `tests/conftest.py`, `tests/test_boundaries.py`, `tests/test_config.py`, `test_config.yaml`, `test_config_missing_boundaries.yaml`
+Key implementation decisions:
+- `connect()` loads spatial extension — required to open files with GEOMETRY columns even without ST_* function calls
+- `process_record()` parses `names` STRUCT at query time — ignores pre-computed `variants` column (single source of truth)
+- Bbox-only locations (no geo point) — divisions are areas, containment naturally skipped by server.py
 
-**Remaining**: Design gate #1 → Baseline test gate (depends on Phase 3 final test) → Red TDD → review → gate → Green TDD → review → gate → Final test → Requirements → Documentation → Doc review → Doc gate → Confirm
+Tests: 632 passed, 0 failed, 1 xfailed (baseline was 631)
+
+**Remaining**: Confirm before merge
 
 ## Key Design Decisions
 
@@ -118,17 +124,23 @@ Files to modify: `garganorn/boundaries.py`, `garganorn/config.py`, `garganorn/qu
 - Green fix #3: applied directly (stale wof_path, heading, docstring) — **needs re-review**
 - **NEXT**: Green gate (needs re-review of fix #3) → Final test (#10) → Requirements (#11) → Doc (#12-14) → Confirm (#15)
 
-### Phase 4
+### Phase 4 (all complete)
 - Design → review → gate FAILED (missing __init__.py, test_config.py)
 - Design fix #1 → re-review #1 → gate FAILED (shared fixture note)
-- Design fix #2 applied — **needs re-review**
-- **NEXT**: Design gate #1 (#34) → Baseline test (#19) → Red TDD (#20) → ... → Confirm (#31)
+- Design fix #2 → re-review #2 → gate → PASSED
+- Baseline: 631 passed → PASSED
+- Red TDD (9 tests) → review → gate → PASSED
+- Green TDD → review → gate → PASSED
+- Final test: 632 passed → PASSED
+- Requirements → Documentation → Doc review → Doc gate → PASSED
+- **Pending**: Confirm before merge
 
 ## Test Count
 
 - Baseline (before all phases): 605 passed, 1 xfailed
 - After Phase 1 commit: 611 passed, 1 xfailed
-- Current (Phase 2+3 uncommitted): **631 passed, 0 failed, 1 xfailed**
+- After Phase 3 (uncommitted): 631 passed, 0 failed, 1 xfailed
+- Current (Phase 4 uncommitted): **632 passed, 0 failed, 1 xfailed**
 - Target: 640+ passed, 0 failed (611 baseline + ~30 new tests across phases 2-4)
 
 ## Files to Resume With
@@ -143,7 +155,8 @@ Files to modify: `garganorn/boundaries.py`, `garganorn/config.py`, `garganorn/qu
 
 Phase 2: Documentation (#3 in progress) → Doc review (#4) → Doc gate (#5) → Confirm (#6)
 Phase 3: Green gate needs re-review of fix #3 → Final test (#10) → Requirements (#11) → Doc (#12-14) → Confirm (#15)
-Phase 4: Design gate needs re-review of fix #2 → Baseline test (#19) → full pipeline through Confirm (#31)
+Phase 4: Implementation complete — Confirm before merge (#31)
 
 Phase 3 requirements (#11) can run in parallel with Phase 3 final test (#10) once green gate passes.
 Phase 2 docs and Phase 3 green gate are independent and can proceed in parallel.
+Phase 4 confirm is blocked on Phases 2 and 3 completing (all phases commit together or in sequence).

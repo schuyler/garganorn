@@ -2,13 +2,13 @@
 import yaml
 from pathlib import Path
 from .database import FoursquareOSP, OvertureMaps, OpenStreetMap
-from .boundaries import WhosOnFirst
+from .boundaries import OvertureDivision
 
 DATABASE_TYPES = {
     "foursquare": FoursquareOSP,
     "overture": OvertureMaps,
     "osm": OpenStreetMap,
-    "wof": WhosOnFirst,
+    "overture_division": OvertureDivision,
 }
 
 def load_config(path):

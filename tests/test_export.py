@@ -1526,7 +1526,7 @@ class TestContainmentInExport:
             "--source", "fsq",
             "--parquet", "/tmp/test.parquet",
             "--output", "/tmp/output",
-            "--boundaries", "/tmp/wof.duckdb",
+            "--boundaries", "/tmp/boundaries.duckdb",
         ]
         with patch.object(sys, "argv", ["quadtree"] + test_args):
             try:
@@ -2146,10 +2146,10 @@ class TestContainmentInExport:
         conn.close()
 
     # ------------------------------------------------------------------
-    # Test 17: Phase 2 queries tile_boundaries, not wof.boundaries
+    # Test 17: Phase 2 queries tile_boundaries, not bnd.boundaries
     # ------------------------------------------------------------------
 
-    def test_phase2_queries_tile_boundaries_not_wof(self, tmp_path, division_db_path):
+    def test_phase2_queries_tile_boundaries_not_bnd(self, tmp_path, division_db_path):
         """Phase 2 (edge_matches CTE) must JOIN tile_boundaries instead of
         bnd.places directly.  After Step 0 creates tile_boundaries, all subsequent
         SQL should reference tile_boundaries — not bnd.places — for spatial joins.

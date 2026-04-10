@@ -1,5 +1,4 @@
 """Admin boundary lookup and record resolution."""
-import json
 import tempfile
 from pathlib import Path
 
@@ -60,13 +59,14 @@ class BoundaryLookup:
             self.conn = None
 
 
-class WhosOnFirst(Database):
-    """Minimal Database subclass for WoF boundary record resolution.
+class OvertureDivision(Database):
+    """Minimal Database subclass for Overture division record resolution.
 
     Supports get_record only. No search, no name_index.
     """
 
-    collection = "org.atgeo.places.wof"
+    collection = "org.atgeo.places.overture.division"
+    attribution = "https://docs.overturemaps.org/attribution/"
 
     def connect(self):
         """Connect to boundary database (no name_index validation)."""
@@ -74,43 +74,40 @@ class WhosOnFirst(Database):
             self.conn = duckdb.connect(str(self.db_path), read_only=True)
             self.temp_dir = tempfile.mkdtemp(prefix='duckdb_temp_')
             self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
+            # Spatial extension is required to open files containing GEOMETRY
+            # columns — DuckDB cannot deserialize the type without it, even if
+            # no ST_* functions are called.
+            self._load_extension("spatial")
         return self.conn
 
     def record_columns(self):
         return """
-            rkey,
-            name,
-            latitude::decimal(10,6)::varchar AS latitude,
-            longitude::decimal(10,6)::varchar AS longitude,
-            placetype,
-            level,
+            id AS rkey,
+            names,
+            subtype,
             country,
+            region,
+            admin_level,
+            wikidata,
+            population,
             min_latitude::decimal(10,6)::varchar AS min_latitude,
             min_longitude::decimal(10,6)::varchar AS min_longitude,
             max_latitude::decimal(10,6)::varchar AS max_latitude,
             max_longitude::decimal(10,6)::varchar AS max_longitude,
-            names_json,
-            concordances
+            variants
         """
 
     def query_record(self):
         columns = self.record_columns()
         return f"""
-            SELECT {columns}, 0 AS importance
-            FROM boundaries
-            WHERE rkey = $rkey
+            SELECT {columns}, importance
+            FROM places
+            WHERE id = $rkey
         """
 
     def process_record(self, result):
-        locations = [
-            {
-                "$type": "community.lexicon.location.geo",
-                "latitude": result.pop("latitude"),
-                "longitude": result.pop("longitude"),
-            }
-        ]
-
-        # Add bbox from boundary extents
+        # Locations: bbox only (divisions are areas, not points)
+        locations = []
         min_lat = result.pop("min_latitude", None)
         min_lon = result.pop("min_longitude", None)
         max_lat = result.pop("max_latitude", None)
@@ -124,43 +121,63 @@ class WhosOnFirst(Database):
                 "east": max_lon,
             })
 
-        # Parse multilingual names into variants
+        # Parse names struct into primary name + variants
+        names = result.pop("names", None)
+        name = None
         variants = []
-        names_json = result.pop("names_json", None)
-        if names_json:
-            for entry in json.loads(names_json):
-                variant = {"name": entry["name"]}
-                if entry.get("language"):
-                    variant["language"] = entry["language"]
-                if entry.get("variant"):
-                    variant["type"] = entry["variant"]
-                variants.append(variant)
+        if names:
+            name = names.get("primary")
+            common = names.get("common")
+            if common and isinstance(common, dict):
+                for lang, lang_name in common.items():
+                    if lang_name and lang_name != name:
+                        variants.append({"name": lang_name, "language": lang})
+            rules = names.get("rules")
+            if rules:
+                for rule in rules:
+                    entry = {"name": rule["value"]}
+                    if rule.get("language"):
+                        entry["language"] = rule["language"]
+                    if rule.get("variant"):
+                        entry["type"] = rule["variant"]
+                    variants.append(entry)
+
+        # Note: pre-computed variants column is intentionally ignored to avoid
+        # duplication if the import pipeline later adds variant extraction.
+        # Names struct is the single source of truth for variants.
+        result.pop("variants", None)
 
         # Build attributes
-        concordances_str = result.pop("concordances", None)
-        placetype = result.pop("placetype", None)
-        level = result.pop("level", None)
+        subtype = result.pop("subtype", None)
         country = result.pop("country", None)
+        region = result.pop("region", None)
+        admin_level = result.pop("admin_level", None)
+        wikidata = result.pop("wikidata", None)
+        population = result.pop("population", None)
 
         attributes = {}
-        if placetype:
-            attributes["placetype"] = placetype
-        if level is not None:
-            attributes["level"] = level
+        if subtype:
+            attributes["subtype"] = subtype
         if country:
             attributes["country"] = country
-        if concordances_str:
-            attributes["concordances"] = json.loads(concordances_str)
+        if region:
+            attributes["region"] = region
+        if admin_level is not None:
+            attributes["admin_level"] = admin_level
+        if wikidata:
+            attributes["wikidata"] = wikidata
+        if population is not None and population > 0:
+            attributes["population"] = population
 
         return {
             "$type": "org.atgeo.place",
             "collection": self.collection,
             "rkey": result.pop("rkey"),
             "locations": locations,
-            "name": result.pop("name"),
+            "name": name or "",
             "variants": variants,
             "attributes": attributes,
         }
 
     def query_nearest(self, _params, trigrams=None):
-        raise NotImplementedError("WoF boundary collection does not support search")
+        raise NotImplementedError("Division collection does not support search")

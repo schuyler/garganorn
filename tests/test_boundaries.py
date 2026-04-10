@@ -1,7 +1,7 @@
-"""Tests for garganorn.boundaries — BoundaryLookup and WhosOnFirst."""
+"""Tests for garganorn.boundaries — BoundaryLookup and OvertureDivision."""
 import pytest
 
-from garganorn.boundaries import BoundaryLookup
+from garganorn.boundaries import BoundaryLookup, OvertureDivision
 
 
 # ---------------------------------------------------------------------------
@@ -64,77 +64,92 @@ class TestBoundaryLookupContainment:
         assert not any("div_locality_sf" in rk for rk in rkeys)
 
 
-from garganorn.boundaries import WhosOnFirst
-
 
 # ---------------------------------------------------------------------------
-# WhosOnFirst (Database subclass) tests
+# OvertureDivision (Database subclass) tests
 # ---------------------------------------------------------------------------
 
-class TestWhosOnFirstGetRecord:
-    """WhosOnFirst.get_record() tests."""
+class TestOvertureDivisionGetRecord:
+    """OvertureDivision.get_record() tests."""
 
-    def test_returns_correct_record_structure(self, wof_db):
-        """get_record returns lexicon-compliant dict with geo+bbox locations."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "85922583")
+    def test_returns_correct_record_structure(self, division_db):
+        """get_record returns a lexicon-compliant dict with expected top-level keys."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
         assert record is not None
         assert record["$type"] == "org.atgeo.place"
-        assert record["collection"] == "org.atgeo.places.wof"
-        assert record["rkey"] == "85922583"
-        assert record["name"] == "San Francisco"
+        assert record["collection"] == "org.atgeo.places.overture.division"
+        assert record["rkey"] == "div_locality_sf"
+        assert "locations" in record
+        assert "name" in record
+        assert "variants" in record
+        assert "attributes" in record
 
-        # Should have both geo and bbox locations
-        types = [loc["$type"] for loc in record["locations"]]
-        assert "community.lexicon.location.geo" in types
-        assert "community.lexicon.location.bbox" in types
-
-    def test_bbox_location_values(self, wof_db):
-        """Bbox location has correct north/south/east/west strings."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "85922583")
+    def test_bbox_location_values(self, division_db):
+        """Bbox location has float north/south/east/west values matching test data extent."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
+        assert record is not None
         bbox = next(
             loc for loc in record["locations"]
             if loc["$type"] == "community.lexicon.location.bbox"
         )
         assert float(bbox["north"]) == pytest.approx(37.85, abs=0.01)
         assert float(bbox["south"]) == pytest.approx(37.6, abs=0.01)
+        assert float(bbox["east"]) == pytest.approx(-122.3, abs=0.01)
+        assert float(bbox["west"]) == pytest.approx(-122.55, abs=0.01)
 
-    def test_variants_from_names_json(self, wof_db):
-        """WoF names_json is parsed into variants array."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "85922583")
-        assert len(record["variants"]) >= 2
-        names = [v["name"] for v in record["variants"]]
-        assert "San Francisco" in names
-        assert "\u65e7\u91d1\u5c71" in names
-
-    def test_concordances_in_attributes(self, wof_db):
-        """Concordances JSON is parsed into attributes dict."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "85922583")
-        attrs = record["attributes"]
-        assert attrs["placetype"] == "locality"
-        assert attrs["level"] == 50
-        assert attrs["country"] == "US"
-        assert attrs["concordances"]["wk:id"] == "Q62"
-        assert attrs["concordances"]["gn:id"] == "5391959"
-
-    def test_record_without_names_or_concordances(self, wof_db):
-        """Record with NULL names_json/concordances has empty variants and no concordances key."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "102191575")
+    def test_no_geo_location(self, division_db):
+        """Divisions have bbox-only locations — no geo point location."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
         assert record is not None
-        assert record["name"] == "North America"
-        assert record["variants"] == []
-        assert "concordances" not in record["attributes"]
+        geo_locs = [
+            loc for loc in record["locations"]
+            if loc["$type"] == "community.lexicon.location.geo"
+        ]
+        assert geo_locs == []
 
-    def test_not_found_returns_none(self, wof_db):
+    def test_variants_from_names_struct(self, division_db):
+        """Names struct common map is parsed into a non-empty variants list with specific known entries."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
+        assert record is not None
+        assert isinstance(record["variants"], list)
+        assert len(record["variants"]) >= 1
+        variant_names = [v["name"] for v in record["variants"]]
+        # div_locality_sf has common: {"es": "San Francisco", "zh": "\u65e7\u91d1\u5c71"}
+        # The primary name is also "San Francisco", so the es entry may be deduplicated;
+        # the Chinese name must always appear as a variant.
+        assert "\u65e7\u91d1\u5c71" in variant_names
+
+    def test_attributes(self, division_db):
+        """Attributes dict contains expected keys with correct values for div_locality_sf."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
+        assert record is not None
+        attrs = record["attributes"]
+        assert attrs["admin_level"] == 3
+        assert attrs["country"] == "US"
+        assert attrs["subtype"] == "locality"
+        assert "region" in attrs
+        assert "wikidata" in attrs
+        assert "population" in attrs
+
+    def test_null_names_returns_empty_name_and_variants(self, division_db):
+        """Record with names=NULL yields name='' and variants=[]."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_continent_na")
+        assert record is not None
+        assert record["name"] == ""
+        assert record["variants"] == []
+
+    def test_not_found_returns_none(self, division_db):
         """Missing rkey returns None."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "999999999")
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "nonexistent-id")
         assert record is None
 
-    def test_importance_is_zero(self, wof_db):
-        """WoF records have importance 0 (unranked)."""
-        record = wof_db.get_record("places.atgeo.org", "org.atgeo.places.wof", "85922583")
-        assert record["importance"] == 0
+    def test_importance_is_zero(self, division_db):
+        """get_record() pops importance then re-adds it if not None; 0 is not None so it appears."""
+        record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
+        assert record is not None
+        assert record.get("importance") == 0
 
-    def test_query_nearest_raises(self, wof_db):
-        """WhosOnFirst does not support search."""
+    def test_query_nearest_raises(self, division_db):
+        """OvertureDivision does not support search."""
         with pytest.raises(NotImplementedError):
-            wof_db.query_nearest({})
+            division_db.query_nearest({})

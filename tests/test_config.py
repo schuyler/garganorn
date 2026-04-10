@@ -4,7 +4,7 @@ import yaml
 
 from garganorn.config import load_config
 from garganorn.database import FoursquareOSP, OvertureMaps
-from garganorn.boundaries import WhosOnFirst
+from garganorn.boundaries import OvertureDivision
 
 
 def _write_config(tmp_path, data):
@@ -87,17 +87,6 @@ def test_config_without_boundaries(tmp_path):
     assert boundaries_path is None
 
 
-def test_wof_type_creates_whos_on_first(tmp_path):
-    """'wof' database type creates a WhosOnFirst instance."""
-    fake_db = tmp_path / "wof.duckdb"
-    fake_db.touch()
-    config_path = _write_config(tmp_path, {
-        "databases": [{"type": "wof", "path": str(fake_db)}]
-    })
-    repo, dbs, boundaries_path, *_ = load_config(config_path)
-    assert len(dbs) == 1
-    assert isinstance(dbs[0], WhosOnFirst)
-
 
 # ---------------------------------------------------------------------------
 # Tiles config tests (Red phase: load_config returns 3-tuple, not 4-tuple yet)
@@ -147,3 +136,15 @@ def test_config_without_tiles_returns_4tuple_with_none(tmp_path):
     result = load_config(config_path)
     assert len(result) == 4, f"load_config must always return 4-tuple; got {len(result)}-tuple"
     assert result[3] is None
+
+
+def test_overture_division_type_creates_overture_division(tmp_path):
+    """'overture_division' database type creates an OvertureDivision instance."""
+    fake_db = tmp_path / "boundaries.duckdb"
+    fake_db.touch()
+    config_path = _write_config(tmp_path, {
+        "databases": [{"type": "overture_division", "path": str(fake_db)}]
+    })
+    repo, dbs, boundaries_path, *_ = load_config(config_path)
+    assert len(dbs) == 1
+    assert isinstance(dbs[0], OvertureDivision)
