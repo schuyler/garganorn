@@ -75,8 +75,13 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
                     ORDER BY b.level ASC
                 )}})::VARCHAR
                 FROM places p
+                -- DuckDB's R-tree index cannot be probed with a per-row value from the
+                -- driving table, so the ST_Contains join scans all boundaries. The BETWEEN
+                -- pre-filter on bbox columns lets zone maps skip non-overlapping row groups.
                 JOIN wof.boundaries b
-                    ON ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
+                    ON p.{lat_expr} BETWEEN b.min_latitude AND b.max_latitude
+                   AND p.{lon_expr} BETWEEN b.min_longitude AND b.max_longitude
+                   AND ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
                 WHERE LEFT(p.qk17, 6) = ?
                 GROUP BY p.{pk_expr}
             """, [z6])

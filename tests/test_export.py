@@ -1365,6 +1365,90 @@ class TestContainmentInExport:
             assert levels == sorted(levels), f"within must be ordered by level ASC; got {levels}"
 
     # ------------------------------------------------------------------
+    # Test 6b: compute_containment bbox pre-filter regression guard
+    # ------------------------------------------------------------------
+
+    def test_compute_containment_matches_all_containing_boundaries(self, tmp_path, wof_db_path):
+        """compute_containment must match ALL boundaries that contain a place, not just some.
+
+        This test guards against a future bbox pre-filter incorrectly excluding a
+        boundary whose bbox columns do contain the place's coordinates. A buggy
+        pre-filter that uses wrong bbox values (e.g., inverted min/max, or a bbox
+        that is too small) would produce fewer than the expected 4 containment
+        entries for the SF test point, causing this test to fail.
+
+        The SF test point (37.7749, -122.4194) falls inside all four WoF boundaries
+        defined in conftest.py::WOF_BOUNDARIES that cover North America:
+          - North America  (level  0): bbox [20,-130] to [55,-60]
+          - United States  (level 10): bbox [24,-125] to [50,-66]
+          - California     (level 25): bbox [34,-125] to [42,-118]
+          - San Francisco  (level 50): bbox [37.6,-122.55] to [37.85,-122.3]
+
+        Manhattan (level 55) does NOT contain the SF point, so exactly 4 entries
+        are expected and no more.
+
+        This test passes NOW (current code uses ST_Contains with no bbox pre-filter)
+        and must continue to pass after a correctly-implemented bbox pre-filter is
+        added. It FAILS if the bbox pre-filter is buggy (false negative).
+        """
+        try:
+            from garganorn.quadtree import compute_containment
+        except (ImportError, AttributeError):
+            pytest.fail(
+                "compute_containment not importable from garganorn.quadtree"
+            )
+
+        db_path = tmp_path / "containment_bbox_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        # SF city hall — inside North America, US, California, and San Francisco boundaries.
+        conn.execute(
+            "INSERT INTO places VALUES ('sf001', 37.7749, -122.4194, ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+
+        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        rows = conn.execute(
+            "SELECT place_id, relations_json FROM place_containment WHERE place_id = 'sf001'"
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 1, (
+            f"Expected exactly 1 place_containment row for 'sf001', got {len(rows)}"
+        )
+
+        parsed = json.loads(rows[0][1])
+        within = parsed["within"]
+
+        # The SF point falls inside exactly 4 of the 5 WoF test boundaries.
+        # If a bbox pre-filter incorrectly excludes any of these 4 boundaries,
+        # this assertion will catch it.
+        expected_names = {"North America", "United States", "California", "San Francisco"}
+        actual_names = {entry["name"] for entry in within}
+        assert actual_names == expected_names, (
+            f"compute_containment produced wrong set of containing boundaries.\n"
+            f"  Expected: {sorted(expected_names)}\n"
+            f"  Got:      {sorted(actual_names)}\n"
+            f"A missing boundary indicates the bbox pre-filter incorrectly excluded it "
+            f"(false negative). An extra boundary indicates incorrect inclusion."
+        )
+
+        # Verify levels are ordered ascending
+        levels = [e["level"] for e in within]
+        assert levels == sorted(levels), (
+            f"within entries must be ordered by level ASC; got {levels}"
+        )
+
+    # ------------------------------------------------------------------
     # Test 7: run_pipeline accepts boundaries_db keyword argument
     # ------------------------------------------------------------------
 
