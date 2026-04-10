@@ -291,7 +291,7 @@ def test_get_record_with_boundaries_includes_relations():
     # Mock BoundaryLookup
     mock_boundaries = MagicMock()
     mock_boundaries.containment.return_value = [
-        {"rkey": "org.atgeo.places.wof:85922583", "name": "San Francisco", "level": 50},
+        {"rkey": "org.atgeo.places.overture.division:85922583"},
     ]
 
     logger = logging.getLogger("test")
@@ -301,7 +301,8 @@ def test_get_record_with_boundaries_includes_relations():
     value = result["value"]
     assert "relations" in value
     assert "within" in value["relations"]
-    assert value["relations"]["within"][0]["name"] == "San Francisco"
+    assert value["relations"]["within"][0]["rkey"] == "org.atgeo.places.overture.division:85922583"
+    assert "name" not in value["relations"]["within"][0]
     # relations should NOT be at the envelope level
     assert "relations" not in result
 

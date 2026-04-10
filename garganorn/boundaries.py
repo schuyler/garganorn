@@ -1,4 +1,4 @@
-"""WoF admin boundary lookup and record resolution."""
+"""Admin boundary lookup and record resolution."""
 import json
 import tempfile
 from pathlib import Path
@@ -9,9 +9,9 @@ from .database import Database
 
 
 class BoundaryLookup:
-    """Point-in-polygon lookup against WoF admin boundaries."""
+    """Point-in-polygon lookup against admin boundaries."""
 
-    COLLECTION = "org.atgeo.places.wof"
+    COLLECTION = "org.atgeo.places.overture.division"
 
     def __init__(self, db_path):
         self.db_path = Path(db_path)
@@ -30,23 +30,17 @@ class BoundaryLookup:
     def containment(self, lat, lon):
         """Return all admin regions containing the given point.
 
-        Returns a list of dicts ordered by level ascending (continent first,
-        most specific last), each containing:
-            rkey: collection-qualified rkey (org.atgeo.places.wof:<id>)
-            name: display name
-            level: integer 0-100
+        Returns a list of dicts ordered by admin_level ascending (continent
+        first, most specific last), each containing:
+            rkey: collection-qualified rkey (org.atgeo.places.overture.division:<id>)
         """
         conn = self.connect()
         rows = conn.execute("""
-            SELECT rkey, name, level
-            FROM boundaries
-            WHERE ST_Contains(geom, ST_Point($lon, $lat))
-            ORDER BY level ASC
+            SELECT id FROM places
+            WHERE ST_Contains(geometry, ST_Point($lon, $lat))
+            ORDER BY admin_level ASC
         """, {"lat": lat, "lon": lon}).fetchall()
-        return [
-            {"rkey": f"{self.COLLECTION}:{r[0]}", "name": r[1], "level": r[2]}
-            for r in rows
-        ]
+        return [{"rkey": f"{self.COLLECTION}:{r[0]}"} for r in rows]
 
     def close(self):
         if self.conn:

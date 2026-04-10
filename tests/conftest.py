@@ -600,19 +600,76 @@ def wof_db_path(tmp_path_factory):
 
 
 @pytest.fixture
-def boundary_lookup(wof_db_path):
-    bl = BoundaryLookup(wof_db_path)
-    bl.connect()
-    yield bl
-    bl.close()
-
-
-@pytest.fixture
 def wof_db(wof_db_path):
     db = WhosOnFirst(wof_db_path)
     db.connect()
     yield db
     db.close()
+
+
+# ---------------------------------------------------------------------------
+# Division boundary test data (Overture divisions schema)
+# ---------------------------------------------------------------------------
+
+# id, admin_level, lat, lon, wkt_geom, min_lat, min_lon, max_lat, max_lon
+DIVISION_BOUNDARIES = [
+    ("div_continent_na", 0, 40.0, -100.0,
+     "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
+     20.0, -130.0, 55.0, -60.0),
+    ("div_country_us", 1, 39.0, -98.0,
+     "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
+     24.0, -125.0, 50.0, -66.0),
+    ("div_region_ca", 2, 37.0, -120.0,
+     "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
+     34.0, -125.0, 42.0, -118.0),
+    ("div_locality_sf", 3, 37.7749, -122.4194,
+     "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
+     37.6, -122.55, 37.85, -122.3),
+    ("div_borough_manhattan", 4, 40.7831, -73.9712,
+     "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
+     40.68, -74.05, 40.88, -73.90),
+]
+
+
+def _create_division_db(db_path):
+    """Create a division-schema boundary DB (table 'places' with id, geometry, admin_level)."""
+    conn = duckdb.connect(str(db_path))
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE places (
+            id VARCHAR,
+            geometry GEOMETRY,
+            admin_level INTEGER,
+            min_latitude DOUBLE,
+            max_latitude DOUBLE,
+            min_longitude DOUBLE,
+            max_longitude DOUBLE
+        )
+    """)
+    for row in DIVISION_BOUNDARIES:
+        bid, admin_level, lat, lon, wkt, min_lat, min_lon, max_lat, max_lon = row
+        conn.execute("""
+            INSERT INTO places VALUES (
+                ?, ST_GeomFromText(?), ?, ?, ?, ?, ?
+            )
+        """, [bid, wkt, admin_level, min_lat, max_lat, min_lon, max_lon])
+    conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
+    conn.close()
+
+
+@pytest.fixture(scope="session")
+def division_db_path(tmp_path_factory):
+    db_path = tmp_path_factory.mktemp("division") / "division.duckdb"
+    _create_division_db(db_path)
+    return db_path
+
+
+@pytest.fixture
+def boundary_lookup(division_db_path):
+    bl = BoundaryLookup(division_db_path)
+    bl.connect()
+    yield bl
+    bl.close()
 
 
 # ---------------------------------------------------------------------------

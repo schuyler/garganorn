@@ -1039,17 +1039,17 @@ class TestOvertureExportTiles:
 
 
 # ---------------------------------------------------------------------------
-# WoF containment relations JSON for test fixtures
+# Division containment relations JSON for test fixtures
 # ---------------------------------------------------------------------------
 
-# The four WoF boundaries that contain SF places (lat ~37.77, lon ~-122.42),
-# ordered by level ascending (continent first — matches ORDER BY level ASC).
+# The four division boundaries that contain SF places (lat ~37.77, lon ~-122.42),
+# ordered by admin_level ascending (continent first — matches ORDER BY admin_level ASC).
 _SF_WITHIN_JSON = json.dumps({
     "within": [
-        {"rkey": "org.atgeo.places.wof:102191575", "name": "North America", "level": 0},
-        {"rkey": "org.atgeo.places.wof:85633793", "name": "United States", "level": 10},
-        {"rkey": "org.atgeo.places.wof:85688637", "name": "California", "level": 25},
-        {"rkey": "org.atgeo.places.wof:85922583", "name": "San Francisco", "level": 50},
+        {"rkey": "org.atgeo.places.overture.division:div_continent_na"},
+        {"rkey": "org.atgeo.places.overture.division:div_country_us"},
+        {"rkey": "org.atgeo.places.overture.division:div_region_ca"},
+        {"rkey": "org.atgeo.places.overture.division:div_locality_sf"},
     ]
 })
 
@@ -1074,11 +1074,11 @@ def _create_place_containment(conn, entries):
 
 
 # ---------------------------------------------------------------------------
-# Tests: WoF containment in tile export pipelines (Red phase)
+# Tests: Division containment in tile export pipelines
 # ---------------------------------------------------------------------------
 
 class TestContainmentInExport:
-    """Tests specifying WoF containment in tile export output.
+    """Tests specifying division containment in tile export output.
 
     All tests in this class FAIL in the Red phase because:
       - Tests 1-4: the export SQL files do not yet LEFT JOIN place_containment,
@@ -1135,12 +1135,10 @@ class TestContainmentInExport:
         )
         for entry in within:
             assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert "name" in entry, f"within entry missing 'name': {entry}"
-            assert "level" in entry, f"within entry missing 'level': {entry}"
-        levels = [entry["level"] for entry in within]
-        assert levels == sorted(levels), (
-            f"within entries must be ordered by level ascending; got levels={levels}"
-        )
+            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
+                f"rkey must have division prefix; got {entry['rkey']!r}"
+            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
+            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 2: FSQ export produces empty relations when containment table is empty
@@ -1239,12 +1237,10 @@ class TestContainmentInExport:
         )
         for entry in within:
             assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert "name" in entry, f"within entry missing 'name': {entry}"
-            assert "level" in entry, f"within entry missing 'level': {entry}"
-        levels = [entry["level"] for entry in within]
-        assert levels == sorted(levels), (
-            f"within entries must be ordered by level ascending; got levels={levels}"
-        )
+            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
+                f"rkey must have division prefix; got {entry['rkey']!r}"
+            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
+            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 4: OSM export includes relations.within when containment present
@@ -1313,12 +1309,10 @@ class TestContainmentInExport:
         )
         for entry in within:
             assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert "name" in entry, f"within entry missing 'name': {entry}"
-            assert "level" in entry, f"within entry missing 'level': {entry}"
-        levels = [entry["level"] for entry in within]
-        assert levels == sorted(levels), (
-            f"within entries must be ordered by level ascending; got levels={levels}"
-        )
+            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
+                f"rkey must have division prefix; got {entry['rkey']!r}"
+            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
+            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 5: compute_containment import
@@ -1335,7 +1329,7 @@ class TestContainmentInExport:
     # Test 6: compute_containment produces place_containment table
     # ------------------------------------------------------------------
 
-    def test_compute_containment_produces_table(self, tmp_path, wof_db_path):
+    def test_compute_containment_produces_table(self, tmp_path, division_db_path):
         """compute_containment must create place_containment with correct columns and rows.
 
         Fails in Red phase because compute_containment does not exist yet.
@@ -1368,7 +1362,7 @@ class TestContainmentInExport:
             "INSERT INTO places VALUES ('exp002', 37.7694, -122.4862, ST_QuadKey(-122.4862, 37.7694, 17))"
         )
 
-        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # Verify the table was created
         tables = conn.execute(
@@ -1391,13 +1385,13 @@ class TestContainmentInExport:
             f"place_containment must have 'relations_json' column; got columns: {list(cols)}"
         )
 
-        # Verify rows exist for SF places (they fall inside NA/US/CA/SF boundaries)
+        # Verify rows exist for SF places (they fall inside division boundaries)
         rows = conn.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
         conn.close()
 
         assert len(rows) >= 1, (
             "compute_containment must produce at least one row for SF test places "
-            f"that fall inside the WoF boundaries; got {len(rows)} rows"
+            f"that fall inside the division boundaries; got {len(rows)} rows"
         )
         for place_id, relations_json in rows:
             parsed = json.loads(relations_json)
@@ -1406,21 +1400,19 @@ class TestContainmentInExport:
             )
             within = parsed["within"]
             assert isinstance(within, list), f"within must be a list for {place_id}; got {type(within)}"
-            assert len(within) >= 1, f"SF coordinates should be contained by at least 1 WoF boundary"
+            assert len(within) >= 1, f"SF coordinates should be contained by at least 1 boundary"
             for entry in within:
                 assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-                assert entry["rkey"].startswith("org.atgeo.places.wof:"), \
+                assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
                     f"rkey must be collection-qualified; got {entry['rkey']!r}"
-                assert "name" in entry, f"within entry missing 'name': {entry}"
-                assert "level" in entry, f"within entry missing 'level': {entry}"
-            levels = [e["level"] for e in within]
-            assert levels == sorted(levels), f"within must be ordered by level ASC; got {levels}"
+                assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
+                assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 6b: compute_containment bbox pre-filter regression guard
     # ------------------------------------------------------------------
 
-    def test_compute_containment_matches_all_containing_boundaries(self, tmp_path, wof_db_path):
+    def test_compute_containment_matches_all_containing_boundaries(self, tmp_path, division_db_path):
         """compute_containment must match ALL boundaries that contain a place, not just some.
 
         This test guards against a future bbox pre-filter incorrectly excluding a
@@ -1429,15 +1421,15 @@ class TestContainmentInExport:
         that is too small) would produce fewer than the expected 4 containment
         entries for the SF test point, causing this test to fail.
 
-        The SF test point (37.7749, -122.4194) falls inside all four WoF boundaries
-        defined in conftest.py::WOF_BOUNDARIES that cover North America:
-          - North America  (level  0): bbox [20,-130] to [55,-60]
-          - United States  (level 10): bbox [24,-125] to [50,-66]
-          - California     (level 25): bbox [34,-125] to [42,-118]
-          - San Francisco  (level 50): bbox [37.6,-122.55] to [37.85,-122.3]
+        The SF test point (37.7749, -122.4194) falls inside all four division boundaries
+        defined in conftest.py::DIVISION_BOUNDARIES that cover North America:
+          - div_continent_na (admin_level 0): bbox [20,-130] to [55,-60]
+          - div_country_us   (admin_level 1): bbox [24,-125] to [50,-66]
+          - div_region_ca    (admin_level 2): bbox [34,-125] to [42,-118]
+          - div_locality_sf  (admin_level 3): bbox [37.6,-122.55] to [37.85,-122.3]
 
-        Manhattan (level 55) does NOT contain the SF point, so exactly 4 entries
-        are expected and no more.
+        div_borough_manhattan (admin_level 4) does NOT contain the SF point,
+        so exactly 4 entries are expected and no more.
 
         This test passes NOW (current code uses ST_Contains with no bbox pre-filter)
         and must continue to pass after a correctly-implemented bbox pre-filter is
@@ -1467,7 +1459,7 @@ class TestContainmentInExport:
             "INSERT INTO places VALUES ('sf001', 37.7749, -122.4194, ST_QuadKey(-122.4194, 37.7749, 17))"
         )
 
-        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         rows = conn.execute(
             "SELECT place_id, relations_json FROM place_containment WHERE place_id = 'sf001'"
@@ -1481,23 +1473,22 @@ class TestContainmentInExport:
         parsed = json.loads(rows[0][1])
         within = parsed["within"]
 
-        # The SF point falls inside exactly 4 of the 5 WoF test boundaries.
+        # The SF point falls inside exactly 4 of the 5 division test boundaries.
         # If a bbox pre-filter incorrectly excludes any of these 4 boundaries,
         # this assertion will catch it.
-        expected_names = {"North America", "United States", "California", "San Francisco"}
-        actual_names = {entry["name"] for entry in within}
-        assert actual_names == expected_names, (
+        expected_rkeys = {
+            "org.atgeo.places.overture.division:div_continent_na",
+            "org.atgeo.places.overture.division:div_country_us",
+            "org.atgeo.places.overture.division:div_region_ca",
+            "org.atgeo.places.overture.division:div_locality_sf",
+        }
+        actual_rkeys = {entry["rkey"] for entry in within}
+        assert actual_rkeys == expected_rkeys, (
             f"compute_containment produced wrong set of containing boundaries.\n"
-            f"  Expected: {sorted(expected_names)}\n"
-            f"  Got:      {sorted(actual_names)}\n"
+            f"  Expected: {sorted(expected_rkeys)}\n"
+            f"  Got:      {sorted(actual_rkeys)}\n"
             f"A missing boundary indicates the bbox pre-filter incorrectly excluded it "
             f"(false negative). An extra boundary indicates incorrect inclusion."
-        )
-
-        # Verify levels are ordered ascending
-        levels = [e["level"] for e in within]
-        assert levels == sorted(levels), (
-            f"within entries must be ordered by level ASC; got {levels}"
         )
 
     # ------------------------------------------------------------------
@@ -1615,10 +1606,10 @@ class TestContainmentInExport:
     # Test 10: place outside all boundaries produces no containment row
     # ------------------------------------------------------------------
 
-    def test_compute_containment_place_outside_all_boundaries(self, tmp_path, wof_db_path):
+    def test_compute_containment_place_outside_all_boundaries(self, tmp_path, division_db_path):
         """A place at (0, 0) in the ocean should produce no place_containment row.
 
-        All test WoF boundaries cover parts of North America. A point in the
+        All test division boundaries cover parts of North America. A point in the
         Gulf of Guinea should not be contained by any of them. This validates
         that compute_containment does not produce spurious containment rows
         for places outside all boundaries.
@@ -1642,7 +1633,7 @@ class TestContainmentInExport:
             "ST_QuadKey(0.0, 0.0, 17))"
         )
 
-        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         rows = conn.execute(
             "SELECT place_id FROM place_containment WHERE place_id = 'ocean001'"
@@ -1657,7 +1648,7 @@ class TestContainmentInExport:
     # Test 11: two-phase split — tile-containing vs tile-straddling boundaries
     # ------------------------------------------------------------------
 
-    def test_compute_containment_two_phase_split(self, tmp_path, wof_db_path):
+    def test_compute_containment_two_phase_split(self, tmp_path, division_db_path):
         """Verify correct containment when some boundaries fully contain the z6
         tile and others only partially overlap it.
 
@@ -1665,19 +1656,19 @@ class TestContainmentInExport:
         bbox is approximately (-123.75, 36.6) to (-118.125, 41.0).
 
         Phase 1 boundaries (fully contain the z6 tile):
-          - North America: (-130, 20) to (-60, 55)  — fully contains tile
-          - United States:  (-125, 24) to (-66, 50)  — fully contains tile
-          - California:     (-125, 34) to (-118, 42)  — fully contains tile
+          - div_continent_na (admin_level 0): (-130, 20) to (-60, 55) — fully contains tile
+          - div_country_us   (admin_level 1): (-125, 24) to (-66, 50) — fully contains tile
+          - div_region_ca    (admin_level 2): (-125, 34) to (-118, 42) — fully contains tile
 
         Phase 2 boundary (overlaps but does NOT fully contain the z6 tile):
-          - San Francisco:  (-122.55, 37.6) to (-122.3, 37.85)  — small polygon
+          - div_locality_sf  (admin_level 3): (-122.55, 37.6) to (-122.3, 37.85) — small polygon
             inside the tile, must be evaluated per-point via ST_Contains
 
         Non-overlapping boundary:
-          - Manhattan:      (-74.05, 40.68) to (-73.90, 40.88)  — different tile
+          - div_borough_manhattan (admin_level 4): (-74.05, 40.68) to (-73.90, 40.88) — different tile
 
         The SF point should match exactly 4 boundaries (NA, US, CA, SF).
-        A Manhattan point should match exactly 3 (NA, US only — not CA or SF).
+        The Manhattan point should match exactly 3 (NA, US, Manhattan).
         """
         from garganorn.quadtree import compute_containment
 
@@ -1703,7 +1694,7 @@ class TestContainmentInExport:
             "ST_QuadKey(-73.9712, 40.7831, 17))"
         )
 
-        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # Check SF point: 4 boundaries
         sf_rows = conn.execute(
@@ -1711,40 +1702,44 @@ class TestContainmentInExport:
         ).fetchall()
         assert len(sf_rows) == 1, f"Expected 1 row for sf_center; got {len(sf_rows)}"
         sf_within = json.loads(sf_rows[0][0])["within"]
-        sf_names = {e["name"] for e in sf_within}
-        assert sf_names == {"North America", "United States", "California", "San Francisco"}, (
-            f"SF point should be in 4 boundaries; got {sorted(sf_names)}"
+        sf_rkeys = {e["rkey"] for e in sf_within}
+        expected_sf_rkeys = {
+            "org.atgeo.places.overture.division:div_continent_na",
+            "org.atgeo.places.overture.division:div_country_us",
+            "org.atgeo.places.overture.division:div_region_ca",
+            "org.atgeo.places.overture.division:div_locality_sf",
+        }
+        assert sf_rkeys == expected_sf_rkeys, (
+            f"SF point should be in 4 boundaries; got {sorted(sf_rkeys)}"
         )
 
-        # Check Manhattan point: 2 boundaries (NA, US) + Manhattan
+        # Check Manhattan point: NA, US, Manhattan (3 boundaries)
         nyc_rows = conn.execute(
             "SELECT relations_json FROM place_containment WHERE place_id = 'nyc_center'"
         ).fetchall()
         assert len(nyc_rows) == 1, f"Expected 1 row for nyc_center; got {len(nyc_rows)}"
         nyc_within = json.loads(nyc_rows[0][0])["within"]
-        nyc_names = {e["name"] for e in nyc_within}
-        assert nyc_names == {"North America", "United States", "Manhattan"}, (
-            f"Manhattan point should be in NA, US, Manhattan; got {sorted(nyc_names)}"
+        nyc_rkeys = {e["rkey"] for e in nyc_within}
+        expected_nyc_rkeys = {
+            "org.atgeo.places.overture.division:div_continent_na",
+            "org.atgeo.places.overture.division:div_country_us",
+            "org.atgeo.places.overture.division:div_borough_manhattan",
+        }
+        assert nyc_rkeys == expected_nyc_rkeys, (
+            f"Manhattan point should be in NA, US, Manhattan; got {sorted(nyc_rkeys)}"
         )
-
-        # Verify level ordering for both
-        for label, within in [("sf", sf_within), ("nyc", nyc_within)]:
-            levels = [e["level"] for e in within]
-            assert levels == sorted(levels), (
-                f"{label} within entries must be ordered by level ASC; got {levels}"
-            )
         conn.close()
 
     # ------------------------------------------------------------------
     # Test 12: place near tile edge with boundary straddling the edge
     # ------------------------------------------------------------------
 
-    def test_compute_containment_place_near_tile_edge(self, tmp_path, wof_db_path):
+    def test_compute_containment_place_near_tile_edge(self, tmp_path, division_db_path):
         """A place near the edge of the SF city boundary must still be correctly
         contained when it falls inside the boundary polygon.
 
-        The SF boundary is POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85,
-        -122.3 37.6, -122.55 37.6)). We test:
+        The SF boundary (div_locality_sf) is POLYGON((-122.55 37.6, -122.55 37.85,
+        -122.3 37.85, -122.3 37.6, -122.55 37.6)). We test:
           - A point just inside the SW corner: (37.61, -122.54) — should be in SF
           - A point just outside the SW corner: (37.59, -122.56) — should NOT be in SF
             but should still be in NA, US, CA (the z6 tile is the same: 023010)
@@ -1776,7 +1771,7 @@ class TestContainmentInExport:
             "ST_QuadKey(-122.56, 37.59, 17))"
         )
 
-        compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # edge_in: should be in NA, US, CA, SF (4 boundaries)
         in_rows = conn.execute(
@@ -1784,9 +1779,15 @@ class TestContainmentInExport:
         ).fetchall()
         assert len(in_rows) == 1, f"Expected 1 row for edge_in; got {len(in_rows)}"
         in_within = json.loads(in_rows[0][0])["within"]
-        in_names = {e["name"] for e in in_within}
-        assert in_names == {"North America", "United States", "California", "San Francisco"}, (
-            f"edge_in should be in 4 boundaries; got {sorted(in_names)}"
+        in_rkeys = {e["rkey"] for e in in_within}
+        expected_in_rkeys = {
+            "org.atgeo.places.overture.division:div_continent_na",
+            "org.atgeo.places.overture.division:div_country_us",
+            "org.atgeo.places.overture.division:div_region_ca",
+            "org.atgeo.places.overture.division:div_locality_sf",
+        }
+        assert in_rkeys == expected_in_rkeys, (
+            f"edge_in should be in 4 boundaries; got {sorted(in_rkeys)}"
         )
 
         # edge_out: should be in NA, US, CA only (3 boundaries, not SF)
@@ -1795,9 +1796,14 @@ class TestContainmentInExport:
         ).fetchall()
         assert len(out_rows) == 1, f"Expected 1 row for edge_out; got {len(out_rows)}"
         out_within = json.loads(out_rows[0][0])["within"]
-        out_names = {e["name"] for e in out_within}
-        assert out_names == {"North America", "United States", "California"}, (
-            f"edge_out should be in 3 boundaries (not SF); got {sorted(out_names)}"
+        out_rkeys = {e["rkey"] for e in out_within}
+        expected_out_rkeys = {
+            "org.atgeo.places.overture.division:div_continent_na",
+            "org.atgeo.places.overture.division:div_country_us",
+            "org.atgeo.places.overture.division:div_region_ca",
+        }
+        assert out_rkeys == expected_out_rkeys, (
+            f"edge_out should be in 3 boundaries (not SF); got {sorted(out_rkeys)}"
         )
 
     # ------------------------------------------------------------------
@@ -1809,60 +1815,51 @@ class TestContainmentInExport:
         ST_Intersects pre-filter (Step 0) that excludes non-intersecting
         boundaries.
 
-        Creates a WoF DB with one boundary that intersects the tile and one
+        Creates a division DB with one boundary that intersects the tile and one
         that is far away. Uses a DuckDB connection wrapper to intercept SQL
         and verify that tile_boundaries is created and queried.
 
         FAILS on current code because there is no tile_boundaries temp table
         and no ST_Intersects pre-filter. Phase 1 and Phase 2 query
-        wof.boundaries directly.
+        bnd.places directly.
         """
         from garganorn.quadtree import compute_containment
 
-        # Create a WoF DB with two boundaries:
-        # 1. "Local Box" — small box around the test point
-        # 2. "Distant Box" — box in the southern hemisphere, nowhere near the tile
-        wof_path = tmp_path / "wof_prefilter.duckdb"
-        wof_conn = duckdb.connect(str(wof_path))
-        wof_conn.execute("INSTALL spatial; LOAD spatial;")
-        wof_conn.execute("""
-            CREATE TABLE boundaries (
-                wof_id BIGINT,
-                rkey VARCHAR,
-                name VARCHAR,
-                placetype VARCHAR,
-                level INTEGER,
-                latitude DOUBLE,
-                longitude DOUBLE,
-                geom GEOMETRY,
-                country VARCHAR,
+        # Create a division DB with two boundaries:
+        # 1. "local_box" — small box around the test point
+        # 2. "distant_box" — box in the southern hemisphere, nowhere near the tile
+        division_path = tmp_path / "division_prefilter.duckdb"
+        division_conn = duckdb.connect(str(division_path))
+        division_conn.execute("INSTALL spatial; LOAD spatial;")
+        division_conn.execute("""
+            CREATE TABLE places (
+                id VARCHAR,
+                geometry GEOMETRY,
+                admin_level INTEGER,
                 min_latitude DOUBLE,
-                min_longitude DOUBLE,
                 max_latitude DOUBLE,
-                max_longitude DOUBLE,
-                names_json VARCHAR,
-                concordances VARCHAR
+                min_longitude DOUBLE,
+                max_longitude DOUBLE
             )
         """)
         # Local boundary containing the test point (SF area)
-        wof_conn.execute("""
-            INSERT INTO boundaries VALUES (
-                1, '1', 'Local Box', 'region', 25, 37.77, -122.42,
+        division_conn.execute("""
+            INSERT INTO places VALUES (
+                'local_box',
                 ST_GeomFromText('POLYGON((-123 37, -123 38, -122 38, -122 37, -123 37))'),
-                'US', 37.0, -123.0, 38.0, -122.0, NULL, NULL
+                3, 37.0, 38.0, -123.0, -122.0
             )
         """)
         # Distant boundary — southern hemisphere, does not intersect the SF z6 tile
-        wof_conn.execute("""
-            INSERT INTO boundaries VALUES (
-                2, '2', 'Distant Box', 'region', 25, -40.0, 170.0,
+        division_conn.execute("""
+            INSERT INTO places VALUES (
+                'distant_box',
                 ST_GeomFromText('POLYGON((169 -41, 169 -39, 171 -39, 171 -41, 169 -41))'),
-                'NZ', -41.0, 169.0, -39.0, 171.0, NULL, NULL
+                3, -41.0, -39.0, 169.0, 171.0
             )
         """)
-        wof_conn.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
-        wof_conn.execute("CREATE INDEX idx_rkey ON boundaries(rkey)")
-        wof_conn.close()
+        division_conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
+        division_conn.close()
 
         # Create places DB with one point in SF
         db_path = tmp_path / "prefilter_test.duckdb"
@@ -1898,7 +1895,7 @@ class TestContainmentInExport:
                 return getattr(self._real, name)
 
         wrapped = _ConnWrapper(conn)
-        compute_containment(wrapped, str(wof_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(wrapped, str(division_path), "fsq_place_id", "longitude", "latitude")
 
         # Verify tile_boundaries was created
         tb_creates = [s for s in sql_log if re.search(r"CREATE\b.*\bTABLE\b.*\btile_boundaries\b", s, re.IGNORECASE)]
@@ -1912,9 +1909,9 @@ class TestContainmentInExport:
         rows = conn.execute("SELECT relations_json FROM place_containment").fetchall()
         assert len(rows) == 1, f"Expected 1 containment row; got {len(rows)}"
         within = json.loads(rows[0][0])["within"]
-        names = {e["name"] for e in within}
-        assert names == {"Local Box"}, (
-            f"Only 'Local Box' should match; got {sorted(names)}"
+        rkeys = {e["rkey"] for e in within}
+        assert rkeys == {"org.atgeo.places.overture.division:local_box"}, (
+            f"Only 'local_box' should match; got {sorted(rkeys)}"
         )
         conn.close()
 
@@ -1926,38 +1923,26 @@ class TestContainmentInExport:
         """After Step 0, tile_boundaries must contain clipped geometries with
         fewer vertices than the original boundary.
 
-        Creates a WoF DB with one boundary that spans far beyond the tile.
+        Creates a division DB with one boundary that spans far beyond the tile.
         Uses a connection wrapper to intercept the CREATE of tile_boundaries
         and immediately query ST_NPoints on the clipped geometry before
         the table is dropped.
-
-        FAILS on current code because tile_boundaries temp table does not
-        exist -- the code joins directly against wof.boundaries without
-        creating any intermediate table.
         """
         from garganorn.quadtree import compute_containment
 
-        # Create a WoF DB with one large boundary (many vertices, spans wide)
-        wof_path = tmp_path / "wof_clip.duckdb"
-        wof_conn = duckdb.connect(str(wof_path))
-        wof_conn.execute("INSTALL spatial; LOAD spatial;")
-        wof_conn.execute("""
-            CREATE TABLE boundaries (
-                wof_id BIGINT,
-                rkey VARCHAR,
-                name VARCHAR,
-                placetype VARCHAR,
-                level INTEGER,
-                latitude DOUBLE,
-                longitude DOUBLE,
-                geom GEOMETRY,
-                country VARCHAR,
+        # Create a division DB with one large boundary (many vertices, spans wide)
+        division_path = tmp_path / "division_clip.duckdb"
+        division_conn = duckdb.connect(str(division_path))
+        division_conn.execute("INSTALL spatial; LOAD spatial;")
+        division_conn.execute("""
+            CREATE TABLE places (
+                id VARCHAR,
+                geometry GEOMETRY,
+                admin_level INTEGER,
                 min_latitude DOUBLE,
-                min_longitude DOUBLE,
                 max_latitude DOUBLE,
-                max_longitude DOUBLE,
-                names_json VARCHAR,
-                concordances VARCHAR
+                min_longitude DOUBLE,
+                max_longitude DOUBLE
             )
         """)
         # A large polygon spanning most of the Western Hemisphere.
@@ -1973,21 +1958,20 @@ class TestContainmentInExport:
             "-60 10, -170 10"
             "))"
         )
-        wof_conn.execute(f"""
-            INSERT INTO boundaries VALUES (
-                1, '1', 'Big Region', 'continent', 0, 30.0, -100.0,
+        division_conn.execute(f"""
+            INSERT INTO places VALUES (
+                'big_region',
                 ST_GeomFromText('{large_wkt}'),
-                'XX', 10.0, -170.0, 50.0, -60.0, NULL, NULL
+                0, 10.0, 50.0, -170.0, -60.0
             )
         """)
-        wof_conn.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
-        wof_conn.execute("CREATE INDEX idx_rkey ON boundaries(rkey)")
+        division_conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
 
         # Get original vertex count before closing
-        orig_npoints = wof_conn.execute(
-            "SELECT ST_NPoints(geom) FROM boundaries WHERE rkey = '1'"
+        orig_npoints = division_conn.execute(
+            "SELECT ST_NPoints(geometry) FROM places WHERE id = 'big_region'"
         ).fetchone()[0]
-        wof_conn.close()
+        division_conn.close()
 
         # Create places DB
         db_path = tmp_path / "clip_test.duckdb"
@@ -2019,7 +2003,7 @@ class TestContainmentInExport:
                 if isinstance(sql, str) and re.search(r"CREATE\b.*\bTABLE\b.*\btile_boundaries\b", sql, re.IGNORECASE):
                     try:
                         row = self._real.execute(
-                            "SELECT ST_NPoints(geom) FROM tile_boundaries WHERE rkey = '1'"
+                            "SELECT ST_NPoints(geometry) FROM tile_boundaries WHERE id = 'big_region'"
                         ).fetchone()
                         if row:
                             clipped_npoints.append(row[0])
@@ -2031,7 +2015,7 @@ class TestContainmentInExport:
                 return getattr(self._real, name)
 
         wrapped = _ClipInspector(conn)
-        compute_containment(wrapped, str(wof_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(wrapped, str(division_path), "fsq_place_id", "longitude", "latitude")
 
         assert len(clipped_npoints) > 0, (
             "tile_boundaries temp table was never created. "
@@ -2049,7 +2033,7 @@ class TestContainmentInExport:
     # Test 15: tile_boundaries temp table is cleaned up after execution
     # ------------------------------------------------------------------
 
-    def test_tile_boundaries_cleanup(self, tmp_path, wof_db_path):
+    def test_tile_boundaries_cleanup(self, tmp_path, division_db_path):
         """tile_boundaries temp table must be dropped in the finally block
         after compute_containment completes.
 
@@ -2094,7 +2078,7 @@ class TestContainmentInExport:
                 return getattr(self._real, name)
 
         wrapped = _TrackingConn(conn)
-        compute_containment(wrapped, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(wrapped, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # tile_boundaries must have been created during execution
         assert len(tile_boundaries_created) > 0, (
@@ -2117,7 +2101,7 @@ class TestContainmentInExport:
     # Test 16: log output includes boundaries= field
     # ------------------------------------------------------------------
 
-    def test_log_includes_boundaries_count(self, tmp_path, wof_db_path, caplog):
+    def test_log_includes_boundaries_count(self, tmp_path, division_db_path, caplog):
         """Per-tile log lines must include 'boundaries=N' showing the count
         of tile-intersecting boundaries from Step 0.
 
@@ -2144,7 +2128,7 @@ class TestContainmentInExport:
         )
 
         with caplog.at_level(logging.INFO, logger="garganorn.quadtree"):
-            compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+            compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # Find per-tile log lines
         tile_lines = [
@@ -2165,13 +2149,12 @@ class TestContainmentInExport:
     # Test 17: Phase 2 queries tile_boundaries, not wof.boundaries
     # ------------------------------------------------------------------
 
-    def test_phase2_queries_tile_boundaries_not_wof(self, tmp_path, wof_db_path):
+    def test_phase2_queries_tile_boundaries_not_wof(self, tmp_path, division_db_path):
         """Phase 2 (edge_matches CTE) must JOIN tile_boundaries instead of
-        wof.boundaries.  After Step 0 creates tile_boundaries, all subsequent
-        SQL should reference tile_boundaries — not wof.boundaries — for
-        spatial joins.
+        bnd.places directly.  After Step 0 creates tile_boundaries, all subsequent
+        SQL should reference tile_boundaries — not bnd.places — for spatial joins.
 
-        FAILS on current code because Phase 2 uses ``JOIN wof.boundaries b``.
+        FAILS on current code because Phase 2 uses ``JOIN bnd.places``.
         """
         from garganorn.quadtree import compute_containment
 
@@ -2208,7 +2191,7 @@ class TestContainmentInExport:
                 return getattr(self._real, name)
 
         wrapped = _SQLLogger(conn)
-        compute_containment(wrapped, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+        compute_containment(wrapped, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # Find the index of the Step 0 CREATE tile_boundaries statement
         step0_idx = None
@@ -2222,17 +2205,17 @@ class TestContainmentInExport:
             "Cannot verify Phase 2 retargeting without Step 0."
         )
 
-        # All SQL after Step 0 should NOT reference wof.boundaries in a
+        # All SQL after Step 0 should NOT reference bnd.places in a
         # JOIN or FROM context — they should use tile_boundaries instead.
         post_step0 = sql_log[step0_idx + 1:]
-        wof_boundary_refs = [
+        bnd_places_refs = [
             sql for sql in post_step0
-            if re.search(r"\b(JOIN|FROM)\s+wof\.boundaries\b", sql, re.IGNORECASE)
+            if re.search(r"\b(JOIN|FROM)\s+bnd\.places\b", sql, re.IGNORECASE)
         ]
-        assert len(wof_boundary_refs) == 0, (
+        assert len(bnd_places_refs) == 0, (
             "After Step 0, Phase 2 must JOIN tile_boundaries instead of "
-            "wof.boundaries. Found wof.boundaries references in post-Step-0 SQL:\n"
-            + "\n---\n".join(wof_boundary_refs[:3])
+            "bnd.places. Found bnd.places references in post-Step-0 SQL:\n"
+            + "\n---\n".join(bnd_places_refs[:3])
         )
 
         # At least one post-Step-0 SQL should reference tile_boundaries

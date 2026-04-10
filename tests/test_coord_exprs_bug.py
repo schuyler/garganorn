@@ -98,8 +98,8 @@ class TestCoordExprsAlias:
 # compute_containment with overture-style bbox struct column
 # ---------------------------------------------------------------------------
 
-def _make_wof_db(path):
-    """Create a minimal WoF boundaries DuckDB at *path*.
+def _make_division_db(path):
+    """Create a minimal division-schema boundaries DuckDB at *path*.
 
     The geometry is a simple polygon covering the San Francisco area, which
     contains the test place at (-122.42, 37.78).
@@ -107,35 +107,25 @@ def _make_wof_db(path):
     con = duckdb.connect(path)
     con.execute("INSTALL spatial; LOAD spatial;")
     con.execute("""
-        CREATE TABLE boundaries (
-            wof_id        BIGINT,
-            rkey          VARCHAR,
-            name          VARCHAR,
-            placetype     VARCHAR,
-            level         INTEGER,
-            latitude      DOUBLE,
-            longitude     DOUBLE,
-            geom          GEOMETRY,
-            country       VARCHAR,
+        CREATE TABLE places (
+            id            VARCHAR,
+            geometry      GEOMETRY,
+            admin_level   INTEGER,
             min_latitude  DOUBLE,
-            min_longitude DOUBLE,
             max_latitude  DOUBLE,
-            max_longitude DOUBLE,
-            names_json    VARCHAR,
-            concordances  VARCHAR
+            min_longitude DOUBLE,
+            max_longitude DOUBLE
         )
     """)
     con.execute("""
-        INSERT INTO boundaries VALUES (
-            85922583, '85922583', 'San Francisco', 'locality', 50,
-            37.7749, -122.4194,
+        INSERT INTO places VALUES (
+            '85922583',
             ST_GeomFromText('POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))'),
-            'US',
-            37.6, -122.55, 37.85, -122.3,
-            NULL, NULL
+            3,
+            37.6, 37.85, -122.55, -122.3
         )
     """)
-    con.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
+    con.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     con.close()
 
 
@@ -148,8 +138,8 @@ class TestComputeContainmentOverture:
         Currently raises duckdb.ParserException due to `p.(bbox.xmin + bbox.xmax) / 2.0`
         being invalid SQL. After the fix, it should succeed.
         """
-        wof_path = str(tmp_path / "wof.duckdb")
-        _make_wof_db(wof_path)
+        division_path = str(tmp_path / "division.duckdb")
+        _make_division_db(division_path)
 
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -174,18 +164,18 @@ class TestComputeContainmentOverture:
 
         # This call currently fails with TypeError because _coord_exprs does not
         # yet accept an alias parameter. After the fix, it should succeed.
-        compute_containment(con, wof_path, pk_expr, lon_expr, lat_expr)
+        compute_containment(con, division_path, pk_expr, lon_expr, lat_expr)
 
         # Verify the containment table was populated
         rows = con.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
         assert len(rows) == 1, f"Expected 1 containment row, got {len(rows)}"
         assert rows[0][0] == "ovr001"
-        assert "San Francisco" in rows[0][1]
+        assert "org.atgeo.places.overture.division:85922583" in rows[0][1]
 
-    def test_overture_containment_result_has_correct_wof_rkey(self, tmp_path):
-        """The containment record for an overture place references the expected WoF rkey."""
-        wof_path = str(tmp_path / "wof.duckdb")
-        _make_wof_db(wof_path)
+    def test_overture_containment_result_has_correct_division_rkey(self, tmp_path):
+        """The containment record for an overture place references the expected division rkey."""
+        division_path = str(tmp_path / "division.duckdb")
+        _make_division_db(division_path)
 
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -207,7 +197,7 @@ class TestComputeContainmentOverture:
         lon_expr, lat_expr = _coord_exprs("overture", alias="p")
         pk_expr = "p.id"
 
-        compute_containment(con, wof_path, pk_expr, lon_expr, lat_expr)
+        compute_containment(con, division_path, pk_expr, lon_expr, lat_expr)
 
         rows = con.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
         assert len(rows) == 1
@@ -215,4 +205,4 @@ class TestComputeContainmentOverture:
         within = relations.get("within", [])
         rkeys = [r["rkey"] for r in within]
         assert any("85922583" in rk for rk in rkeys), \
-            f"Expected WoF rkey 85922583 in relations: {rkeys}"
+            f"Expected division rkey containing '85922583' in relations: {rkeys}"

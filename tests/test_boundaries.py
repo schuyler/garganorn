@@ -14,24 +14,39 @@ class TestBoundaryLookupContainment:
     def test_returns_all_containing_boundaries(self, boundary_lookup):
         """Point in SF returns continent, country, region, and locality."""
         result = boundary_lookup.containment(37.7749, -122.4194)
-        names = [r["name"] for r in result]
-        assert "North America" in names
-        assert "United States" in names
-        assert "California" in names
-        assert "San Francisco" in names
-        assert "Manhattan" not in names
+        rkeys = [r["rkey"] for r in result]
+        assert any("div_continent_na" in rk for rk in rkeys)
+        assert any("div_country_us" in rk for rk in rkeys)
+        assert any("div_region_ca" in rk for rk in rkeys)
+        assert any("div_locality_sf" in rk for rk in rkeys)
+        assert not any("div_borough_manhattan" in rk for rk in rkeys)
 
-    def test_ordered_by_level_ascending(self, boundary_lookup):
-        """Results are ordered continent-first, most-specific-last."""
+    def test_ordered_by_admin_level_ascending(self, boundary_lookup):
+        """Results are ordered continent-first, most-specific-last.
+
+        Verified by checking rkey sequence matches known admin_level order
+        from the division test data.
+        """
         result = boundary_lookup.containment(37.7749, -122.4194)
-        levels = [r["level"] for r in result]
-        assert levels == sorted(levels)
+        rkeys = [r["rkey"] for r in result]
+        # Division test data admin_level order: continent(0), country(1), region(2), locality(3)
+        expected_order = ["div_continent_na", "div_country_us", "div_region_ca", "div_locality_sf"]
+        actual_ids = [rk.split(":")[-1] for rk in rkeys]
+        assert actual_ids == expected_order
 
     def test_rkeys_are_collection_qualified(self, boundary_lookup):
-        """Each rkey is prefixed with org.atgeo.places.wof:"""
+        """Each rkey is prefixed with org.atgeo.places.overture.division:"""
         result = boundary_lookup.containment(37.7749, -122.4194)
         for entry in result:
-            assert entry["rkey"].startswith("org.atgeo.places.wof:")
+            assert entry["rkey"].startswith("org.atgeo.places.overture.division:")
+
+    def test_containment_returns_rkey_only(self, boundary_lookup):
+        """containment() dicts must have 'rkey' only -- no 'name', no 'level'."""
+        result = boundary_lookup.containment(37.7749, -122.4194)
+        for entry in result:
+            assert "rkey" in entry
+            assert "name" not in entry, f"'name' key must not appear: {entry}"
+            assert "level" not in entry, f"'level' key must not appear: {entry}"
 
     def test_empty_for_point_outside_all_boundaries(self, boundary_lookup):
         """Point in the middle of the ocean returns empty list."""
@@ -39,14 +54,14 @@ class TestBoundaryLookupContainment:
         assert result == []
 
     def test_partial_containment(self, boundary_lookup):
-        """Point in Manhattan returns continent+country but not California/SF."""
+        """Point in Manhattan returns continent+country+borough but not CA/SF."""
         result = boundary_lookup.containment(40.7831, -73.9712)
-        names = [r["name"] for r in result]
-        assert "North America" in names
-        assert "United States" in names
-        assert "Manhattan" in names
-        assert "California" not in names
-        assert "San Francisco" not in names
+        rkeys = [r["rkey"] for r in result]
+        assert any("div_continent_na" in rk for rk in rkeys)
+        assert any("div_country_us" in rk for rk in rkeys)
+        assert any("div_borough_manhattan" in rk for rk in rkeys)
+        assert not any("div_region_ca" in rk for rk in rkeys)
+        assert not any("div_locality_sf" in rk for rk in rkeys)
 
 
 from garganorn.boundaries import WhosOnFirst
