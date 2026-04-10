@@ -35,11 +35,17 @@ REPO = "places.atgeo.org"
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
 
-def _coord_exprs(source):
-    """Return (lon_expr, lat_expr) SQL expressions for the given source."""
+def _coord_exprs(source, alias=""):
+    """Return (lon_expr, lat_expr) SQL expressions for the given source.
+
+    When alias is provided, column and struct field references are qualified
+    with that table alias (e.g. "t.longitude" instead of "longitude").
+    """
+    prefix = f"{alias}." if alias else ""
     if source == "overture":
-        return "(bbox.xmin + bbox.xmax) / 2.0", "(bbox.ymin + bbox.ymax) / 2.0"
-    return "longitude", "latitude"
+        return (f"({prefix}bbox.xmin + {prefix}bbox.xmax) / 2.0",
+                f"({prefix}bbox.ymin + {prefix}bbox.ymax) / 2.0")
+    return f"{prefix}longitude", f"{prefix}latitude"
 
 
 def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
@@ -133,7 +139,7 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
             con.execute(f"""
                 INSERT INTO place_containment
                 WITH bulk_assign AS (
-                    SELECT p.{pk_expr} AS pk,
+                    SELECT {pk_expr} AS pk,
                            'org.atgeo.places.wof:' || ph.rkey AS rkey,
                            ph.name, ph.level
                     FROM places p
@@ -141,14 +147,14 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
                     WHERE LEFT(p.qk17, 6) = ?
                 ),
                 edge_matches AS (
-                    SELECT p.{pk_expr} AS pk,
+                    SELECT {pk_expr} AS pk,
                            'org.atgeo.places.wof:' || b.rkey AS rkey,
                            b.name, b.level
                     FROM places p
                     JOIN tile_boundaries b
-                        ON p.{lat_expr} BETWEEN b.min_latitude AND b.max_latitude
-                       AND p.{lon_expr} BETWEEN b.min_longitude AND b.max_longitude
-                       AND ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
+                        ON {lat_expr} BETWEEN b.min_latitude AND b.max_latitude
+                       AND {lon_expr} BETWEEN b.min_longitude AND b.max_longitude
+                       AND ST_Contains(b.geom, ST_Point({lon_expr}, {lat_expr}))
                     WHERE LEFT(p.qk17, 6) = ?
                       AND NOT EXISTS (
                           SELECT 1 FROM phase1 ph WHERE ph.rkey = b.rkey
@@ -289,8 +295,8 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         run_sql("tile assignment", "compute_tile_assignments.sql",
                 pk_expr=pk_expr, min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
 
-        lon_expr, lat_expr = _coord_exprs(source)
-        compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr)
+        lon_expr, lat_expr = _coord_exprs(source, alias="p")
+        compute_containment(con, boundaries_db, f"p.{pk_expr}", lon_expr, lat_expr)
 
         log.info("[%s] export: starting", source)
         manifest = export_tiles(con, tile_dir, source, max_workers=export_workers)
