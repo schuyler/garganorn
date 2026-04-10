@@ -3,6 +3,8 @@
 import gzip
 import inspect
 import json
+import logging
+import re
 
 import duckdb
 import pytest
@@ -1747,3 +1749,449 @@ class TestContainmentInExport:
         assert out_names == {"North America", "United States", "California"}, (
             f"edge_out should be in 3 boundaries (not SF); got {sorted(out_names)}"
         )
+
+    # ------------------------------------------------------------------
+    # Test 13: ST_Intersects pre-filter creates tile_boundaries table
+    # ------------------------------------------------------------------
+
+    def test_prefilter_creates_tile_boundaries(self, tmp_path):
+        """compute_containment must create a tile_boundaries temp table via
+        ST_Intersects pre-filter (Step 0) that excludes non-intersecting
+        boundaries.
+
+        Creates a WoF DB with one boundary that intersects the tile and one
+        that is far away. Uses a DuckDB connection wrapper to intercept SQL
+        and verify that tile_boundaries is created and queried.
+
+        FAILS on current code because there is no tile_boundaries temp table
+        and no ST_Intersects pre-filter. Phase 1 and Phase 2 query
+        wof.boundaries directly.
+        """
+        from garganorn.quadtree import compute_containment
+
+        # Create a WoF DB with two boundaries:
+        # 1. "Local Box" — small box around the test point
+        # 2. "Distant Box" — box in the southern hemisphere, nowhere near the tile
+        wof_path = tmp_path / "wof_prefilter.duckdb"
+        wof_conn = duckdb.connect(str(wof_path))
+        wof_conn.execute("INSTALL spatial; LOAD spatial;")
+        wof_conn.execute("""
+            CREATE TABLE boundaries (
+                wof_id BIGINT,
+                rkey VARCHAR,
+                name VARCHAR,
+                placetype VARCHAR,
+                level INTEGER,
+                latitude DOUBLE,
+                longitude DOUBLE,
+                geom GEOMETRY,
+                country VARCHAR,
+                min_latitude DOUBLE,
+                min_longitude DOUBLE,
+                max_latitude DOUBLE,
+                max_longitude DOUBLE,
+                names_json VARCHAR,
+                concordances VARCHAR
+            )
+        """)
+        # Local boundary containing the test point (SF area)
+        wof_conn.execute("""
+            INSERT INTO boundaries VALUES (
+                1, '1', 'Local Box', 'region', 25, 37.77, -122.42,
+                ST_GeomFromText('POLYGON((-123 37, -123 38, -122 38, -122 37, -123 37))'),
+                'US', 37.0, -123.0, 38.0, -122.0, NULL, NULL
+            )
+        """)
+        # Distant boundary — southern hemisphere, does not intersect the SF z6 tile
+        wof_conn.execute("""
+            INSERT INTO boundaries VALUES (
+                2, '2', 'Distant Box', 'region', 25, -40.0, 170.0,
+                ST_GeomFromText('POLYGON((169 -41, 169 -39, 171 -39, 171 -41, 169 -41))'),
+                'NZ', -41.0, 169.0, -39.0, 171.0, NULL, NULL
+            )
+        """)
+        wof_conn.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
+        wof_conn.execute("CREATE INDEX idx_rkey ON boundaries(rkey)")
+        wof_conn.close()
+
+        # Create places DB with one point in SF
+        db_path = tmp_path / "prefilter_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('p1', 37.77, -122.42, "
+            "ST_QuadKey(-122.42, 37.77, 17))"
+        )
+
+        # Use a wrapper to intercept SQL and detect tile_boundaries creation
+        sql_log = []
+
+        class _ConnWrapper:
+            """Thin wrapper around DuckDBPyConnection that logs SQL strings."""
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *args, **kwargs):
+                if isinstance(sql, str):
+                    sql_log.append(sql)
+                return self._real.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        wrapped = _ConnWrapper(conn)
+        compute_containment(wrapped, str(wof_path), "fsq_place_id", "longitude", "latitude")
+
+        # Verify tile_boundaries was created
+        tb_creates = [s for s in sql_log if re.search(r"CREATE\b.*\bTABLE\b.*\btile_boundaries\b", s, re.IGNORECASE)]
+        assert len(tb_creates) > 0, (
+            "compute_containment must create a tile_boundaries temp table in Step 0 "
+            "using ST_Intersects pre-filter. No such CREATE statement was found in "
+            "the executed SQL."
+        )
+
+        # Verify the containment result is still correct
+        rows = conn.execute("SELECT relations_json FROM place_containment").fetchall()
+        assert len(rows) == 1, f"Expected 1 containment row; got {len(rows)}"
+        within = json.loads(rows[0][0])["within"]
+        names = {e["name"] for e in within}
+        assert names == {"Local Box"}, (
+            f"Only 'Local Box' should match; got {sorted(names)}"
+        )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 14: geometry clipping reduces vertex count
+    # ------------------------------------------------------------------
+
+    def test_geometry_clipping_reduces_vertices(self, tmp_path):
+        """After Step 0, tile_boundaries must contain clipped geometries with
+        fewer vertices than the original boundary.
+
+        Creates a WoF DB with one boundary that spans far beyond the tile.
+        Uses a connection wrapper to intercept the CREATE of tile_boundaries
+        and immediately query ST_NPoints on the clipped geometry before
+        the table is dropped.
+
+        FAILS on current code because tile_boundaries temp table does not
+        exist -- the code joins directly against wof.boundaries without
+        creating any intermediate table.
+        """
+        from garganorn.quadtree import compute_containment
+
+        # Create a WoF DB with one large boundary (many vertices, spans wide)
+        wof_path = tmp_path / "wof_clip.duckdb"
+        wof_conn = duckdb.connect(str(wof_path))
+        wof_conn.execute("INSTALL spatial; LOAD spatial;")
+        wof_conn.execute("""
+            CREATE TABLE boundaries (
+                wof_id BIGINT,
+                rkey VARCHAR,
+                name VARCHAR,
+                placetype VARCHAR,
+                level INTEGER,
+                latitude DOUBLE,
+                longitude DOUBLE,
+                geom GEOMETRY,
+                country VARCHAR,
+                min_latitude DOUBLE,
+                min_longitude DOUBLE,
+                max_latitude DOUBLE,
+                max_longitude DOUBLE,
+                names_json VARCHAR,
+                concordances VARCHAR
+            )
+        """)
+        # A large polygon spanning most of the Western Hemisphere.
+        # The SF z6 tile bbox is approx (-123.75, 36.60, -118.125, 40.98).
+        # This polygon spans far beyond that, with many vertices.
+        # After clipping to the tile, the geometry should have fewer vertices.
+        large_wkt = (
+            "POLYGON(("
+            "-170 10, -160 15, -150 20, -140 25, -135 30, "
+            "-130 35, -125 37, -124 38, -123 39, -122 40, "
+            "-121 41, -120 42, -118 43, -115 44, -110 45, "
+            "-100 46, -90 47, -80 48, -70 49, -60 50, "
+            "-60 10, -170 10"
+            "))"
+        )
+        wof_conn.execute(f"""
+            INSERT INTO boundaries VALUES (
+                1, '1', 'Big Region', 'continent', 0, 30.0, -100.0,
+                ST_GeomFromText('{large_wkt}'),
+                'XX', 10.0, -170.0, 50.0, -60.0, NULL, NULL
+            )
+        """)
+        wof_conn.execute("CREATE INDEX boundaries_rtree ON boundaries USING RTREE (geom)")
+        wof_conn.execute("CREATE INDEX idx_rkey ON boundaries(rkey)")
+
+        # Get original vertex count before closing
+        orig_npoints = wof_conn.execute(
+            "SELECT ST_NPoints(geom) FROM boundaries WHERE rkey = '1'"
+        ).fetchone()[0]
+        wof_conn.close()
+
+        # Create places DB
+        db_path = tmp_path / "clip_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('p1', 37.77, -122.42, "
+            "ST_QuadKey(-122.42, 37.77, 17))"
+        )
+
+        # Wrapper that captures tile_boundaries npoints after it's created
+        clipped_npoints = []
+
+        class _ClipInspector:
+            """Intercepts execute calls to inspect tile_boundaries after creation."""
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *args, **kwargs):
+                result = self._real.execute(sql, *args, **kwargs)
+                if isinstance(sql, str) and re.search(r"CREATE\b.*\bTABLE\b.*\btile_boundaries\b", sql, re.IGNORECASE):
+                    try:
+                        row = self._real.execute(
+                            "SELECT ST_NPoints(geom) FROM tile_boundaries WHERE rkey = '1'"
+                        ).fetchone()
+                        if row:
+                            clipped_npoints.append(row[0])
+                    except Exception:
+                        pass
+                return result
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        wrapped = _ClipInspector(conn)
+        compute_containment(wrapped, str(wof_path), "fsq_place_id", "longitude", "latitude")
+
+        assert len(clipped_npoints) > 0, (
+            "tile_boundaries temp table was never created. "
+            "Step 0 (ST_Intersects pre-filter with ST_Intersection clipping) is missing. "
+            "compute_containment must create tile_boundaries before phase 1."
+        )
+        assert clipped_npoints[0] < orig_npoints, (
+            f"Clipped geometry should have fewer vertices than original. "
+            f"Original: {orig_npoints}, clipped: {clipped_npoints[0]}. "
+            f"ST_Intersection clipping in Step 0 is not reducing vertex count."
+        )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 15: tile_boundaries temp table is cleaned up after execution
+    # ------------------------------------------------------------------
+
+    def test_tile_boundaries_cleanup(self, tmp_path, wof_db_path):
+        """tile_boundaries temp table must be dropped in the finally block
+        after compute_containment completes.
+
+        FAILS on current code because tile_boundaries is never created,
+        so there's nothing to clean up. This test verifies that:
+        1. The table WAS created during execution (via SQL interception)
+        2. tile_boundaries does NOT exist after compute_containment returns
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "cleanup_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('p1', 37.7749, -122.4194, "
+            "ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+
+        # Track whether tile_boundaries was created during execution
+        tile_boundaries_created = []
+
+        class _TrackingConn:
+            """Wrapper that tracks tile_boundaries CREATE statements."""
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *args, **kwargs):
+                result = self._real.execute(sql, *args, **kwargs)
+                if isinstance(sql, str) and re.search(r"CREATE\b.*\bTABLE\b.*\btile_boundaries\b", sql, re.IGNORECASE):
+                    tile_boundaries_created.append(True)
+                return result
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        wrapped = _TrackingConn(conn)
+        compute_containment(wrapped, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        # tile_boundaries must have been created during execution
+        assert len(tile_boundaries_created) > 0, (
+            "tile_boundaries temp table was never created during compute_containment. "
+            "Step 0 must CREATE TEMP TABLE tile_boundaries with ST_Intersects pre-filter."
+        )
+
+        # tile_boundaries must NOT exist after compute_containment returns
+        tables = conn.execute("""
+            SELECT table_name FROM information_schema.tables
+            WHERE table_name = 'tile_boundaries'
+        """).fetchall()
+        assert len(tables) == 0, (
+            "tile_boundaries temp table still exists after compute_containment returned. "
+            "It must be dropped in the finally block."
+        )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 16: log output includes boundaries= field
+    # ------------------------------------------------------------------
+
+    def test_log_includes_boundaries_count(self, tmp_path, wof_db_path, caplog):
+        """Per-tile log lines must include 'boundaries=N' showing the count
+        of tile-intersecting boundaries from Step 0.
+
+        FAILS on current code because the log format is:
+            compute_containment: tile %d/%d z6=%s phase1=%d (%.1fs)
+        and does not include a boundaries= field.
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "log_test.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('p1', 37.7749, -122.4194, "
+            "ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+
+        with caplog.at_level(logging.INFO, logger="garganorn.quadtree"):
+            compute_containment(conn, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        # Find per-tile log lines
+        tile_lines = [
+            r.message for r in caplog.records
+            if "compute_containment: tile" in r.message
+        ]
+        assert len(tile_lines) > 0, (
+            "No per-tile log lines found from compute_containment"
+        )
+        for line in tile_lines:
+            assert "boundaries=" in line, (
+                f"Per-tile log line must include 'boundaries=N' field. "
+                f"Got: {line!r}"
+            )
+        conn.close()
+
+    # ------------------------------------------------------------------
+    # Test 17: Phase 2 queries tile_boundaries, not wof.boundaries
+    # ------------------------------------------------------------------
+
+    def test_phase2_queries_tile_boundaries_not_wof(self, tmp_path, wof_db_path):
+        """Phase 2 (edge_matches CTE) must JOIN tile_boundaries instead of
+        wof.boundaries.  After Step 0 creates tile_boundaries, all subsequent
+        SQL should reference tile_boundaries — not wof.boundaries — for
+        spatial joins.
+
+        FAILS on current code because Phase 2 uses ``JOIN wof.boundaries b``.
+        """
+        from garganorn.quadtree import compute_containment
+
+        db_path = tmp_path / "phase2_retarget.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                fsq_place_id VARCHAR,
+                latitude     DOUBLE,
+                longitude    DOUBLE,
+                qk17         VARCHAR
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES ('p1', 37.7749, -122.4194, "
+            "ST_QuadKey(-122.4194, 37.7749, 17))"
+        )
+
+        # Capture all executed SQL
+        sql_log = []
+
+        class _SQLLogger:
+            """Wrapper that logs all executed SQL statements."""
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *args, **kwargs):
+                if isinstance(sql, str):
+                    sql_log.append(sql)
+                return self._real.execute(sql, *args, **kwargs)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        wrapped = _SQLLogger(conn)
+        compute_containment(wrapped, str(wof_db_path), "fsq_place_id", "longitude", "latitude")
+
+        # Find the index of the Step 0 CREATE tile_boundaries statement
+        step0_idx = None
+        for i, sql in enumerate(sql_log):
+            if re.search(r"CREATE\b.*\bTABLE\b.*\btile_boundaries\b", sql, re.IGNORECASE):
+                step0_idx = i
+                break
+
+        assert step0_idx is not None, (
+            "Step 0 (CREATE tile_boundaries) was never executed. "
+            "Cannot verify Phase 2 retargeting without Step 0."
+        )
+
+        # All SQL after Step 0 should NOT reference wof.boundaries in a
+        # JOIN or FROM context — they should use tile_boundaries instead.
+        post_step0 = sql_log[step0_idx + 1:]
+        wof_boundary_refs = [
+            sql for sql in post_step0
+            if re.search(r"\b(JOIN|FROM)\s+wof\.boundaries\b", sql, re.IGNORECASE)
+        ]
+        assert len(wof_boundary_refs) == 0, (
+            "After Step 0, Phase 2 must JOIN tile_boundaries instead of "
+            "wof.boundaries. Found wof.boundaries references in post-Step-0 SQL:\n"
+            + "\n---\n".join(wof_boundary_refs[:3])
+        )
+
+        # At least one post-Step-0 SQL should reference tile_boundaries
+        tb_refs = [
+            sql for sql in post_step0
+            if "tile_boundaries" in sql
+        ]
+        assert len(tb_refs) > 0, (
+            "No post-Step-0 SQL references tile_boundaries. "
+            "Phase 2 must use tile_boundaries for spatial joins."
+        )
+        conn.close()

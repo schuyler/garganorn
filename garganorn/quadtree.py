@@ -49,15 +49,26 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
     table if boundaries_db is None.
 
     Places are grouped by z6 quadkey tile so each spatial join operates on
-    a small spatial partition. Within each tile, a two-phase approach avoids
-    running expensive per-point ST_Contains against every boundary:
+    a small spatial partition. Within each tile, a three-step approach
+    reduces both boundary count and vertex complexity before running
+    per-point containment:
 
-      Phase 1: R-tree indexed ST_Contains finds boundaries whose geometry
-      fully contains the tile bbox. Every place in the tile is assigned to
-      these boundaries via a CROSS JOIN (no per-point geometry test).
+      Step 0 (pre-filter and clip): ST_Intersects with R-tree narrows ~1M
+      boundaries to those overlapping the tile envelope. ST_Intersection
+      clips surviving geometries to the tile bbox, reducing vertex counts
+      for boundaries that extend beyond the tile (e.g. country-spanning
+      polygons clipped from hundreds of thousands of vertices to hundreds).
+      Results are materialized to a temp table.
 
-      Phase 2: ST_Contains runs per-point only for "edge" boundaries --
-      those whose bbox overlaps the tile but were not matched in phase 1.
+      Step 1 (phase 1 -- full containment): ST_Contains identifies clipped
+      boundaries whose geometry fully contains the tile bbox. Every place
+      in the tile is assigned to these boundaries via CROSS JOIN (no
+      per-point geometry test).
+
+      Step 2 (phase 2 -- per-point containment): ST_Contains runs per-point
+      only for "edge" boundaries -- those that overlap the tile but were
+      not matched in phase 1. Bbox pre-filter on lat/lon columns reduces
+      the number of ST_Contains calls.
 
     Correctness depends on each place belonging to exactly one z6 tile
     (determined by its qk17 prefix). The CROSS JOIN in phase 1 assigns
@@ -87,10 +98,30 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
             bbox = quadkey_to_bbox(z6)
             t_tile = time.monotonic()
 
-            # Phase 1: standalone query — R-tree index activates for top-level WHERE
+            # Step 0: pre-filter and clip boundaries to tile envelope
+            con.execute("""
+                CREATE OR REPLACE TEMP TABLE tile_boundaries AS
+                SELECT rkey, name, level,
+                       ST_Intersection(geom, ST_MakeEnvelope(?, ?, ?, ?)) AS geom,
+                       greatest(min_latitude, ?) AS min_latitude,
+                       least(max_latitude, ?)    AS max_latitude,
+                       greatest(min_longitude, ?) AS min_longitude,
+                       least(max_longitude, ?)    AS max_longitude
+                FROM wof.boundaries
+                WHERE ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?))
+            """, [bbox[0], bbox[1], bbox[2], bbox[3],   # ST_Intersection envelope
+                  bbox[1], bbox[3], bbox[0], bbox[2],   # bbox clamping (lat_min, lat_max, lon_min, lon_max)
+                  bbox[0], bbox[1], bbox[2], bbox[3]])  # ST_Intersects WHERE
+
+            tile_boundary_count = con.execute(
+                "SELECT count(*) FROM tile_boundaries"
+            ).fetchone()[0]
+
+            # Phase 1: materialize full-tile containment matches as a temp table
+            # so Phase 2 can use NOT EXISTS anti-join to skip them
             con.execute("""
                 CREATE OR REPLACE TEMP TABLE phase1 AS
-                SELECT rkey, name, level FROM wof.boundaries
+                SELECT rkey, name, level FROM tile_boundaries
                 WHERE ST_Contains(geom, ST_MakeEnvelope(?, ?, ?, ?))
             """, [bbox[0], bbox[1], bbox[2], bbox[3]])
 
@@ -114,7 +145,7 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
                            'org.atgeo.places.wof:' || b.rkey AS rkey,
                            b.name, b.level
                     FROM places p
-                    JOIN wof.boundaries b
+                    JOIN tile_boundaries b
                         ON p.{lat_expr} BETWEEN b.min_latitude AND b.max_latitude
                        AND p.{lon_expr} BETWEEN b.min_longitude AND b.max_longitude
                        AND ST_Contains(b.geom, ST_Point(p.{lon_expr}, p.{lat_expr}))
@@ -137,9 +168,10 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
             """, [z6, z6])
 
             elapsed = time.monotonic() - t_tile
-            log.info("compute_containment: tile %d/%d z6=%s phase1=%d (%.1fs)",
-                     i, total, z6, phase1_count, elapsed)
+            log.info("compute_containment: tile %d/%d z6=%s boundaries=%d phase1=%d (%.1fs)",
+                     i, total, z6, tile_boundary_count, phase1_count, elapsed)
     finally:
+        con.execute("DROP TABLE IF EXISTS tile_boundaries")
         con.execute("DROP TABLE IF EXISTS phase1")
         con.execute("DETACH wof")
 
