@@ -22,12 +22,14 @@ SOURCE_PK = {
     "fsq": "fsq_place_id",
     "overture": "id",
     "osm": "rkey",
+    "overture_division": "id",
 }
 
 ATTRIBUTION = {
     "fsq": "https://docs.foursquare.com/data-products/docs/access-fsq-os-places",
     "overture": "https://docs.overturemaps.org/attribution/",
     "osm": "https://www.openstreetmap.org/copyright",
+    "overture_division": "https://docs.overturemaps.org/attribution/",
 }
 
 REPO = "places.atgeo.org"
@@ -42,14 +44,15 @@ def _coord_exprs(source, alias=""):
     with that table alias (e.g. "t.longitude" instead of "longitude").
     """
     prefix = f"{alias}." if alias else ""
-    if source == "overture":
+    if source in ("overture", "overture_division"):
         return (f"({prefix}bbox.xmin + {prefix}bbox.xmax) / 2.0",
                 f"({prefix}bbox.ymin + {prefix}bbox.ymax) / 2.0")
     return f"{prefix}longitude", f"{prefix}latitude"
 
 
-def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
-    """Populate place_containment with WoF boundary relations for each place.
+def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
+                        collection_prefix="org.atgeo.places.overture.division"):
+    """Populate place_containment with boundary relations for each place.
 
     Creates place_containment(place_id, relations_json). Returns an empty
     table if boundaries_db is None.
@@ -59,7 +62,7 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
     reduces both boundary count and vertex complexity before running
     per-point containment:
 
-      Step 0 (pre-filter and clip): ST_Intersects with R-tree narrows ~1M
+      Step 0 (pre-filter and clip): ST_Intersects with R-tree narrows
       boundaries to those overlapping the tile envelope. ST_Intersection
       clips surviving geometries to the tile bbox, reducing vertex counts
       for boundaries that extend beyond the tile (e.g. country-spanning
@@ -92,7 +95,7 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
     if boundaries_db is None:
         return
 
-    con.execute(f"ATTACH '{boundaries_db}' AS wof (READ_ONLY)")
+    con.execute(f"ATTACH '{boundaries_db}' AS bnd (READ_ONLY)")
     try:
         z6_tiles = [
             row[0]
@@ -107,14 +110,14 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
             # Step 0: pre-filter and clip boundaries to tile envelope
             con.execute("""
                 CREATE OR REPLACE TEMP TABLE tile_boundaries AS
-                SELECT rkey, name, level,
-                       ST_Intersection(geom, ST_MakeEnvelope(?, ?, ?, ?)) AS geom,
+                SELECT id, admin_level,
+                       ST_Intersection(geometry, ST_MakeEnvelope(?, ?, ?, ?)) AS geometry,
                        greatest(min_latitude, ?) AS min_latitude,
                        least(max_latitude, ?)    AS max_latitude,
                        greatest(min_longitude, ?) AS min_longitude,
                        least(max_longitude, ?)    AS max_longitude
-                FROM wof.boundaries
-                WHERE ST_Intersects(geom, ST_MakeEnvelope(?, ?, ?, ?))
+                FROM bnd.places
+                WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?))
             """, [bbox[0], bbox[1], bbox[2], bbox[3],   # ST_Intersection envelope
                   bbox[1], bbox[3], bbox[0], bbox[2],   # bbox clamping (lat_min, lat_max, lon_min, lon_max)
                   bbox[0], bbox[1], bbox[2], bbox[3]])  # ST_Intersects WHERE
@@ -127,8 +130,8 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
             # so Phase 2 can use NOT EXISTS anti-join to skip them
             con.execute("""
                 CREATE OR REPLACE TEMP TABLE phase1 AS
-                SELECT rkey, name, level FROM tile_boundaries
-                WHERE ST_Contains(geom, ST_MakeEnvelope(?, ?, ?, ?))
+                SELECT id, admin_level FROM tile_boundaries
+                WHERE ST_Contains(geometry, ST_MakeEnvelope(?, ?, ?, ?))
             """, [bbox[0], bbox[1], bbox[2], bbox[3]])
 
             phase1_count = con.execute("SELECT count(*) FROM phase1").fetchone()[0]
@@ -140,24 +143,24 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
                 INSERT INTO place_containment
                 WITH bulk_assign AS (
                     SELECT {pk_expr} AS pk,
-                           'org.atgeo.places.wof:' || ph.rkey AS rkey,
-                           ph.name, ph.level
+                           '{collection_prefix}:' || ph.id AS rkey,
+                           ph.admin_level
                     FROM places p
                     CROSS JOIN phase1 ph
                     WHERE LEFT(p.qk17, 6) = ?
                 ),
                 edge_matches AS (
                     SELECT {pk_expr} AS pk,
-                           'org.atgeo.places.wof:' || b.rkey AS rkey,
-                           b.name, b.level
+                           '{collection_prefix}:' || b.id AS rkey,
+                           b.admin_level
                     FROM places p
                     JOIN tile_boundaries b
                         ON {lat_expr} BETWEEN b.min_latitude AND b.max_latitude
                        AND {lon_expr} BETWEEN b.min_longitude AND b.max_longitude
-                       AND ST_Contains(b.geom, ST_Point({lon_expr}, {lat_expr}))
+                       AND ST_Contains(b.geometry, ST_Point({lon_expr}, {lat_expr}))
                     WHERE LEFT(p.qk17, 6) = ?
                       AND NOT EXISTS (
-                          SELECT 1 FROM phase1 ph WHERE ph.rkey = b.rkey
+                          SELECT 1 FROM phase1 ph WHERE ph.id = b.id
                       )
                 ),
                 all_matches AS (
@@ -166,8 +169,8 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
                     SELECT * FROM edge_matches
                 )
                 SELECT pk, to_json({{within: list(
-                    {{rkey: rkey, name: name, level: level}}
-                    ORDER BY level ASC
+                    {{rkey: rkey}}
+                    ORDER BY admin_level ASC
                 )}})::VARCHAR
                 FROM all_matches
                 GROUP BY pk
@@ -179,7 +182,7 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr):
     finally:
         con.execute("DROP TABLE IF EXISTS tile_boundaries")
         con.execute("DROP TABLE IF EXISTS phase1")
-        con.execute("DETACH wof")
+        con.execute("DETACH bnd")
 
 
 def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> dict:
@@ -251,6 +254,41 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
 
 
 def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None):
+    """Run the full import-assign-containment-export pipeline for a data source.
+
+    Stages:
+      1. Import: load parquet into a `places` DuckDB table via source-specific SQL.
+      2. Importance + variants: compute search ranking and name variants (skipped for
+         overture_division, which inlines importance=0 and variants=[] in the import SQL).
+      3. Tile assignment: assign each place to one or more quadtree tiles.
+      4. Containment: populate place_containment with admin boundary relations
+         (no-op if boundaries_db is None).
+      5. Export tiles: write gzipped JSON tile files to a timestamped subdirectory.
+      6. Manifest: write manifest.json and manifest.duckdb for tile serving.
+      7. Boundary export (overture_division only): write boundaries.duckdb with
+         Hilbert-sorted geometries and an R-tree index for use by other sources'
+         containment stage.
+
+    Output layout:
+      <output_dir>/<source>/<timestamp>/   -- tile files, manifests
+      <output_dir>/<source>/current        -- symlink to latest timestamp dir
+      <output_dir>/overture_division/boundaries.duckdb  -- (overture_division only)
+
+    The working DuckDB file is written to the tile directory and deleted on success.
+    Old timestamped directories beyond the two most recent are removed.
+
+    Args:
+        source: Pipeline source key (fsq, overture, osm, overture_division).
+        parquet_glob: Parquet path(s). String glob for single-parquet sources;
+            (division_parquet, division_area_parquet) tuple for overture_division;
+            (node_parquet, way_parquet) tuple for osm.
+        bbox: (xmin, ymin, xmax, ymax) bounding box filter, or None for all records.
+        output_dir: Base directory for all pipeline outputs.
+        memory_limit: DuckDB memory limit string (e.g. "48GB").
+        max_per_tile: Maximum records assigned to a single tile.
+        boundaries_db: Path to boundaries.duckdb for containment enrichment, or None.
+        export_workers: Thread count for tile gzip compression. Defaults to CPU count.
+    """
     source_dir = os.path.join(output_dir, source)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     tile_dir = os.path.join(source_dir, timestamp)
@@ -273,7 +311,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
         xmin, ymin, xmax, ymax = bbox if bbox is not None else (-180, -90, 180, 90)
 
-        # Import stage — OSM needs two separate parquet paths
+        # Import stage — OSM and overture_division need two separate parquet paths
         if source == "osm":
             node_parquet, way_parquet = parquet_glob
             run_sql("import", "osm_import.sql",
@@ -281,15 +319,23 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                     node_parquet=node_parquet,
                     way_parquet=way_parquet,
                     xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
+        elif source == "overture_division":
+            division_parquet, division_area_parquet = parquet_glob
+            run_sql("import", "overture_division_import.sql",
+                    memory_limit=memory_limit,
+                    division_parquet=division_parquet,
+                    division_area_parquet=division_area_parquet,
+                    xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
         else:
             run_sql("import", f"{source}_import.sql",
                     memory_limit=memory_limit,
                     parquet_glob=parquet_glob,
                     xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
-        run_sql("importance", f"{source}_importance.sql",
-                density_norm=10.0, idf_norm=18.0)
-        run_sql("variants", f"{source}_variants.sql")
+        if source not in ("overture_division",):
+            run_sql("importance", f"{source}_importance.sql",
+                    density_norm=10.0, idf_norm=18.0)
+            run_sql("variants", f"{source}_variants.sql")
 
         pk_expr = SOURCE_PK[source]
         run_sql("tile assignment", "compute_tile_assignments.sql",
@@ -306,6 +352,33 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
         write_manifest(manifest, tile_dir, source)
         write_manifest_db(con, tile_dir, source)
+
+        if source == "overture_division":
+            # Write boundaries.duckdb for use by other sources' containment stage.
+            # Rows are sorted by ST_Hilbert before insertion so the R-tree index
+            # gets spatially coherent pages, improving range-query performance.
+            # Written to a .tmp file first, then renamed atomically so a concurrent
+            # reader never sees a partially-written file.
+            boundaries_path = os.path.join(source_dir, "boundaries.duckdb")
+            boundaries_tmp = boundaries_path + ".tmp"
+            if os.path.exists(boundaries_tmp):
+                os.remove(boundaries_tmp)
+            log.info("[%s] boundary export: starting", source)
+            con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
+            con.execute("""
+                CREATE TABLE bnd.places AS
+                SELECT id, geometry, admin_level,
+                       min_latitude, max_latitude,
+                       min_longitude, max_longitude
+                FROM places
+                ORDER BY ST_Hilbert(geometry,
+                    {'min_x': -180.0, 'min_y': -90.0,
+                     'max_x': 180.0, 'max_y': 90.0}::BOX_2D)
+            """)
+            con.execute("CREATE INDEX bnd_places_rtree ON bnd.places USING RTREE(geometry)")
+            con.execute("DETACH bnd")
+            os.rename(boundaries_tmp, boundaries_path)
+            log.info("[%s] boundary export: done (%.1fs)", source, time.monotonic() - t0)
     except Exception:
         con.close()
         raise
@@ -427,8 +500,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Build quadtree tile exports from place parquet data."
     )
-    parser.add_argument("--source", required=True, choices=["fsq", "overture", "osm"],
-                        help="Data source: fsq, overture, or osm")
+    parser.add_argument("--source", required=True, choices=["fsq", "overture", "osm", "overture_division"],
+                        help="Data source: fsq, overture, osm, or overture_division")
     parser.add_argument("--parquet", default=None,
                         help="Parquet glob pattern (fsq, overture)")
     parser.add_argument("--parquet-dir", default=None, dest="parquet_dir",
@@ -445,9 +518,13 @@ def main():
     parser.add_argument("--max-per-tile", default=None, type=int, dest="max_per_tile",
                         help="Maximum records per tile")
     parser.add_argument("--boundaries", default=None,
-                        help="Path to WoF boundaries DuckDB for containment enrichment")
+                        help="Path to division boundaries DuckDB for containment enrichment")
     parser.add_argument("--export-workers", default=None, type=int, dest="export_workers",
                         help="Number of threads for tile gzip compression (default: CPU count)")
+    parser.add_argument("--division-parquet", default=None, dest="division_parquet",
+                        help="Path to division parquet (overture_division only)")
+    parser.add_argument("--division-area-parquet", default=None, dest="division_area_parquet",
+                        help="Path to division_area parquet (overture_division only)")
 
     args = parser.parse_args()
 
@@ -456,6 +533,11 @@ def main():
             parser.error("--source osm requires --parquet-dir")
         if args.parquet is not None:
             parser.error("--source osm uses --parquet-dir, not --parquet")
+    elif args.source == "overture_division":
+        if args.division_parquet is None or args.division_area_parquet is None:
+            parser.error("--source overture_division requires --division-parquet and --division-area-parquet")
+        if args.parquet is not None:
+            parser.error("--source overture_division uses --division-parquet/--division-area-parquet, not --parquet")
     else:
         if args.parquet is None:
             parser.error(f"--source {args.source} requires --parquet")
@@ -490,12 +572,14 @@ def main():
     # Build bbox: None means no filter
     bbox = tuple(args.bbox) if args.bbox is not None else None
 
-    # Build parquet_glob: derive node/way paths for OSM, single string otherwise
+    # Build parquet_glob: derive paths for sources with multiple parquet inputs
     if args.source == "osm":
         parquet_glob = (
             f"{args.parquet_dir}/type=node/*.parquet",
             f"{args.parquet_dir}/type=way/*.parquet",
         )
+    elif args.source == "overture_division":
+        parquet_glob = (args.division_parquet, args.division_area_parquet)
     else:
         parquet_glob = args.parquet
 

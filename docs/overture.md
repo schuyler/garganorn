@@ -64,3 +64,63 @@ Data is available under CDLA Permissive 2.0 license.
 - [Complete Category List](https://github.com/OvertureMaps/schema/blob/main/docs/schema/concepts/by-theme/places/overture_categories.csv)
 - [Schema Concepts](https://docs.overturemaps.org/schema/concepts/by-theme/places/)
 - [Overture Maps Foundation](https://overturemaps.org/)
+
+---
+
+# Overture Maps Divisions Schema
+
+This document describes the data model for Overture Maps Divisions as used in garganorn's `overture_division` pipeline source.
+
+## Overview
+
+The Overture divisions theme contains administrative boundary data: countries, regions, counties, and other administrative units. It is split across two parquet datasets that are joined during import:
+
+- **division** — one row per administrative unit; carries metadata (names, subtype, country, region, wikidata, population)
+- **division_area** — one or more rows per administrative unit; carries the polygon geometry and `admin_level`
+
+A single division may have multiple `division_area` rows (e.g. a country with non-contiguous territory). The import pipeline merges these with `ST_Union_Agg`.
+
+## Division Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | String | Overture GERS identifier; used as `rkey` |
+| `names.primary` | String | Primary name |
+| `subtype` | String | Administrative unit type (e.g. `country`, `region`, `county`, `locality`) |
+| `country` | String | ISO 3166-1 alpha-2 country code |
+| `region` | String | ISO 3166-2 region code (e.g. `US-CA`) |
+| `wikidata` | String | Wikidata QID (e.g. `Q99`) |
+| `population` | Integer | Population count where available |
+| `parent_division_id` | String | GERS ID of the parent administrative unit |
+
+## Division Area Schema
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `division_id` | String | Foreign key to `division.id` |
+| `admin_level` | Integer | OSM-style hierarchy level (2=country, 4=state/province, 6=county, 8=municipality) |
+| `geometry` | Geometry | Polygon or multipolygon boundary |
+| `is_land` | Boolean | True for land boundaries; false for maritime boundaries |
+| `bbox` | Struct | Bounding box (xmin, ymin, xmax, ymax); used for bbox filtering at import time |
+
+## Garganorn Collection
+
+Collection name: `org.atgeo.places.overture.division`
+
+Tile records use `community.lexicon.location.bbox` (north/south/east/west extents of the geometry) rather than a point location. No polygon geometry appears in tile output. The full geometry is stored in `boundaries.duckdb` for point-in-polygon containment queries.
+
+Record attributes:
+
+| Key | Source |
+|-----|--------|
+| `subtype` | `division.subtype` |
+| `country` | `division.country` |
+| `region` | `division.region` |
+| `admin_level` | `division_area.admin_level` (minimum across merged areas) |
+| `wikidata` | `division.wikidata` |
+| `population` | `division.population` |
+
+## References
+
+- [Overture Divisions Schema Reference](https://docs.overturemaps.org/schema/reference/divisions/division/)
+- [Overture Divisions Guide](https://docs.overturemaps.org/guides/divisions/)

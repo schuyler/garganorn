@@ -47,6 +47,54 @@ This produces a versioned parquet file in `db/` with a symlink (`density.parquet
 
 See [`docs/s2_duckdb_design.md`](docs/s2_duckdb_design.md) for design details.
 
+## Tile export pipeline
+
+`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/`, with a `current` symlink pointing to the latest run.
+
+Supported sources:
+
+| `--source` | Input | Collection |
+|---|---|---|
+| `fsq` | `--parquet <glob>` | `org.atgeo.places.foursquare` |
+| `overture` | `--parquet <glob>` | `org.atgeo.places.overture.place` |
+| `osm` | `--parquet-dir <dir>` | `org.atgeo.places.osm` |
+| `overture_division` | `--division-parquet <path> --division-area-parquet <path>` | `org.atgeo.places.overture.division` |
+
+### overture_division
+
+Imports Overture Maps administrative boundaries from the `division` and `division_area` parquet themes. Produces two outputs:
+
+- **Tile files** under `<output>/overture_division/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, admin_level, wikidata, population).
+- **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries. Used by the venue tile pipeline via `--boundaries`.
+
+```
+python -m garganorn.quadtree \
+  --source overture_division \
+  --division-parquet /data/overture/division.parquet \
+  --division-area-parquet /data/overture/division_area.parquet \
+  --output /srv/tiles
+```
+
+To enrich another source's tiles with division containment (adds `relations.within` to each record):
+
+```
+python -m garganorn.quadtree \
+  --source overture \
+  --parquet '/data/overture/places/*.parquet' \
+  --boundaries /srv/tiles/overture_division/boundaries.duckdb \
+  --output /srv/tiles
+```
+
+Optional arguments (all sources):
+
+| Argument | Default | Description |
+|---|---|---|
+| `--bbox XMIN YMIN XMAX YMAX` | none | Restrict import to a bounding box |
+| `--memory-limit` | `48GB` | DuckDB memory limit |
+| `--max-per-tile` | `1000` | Maximum records per tile |
+| `--export-workers` | CPU count | Threads for tile gzip compression |
+| `--config` | none | YAML config file (can set `tiles.memory_limit`, `tiles.max_per_tile`, `tiles.boundaries`) |
+
 ## Running the server
 
 Install and start a Flask dev server on `localhost:8000`:
