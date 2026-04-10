@@ -48,14 +48,15 @@ class TestFsqImportCacheEnforcement:
     def test_fsq_import_fails_without_cache(self, tmp_path):
         """import-fsq-extract.sh exits 1 and mentions download-fsq.sh when cache is empty.
 
-        Red: the script currently hits S3 rather than enforcing cache presence.
-        It does not emit "Cache missing" or "Run download-fsq.sh".
+        Red: --cache-dir flag does not exist yet in the script. Once the green
+        implementation adds --cache-dir, this test will pass.
         """
-        # tmp_path is an empty directory — no parquet files present.
-        # We cannot inject the cache dir via a CLI flag (the script derives it
-        # from the S3-discovered release). Instead we assert on the output
-        # messages that the modified script will emit when cache is absent.
-        result = _run("import-fsq-extract.sh", SAMPLE_BBOX)
+        # Pass --cache-dir pointing at a nonexistent directory so the script
+        # can skip S3 discovery and check the cache directly.
+        result = _run(
+            "import-fsq-extract.sh",
+            ["--cache-dir", "/tmp/nonexistent-garganorn-test"] + SAMPLE_BBOX,
+        )
 
         assert result.returncode == 1, (
             f"Expected exit code 1, got {result.returncode}.\n"
@@ -74,15 +75,17 @@ class TestFsqImportCacheEnforcement:
     def test_fsq_import_fails_incomplete_cache(self, tmp_path):
         """import-fsq-extract.sh exits 1 with an 'Incomplete FSQ cache' message when fewer than 100 parquet files are present.
 
-        Red: the script currently has no cache count check; it downloads from S3.
+        Red: --cache-dir flag does not exist yet in the script. Once the green
+        implementation adds --cache-dir, this test will pass.
         """
-        # Create 50 fake parquet files in tmp_path (incomplete cache).
-        cache_dir = tmp_path / "cache"
-        cache_dir.mkdir()
+        # Create 50 fake parquet files directly in tmp_path (incomplete cache).
         for i in range(50):
-            (cache_dir / f"places-{i:05d}.zstd.parquet").touch()
+            (tmp_path / f"places-{i:05d}.zstd.parquet").touch()
 
-        result = _run("import-fsq-extract.sh", SAMPLE_BBOX)
+        result = _run(
+            "import-fsq-extract.sh",
+            ["--cache-dir", str(tmp_path)] + SAMPLE_BBOX,
+        )
 
         assert result.returncode == 1, (
             f"Expected exit code 1, got {result.returncode}.\n"
@@ -105,10 +108,15 @@ class TestOvertureImportCacheEnforcement:
     def test_overture_import_fails_without_cache(self, tmp_path):
         """import-overture-extract.sh exits 1 and mentions download-overture.sh when cache is empty.
 
-        Red: the script currently hits S3 and downloads rather than enforcing
-        cache presence. It does not emit "Cache missing" or "Run download-overture.sh".
+        Red: --cache-dir flag does not exist yet in the script. Once the green
+        implementation adds --cache-dir, this test will pass.
         """
-        result = _run("import-overture-extract.sh", SAMPLE_BBOX)
+        # Pass --cache-dir pointing at a nonexistent directory so the script
+        # can skip S3 discovery and check the cache directly.
+        result = _run(
+            "import-overture-extract.sh",
+            ["--cache-dir", "/tmp/nonexistent-garganorn-test"] + SAMPLE_BBOX,
+        )
 
         assert result.returncode == 1, (
             f"Expected exit code 1, got {result.returncode}.\n"
