@@ -57,6 +57,22 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
     Creates place_containment(place_id, relations_json). Returns an empty
     table if boundaries_db is None.
 
+    Args:
+        con: Open DuckDB connection with a `places` table (must have qk17 column).
+        boundaries_db: Path to boundaries.duckdb, or None to skip containment.
+        pk_expr: SQL expression for the place primary key column (e.g. "p.id").
+        lon_expr: SQL expression for place longitude.
+        lat_expr: SQL expression for place latitude.
+        collection_prefix: NSID prefix prepended to boundary IDs in rkey values.
+            Parameterized so the same function can be reused if the boundary
+            source or collection changes without altering callers.
+            Defaults to "org.atgeo.places.overture.division".
+
+    The boundaries database is attached under the alias `bnd` (generic, not
+    source-specific) and detached when processing completes. The `bnd.places`
+    table must have columns `id`, `geometry`, `admin_level`, `min_latitude`,
+    `max_latitude`, `min_longitude`, `max_longitude`.
+
     Places are grouped by z6 quadkey tile so each spatial join operates on
     a small spatial partition. Within each tile, a three-step approach
     reduces both boundary count and vertex complexity before running
@@ -78,6 +94,10 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
       only for "edge" boundaries -- those that overlap the tile but were
       not matched in phase 1. Bbox pre-filter on lat/lon columns reduces
       the number of ST_Contains calls.
+
+    Output relations contain only {rkey: ...} per boundary. Name, level, and
+    other division metadata are not inlined here; clients resolve them from
+    the division tile for each rkey.
 
     Correctness depends on each place belonging to exactly one z6 tile
     (determined by its qk17 prefix). The CROSS JOIN in phase 1 assigns

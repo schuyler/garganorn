@@ -9,8 +9,15 @@ from .database import Database
 
 
 class BoundaryLookup:
-    """Point-in-polygon lookup against admin boundaries."""
+    """Point-in-polygon lookup against Overture division boundaries.
 
+    Queries a boundaries.duckdb file produced by the overture_division pipeline
+    stage. The database schema uses a `places` table with columns `id`,
+    `geometry`, and `admin_level` — matching the division export schema.
+    """
+
+    # Collection used to qualify rkeys in containment output.
+    # Matches the overture_division pipeline collection name.
     COLLECTION = "org.atgeo.places.overture.division"
 
     def __init__(self, db_path):
@@ -33,6 +40,11 @@ class BoundaryLookup:
         Returns a list of dicts ordered by admin_level ascending (continent
         first, most specific last), each containing:
             rkey: collection-qualified rkey (org.atgeo.places.overture.division:<id>)
+
+        Only rkey is returned. Name, level, and other division metadata are
+        available from the division tile for that rkey; clients resolve them
+        from the admin tile layer rather than duplicating them in every
+        containment relation.
         """
         conn = self.connect()
         rows = conn.execute("""
