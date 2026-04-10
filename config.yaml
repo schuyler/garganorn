@@ -16,7 +16,7 @@ tiles:
       base_url: https://places.atgeo.org/tiles/fsq/current
       attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
       cache_ttl: 86400
-    org.atgeo.places.overture:
+    org.atgeo.places.overture.place:
       manifest: tiles/overture/current/manifest.duckdb
       tiles_dir: tiles/overture/current
       base_url: https://places.atgeo.org/tiles/overture/current

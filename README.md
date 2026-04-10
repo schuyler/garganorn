@@ -64,7 +64,7 @@ gunicorn "garganorn.__main__:create_app()" --bind 0.0.0.0:8000 --workers 2
 
 ## Querying the XRPC service
 
-The collection name for each data source is set by the database class. For Foursquare OSP it's `org.atgeo.places.foursquare`; for Overture Maps it's `org.atgeo.places.overture`.
+The collection name for each data source is set by the database class. For Foursquare OSP it's `org.atgeo.places.foursquare`; for Overture Maps it's `org.atgeo.places.overture.place`.
 
 ### searchRecords
 

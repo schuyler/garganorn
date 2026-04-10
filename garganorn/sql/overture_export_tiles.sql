@@ -21,7 +21,7 @@ CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
     to_json({
-        uri: 'https://${repo}/org.atgeo.places.overture/' || p.id,
+        uri: 'https://${repo}/org.atgeo.places.overture.place/' || p.id,
         value: {
             "$type": 'org.atgeo.place',
             rkey: p.id,

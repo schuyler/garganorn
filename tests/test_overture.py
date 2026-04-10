@@ -112,7 +112,7 @@ def test_nearest_text(overture_db):
 
 def test_get_record(overture_db):
     """Known id returns a record with expected structure."""
-    record = overture_db.get_record("", "org.atgeo.places.overture", "ovr001")
+    record = overture_db.get_record("", "org.atgeo.places.overture.place", "ovr001")
     assert record is not None
     assert record["rkey"] == "ovr001"
     assert record["name"] == "Philz Coffee"
@@ -568,7 +568,7 @@ def test_nearest_attributes_match_get_record(overture_db):
     assert philz is not None, "Expected to find 'Philz Coffee' in nearest() results"
     rkey = philz["rkey"]
 
-    direct = overture_db.get_record("", "org.atgeo.places.overture", rkey)
+    direct = overture_db.get_record("", "org.atgeo.places.overture.place", rkey)
     assert direct is not None, f"get_record returned None for rkey={rkey}"
 
     assert philz["attributes"] == direct["attributes"], (

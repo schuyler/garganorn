@@ -13,7 +13,7 @@ from garganorn.server import Server, load_lexicons
 # ---------------------------------------------------------------------------
 
 FSQ_COLLECTION = "org.atgeo.places.foursquare"
-OVR_COLLECTION = "org.atgeo.places.overture"
+OVR_COLLECTION = "org.atgeo.places.overture.place"
 
 SAMPLE_RECORD = {
     "$type": "org.atgeo.place",

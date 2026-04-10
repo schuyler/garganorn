@@ -622,7 +622,7 @@ class FoursquareOSP(Database):
         }
 
 class OvertureMaps(Database):
-    collection = "org.atgeo.places.overture"
+    collection = "org.atgeo.places.overture.place"
     attribution = "https://docs.overturemaps.org/attribution/"
 
     def record_columns(self):

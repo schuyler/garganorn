@@ -489,7 +489,7 @@ class TestGetRecordVariants:
 
     def test_overture_get_record_returns_variants(self, overture_db):
         """get_record for Coit Tower returns non-empty variants."""
-        record = overture_db.get_record("", "org.atgeo.places.overture", "ovr003")
+        record = overture_db.get_record("", "org.atgeo.places.overture.place", "ovr003")
         assert record is not None
         assert "variants" in record
         assert len(record["variants"]) > 0, (

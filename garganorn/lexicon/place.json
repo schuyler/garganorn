@@ -9,16 +9,12 @@
             "properties": {
                 "rkey": {
                     "type": "string",
-                    "description": "Collection-qualified record key (e.g. org.atgeo.places.wof:85922583).",
+                    "description": "Collection-qualified record key (e.g. org.atgeo.places.{source}:{id}).",
                     "format": "record-key"
                 },
                 "name": {
                     "type": "string",
                     "description": "Display name of the related place."
-                },
-                "level": {
-                    "type": "integer",
-                    "description": "Admin hierarchy level (0=continent, 10=country, 25=region, 50=locality, etc.)."
                 }
             }
         },
@@ -94,7 +90,7 @@
                         "properties": {
                             "within": {
                                 "type": "array",
-                                "description": "Admin regions that geographically contain this place, ordered by level ascending.",
+                                "description": "Admin regions that geographically contain this place, ordered broadest to most specific.",
                                 "items": {
                                     "type": "ref",
                                     "ref": "#relation"

@@ -90,7 +90,7 @@ structured source references:
       "id": "40982e80f964a520ecf21ee3"
     },
     {
-      "collection": "org.atgeo.places.overture",
+      "collection": "org.atgeo.places.overture.place",
       "id": "08f2830829d8c099036c7f5f8bba30ec"
     }
   ]
