@@ -16,9 +16,9 @@ Changes:
 - New test file: `tests/test_phase1_schema_rename.py` (6 tests)
 - 611 tests pass (baseline was 605 + 6 new)
 
-## Phase 2: Division Import Pipeline — PENDING DOCS + CONFIRM
+## Phase 2: Division Import Pipeline — COMPLETE ✓
 
-**Implementation complete, not yet committed.** Final test gate PASSED. Requirements gate PASSED. Documentation in progress.
+**Committed as `23966c7`** on `feat/quadtree`.
 
 Files created:
 - `garganorn/sql/overture_division_import.sql` — two-parquet-path CTEs (division + division_area), ST_Union_Agg, bbox materialization, importance=0, empty variants
@@ -29,14 +29,12 @@ Files modified:
 
 Tests: `tests/test_overture_division.py` (12 tests)
 
-**Remaining**: Documentation (in progress) → Doc review → Doc gate → Confirm before merge
-
-**Known test cleanup needed** (cosmetic, not blocking):
+**Known test cleanup** (cosmetic, not blocking):
 - `test_overture_division.py`: fragile source-code inspection heuristic in `test_variants_skipped`, duplicate `test_overture_division_registered_in_source_pk`
 
-## Phase 3: Containment Restructure — GREEN FIX #2 DONE, PENDING GATE + REMAINING
+## Phase 3: Containment Restructure — COMPLETE ✓
 
-**Implementation complete. All 631 tests pass (0 failures).** Green fix #2 applied (test_server.py mock, stale variable names, stale comments). Pending re-review gate, then final test gate and remaining pipeline.
+**Committed as `be85739`** on `feat/quadtree`.
 
 Files modified:
 - `garganorn/boundaries.py` — BoundaryLookup.COLLECTION → `org.atgeo.places.overture.division`, containment() returns rkey-only, queries `places` table
@@ -47,20 +45,11 @@ Files modified:
 - `tests/test_coord_exprs_bug.py` — _make_wof_db→_make_division_db, division schema, wof_path→division_path
 - `tests/test_server.py` — mock updated to rkey-only division format
 
-Tests: `tests/test_phase3_containment.py` (7 tests)
-
-**Remaining**: Green gate #2 (pending re-review #2 results already in) → Final test gate → Requirements gate → Documentation → Doc review → Doc gate → Confirm
-
-### Green fix history
-- Fix #1: Updated 11 failing tests (test_coord_exprs_bug.py 2, test_export.py 9) — fixtures to division schema, assertions to rkey-only
-- Re-review #1: FAIL — test_server.py mock not updated, stale wof_path/wof_conn variable names
-- Fix #2: Updated test_server.py mock, renamed stale variables, updated stale comments
-- Re-review #2: FAIL — remaining stale wof_path in test_coord_exprs_bug.py (2nd test), stale heading/docstring in test_export.py
-- Fix #3 (applied directly): Renamed wof_path→division_path in test_coord_exprs_bug.py, updated heading and docstring in test_export.py
+Tests: `tests/test_phase3_containment.py` (7 tests), 631 passed
 
 ## Phase 4: Division Database Class and Server Integration — COMPLETE ✓
 
-**Implementation complete, not yet committed.**
+**Committed as `8157507`** on `feat/quadtree`.
 
 Files modified:
 - `garganorn/boundaries.py` — `OvertureDivision(Database)` class added, `get_record()` only (no search); `connect()` loads spatial extension; `process_record()` parses `names` STRUCT at query time
@@ -80,8 +69,6 @@ Key implementation decisions:
 
 Tests: 632 passed, 0 failed, 1 xfailed (baseline was 631)
 
-**Remaining**: Confirm before merge
-
 ## Key Design Decisions
 
 - **Two parquet paths** for division import (not single glob) — division and division_area have different schemas
@@ -89,7 +76,7 @@ Tests: 632 passed, 0 failed, 1 xfailed (baseline was 631)
 - **Bbox location fields**: `north`/`south`/`east`/`west` per `garganorn/lexicon/bbox.json`
 - **Hilbert ordering** on boundary DB geometry for zone map effectiveness
 - **R-tree only in top-level WHERE** — DuckDB 1.5 doesn't use spatial indexing on join conditions
-- **WoF fixtures kept** alongside division fixtures in conftest.py through Phase 3 (WoF removal in Phase 4)
+- **WoF fixtures kept** through Phase 3, removed in Phase 4
 - **Boundary DB enrichment** — add record-serving columns so OvertureDivision can serve full records as fallback
 - **Names struct at query time** — single source of truth for variants, ignore pre-computed column
 
@@ -104,59 +91,42 @@ Tests: 632 passed, 0 failed, 1 xfailed (baseline was 631)
 - Requirements → Documentation → Doc review → Doc gate → PASSED
 - **Committed as `9e41913`**
 
-### Phase 2
+### Phase 2 (all complete)
 - Design → review → gate (1 fix loop) → PASSED
 - Baseline: 611 passed → PASSED
 - Red TDD (12 tests) → review → gate → PASSED
 - Green TDD → review → gate → PASSED
-- Final test gate → PASSED (12/12 Phase 2 tests pass, 11 failures are Phase 3)
-- Requirements gate → PASSED (all 14 requirements met)
-- **IN PROGRESS**: Documentation (task #3) → Doc review (#4) → Doc gate (#5) → Confirm (#6)
-- Known cleanup: fragile test heuristic + duplicate test in test_overture_division.py
+- Final test gate → PASSED
+- Requirements gate → PASSED
+- Documentation → Doc review → Doc gate → PASSED
+- **Committed as `23966c7`**
 
-### Phase 3
+### Phase 3 (all complete)
 - Design → review → gate (1 fix loop) → PASSED
-- Baseline: 611 passed
+- Baseline: 611 passed → PASSED
 - Red TDD (7 tests) → review → gate → PASSED
-- Green TDD: implementation done → review → gate FAILED (11 test failures)
-- Green fix #1: 11 tests fixed → re-review #1 → gate FAILED (test_server.py mock)
-- Green fix #2: test_server.py + stale names → re-review #2 → gate FAILED (remaining stale refs)
-- Green fix #3: applied directly (stale wof_path, heading, docstring) — **needs re-review**
-- **NEXT**: Green gate (needs re-review of fix #3) → Final test (#10) → Requirements (#11) → Doc (#12-14) → Confirm (#15)
+- Green TDD → review → gate → PASSED (3 fix loops: stale WoF refs in tests)
+- Final test: 631 passed → PASSED
+- Requirements → Documentation → Doc review → Doc gate → PASSED
+- **Committed as `be85739`**
 
 ### Phase 4 (all complete)
-- Design → review → gate FAILED (missing __init__.py, test_config.py)
-- Design fix #1 → re-review #1 → gate FAILED (shared fixture note)
-- Design fix #2 → re-review #2 → gate → PASSED
+- Design → review → gate → PASSED (3 fix loops: spatial extension, column order, fixture note)
 - Baseline: 631 passed → PASSED
-- Red TDD (9 tests) → review → gate → PASSED
-- Green TDD → review → gate → PASSED
+- Red TDD (10 tests) → review → gate → PASSED (2 fix loops: fixture infra, skip→fail)
+- Green TDD → review → gate → PASSED (1 fix loop: stale WoF refs in tests)
 - Final test: 632 passed → PASSED
 - Requirements → Documentation → Doc review → Doc gate → PASSED
-- **Pending**: Confirm before merge
+- **Committed as `8157507`**
 
 ## Test Count
 
 - Baseline (before all phases): 605 passed, 1 xfailed
-- After Phase 1 commit: 611 passed, 1 xfailed
-- After Phase 3 (uncommitted): 631 passed, 0 failed, 1 xfailed
-- Current (Phase 4 uncommitted): **632 passed, 0 failed, 1 xfailed**
-- Target: 640+ passed, 0 failed (611 baseline + ~30 new tests across phases 2-4)
+- After Phase 1 (`9e41913`): 611 passed, 1 xfailed
+- After Phase 2 (`23966c7`): 623 passed, 1 xfailed
+- After Phase 3 (`be85739`): 631 passed, 1 xfailed
+- After Phase 4 (`8157507`): **632 passed, 1 xfailed** (net +27 tests across all phases)
 
-## Files to Resume With
+## Status
 
-- Plan doc: `docs/superpowers/plans/2026-04-10-overture-divisions.md`
-- Phase 2 design: `~/.claude/plans/phase2-design.md`
-- Phase 3 design: `~/.claude/plans/phase3-design.md`
-- Phase 4 design: `~/.claude/plans/phase4-design.md`
-- This status file: `docs/superpowers/plans/2026-04-10-overture-divisions-status.md`
-
-## Active Task List (for resuming)
-
-Phase 2: Documentation (#3 in progress) → Doc review (#4) → Doc gate (#5) → Confirm (#6)
-Phase 3: Green gate needs re-review of fix #3 → Final test (#10) → Requirements (#11) → Doc (#12-14) → Confirm (#15)
-Phase 4: Implementation complete — Confirm before merge (#31)
-
-Phase 3 requirements (#11) can run in parallel with Phase 3 final test (#10) once green gate passes.
-Phase 2 docs and Phase 3 green gate are independent and can proceed in parallel.
-Phase 4 confirm is blocked on Phases 2 and 3 completing (all phases commit together or in sequence).
+All 4 phases complete and committed on `feat/quadtree`. Branch is ahead of `origin/feat/quadtree` by 5 commits (`9e41913` through `8157507`). Ready for PR to main when end-to-end integration is verified.
