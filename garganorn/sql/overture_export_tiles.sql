@@ -1,3 +1,15 @@
+-- Strip null-valued keys from a JSON object. Needed because locations are
+-- built as independent structs (geo, address) to avoid DuckDB's list_concat
+-- struct-union, which adds spurious null fields from the other type. The
+-- $."key" path syntax handles the $type key (leading $ is JSONPath root).
+-- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
+-- it (merged in PR #21748, 2026-04-02; not yet in v1.5.1).
+CREATE OR REPLACE MACRO strip_json_nulls(js) AS
+    map_from_entries(
+        [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
+         IF json_extract(js, '$."' || key || '"') <> ('null'::JSON)]
+    )::JSON;
+
 -- Overture tile JSON export view.
 -- Inputs:
 --   places          — Overture places table (imported via import-overture-extract.sh)
@@ -15,29 +27,36 @@ SELECT
             rkey: p.id,
             name: p.names."primary",
             importance: p.importance,
-            locations: list_concat(
-                [{
+            locations: (
+                '[' || to_json({
                     "$type": 'community.lexicon.location.geo',
                     -- bbox mean avoids spatial function overhead; identical to centroid for point geometries (the vast majority)
                     latitude: ((p.bbox.ymin + p.bbox.ymax) / 2)::DECIMAL(10,6)::VARCHAR,
                     longitude: ((p.bbox.xmin + p.bbox.xmax) / 2)::DECIMAL(10,6)::VARCHAR
-                }],
-                list_transform(
-                    list_filter(coalesce(p.addresses, []), addr -> addr.country IS NOT NULL),
-                    addr -> {
-                        "$type": 'community.lexicon.location.address',
-                        country: addr.country,
-                        region: CASE
-                                    WHEN position('-' IN addr.region) > 0
-                                    THEN substr(addr.region, position('-' IN addr.region) + 1)
-                                    ELSE addr.region
-                                END,
-                        locality: addr.locality,
-                        street: addr.freeform,
-                        postalCode: addr.postcode
-                    }
-                )
-            ),
+                })
+                || CASE WHEN len(list_filter(coalesce(p.addresses, []), addr -> addr.country IS NOT NULL)) > 0
+                    THEN ', ' || array_to_string(
+                        list_transform(
+                            list_filter(coalesce(p.addresses, []), addr -> addr.country IS NOT NULL),
+                            addr -> strip_json_nulls(to_json({
+                                "$type": 'community.lexicon.location.address',
+                                country: addr.country,
+                                region: CASE
+                                            WHEN position('-' IN addr.region) > 0
+                                            THEN substr(addr.region, position('-' IN addr.region) + 1)
+                                            ELSE addr.region
+                                        END,
+                                locality: addr.locality,
+                                street: addr.freeform,
+                                postalCode: addr.postcode
+                            }))::VARCHAR
+                        ),
+                        ', '
+                    )
+                    ELSE ''
+                END
+                || ']'
+            )::JSON,
             variants: coalesce(p.variants, []),
             attributes: {
                 id: p.id,

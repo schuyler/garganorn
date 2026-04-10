@@ -272,6 +272,31 @@ class TestFsqExportTiles:
                 found = True
         assert found, "Mystery Spot (null country place) not found in export output"
 
+    def test_no_null_fields_in_locations(self, tmp_path):
+        """No location in any record must contain a key with a None/null value.
+
+        Fails against current code: list_concat unions geo and address struct types,
+        so geo locations get spurious null address fields (country, region, etc.) and
+        address locations get spurious null geo fields (latitude, longitude).
+        """
+        db_path = tmp_path / "test_fsq_no_null_loc.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_fsq_export_db(conn)
+        self._run_export(conn)
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        conn.close()
+        assert rows, "No rows returned from tile_export"
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            locations = parsed["value"]["locations"]
+            for loc in locations:
+                null_keys = [k for k, v in loc.items() if v is None]
+                assert not null_keys, (
+                    f"Location {loc.get('$type')!r} in record {parsed['value'].get('rkey')!r} "
+                    f"has null values for keys: {null_keys}. "
+                    "Locations must contain only fields belonging to their type."
+                )
+
     def test_tile_export_is_view_not_table(self, tmp_path):
         """tile_export must be a VIEW, not a BASE TABLE.
 
@@ -905,6 +930,31 @@ class TestOvertureExportTiles:
         assert locations[0]["$type"] == "community.lexicon.location.geo", (
             f"Only location must be geo type; got {locations[0]['$type']!r}"
         )
+
+    def test_no_null_fields_in_locations(self, overture_parquet, tmp_path):
+        """No location in any record must contain a key with a None/null value.
+
+        Fails against current code: list_concat unions geo and address struct types,
+        so geo locations get spurious null address fields (country, region, etc.) and
+        address locations get spurious null geo fields (latitude, longitude).
+        """
+        db_path = tmp_path / "test_ov_no_null_loc.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet)
+        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+        conn.close()
+        assert rows, "No rows returned from tile_export"
+        for (record_json,) in rows:
+            parsed = json.loads(record_json)
+            locations = parsed["value"]["locations"]
+            for loc in locations:
+                null_keys = [k for k, v in loc.items() if v is None]
+                assert not null_keys, (
+                    f"Location {loc.get('$type')!r} in record {parsed['value'].get('rkey')!r} "
+                    f"has null values for keys: {null_keys}. "
+                    "Locations must contain only fields belonging to their type."
+                )
 
     def test_overture_export_mixed_null_country_addresses(self, overture_parquet, tmp_path):
         """ov009 (one null-country entry + one non-null-country entry) must render with

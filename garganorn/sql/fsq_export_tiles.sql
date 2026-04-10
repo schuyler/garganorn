@@ -1,3 +1,15 @@
+-- Strip null-valued keys from a JSON object. Needed because locations are
+-- built as independent structs (geo, address) to avoid DuckDB's list_concat
+-- struct-union, which adds spurious null fields from the other type. The
+-- $."key" path syntax handles the $type key (leading $ is JSONPath root).
+-- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
+-- it (merged in PR #21748, 2026-04-02; not yet in v1.5.1).
+CREATE OR REPLACE MACRO strip_json_nulls(js) AS
+    map_from_entries(
+        [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
+         IF json_extract(js, '$."' || key || '"') <> ('null'::JSON)]
+    )::JSON;
+
 CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
@@ -8,21 +20,25 @@ SELECT
             rkey: p.fsq_place_id,
             name: p.name,
             importance: p.importance,
-            locations: list_concat(
-                [{
+            locations: (
+                '[' || to_json({
                     "$type": 'community.lexicon.location.geo',
                     latitude: p.latitude::DECIMAL(10,6)::VARCHAR,
                     longitude: p.longitude::DECIMAL(10,6)::VARCHAR
-                }],
-                CASE WHEN p.country IS NOT NULL THEN [{
-                    "$type": 'community.lexicon.location.address',
-                    country: p.country,
-                    region: p.region,
-                    locality: p.locality,
-                    street: p.address,
-                    postalCode: p.postcode
-                }] ELSE []::STRUCT("$type" VARCHAR, country VARCHAR, region VARCHAR, locality VARCHAR, street VARCHAR, postalCode VARCHAR)[] END
-            ),
+                })
+                || CASE WHEN p.country IS NOT NULL
+                    THEN ', ' || strip_json_nulls(to_json({
+                        "$type": 'community.lexicon.location.address',
+                        country: p.country,
+                        region: p.region,
+                        locality: p.locality,
+                        street: p.address,
+                        postalCode: p.postcode
+                    }))
+                    ELSE ''
+                END
+                || ']'
+            )::JSON,
             variants: coalesce(p.variants, []),
             attributes: {
                 fsq_place_id: p.fsq_place_id,
