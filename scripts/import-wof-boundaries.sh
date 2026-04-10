@@ -168,7 +168,7 @@ SELECT * FROM staged
 WHERE ST_GeometryType(geom) != 'POINT'
 -- Hilbert-sort clusters spatially adjacent boundaries into the same row groups,
 -- making DuckDB zone maps effective for the bbox BETWEEN pre-filter in compute_containment.
-ORDER BY ST_Hilbert(geom, ST_MakeEnvelope(-180, -90, 180, 90)::BOX_2D);
+ORDER BY ST_Hilbert(geom, {'min_x': -180.0, 'min_y': -90.0, 'max_x': 180.0, 'max_y': 90.0}::BOX_2D);
 
 SELECT printf('[%s] Stage 1 complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 SELECT count(*) AS boundary_count FROM boundaries;
