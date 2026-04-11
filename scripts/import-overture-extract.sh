@@ -103,22 +103,22 @@ if [ -z "$cache_dir" ]; then
 fi
 
 # Verify cache exists and has parquet files
-if [ ! -d "$cache_dir" ] || [ -z "$(ls "$cache_dir"/*.parquet 2>/dev/null)" ]; then
-    echo "Cache missing: $cache_dir"
+if [ ! -d "$cache_dir/places" ] || [ -z "$(ls "$cache_dir"/places/*.parquet 2>/dev/null)" ]; then
+    echo "Cache missing: $cache_dir/places"
     echo "Run download-overture.sh first to populate the cache."
     exit 1
 fi
 
 # Reconstruct parquet_files from cache if not already set
 if [ -z "$parquet_files" ]; then
-    parquet_files=$(ls "$cache_dir"/*.parquet 2>/dev/null)
+    parquet_files=$(ls "$cache_dir"/places/*.parquet 2>/dev/null)
 fi
 
 # Remove any existing temp file
 rm -f "${output_dir}/${db_filename}.tmp"
 
 # Take the first cached file to initialize the structure
-first_file="${cache_dir}/$(basename "$(echo "$parquet_files" | head -1)")"
+first_file="${cache_dir}/places/$(basename "$(echo "$parquet_files" | head -1)")"
 
 # Initialize the spatial extension and the places table
 cat > "${output_dir}/import-overture.sql" <<EOF
@@ -138,7 +138,7 @@ file_number=0
 
 while IFS= read -r file; do
   file_number=$((file_number + 1))
-  local_file="${cache_dir}/$(basename "$file")"
+  local_file="${cache_dir}/places/$(basename "$file")"
 
   cat <<EOF
 SELECT printf('[%s] Importing file ${file_number}/${file_count}: $(basename "$file")', strftime(now(), '%Y-%m-%dT%H:%M:%S'));

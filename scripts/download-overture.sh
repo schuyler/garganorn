@@ -87,7 +87,7 @@ places_file_count=$(echo "$places_files" | wc -l | tr -d ' ')
 places_cached_count=0
 while IFS= read -r file; do
     filename=$(basename "$file")
-    if [ -f "${cache_dir}/${filename}" ]; then
+    if [ -f "${cache_dir}/places/${filename}" ]; then
         places_cached_count=$((places_cached_count + 1))
     fi
 done <<< "$places_files"
@@ -95,9 +95,10 @@ done <<< "$places_files"
 # Download missing places files
 places_dl_count=0
 echo "Downloading places parquet files..."
+mkdir -p "${cache_dir}/places"
 while IFS= read -r file; do
     filename=$(basename "$file")
-    dest="${cache_dir}/${filename}"
+    dest="${cache_dir}/places/${filename}"
     if [ -f "$dest" ]; then
         continue
     fi
@@ -111,61 +112,51 @@ while IFS= read -r file; do
     mv "${dest}.tmp" "$dest"
 done <<< "$places_files"
 
-# Download divisions parquet files
-echo "Finding available divisions parquet files..."
+# Download division and division_area parquet files
+for type_name in division division_area; do
+    type="type=${type_name}"
+    type_dir="${cache_dir}/${type_name}"
+    mkdir -p "$type_dir"
 
-# First, discover the type subdirectories under theme=divisions/
-divisions_types=$(curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=divisions/&delimiter=/" |
-  grep -o '<Prefix>release/'${latest_release}'/theme=divisions/type=[^<]*/</Prefix>' |
-  sed 's/<Prefix>release\/'${latest_release}'\/theme=divisions\/\(type=[^\/]*\)\/<\/Prefix>/\1/')
+    echo "Finding available ${type_name} parquet files..."
+    divisions_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=divisions/${type}/" |
+      grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
+      sed 's/>\(.*\)</\1/g' |
+      sort)
 
-if [ -z "$divisions_types" ]; then
-    echo "Warning: No divisions found in this release."
-else
-    # For each type, list and download parquet files
-    while IFS= read -r type; do
-        type_dir="${cache_dir}/divisions/${type}"
-        mkdir -p "$type_dir"
+    if [ -z "$divisions_files" ]; then
+        echo "No parquet files found for ${type_name}"
+        continue
+    fi
 
-        echo "Downloading divisions type: ${type}"
-        divisions_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=divisions/${type}/" |
-          grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
-          sed 's/>\(.*\)</\1/g' |
-          sort)
+    # Count already-cached files
+    divisions_file_count=$(echo "$divisions_files" | wc -l | tr -d ' ')
+    divisions_cached_count=0
+    while IFS= read -r file; do
+        filename=$(basename "$file")
+        if [ -f "${type_dir}/${filename}" ]; then
+            divisions_cached_count=$((divisions_cached_count + 1))
+        fi
+    done <<< "$divisions_files"
 
-        if [ -z "$divisions_files" ]; then
-            echo "No parquet files found for divisions/${type}"
+    # Download missing files
+    divisions_dl_count=0
+    echo "Downloading ${type_name} parquet files..."
+    while IFS= read -r file; do
+        filename=$(basename "$file")
+        dest="${type_dir}/${filename}"
+        if [ -f "$dest" ]; then
             continue
         fi
-
-        # Count already-cached divisions files for this type
-        divisions_file_count=$(echo "$divisions_files" | wc -l | tr -d ' ')
-        divisions_cached_count=0
-        while IFS= read -r file; do
-            filename=$(basename "$file")
-            if [ -f "${type_dir}/${filename}" ]; then
-                divisions_cached_count=$((divisions_cached_count + 1))
-            fi
-        done <<< "$divisions_files"
-
-        # Download missing divisions files for this type
-        divisions_dl_count=0
-        while IFS= read -r file; do
-            filename=$(basename "$file")
-            dest="${type_dir}/${filename}"
-            if [ -f "$dest" ]; then
-                continue
-            fi
-            divisions_dl_count=$((divisions_dl_count + 1))
-            echo "Downloading ${divisions_dl_count} / $((divisions_file_count - divisions_cached_count)) (cached: ${divisions_cached_count}): ${type}/${filename}"
-            if ! curl -sf -o "${dest}.tmp" "${source_base}/${file}"; then
-                echo "Failed to download ${source_base}/${file}"
-                rm -f "${dest}.tmp"
-                exit 1
-            fi
-            mv "${dest}.tmp" "$dest"
-        done <<< "$divisions_files"
-    done <<< "$divisions_types"
-fi
+        divisions_dl_count=$((divisions_dl_count + 1))
+        echo "Downloading ${divisions_dl_count} / $((divisions_file_count - divisions_cached_count)) (cached: ${divisions_cached_count}): ${type_name}/${filename}"
+        if ! curl -sf -o "${dest}.tmp" "${source_base}/${file}"; then
+            echo "Failed to download ${source_base}/${file}"
+            rm -f "${dest}.tmp"
+            exit 1
+        fi
+        mv "${dest}.tmp" "$dest"
+    done <<< "$divisions_files"
+done
 
 echo "Done."
