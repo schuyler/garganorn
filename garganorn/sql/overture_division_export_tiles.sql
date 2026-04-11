@@ -13,6 +13,17 @@
 -- (which divisions contain this one). Left join means records without
 -- containment data get an empty relations object.
 
+-- Strip null-valued keys from a JSON object. Divisions commonly have null
+-- values for optional fields (region, wikidata, population) which creates
+-- noisy output when embedded in tile JSON.
+-- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
+-- it (merged in PR #21748, 2026-04-02; not yet in v1.5.1).
+CREATE OR REPLACE MACRO strip_json_nulls(js) AS
+    map_from_entries(
+        [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
+         IF json_extract(js, '$."' || key || '"') <> ('null'::JSON)]
+    )::JSON;
+
 CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
@@ -31,14 +42,14 @@ SELECT
                 west: p.min_longitude::DECIMAL(10,6)::VARCHAR
             }],
             variants: coalesce(p.variants, []),
-            attributes: {
+            attributes: strip_json_nulls(to_json({
                 subtype: p.subtype,
                 country: p.country,
                 region: p.region,
                 admin_level: p.admin_level,
                 wikidata: p.wikidata,
                 population: p.population
-            },
+            })),
             relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
         }
     })::VARCHAR AS record_json

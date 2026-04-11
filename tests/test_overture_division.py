@@ -1,16 +1,13 @@
-"""Tests for Phase 2 of the Overture divisions migration.
+"""Tests for the Overture divisions pipeline and export."""
 
-Red phase: these tests verify that overture_division is registered as a
-pipeline source in quadtree.py and that the expected SQL files exist.
-All tests should fail until the Green phase implementation.
-"""
-
+import json
 import pathlib
 from unittest.mock import patch, MagicMock, call
 
+import duckdb
 import pytest
 
-from tests.quadtree_helpers import REPO_ROOT
+from tests.quadtree_helpers import REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit
 
 
 # ---------------------------------------------------------------------------
@@ -177,3 +174,129 @@ class TestPipelineSkipsImportanceVariants:
         assert "overture_division" in SOURCE_PK, (
             "overture_division must be in SOURCE_PK before pipeline can run"
         )
+
+
+# ---------------------------------------------------------------------------
+# Export: strip null-valued keys from attributes
+# ---------------------------------------------------------------------------
+
+_DIV_EXPORT_PLACES = [
+    # (id, name, subtype, country, region, admin_level, wikidata, population)
+    ("div001", "Testland", "country", "US", None, 2, None, 1000000),
+    ("div002", "Testregion", "region", "US", "CA", 4, "Q123", None),
+    # all optional fields null
+    ("div003", "Nowhere", "county", None, None, 6, None, None),
+]
+
+
+def _make_division_export_db(conn, places_rows=None):
+    """Populate conn with minimal places, tile_assignments, place_containment."""
+    if places_rows is None:
+        places_rows = _DIV_EXPORT_PLACES
+
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    conn.execute("""
+        CREATE TABLE places (
+            id VARCHAR,
+            geometry GEOMETRY,
+            names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR),
+                         rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
+            subtype VARCHAR,
+            country VARCHAR,
+            region VARCHAR,
+            admin_level INTEGER,
+            wikidata VARCHAR,
+            population BIGINT,
+            min_latitude DOUBLE,
+            max_latitude DOUBLE,
+            min_longitude DOUBLE,
+            max_longitude DOUBLE,
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            qk17 VARCHAR,
+            importance INTEGER,
+            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
+        )
+    """)
+
+    for (div_id, name, subtype, country, region, admin_level,
+         wikidata, population) in places_rows:
+        # NOTE: f-string interpolation is safe here — all values are
+        # hardcoded test data from _DIV_EXPORT_PLACES above.
+        conn.execute(f"""
+            INSERT INTO places VALUES (
+                '{div_id}',
+                ST_GeomFromText('POLYGON((-122.5 37.7, -122.4 37.7, -122.4 37.8, -122.5 37.8, -122.5 37.7))'),
+                {{'primary': '{name}', 'common': map([]::VARCHAR[], []::VARCHAR[]),
+                  'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]}},
+                {f"'{subtype}'" if subtype else "NULL"},
+                {f"'{country}'" if country else "NULL"},
+                {f"'{region}'" if region else "NULL"},
+                {admin_level},
+                {f"'{wikidata}'" if wikidata else "NULL"},
+                {population if population else "NULL"},
+                37.7, 37.8, -122.5, -122.4,
+                {{'xmin': -122.5, 'ymin': 37.7, 'xmax': -122.4, 'ymax': 37.8}},
+                ST_QuadKey(-122.45, 37.75, 17),
+                0,
+                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
+            )
+        """)
+
+    conn.execute("""
+        CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)
+    """)
+    for (div_id, *_) in places_rows:
+        conn.execute(f"INSERT INTO tile_assignments VALUES ('{div_id}', '023010')")
+
+    conn.execute("""
+        CREATE TABLE place_containment (place_id VARCHAR, relations_json VARCHAR)
+    """)
+
+
+class TestExportStripJsonNulls:
+    """overture_division export must strip null-valued keys from attributes."""
+
+    def test_export_strips_null_attributes(self, tmp_path):
+        """Attributes dict must not contain null-valued keys."""
+        db_path = tmp_path / "test_division_strip_nulls.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_division_export_db(conn)
+
+        raw_sql = _load_sql("overture_division_export_tiles.sql",
+                            {"repo": "https://example.com"})
+        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+        conn.execute(sql)
+
+        rows = conn.execute(
+            "SELECT record_json FROM tile_export ORDER BY record_json"
+        ).fetchall()
+        conn.close()
+
+        assert len(rows) == 3
+
+        for (record_json,) in rows:
+            record = json.loads(record_json)
+            attrs = record["value"]["attributes"]
+            rkey = record["value"]["rkey"]
+
+            null_keys = [k for k, v in attrs.items() if v is None]
+            assert not null_keys, (
+                f"Record {rkey} has null-valued attribute keys: {null_keys}. "
+                f"Attributes: {attrs}"
+            )
+
+            if rkey == "div001":
+                assert attrs["country"] == "US"
+                assert attrs["population"] == 1000000
+                assert "region" not in attrs
+                assert "wikidata" not in attrs
+            elif rkey == "div002":
+                assert attrs["country"] == "US"
+                assert attrs["region"] == "CA"
+                assert attrs["wikidata"] == "Q123"
+                assert "population" not in attrs
+            elif rkey == "div003":
+                assert attrs["subtype"] == "county"
+                assert attrs["admin_level"] == 6
+                assert set(attrs.keys()) == {"subtype", "admin_level"}
