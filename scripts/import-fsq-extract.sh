@@ -96,7 +96,7 @@ fi
 
 # Verify all 100 files are present
 cached_count=$(find "$cache_dir" -maxdepth 1 -name '*.parquet' -type f | wc -l | tr -d ' ')
-if [ "$cached_count" -lt 100 ]; then
+if [ "$cached_count" -ne 100 ]; then
     echo "Incomplete FSQ cache: found $cached_count files, expected 100 in $cache_dir"
     exit 1
 fi
