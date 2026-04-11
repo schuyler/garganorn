@@ -10,12 +10,14 @@ if ! command -v duckdb &> /dev/null; then
     exit 1
 fi
 
-# Extract --log option before positional parsing
+# Extract --log and --cache-dir options before positional parsing
 log_file=""
+cache_dir=""
 remaining_args=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --log) log_file="$2"; shift 2 ;;
+        --cache-dir) cache_dir="$2"; shift 2 ;;
         *) remaining_args+=("$1"); shift ;;
     esac
 done
@@ -33,7 +35,7 @@ ymax=$4
 
 if [ -z "$xmin" ] || [ -z "$ymin" ] || [ -z "$xmax" ] || [ -z "$ymax" ]; then
     echo
-    echo "Usage: $0 [--log <path>] <xmin> <ymin> <xmax> <ymax>"
+    echo "Usage: $0 [--log <path>] [--cache-dir <path>] <xmin> <ymin> <xmax> <ymax>"
     echo
     exit 1
 fi
@@ -50,64 +52,54 @@ if (( $(echo "$xmin >= $xmax" | bc -l) )) || (( $(echo "$ymin >= $ymax" | bc -l)
     exit 1
 fi
 
-# Find the latest release from https://fsq-os-places-us-east-1.s3.amazonaws.com/ using curl
-# The release values are in the format: "<Key>release/dt=2025-03-06/</Key>"
-# The XML file does not contain newlines
-# We want something POSIX compliant so it will run on both MacOS and Linux
-
-# Fetch the XML and extract the latest release date
-latest_release=$(curl -s "https://fsq-os-places-us-east-1.s3.amazonaws.com/" |
-  grep -o "<Key>release/dt=[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}/</Key>" |
-  sed 's/<Key>release\/dt=\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)\/<\/Key>/\1/g' |
-  sort -r |
-  head -1)
-
-if [ -z "$latest_release" ]; then
-    echo "No releases found."
-    exit 1
-fi
-
-echo "Using latest release: $latest_release"
-
-# Construct the source data URL using the latest release date
-source_data="https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${latest_release}/places/parquet/places-00000.zstd.parquet"
-
 # Create the db/ directory in the parent folder relative to this script
 # This will be the output directory for the DuckDB database
 script_dir="$(dirname "$(realpath "$0")")"
 output_dir="${script_dir}/../db"
 mkdir -p "$output_dir"
 
-# Download and cache parquet files locally
-cache_dir="${output_dir}/cache/fsq/${latest_release}"
-mkdir -p "$cache_dir"
+# If --cache-dir is not provided, discover the latest release from S3
+if [ -z "$cache_dir" ]; then
+    # Find the latest release from https://fsq-os-places-us-east-1.s3.amazonaws.com/ using curl
+    # The release values are in the format: "<Key>release/dt=2025-03-06/</Key>"
+    # The XML file does not contain newlines
+    # We want something POSIX compliant so it will run on both MacOS and Linux
 
-cached_count=0
-for i in $(seq 0 99); do
-    filename="places-$(printf '%05d' $i).zstd.parquet"
-    dest="${cache_dir}/${filename}"
-    if [ -f "$dest" ]; then
-        cached_count=$((cached_count + 1))
-    fi
-done
+    # Fetch the XML and extract the latest release date
+    latest_release=$(curl -s "https://fsq-os-places-us-east-1.s3.amazonaws.com/" |
+      grep -o "<Key>release/dt=[0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}/</Key>" |
+      sed 's/<Key>release\/dt=\([0-9]\{4\}-[0-9]\{2\}-[0-9]\{2\}\)\/<\/Key>/\1/g' |
+      sort -r |
+      head -1)
 
-dl_count=0
-for i in $(seq 0 99); do
-    filename="places-$(printf '%05d' $i).zstd.parquet"
-    dest="${cache_dir}/${filename}"
-    if [ -f "$dest" ]; then
-        continue
-    fi
-    dl_count=$((dl_count + 1))
-    echo "Downloading $dl_count / $((100 - cached_count)) (cached: $cached_count)"
-    url=$(echo "${source_data}" | sed "s/places-00000.zstd.parquet/${filename}/")
-    if ! curl -sf -o "${dest}.tmp" "$url"; then
-        echo "Failed to download ${url}"
-        rm -f "${dest}.tmp"
+    if [ -z "$latest_release" ]; then
+        echo "No releases found."
         exit 1
     fi
-    mv "${dest}.tmp" "$dest"
-done
+
+    echo "Using latest release: $latest_release"
+
+    # Construct the source data URL using the latest release date
+    source_data="https://fsq-os-places-us-east-1.s3.amazonaws.com/release/dt=${latest_release}/places/parquet/places-00000.zstd.parquet"
+
+    # Download and cache parquet files locally
+    cache_dir="${output_dir}/cache/fsq/${latest_release}"
+    mkdir -p "$cache_dir"
+fi
+
+# Verify cache exists and is complete
+if [ ! -d "$cache_dir" ] || [ -z "$(ls "$cache_dir"/*.parquet 2>/dev/null)" ]; then
+    echo "Cache missing: $cache_dir"
+    echo "Run download-fsq.sh first to populate the cache."
+    exit 1
+fi
+
+# Verify all 100 files are present
+cached_count=$(find "$cache_dir" -maxdepth 1 -name '*.parquet' -type f | wc -l | tr -d ' ')
+if [ "$cached_count" -lt 100 ]; then
+    echo "Incomplete FSQ cache: found $cached_count files, expected 100 in $cache_dir"
+    exit 1
+fi
 
 # Remove any existing temp file
 rm -f "${output_dir}/fsq-osp.duckdb.tmp"
