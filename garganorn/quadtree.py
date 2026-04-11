@@ -285,7 +285,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
          (no-op if boundaries_db is None).
       5. Export tiles: write gzipped JSON tile files to a timestamped subdirectory.
       6. Manifest: write manifest.json and manifest.duckdb for tile serving.
-      7. Boundary export (overture_division only): write boundaries.duckdb with
+      7. DuckDB boundary export (overture_division only): write boundaries.duckdb with
          Hilbert-sorted geometries and an R-tree index for use by other sources'
          containment stage.
 
@@ -383,7 +383,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             boundaries_tmp = boundaries_path + ".tmp"
             if os.path.exists(boundaries_tmp):
                 os.remove(boundaries_tmp)
-            log.info("[%s] boundary export: starting", source)
+            log.info("[%s] DuckDB boundary export: starting", source)
             con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
             con.execute("""
                 CREATE TABLE bnd.places AS
@@ -400,7 +400,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             con.execute("CREATE INDEX bnd_places_rtree ON bnd.places USING RTREE(geometry)")
             con.execute("DETACH bnd")
             os.rename(boundaries_tmp, boundaries_path)
-            log.info("[%s] boundary export: done (%.1fs)", source, time.monotonic() - t0)
+            log.info("[%s] DuckDB boundary export: done (%.1fs)", source, time.monotonic() - t0)
     except Exception:
         con.close()
         raise
