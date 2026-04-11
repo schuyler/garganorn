@@ -2,7 +2,7 @@ repo: places.atgeo.org
 databases:
   - type: foursquare
     path: db/fsq-osp.duckdb
-  - type: overture
+  - type: overture_place
     path: db/overture-maps.duckdb
 
 tiles:

@@ -78,7 +78,7 @@ def run_fsq_import(conn, parquet_glob, bbox=None):
         "ymin": bbox["ymin"],
         "ymax": bbox["ymax"],
     }
-    raw_sql = _load_sql("fsq_import.sql", substitutions)
+    raw_sql = _load_sql("foursquare_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
     conn.execute(sql)
 
@@ -94,7 +94,7 @@ def run_overture_import(conn, parquet_glob, bbox=None):
         "ymin": bbox["ymin"],
         "ymax": bbox["ymax"],
     }
-    raw_sql = _load_sql("overture_import.sql", substitutions)
+    raw_sql = _load_sql("overture_place_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
     conn.execute(sql)
 

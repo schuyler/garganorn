@@ -37,14 +37,11 @@ class TileBackedCollection:
             tile_data = self._read_tile(tile_qk)
         except FileNotFoundError:
             return None
-        # ATProto rkeys are ASCII alphanumeric + hyphen + dot (no slashes), so
-        # endswith on "/{collection}/{rkey}" is unambiguous — no false-positive risk.
-        target_uri_suffix = f"/{self.collection}/{rkey}"
         for record in tile_data["records"]:
-            if record["uri"].endswith(target_uri_suffix):
+            if record["rkey"] == rkey:
                 # Shallow copy prevents mutations by the server layer (e.g., popping
                 # "importance") from corrupting the lru_cache-held tile dict.
-                return copy.copy(record["value"])
+                return copy.copy(record)
         return None
 
     def _read_tile(self, tile_qk: str) -> dict:

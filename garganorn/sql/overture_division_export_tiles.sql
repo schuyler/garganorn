@@ -28,30 +28,27 @@ CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
     to_json({
-        uri: 'https://${repo}/org.atgeo.places.overture.division/' || p.id,
-        value: {
-            "$type": 'org.atgeo.place',
-            rkey: p.id,
-            name: p.names."primary",
-            importance: p.importance,
-            locations: [{
-                "$type": 'community.lexicon.location.bbox',
-                north: p.max_latitude::DECIMAL(10,6)::VARCHAR,
-                south: p.min_latitude::DECIMAL(10,6)::VARCHAR,
-                east: p.max_longitude::DECIMAL(10,6)::VARCHAR,
-                west: p.min_longitude::DECIMAL(10,6)::VARCHAR
-            }],
-            variants: coalesce(p.variants, []),
-            attributes: strip_json_nulls(to_json({
-                subtype: p.subtype,
-                country: p.country,
-                region: p.region,
-                admin_level: p.admin_level,
-                wikidata: p.wikidata,
-                population: p.population
-            })),
-            relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
-        }
+        "$type": 'org.atgeo.place',
+        rkey: p.id,
+        name: p.names."primary",
+        importance: p.importance,
+        locations: [{
+            "$type": 'community.lexicon.location.bbox',
+            north: p.max_latitude::DECIMAL(10,6)::VARCHAR,
+            south: p.min_latitude::DECIMAL(10,6)::VARCHAR,
+            east: p.max_longitude::DECIMAL(10,6)::VARCHAR,
+            west: p.min_longitude::DECIMAL(10,6)::VARCHAR
+        }],
+        variants: coalesce(p.variants, []),
+        attributes: strip_json_nulls(to_json({
+            subtype: p.subtype,
+            country: p.country,
+            region: p.region,
+            admin_level: p.admin_level,
+            wikidata: p.wikidata,
+            population: p.population
+        })),
+        relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
     })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.id

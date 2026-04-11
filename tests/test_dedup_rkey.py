@@ -16,7 +16,7 @@ The bug:
 import pytest
 import duckdb
 
-from garganorn.database import FoursquareOSP, OvertureMaps, OpenStreetMap
+from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap
 
 
 # ---------------------------------------------------------------------------
@@ -315,7 +315,7 @@ def _create_dedup_overture_db(db_path):
 
     # Index "Blue Cafe" (primary) for ov001
     primary_name = "Blue Cafe"
-    norm_primary = OvertureMaps._strip_accents(primary_name.lower())
+    norm_primary = OverturePlaces._strip_accents(primary_name.lower())
     for trigram in _generate_trigrams(primary_name):
         conn.execute(
             "INSERT INTO name_index VALUES (?, 'ov001', ?, ?, 80, FALSE)",
@@ -324,7 +324,7 @@ def _create_dedup_overture_db(db_path):
 
     # Index "Cafe Bleu" (variant) for ov001
     variant_name = "Cafe Bleu"
-    norm_variant = OvertureMaps._strip_accents(variant_name.lower())
+    norm_variant = OverturePlaces._strip_accents(variant_name.lower())
     for trigram in _generate_trigrams(variant_name):
         conn.execute(
             "INSERT INTO name_index VALUES (?, 'ov001', ?, ?, 80, TRUE)",
@@ -333,7 +333,7 @@ def _create_dedup_overture_db(db_path):
 
     # Index "Blue Cafe Express" for ov002
     express_name = "Blue Cafe Express"
-    norm_express = OvertureMaps._strip_accents(express_name.lower())
+    norm_express = OverturePlaces._strip_accents(express_name.lower())
     for trigram in _generate_trigrams(express_name):
         conn.execute(
             "INSERT INTO name_index VALUES (?, 'ov002', ?, ?, 75, FALSE)",
@@ -390,7 +390,7 @@ def dedup_osm_db(dedup_osm_db_path):
 
 @pytest.fixture
 def dedup_overture_db(dedup_overture_db_path):
-    db = OvertureMaps(dedup_overture_db_path)
+    db = OverturePlaces(dedup_overture_db_path)
     db.connect()
     yield db
     db.close()

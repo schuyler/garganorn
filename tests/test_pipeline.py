@@ -38,7 +38,7 @@ class TestRunPipeline:
         output_dir.mkdir()
 
         run_pipeline(
-            "fsq",
+            "foursquare",
             fsq_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
@@ -46,8 +46,8 @@ class TestRunPipeline:
             max_per_tile=100,
         )
 
-        # At least one tile file under output_dir/fsq/current/
-        fsq_dir = output_dir / "fsq"
+        # At least one tile file under output_dir/foursquare/current/
+        fsq_dir = output_dir / "foursquare"
         current_dir = fsq_dir / "current"
         gz_files = list(current_dir.rglob("*.json.gz")) if current_dir.exists() else []
         assert gz_files, (
@@ -62,7 +62,7 @@ class TestRunPipeline:
         with open(manifest_path) as fh:
             manifest = json.load(fh)
         assert "source" in manifest, "manifest.json missing 'source'"
-        assert manifest["source"] == "fsq", (
+        assert manifest["source"] == "foursquare", (
             f"manifest source must be 'fsq'; got {manifest['source']!r}"
         )
 
@@ -85,7 +85,7 @@ class TestRunPipeline:
         output_dir.mkdir()
 
         run_pipeline(
-            "fsq",
+            "foursquare",
             fsq_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
@@ -93,11 +93,11 @@ class TestRunPipeline:
             max_per_tile=100,
         )
 
-        fsq_dir = output_dir / "fsq"
+        fsq_dir = output_dir / "foursquare"
         gz_files = list((fsq_dir / "current").rglob("*.json.gz")) if (fsq_dir / "current").exists() else []
         assert gz_files, f"run_pipeline must write at least one .json.gz under {fsq_dir / 'current'}"
 
-        manifest_path = output_dir / "fsq" / "current" / "manifest.duckdb"
+        manifest_path = output_dir / "foursquare" / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -117,7 +117,7 @@ class TestRunPipeline:
             meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
             assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
             source, generated_at = meta[0]
-            assert source == "fsq", f"metadata source must be 'fsq'; got {source!r}"
+            assert source == "foursquare", f"metadata source must be 'fsq'; got {source!r}"
             datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
         finally:
             con.close()
@@ -140,7 +140,7 @@ class TestRunPipeline:
         output_dir.mkdir()
 
         run_pipeline(
-            "overture",
+            "overture_place",
             overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
@@ -148,7 +148,7 @@ class TestRunPipeline:
             max_per_tile=100,
         )
 
-        ov_dir = output_dir / "overture"
+        ov_dir = output_dir / "overture_place"
         gz_files = list((ov_dir / "current").rglob("*.json.gz")) if (ov_dir / "current").exists() else []
         assert gz_files, f"run_pipeline must write at least one .json.gz under {ov_dir / 'current'}"
 
@@ -172,7 +172,7 @@ class TestRunPipeline:
             meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
             assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
             source, generated_at = meta[0]
-            assert source == "overture", f"metadata source must be 'overture'; got {source!r}"
+            assert source == "overture_place", f"metadata source must be 'overture'; got {source!r}"
             datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
         finally:
             con.close()
@@ -285,7 +285,7 @@ class TestWriteManifest:
         except (ImportError, ModuleNotFoundError):
             pytest.skip("garganorn.quadtree not available")
 
-        write_manifest({"023130": 42, "023131": 7}, str(tmp_path), "fsq")
+        write_manifest({"023130": 42, "023131": 7}, str(tmp_path), "foursquare")
         assert (tmp_path / "manifest.json").exists(), "manifest.json not found"
 
     def test_manifest_structure(self, tmp_path):
@@ -297,7 +297,7 @@ class TestWriteManifest:
 
         out_dir = tmp_path / "manifest_struct"
         out_dir.mkdir()
-        write_manifest({"023130": 42}, str(out_dir), "fsq")
+        write_manifest({"023130": 42}, str(out_dir), "foursquare")
         with open(out_dir / "manifest.json") as fh:
             manifest = json.load(fh)
         assert "source" in manifest, f"manifest missing 'source'; keys={list(manifest)}"
@@ -308,7 +308,7 @@ class TestWriteManifest:
             f"manifest missing 'quadkeys'; keys={list(manifest)}"
         )
         assert isinstance(manifest["quadkeys"], list), "quadkeys must be a list"
-        assert manifest["source"] == "fsq", (
+        assert manifest["source"] == "foursquare", (
             f"source must be 'fsq'; got {manifest['source']!r}"
         )
 
@@ -325,7 +325,7 @@ class TestWriteManifest:
         write_manifest(
             {"023133": 5, "023130": 42, "023132": 17, "023131": 7},
             str(out_dir),
-            "fsq",
+            "foursquare",
         )
         with open(out_dir / "manifest.json") as fh:
             manifest = json.load(fh)
@@ -354,8 +354,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--output", output_dir,
         ]
 
@@ -368,9 +368,9 @@ class TestQuadtreeMainCLI:
 
         source_arg = ca.kwargs.get("source") if "source" in ca.kwargs else (ca.args[0] if len(ca.args) > 0 else None)
         parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
-        assert source_arg == "fsq", f"source must be 'fsq'; got {source_arg!r}. Full call: {ca}"
-        assert parquet_arg == "db/cache/fsq/*.parquet", (
-            f"parquet_glob must be 'db/cache/fsq/*.parquet'; got {parquet_arg!r}. Full call: {ca}"
+        assert source_arg == "foursquare", f"source must be 'fsq'; got {source_arg!r}. Full call: {ca}"
+        assert parquet_arg == "db/cache/foursquare/*.parquet", (
+            f"parquet_glob must be 'db/cache/foursquare/*.parquet'; got {parquet_arg!r}. Full call: {ca}"
         )
 
         bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else "NOT_PRESENT")
@@ -395,8 +395,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "overture",
-            "--parquet", "db/cache/overture/*.parquet",
+            "--source", "overture_place",
+            "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-122.55", "37.60", "-122.30", "37.85",
             "--output", output_dir,
             "--memory-limit", "32GB",
@@ -440,8 +440,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", output_dir,
             "--config", str(config_path),
@@ -482,8 +482,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", output_dir,
             "--config", str(config_path),
@@ -518,8 +518,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", output_dir,
         ]
@@ -547,7 +547,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", str(tmp_path / "tiles"),
         ]
@@ -562,7 +562,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
+            "--source", "foursquare",
             "--output", str(tmp_path / "tiles"),
         ]
 
@@ -578,8 +578,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
         ]
 
@@ -659,7 +659,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
+            "--source", "foursquare",
             "--parquet-dir", "/some/dir",
             "--output", str(tmp_path / "tiles_fsq_bad"),
         ]
@@ -676,8 +676,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--output", str(tmp_path / "tiles_no_bbox"),
         ]
 
@@ -696,8 +696,8 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
-            "--source", "fsq",
-            "--parquet", "db/cache/fsq/*.parquet",
+            "--source", "foursquare",
+            "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
             "--output", str(tmp_path / "tiles_with_bbox"),
         ]
@@ -785,7 +785,7 @@ class TestRunPipelineStaleDb:
 
         # Pre-create the work db directory and insert a stale `places` table,
         # simulating a prior crashed run.
-        work_db_dir = output_dir / "fsq"
+        work_db_dir = output_dir / "foursquare"
         work_db_dir.mkdir()
         work_db_path = work_db_dir / ".fsq_work.duckdb"
         stale_con = duckdb.connect(str(work_db_path))
@@ -794,7 +794,7 @@ class TestRunPipelineStaleDb:
 
         # Second run must succeed without raising CatalogException.
         run_pipeline(
-            "fsq",
+            "foursquare",
             fsq_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
@@ -810,7 +810,7 @@ class TestRunPipelineStaleDb:
         output_dir.mkdir()
 
         # Pre-create the work db directory and insert a stale `places` table.
-        work_db_dir = output_dir / "overture"
+        work_db_dir = output_dir / "overture_place"
         work_db_dir.mkdir()
         work_db_path = work_db_dir / ".overture_work.duckdb"
         stale_con = duckdb.connect(str(work_db_path))
@@ -819,7 +819,7 @@ class TestRunPipelineStaleDb:
 
         # Second run must succeed without raising CatalogException.
         run_pipeline(
-            "overture",
+            "overture_place",
             overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
@@ -873,7 +873,7 @@ class TestTimestampedExport:
         except (ImportError, ModuleNotFoundError):
             pytest.skip("garganorn.quadtree not available")
         run_pipeline(
-            "fsq",
+            "foursquare",
             fsq_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
@@ -882,13 +882,13 @@ class TestTimestampedExport:
         )
 
     def test_creates_timestamped_subdir(self, fsq_parquet, tmp_path):
-        """run_pipeline must create a timestamped subdirectory under output_dir/fsq/."""
+        """run_pipeline must create a timestamped subdirectory under output_dir/foursquare/."""
         output_dir = tmp_path / "ts_subdir_out"
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        fsq_dir = output_dir / "fsq"
-        assert fsq_dir.exists(), f"output_dir/fsq/ must exist; got {list(output_dir.iterdir())}"
+        fsq_dir = output_dir / "foursquare"
+        assert fsq_dir.exists(), f"output_dir/foursquare/ must exist; got {list(output_dir.iterdir())}"
 
         ts_dirs = [
             d for d in fsq_dir.iterdir()
@@ -905,15 +905,15 @@ class TestTimestampedExport:
         )
 
     def test_creates_current_symlink(self, fsq_parquet, tmp_path):
-        """run_pipeline must create a `current` symlink under output_dir/fsq/."""
+        """run_pipeline must create a `current` symlink under output_dir/foursquare/."""
         output_dir = tmp_path / "ts_symlink_out"
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        fsq_dir = output_dir / "fsq"
+        fsq_dir = output_dir / "foursquare"
         current = fsq_dir / "current"
         assert os.path.islink(str(current)), (
-            f"output_dir/fsq/current must be a symlink; got {list(fsq_dir.iterdir())}"
+            f"output_dir/foursquare/current must be a symlink; got {list(fsq_dir.iterdir())}"
         )
 
         target = os.readlink(str(current))
@@ -927,7 +927,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        fsq_dir = output_dir / "fsq"
+        fsq_dir = output_dir / "foursquare"
         first_target = os.readlink(str(fsq_dir / "current"))
 
         time.sleep(1)
@@ -955,7 +955,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        fsq_dir = output_dir / "fsq"
+        fsq_dir = output_dir / "foursquare"
         first_target = os.readlink(str(fsq_dir / "current"))
 
         time.sleep(1)
@@ -984,7 +984,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        current_dir = output_dir / "fsq" / "current"
+        current_dir = output_dir / "foursquare" / "current"
         gz_files = list(current_dir.rglob("*.json.gz"))
         assert gz_files, f"No .json.gz files found under {current_dir}"
 
@@ -1001,7 +1001,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        current_dir = output_dir / "fsq" / "current"
+        current_dir = output_dir / "foursquare" / "current"
 
         manifest_json = current_dir / "manifest.json"
         assert manifest_json.exists(), f"manifest.json must exist at {manifest_json}"
@@ -1025,7 +1025,7 @@ class TestTimestampedExport:
         with pytest.raises(RuntimeError, match="boom"):
             with patch("garganorn.quadtree.export_tiles", side_effect=RuntimeError("boom")):
                 run_pipeline(
-                    "fsq",
+                    "foursquare",
                     fsq_parquet,
                     (-122.55, 37.60, -122.30, 37.85),
                     str(output_dir),
@@ -1033,7 +1033,7 @@ class TestTimestampedExport:
                     max_per_tile=100,
                 )
 
-        fsq_dir = output_dir / "fsq"
+        fsq_dir = output_dir / "foursquare"
         assert fsq_dir.exists(), "source dir must exist even after failed run"
 
         # Partial timestamped dir should be left for debugging
@@ -1061,12 +1061,12 @@ class TestTimestampedExport:
         )
 
     def test_work_db_in_timestamped_dir(self, fsq_parquet, tmp_path):
-        """No .duckdb files should remain under output_dir/fsq/ except manifest.duckdb."""
+        """No .duckdb files should remain under output_dir/foursquare/ except manifest.duckdb."""
         output_dir = tmp_path / "ts_workdb_out"
         output_dir.mkdir()
         self._run(fsq_parquet, output_dir)
 
-        fsq_dir = output_dir / "fsq"
+        fsq_dir = output_dir / "foursquare"
         leftover_dbs = [
             f for f in fsq_dir.rglob("*.duckdb")
             if f.name != "manifest.duckdb"

@@ -1,4 +1,4 @@
-"""Tests for overture_import.sql, overture_importance.sql, and overture_variants.sql."""
+"""Tests for overture_place_import.sql, overture_place_importance.sql, and overture_place_variants.sql."""
 
 import duckdb
 import pytest
@@ -13,11 +13,11 @@ from tests.quadtree_helpers import (
 # ---------------------------------------------------------------------------
 
 class TestOvertureImport:
-    """Tests for garganorn/sql/overture_import.sql."""
+    """Tests for garganorn/sql/overture_place_import.sql."""
 
     def test_sql_file_exists(self):
         """The SQL file must exist on disk (will fail until Green phase)."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_import.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
     def test_places_table_created(self, overture_parquet, tmp_path):
@@ -137,29 +137,29 @@ class TestOvertureImport:
 
 
 # ---------------------------------------------------------------------------
-# Tests: overture_importance.sql
+# Tests: overture_place_importance.sql
 # ---------------------------------------------------------------------------
 
 class TestOvertureImportance:
-    """Tests for garganorn/sql/overture_importance.sql.
+    """Tests for garganorn/sql/overture_place_importance.sql.
 
     Each test creates a fresh DuckDB connection, runs overture_import.sql first,
-    then runs overture_importance.sql.
+    then runs overture_place_importance.sql.
     """
 
     def test_sql_file_exists(self):
         """The SQL file must exist on disk (will fail until Green phase)."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_importance.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_importance.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
     def _run_importance(self, conn):
-        """Load and execute overture_importance.sql on `conn`."""
-        raw_sql = _load_sql("overture_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        """Load and execute overture_place_importance.sql on `conn`."""
+        raw_sql = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
     def test_importance_column_added(self, overture_parquet, tmp_path):
-        """After overture_importance.sql, `places` must have an `importance` column."""
+        """After overture_place_importance.sql, `places` must have an `importance` column."""
         db_path = tmp_path / "test_ov_imp_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -322,28 +322,28 @@ class TestOvertureImportance:
 
 
 # ---------------------------------------------------------------------------
-# Tests: overture_variants.sql
+# Tests: overture_place_variants.sql
 # ---------------------------------------------------------------------------
 
 class TestOvertureVariants:
-    """Tests for garganorn/sql/overture_variants.sql.
+    """Tests for garganorn/sql/overture_place_variants.sql.
 
-    Each test runs overture_import.sql first, then overture_variants.sql.
+    Each test runs overture_import.sql first, then overture_place_variants.sql.
     """
 
     def test_sql_file_exists(self):
         """The SQL file must exist on disk (will fail until Green phase)."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_variants.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_variants.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
     def _run_variants(self, conn):
-        """Load and execute overture_variants.sql on `conn`."""
-        raw_sql = _load_sql("overture_variants.sql", {})
+        """Load and execute overture_place_variants.sql on `conn`."""
+        raw_sql = _load_sql("overture_place_variants.sql", {})
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
     def test_variants_column_added(self, overture_parquet, tmp_path):
-        """After overture_variants.sql, `places` must have a `variants` column."""
+        """After overture_place_variants.sql, `places` must have a `variants` column."""
         db_path = tmp_path / "test_ov_var_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -427,7 +427,7 @@ class TestOvertureVariants:
         """The variants struct must have name, type, and language fields.
 
         ov001 has a names.common entry ('en' → 'Blue Bottle Coffee').
-        After overture_variants.sql, variants[1] must expose .name, .type,
+        After overture_place_variants.sql, variants[1] must expose .name, .type,
         and .language.  The type for a names.common entry should be 'alternate'.
         """
         db_path = tmp_path / "test_ov_variants_fields.duckdb"

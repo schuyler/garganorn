@@ -1,7 +1,8 @@
-"""Tests for garganorn.boundaries — BoundaryLookup and OvertureDivision."""
+"""Tests for garganorn.boundaries — BoundaryLookup and OvertureDivisions."""
 import pytest
 
-from garganorn.boundaries import BoundaryLookup, OvertureDivision
+from garganorn.boundaries import BoundaryLookup
+from garganorn.database import OvertureDivisions
 
 
 # ---------------------------------------------------------------------------
@@ -66,11 +67,11 @@ class TestBoundaryLookupContainment:
 
 
 # ---------------------------------------------------------------------------
-# OvertureDivision (Database subclass) tests
+# OvertureDivisions (Database subclass) tests
 # ---------------------------------------------------------------------------
 
-class TestOvertureDivisionGetRecord:
-    """OvertureDivision.get_record() tests."""
+class TestOvertureDivisionsGetRecord:
+    """OvertureDivisions.get_record() tests."""
 
     def test_returns_correct_record_structure(self, division_db):
         """get_record returns a lexicon-compliant dict with expected top-level keys."""
@@ -150,6 +151,6 @@ class TestOvertureDivisionGetRecord:
         assert record.get("importance") == 0
 
     def test_query_nearest_raises(self, division_db):
-        """OvertureDivision does not support search."""
+        """OvertureDivisions does not support search."""
         with pytest.raises(NotImplementedError):
             division_db.query_nearest({})

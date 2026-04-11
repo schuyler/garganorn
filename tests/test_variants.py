@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from garganorn.database import FoursquareOSP, OvertureMaps, OpenStreetMap
+from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap
 
 
 # ---------------------------------------------------------------------------
@@ -23,7 +23,7 @@ def _make_fsq():
 
 
 def _make_ovr():
-    return OvertureMaps(":memory:")
+    return OverturePlaces(":memory:")
 
 
 def _make_osm():
@@ -193,7 +193,7 @@ class TestProcessRecordVariantsOSM:
 
 
 class TestProcessRecordVariantsOverture:
-    """OvertureMaps.process_record with variants in result dict."""
+    """OverturePlaces.process_record with variants in result dict."""
 
     def test_ovr_variants_populated(self):
         """process_record with variants list returns populated variants."""

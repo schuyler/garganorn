@@ -16,7 +16,7 @@ import duckdb
 import pytest
 from lexrpc.base import XrpcError
 
-from garganorn.quadtree import ATTRIBUTION, TileManifest, run_pipeline
+from garganorn.quadtree import SOURCES, TileManifest, run_pipeline
 from garganorn.tile_reader import TileBackedCollection
 from garganorn.server import Server
 from tests.quadtree_helpers import FSQ_ROWS
@@ -46,7 +46,7 @@ def _build_server(pipeline_dir, max_coverage_tiles=50):
         collection=FSQ_COLLECTION,
         manifest_db_path=manifest_path,
         tiles_dir=str(pipeline_dir),
-        attribution=ATTRIBUTION["fsq"],
+        attribution=SOURCES["foursquare"].attribution,
     )
     return Server(
         REPO, dbs=[], logger=logging.getLogger("test"),
@@ -111,9 +111,9 @@ def _make_single_place_parquet(tmp_path):
 def pipeline_output(fsq_parquet, tmp_path_factory):
     """Run FSQ pipeline once; return resolved current/ directory path."""
     output_dir = tmp_path_factory.mktemp("integration")
-    run_pipeline("fsq", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+    run_pipeline("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
                  str(output_dir), memory_limit="4GB", max_per_tile=100)
-    current = output_dir / "fsq" / "current"
+    current = output_dir / "foursquare" / "current"
     assert current.exists()
     return current
 
@@ -127,11 +127,11 @@ def empty_pipeline_output(fsq_parquet, tmp_path):
     """
     output_dir = tmp_path / "empty"
     output_dir.mkdir()
-    run_pipeline("fsq", fsq_parquet, (0.0, 0.0, 0.01, 0.01),
+    run_pipeline("foursquare", fsq_parquet, (0.0, 0.0, 0.01, 0.01),
                  str(output_dir), memory_limit="4GB", max_per_tile=100)
     # Empty pipeline may not create current symlink if no records are written.
     # Return the source dir so callers can handle either case.
-    current = output_dir / "fsq" / "current"
+    current = output_dir / "foursquare" / "current"
     return current
 
 
@@ -141,9 +141,9 @@ def single_place_output(tmp_path):
     parquet_glob = _make_single_place_parquet(tmp_path / "parquet")
     output_dir = tmp_path / "single"
     output_dir.mkdir()
-    run_pipeline("fsq", parquet_glob, (-122.55, 37.60, -122.30, 37.85),
+    run_pipeline("foursquare", parquet_glob, (-122.55, 37.60, -122.30, 37.85),
                  str(output_dir), memory_limit="4GB", max_per_tile=100)
-    return output_dir / "fsq" / "current"
+    return output_dir / "foursquare" / "current"
 
 
 @pytest.fixture
@@ -151,9 +151,9 @@ def dense_cluster_output(fsq_parquet, tmp_path):
     """Pipeline with max_per_tile=1 to force quadtree subdivision. Function-scoped."""
     output_dir = tmp_path / "dense"
     output_dir.mkdir()
-    run_pipeline("fsq", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+    run_pipeline("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
                  str(output_dir), memory_limit="4GB", max_per_tile=1)
-    return output_dir / "fsq" / "current"
+    return output_dir / "foursquare" / "current"
 
 
 # ---------------------------------------------------------------------------
@@ -208,16 +208,17 @@ class TestPipelineToCoverage:
         records = _collect_tile_records(pipeline_output)
         assert len(records) > 0, "No records found in any tile"
         for record in records:
-            assert record["uri"].startswith(f"https://{REPO}/"), \
-                f"URI does not start with expected prefix: {record['uri']}"
-            value = record["value"]
-            assert value["$type"] == "org.atgeo.place", f"Unexpected $type: {value['$type']}"
-            assert isinstance(value["rkey"], str) and value["rkey"], "rkey must be non-empty string"
-            assert isinstance(value["name"], str), "name must be a string"
-            assert isinstance(value["importance"], int), "importance must be int"
-            assert isinstance(value["locations"], list) and len(value["locations"]) > 0, \
+            assert "uri" not in record, \
+                f"Record should NOT have 'uri' key (flat structure): {record}"
+            assert "value" not in record, \
+                f"Record should NOT have 'value' key (flat structure): {record}"
+            assert record["$type"] == "org.atgeo.place", f"Unexpected $type: {record['$type']}"
+            assert isinstance(record["rkey"], str) and record["rkey"], "rkey must be non-empty string"
+            assert isinstance(record["name"], str), "name must be a string"
+            assert isinstance(record["importance"], int), "importance must be int"
+            assert isinstance(record["locations"], list) and len(record["locations"]) > 0, \
                 "locations must be non-empty list"
-            first_loc = value["locations"][0]
+            first_loc = record["locations"][0]
             assert first_loc["$type"] == "community.lexicon.location.geo", \
                 f"First location $type: {first_loc['$type']}"
             assert isinstance(first_loc["latitude"], str), "latitude must be str"
@@ -234,7 +235,7 @@ class TestPipelineToCoverage:
 
         tile_rkeys = set()
         for record in _collect_tile_records(pipeline_output):
-            tile_rkeys.add(record["value"]["rkey"])
+            tile_rkeys.add(record["rkey"])
 
         assert manifest_rkeys == tile_rkeys, \
             f"Manifest rkeys {manifest_rkeys} != tile rkeys {tile_rkeys}"
@@ -257,7 +258,7 @@ class TestPipelineToCoverage:
         con.close()
         assert row is not None, "metadata table is empty"
         source, generated_at = row
-        assert source == "fsq", f"Expected source='fsq', got '{source}'"
+        assert source == "foursquare", f"Expected source='foursquare', got '{source}'"
         assert isinstance(generated_at, str) and generated_at, \
             "generated_at must be a non-empty string"
 
@@ -418,16 +419,16 @@ class TestExportWorkersParity:
 
         out1 = tmp_path / "workers1"
         out1.mkdir()
-        run_pipeline("fsq", fsq_parquet, bbox, str(out1),
+        run_pipeline("foursquare", fsq_parquet, bbox, str(out1),
                      memory_limit="4GB", max_per_tile=100, export_workers=1)
-        current1 = out1 / "fsq" / "current"
+        current1 = out1 / "foursquare" / "current"
         assert current1.exists(), "current symlink must exist for export_workers=1 run"
 
         out4 = tmp_path / "workers4"
         out4.mkdir()
-        run_pipeline("fsq", fsq_parquet, bbox, str(out4),
+        run_pipeline("foursquare", fsq_parquet, bbox, str(out4),
                      memory_limit="4GB", max_per_tile=100, export_workers=4)
-        current4 = out4 / "fsq" / "current"
+        current4 = out4 / "foursquare" / "current"
         assert current4.exists(), "current symlink must exist for export_workers=4 run"
 
         # Collect relative path → content for each run
@@ -455,8 +456,8 @@ class TestExportWorkersParity:
                 f"Attribution differs in tile {rel_path}"
             )
             # Sort records by rkey for deterministic comparison
-            records1 = sorted(content1["records"], key=lambda r: r["value"]["rkey"])
-            records4 = sorted(content4["records"], key=lambda r: r["value"]["rkey"])
+            records1 = sorted(content1["records"], key=lambda r: r["rkey"])
+            records4 = sorted(content4["records"], key=lambda r: r["rkey"])
             assert records1 == records4, (
                 f"Records differ in tile {rel_path}"
             )

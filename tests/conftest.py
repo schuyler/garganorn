@@ -2,7 +2,7 @@
 import pytest
 import duckdb
 
-from garganorn.database import FoursquareOSP, OvertureMaps, OpenStreetMap
+from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
 from tests.quadtree_helpers import FSQ_ROWS
 
 
@@ -297,7 +297,7 @@ def _create_overture_db(db_path):
         for trigram in _generate_trigrams(name):
             conn.execute("""
                 INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
-            """, [trigram, ovr_id, name, OvertureMaps._strip_accents(name.lower()),
+            """, [trigram, ovr_id, name, OverturePlaces._strip_accents(name.lower()),
                   ovr_importance[ovr_id]])
 
     # Index variant names for Overture places
@@ -305,7 +305,7 @@ def _create_overture_db(db_path):
         importance = ovr_importance[ovr_id]
         for v in variants:
             variant_name = v["name"]
-            norm_variant = OvertureMaps._strip_accents(variant_name.lower())
+            norm_variant = OverturePlaces._strip_accents(variant_name.lower())
             for trigram in _generate_trigrams(variant_name):
                 conn.execute("""
                     INSERT INTO name_index VALUES (?, ?, ?, ?, ?, TRUE)
@@ -346,7 +346,7 @@ def fsq_db(fsq_db_path):
 
 @pytest.fixture
 def overture_db(overture_db_path):
-    db = OvertureMaps(overture_db_path)
+    db = OverturePlaces(overture_db_path)
     db.connect()
     yield db
     db.close()
@@ -519,7 +519,7 @@ def osm_db(osm_db_path):
     db.close()
 
 
-from garganorn.boundaries import BoundaryLookup, OvertureDivision
+from garganorn.boundaries import BoundaryLookup
 
 
 # ---------------------------------------------------------------------------
@@ -573,7 +573,7 @@ DIVISION_BOUNDARIES = [
 
 
 def _create_division_db(db_path):
-    """Create a division-schema boundary DB (enriched places table for OvertureDivision)."""
+    """Create a division-schema boundary DB (enriched places table for OvertureDivisions)."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
     conn.execute("""
@@ -680,7 +680,7 @@ def boundary_lookup(division_db_path):
 
 @pytest.fixture
 def division_db(division_db_path):
-    db = OvertureDivision(division_db_path)
+    db = OvertureDivisions(division_db_path)
     db.connect()
     yield db
     db.close()

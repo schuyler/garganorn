@@ -16,7 +16,7 @@ from tests.quadtree_helpers import (
 class TestQk17PipelineFixes:
     """Red-phase tests for pending fixes to the quadtree pipeline SQL files.
 
-    Fix 1 — overture_import.sql: qk17 should be computed inline in the CTAS
+    Fix 1 — overture_place_import.sql: qk17 should be computed inline in the CTAS
              SELECT list; no ALTER TABLE or UPDATE statements.
 
     Fix 2 — compute_tile_assignments.sql: place_zoom should be an inline CTE,
@@ -25,7 +25,7 @@ class TestQk17PipelineFixes:
     Fix 3 — compute_tile_assignments.sql: tile_assignments CTAS should have
              ORDER BY tile_qk so the output is sorted.
 
-    Fix 4 — overture_export_tiles.sql: place_addresses TEMP TABLE eliminated;
+    Fix 4 — overture_place_export_tiles.sql: place_addresses TEMP TABLE eliminated;
              addresses rendered inline via list_transform/list_filter in the VIEW.
 
     OSM Fix — osm_import.sql: qk17 should be in the CREATE TABLE schema and
@@ -36,38 +36,38 @@ class TestQk17PipelineFixes:
     """
 
     # ------------------------------------------------------------------
-    # Fix 1: overture_import.sql — qk17 inline in CTAS, no ALTER/UPDATE
+    # Fix 1: overture_place_import.sql — qk17 inline in CTAS, no ALTER/UPDATE
     # ------------------------------------------------------------------
 
     def test_fix1_overture_import_no_alter_table(self):
-        """overture_import.sql must NOT contain ALTER TABLE after fix.
+        """overture_place_import.sql must NOT contain ALTER TABLE after fix.
 
         Currently the script adds qk17 via ALTER TABLE + UPDATE after the CTAS.
         After the fix, qk17 is computed inline in the CTAS SELECT list.
         FAILS until the ALTER TABLE statement is removed.
         """
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_import.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
         sql = sql_path.read_text()
         assert "ALTER TABLE" not in sql.upper(), (
-            "overture_import.sql still contains ALTER TABLE. "
+            "overture_place_import.sql still contains ALTER TABLE. "
             "Fix: compute qk17 inline in the CTAS SELECT list and remove "
             "the ALTER TABLE / UPDATE block."
         )
 
     def test_fix1_overture_import_no_update_qk17(self):
-        """overture_import.sql must NOT contain UPDATE places SET qk17 after fix.
+        """overture_place_import.sql must NOT contain UPDATE places SET qk17 after fix.
 
         FAILS until the UPDATE statement is removed.
         """
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_import.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
         sql = sql_path.read_text()
         assert "UPDATE PLACES SET QK17" not in sql.upper(), (
-            "overture_import.sql still contains 'UPDATE places SET qk17'. "
+            "overture_place_import.sql still contains 'UPDATE places SET qk17'. "
             "Fix: compute qk17 inline in the CTAS SELECT list."
         )
 
     def test_fix1_overture_import_qk17_nonnull(self, overture_parquet, tmp_path):
-        """After overture_import.sql runs, all rows must have a non-null qk17.
+        """After overture_place_import.sql runs, all rows must have a non-null qk17.
 
         This is a green regression guard: it passes both before and after the
         fix because both the current ALTER TABLE + UPDATE approach and the
@@ -150,20 +150,20 @@ class TestQk17PipelineFixes:
         )
 
     # ------------------------------------------------------------------
-    # Fix 4: overture_export_tiles.sql — eliminate place_addresses TEMP TABLE
+    # Fix 4: overture_place_export_tiles.sql — eliminate place_addresses TEMP TABLE
     # ------------------------------------------------------------------
 
     def test_no_place_addresses_temp_table(self):
-        """overture_export_tiles.sql must NOT define place_addresses as a TEMP TABLE.
+        """overture_place_export_tiles.sql must NOT define place_addresses as a TEMP TABLE.
 
         After the fix, place_addresses is eliminated entirely and replaced with
         inline list_transform/list_filter in the VIEW. This test FAILS until the
         TEMP TABLE is removed from the SQL file.
         """
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_export_tiles.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_export_tiles.sql"
         sql = sql_path.read_text()
         assert "CREATE TEMP TABLE place_addresses" not in sql, (
-            "overture_export_tiles.sql still defines place_addresses as a TEMP TABLE. "
+            "overture_place_export_tiles.sql still defines place_addresses as a TEMP TABLE. "
             "Fix: remove the TEMP TABLE and use inline list_transform/list_filter in the VIEW."
         )
 

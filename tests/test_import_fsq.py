@@ -1,4 +1,4 @@
-"""Tests for fsq_import.sql, fsq_importance.sql, and fsq_variants.sql."""
+"""Tests for foursquare_import.sql, foursquare_importance.sql, and foursquare_variants.sql."""
 
 import duckdb
 import pytest
@@ -9,15 +9,15 @@ from tests.quadtree_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# Tests: fsq_import.sql
+# Tests: foursquare_import.sql
 # ---------------------------------------------------------------------------
 
 class TestFsqImport:
-    """Tests for garganorn/sql/fsq_import.sql."""
+    """Tests for garganorn/sql/foursquare_import.sql."""
 
     def test_sql_file_exists(self):
         """The SQL file must exist on disk (will fail until Green phase)."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "fsq_import.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "foursquare_import.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
     def test_places_table_created(self, fsq_parquet, tmp_path):
@@ -176,43 +176,43 @@ class TestFsqImport:
         the places table. Once qk17 is folded into the CTAS SELECT list those
         two statements must not appear in the SQL file.
         """
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "fsq_import.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "foursquare_import.sql"
         sql = sql_path.read_text()
         assert "ALTER TABLE places ADD COLUMN qk17" not in sql, (
-            "fsq_import.sql still uses ALTER TABLE to add qk17; "
+            "foursquare_import.sql still uses ALTER TABLE to add qk17; "
             "fold qk17 into the CTAS SELECT list instead"
         )
         assert "UPDATE places SET qk17" not in sql, (
-            "fsq_import.sql still uses UPDATE to populate qk17; "
+            "foursquare_import.sql still uses UPDATE to populate qk17; "
             "fold qk17 into the CTAS SELECT list instead"
         )
 
 
 # ---------------------------------------------------------------------------
-# Tests: fsq_importance.sql
+# Tests: foursquare_importance.sql
 # ---------------------------------------------------------------------------
 
 class TestFsqImportance:
-    """Tests for garganorn/sql/fsq_importance.sql.
+    """Tests for garganorn/sql/foursquare_importance.sql.
 
-    Each test creates a fresh DuckDB connection, runs fsq_import.sql first,
-    then runs fsq_importance.sql.
+    Each test creates a fresh DuckDB connection, runs foursquare_import.sql first,
+    then runs foursquare_importance.sql.
     """
 
     def test_sql_file_exists(self):
         """The SQL file must exist on disk (will fail until Green phase)."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "fsq_importance.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "foursquare_importance.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
     def _run_importance(self, conn):
-        """Load, substitute, and execute fsq_importance.sql on `conn`."""
+        """Load, substitute, and execute foursquare_importance.sql on `conn`."""
         substitutions: dict = {"density_norm": "10.0", "idf_norm": "18.0"}
-        raw_sql = _load_sql("fsq_importance.sql", substitutions)
+        raw_sql = _load_sql("foursquare_importance.sql", substitutions)
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
     def test_importance_column_added(self, fsq_parquet, tmp_path):
-        """After fsq_importance.sql, `places` must have an `importance` column."""
+        """After foursquare_importance.sql, `places` must have an `importance` column."""
         db_path = tmp_path / "test_importance_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -386,29 +386,29 @@ class TestFsqImportance:
 
 
 # ---------------------------------------------------------------------------
-# Tests: fsq_variants.sql
+# Tests: foursquare_variants.sql
 # ---------------------------------------------------------------------------
 
 class TestFsqVariants:
-    """Tests for garganorn/sql/fsq_variants.sql.
+    """Tests for garganorn/sql/foursquare_variants.sql.
 
-    Each test runs fsq_import.sql first, then fsq_variants.sql.
+    Each test runs foursquare_import.sql first, then foursquare_variants.sql.
     """
 
     def test_sql_file_exists(self):
         """The SQL file must exist on disk (will fail until Green phase)."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "fsq_variants.sql"
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "foursquare_variants.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
     def _run_variants(self, conn):
-        """Load, substitute, and execute fsq_variants.sql on `conn`."""
+        """Load, substitute, and execute foursquare_variants.sql on `conn`."""
         substitutions: dict = {}
-        raw_sql = _load_sql("fsq_variants.sql", substitutions)
+        raw_sql = _load_sql("foursquare_variants.sql", substitutions)
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
     def test_variants_column_added(self, fsq_parquet, tmp_path):
-        """After fsq_variants.sql, `places` must have a `variants` column."""
+        """After foursquare_variants.sql, `places` must have a `variants` column."""
         db_path = tmp_path / "test_variants_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")

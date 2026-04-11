@@ -19,11 +19,11 @@ repo: places.atgeo.org
 databases:
   - type: foursquare
     path: db/fsq-osp.duckdb
-  - type: overture
+  - type: overture_place
     path: db/overture-maps.duckdb
 ```
 
-Supported database types are `foursquare` ([Foursquare Open Source Places](https://docs.foursquare.com/data-products/docs/fsq-places-open-source)) and `overture` ([Overture Maps](https://overturemaps.org/)). You can configure one or both. Paths are relative to the working directory.
+Supported database types are `foursquare` ([Foursquare Open Source Places](https://docs.foursquare.com/data-products/docs/fsq-places-open-source)) and `overture_place` ([Overture Maps](https://overturemaps.org/)). You can configure one or both. Paths are relative to the working directory.
 
 ## Data import
 
@@ -55,8 +55,8 @@ Supported sources:
 
 | `--source` | Input | Collection |
 |---|---|---|
-| `fsq` | `--parquet <glob>` | `org.atgeo.places.foursquare` |
-| `overture` | `--parquet <glob>` | `org.atgeo.places.overture.place` |
+| `foursquare` | `--parquet <glob>` | `org.atgeo.places.foursquare` |
+| `overture_place` | `--parquet <glob>` | `org.atgeo.places.overture.place` |
 | `osm` | `--parquet-dir <dir>` | `org.atgeo.places.osm` |
 | `overture_division` | `--division-parquet <path> --division-area-parquet <path>` | `org.atgeo.places.overture.division` |
 
@@ -79,7 +79,7 @@ To enrich another source's tiles with division containment (adds `relations.with
 
 ```
 python -m garganorn.quadtree \
-  --source overture \
+  --source overture_place \
   --parquet '/data/overture/places/*.parquet' \
   --boundaries /srv/tiles/overture_division/boundaries.duckdb \
   --output /srv/tiles

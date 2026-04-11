@@ -7,7 +7,7 @@ INTEGER with varied values.
 import pytest
 import duckdb
 
-from garganorn.database import FoursquareOSP, OvertureMaps
+from garganorn.database import FoursquareOSP, OverturePlaces
 
 
 # ---------------------------------------------------------------------------

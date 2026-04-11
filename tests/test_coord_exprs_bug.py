@@ -1,6 +1,6 @@
 """Red-phase tests for the _coord_exprs table-alias bug.
 
-Bug: _coord_exprs("overture") returns "(bbox.xmin + bbox.xmax) / 2.0" with no
+Bug: _coord_exprs("overture_place") returns "(bbox.xmin + bbox.xmax) / 2.0" with no
 table prefix. compute_containment interpolates these as `p.{lon_expr}` / `p.{lat_expr}`,
 producing invalid SQL `p.(bbox.xmin + bbox.xmax) / 2.0`.
 
@@ -29,7 +29,7 @@ class TestCoordExprsAlias:
 
     def test_overture_no_alias_unchanged(self):
         """Without alias, overture expressions are bare struct field references."""
-        lon, lat = _coord_exprs("overture")
+        lon, lat = _coord_exprs("overture_place")
         assert "bbox.xmin" in lon
         assert "bbox.xmax" in lon
         assert "bbox.ymin" in lat
@@ -37,7 +37,7 @@ class TestCoordExprsAlias:
 
     def test_overture_with_alias_prefixes_struct_fields(self):
         """With alias='p', each struct field reference is qualified as p.bbox.*."""
-        lon, lat = _coord_exprs("overture", alias="p")
+        lon, lat = _coord_exprs("overture_place", alias="p")
         # Expressions must reference p.bbox.*, not bare bbox.*
         assert "p.bbox.xmin" in lon, f"Expected 'p.bbox.xmin' in lon expr: {lon!r}"
         assert "p.bbox.xmax" in lon, f"Expected 'p.bbox.xmax' in lon expr: {lon!r}"
@@ -46,7 +46,7 @@ class TestCoordExprsAlias:
 
     def test_overture_with_alias_no_bare_bbox_refs(self):
         """With alias='p', no unqualified bbox.* appears in the expression."""
-        lon, lat = _coord_exprs("overture", alias="p")
+        lon, lat = _coord_exprs("overture_place", alias="p")
         # A bare `bbox.xmin` (not preceded by 'p.') would indicate the alias
         # was not applied. The simplest check: the expression should not start
         # with "(bbox." after stripping whitespace.
@@ -57,8 +57,8 @@ class TestCoordExprsAlias:
 
     def test_non_overture_alias_prefixes_columns(self):
         """For non-struct sources, alias is applied as a table prefix."""
-        lon_no_alias, lat_no_alias = _coord_exprs("fsq")
-        lon_alias, lat_alias = _coord_exprs("fsq", alias="p")
+        lon_no_alias, lat_no_alias = _coord_exprs("foursquare")
+        lon_alias, lat_alias = _coord_exprs("foursquare", alias="p")
         assert lon_no_alias == "longitude"
         assert lat_no_alias == "latitude"
         assert lon_alias == "p.longitude"
@@ -86,7 +86,7 @@ class TestCoordExprsAlias:
                 {'xmin': -122.42, 'xmax': -122.40, 'ymin': 37.77, 'ymax': 37.79}
             )
         """)
-        lon_expr, lat_expr = _coord_exprs("overture", alias="p")
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         # This SELECT should execute without ParserException
         row = con.execute(f"SELECT {lon_expr}, {lat_expr} FROM places p").fetchone()
         assert row is not None
@@ -159,7 +159,7 @@ class TestComputeContainmentOverture:
             )
         """)
 
-        lon_expr, lat_expr = _coord_exprs("overture", alias="p")
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         pk_expr = "p.id"
 
         # This call currently fails with TypeError because _coord_exprs does not
@@ -194,7 +194,7 @@ class TestComputeContainmentOverture:
             )
         """)
 
-        lon_expr, lat_expr = _coord_exprs("overture", alias="p")
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         pk_expr = "p.id"
 
         compute_containment(con, division_path, pk_expr, lon_expr, lat_expr)

@@ -32,7 +32,7 @@ def _write_tile(tiles_dir, tile_qk, records):
     os.makedirs(subdir, exist_ok=True)
     path = os.path.join(subdir, f"{tile_qk}.json.gz")
     with gzip.open(path, "wt") as f:
-        json.dump({"records": records}, f)
+        json.dump({"collection": COLLECTION, "attribution": ATTRIBUTION, "records": records}, f)
     return path
 
 
@@ -46,10 +46,7 @@ class TestTileBackedCollection:
         rkey = "place001"
         manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
         _write_tile(tmp_path, tile_qk, [
-            {
-                "uri": f"https://example.com/{COLLECTION}/{rkey}",
-                "value": {"rkey": rkey, "name": "Test Place"},
-            }
+            {"rkey": rkey, "name": "Test Place"}
         ])
 
         col = TileBackedCollection(
@@ -69,10 +66,7 @@ class TestTileBackedCollection:
         tile_qk = "023010"
         manifest_db = _make_manifest_db(tmp_path, [("place001", tile_qk)])
         _write_tile(tmp_path, tile_qk, [
-            {
-                "uri": f"https://example.com/{COLLECTION}/place001",
-                "value": {"rkey": "place001", "name": "Test Place"},
-            }
+            {"rkey": "place001", "name": "Test Place"}
         ])
 
         col = TileBackedCollection(
@@ -110,14 +104,8 @@ class TestTileBackedCollection:
             ("place002", tile_qk),
         ])
         _write_tile(tmp_path, tile_qk, [
-            {
-                "uri": f"https://example.com/{COLLECTION}/place001",
-                "value": {"rkey": "place001", "name": "First Place"},
-            },
-            {
-                "uri": f"https://example.com/{COLLECTION}/place002",
-                "value": {"rkey": "place002", "name": "Second Place"},
-            },
+            {"rkey": "place001", "name": "First Place"},
+            {"rkey": "place002", "name": "Second Place"},
         ])
 
         col = TileBackedCollection(

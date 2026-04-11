@@ -11,44 +11,64 @@ from tests.quadtree_helpers import REPO_ROOT, _load_sql, _strip_spatial_install,
 
 
 # ---------------------------------------------------------------------------
-# SOURCE_PK registration
+# SOURCES registration
 # ---------------------------------------------------------------------------
 
-class TestSourcePK:
-    """overture_division must be registered in SOURCE_PK."""
+class TestSources:
+    """overture_division must be registered in SOURCES."""
 
     def test_overture_division_key_exists(self):
-        from garganorn.quadtree import SOURCE_PK
-        assert "overture_division" in SOURCE_PK, (
-            f"SOURCE_PK missing 'overture_division'; keys: {list(SOURCE_PK.keys())}"
+        from garganorn.quadtree import SOURCES
+        assert "overture_division" in SOURCES, (
+            f"SOURCES missing 'overture_division'; keys: {list(SOURCES.keys())}"
         )
 
     def test_overture_division_pk_is_id(self):
-        from garganorn.quadtree import SOURCE_PK
-        assert SOURCE_PK.get("overture_division") == "id", (
-            f"Expected SOURCE_PK['overture_division'] == 'id', "
-            f"got {SOURCE_PK.get('overture_division')!r}"
+        from garganorn.quadtree import SOURCES
+        assert SOURCES["overture_division"].source_pk == "id", (
+            f"Expected SOURCES['overture_division'].source_pk == 'id', "
+            f"got {SOURCES['overture_division'].source_pk!r}"
+        )
+
+    def test_overture_division_has_attribution(self):
+        from garganorn.quadtree import SOURCES
+        assert hasattr(SOURCES["overture_division"], "attribution"), (
+            f"SOURCES['overture_division'] must have 'attribution' attribute"
+        )
+        assert SOURCES["overture_division"].attribution == "https://docs.overturemaps.org/attribution/", (
+            f"Expected overture attribution URL, "
+            f"got {SOURCES['overture_division'].attribution!r}"
+        )
+
+    def test_overture_division_has_collection(self):
+        from garganorn.quadtree import SOURCES
+        assert hasattr(SOURCES["overture_division"], "collection"), (
+            f"SOURCES['overture_division'] must have 'collection' attribute"
+        )
+        assert SOURCES["overture_division"].collection == "org.atgeo.places.overture.division", (
+            f"Expected 'org.atgeo.places.overture.division', "
+            f"got {SOURCES['overture_division'].collection!r}"
         )
 
 
 # ---------------------------------------------------------------------------
-# ATTRIBUTION registration
+# ATTRIBUTION registration (deprecated - replaced by SOURCES)
 # ---------------------------------------------------------------------------
 
 class TestAttribution:
-    """overture_division must be registered in ATTRIBUTION."""
+    """overture_division must be registered in ATTRIBUTION (deprecated)."""
 
     def test_overture_division_key_exists(self):
-        from garganorn.quadtree import ATTRIBUTION
-        assert "overture_division" in ATTRIBUTION, (
-            f"ATTRIBUTION missing 'overture_division'; keys: {list(ATTRIBUTION.keys())}"
+        from garganorn.quadtree import SOURCES
+        assert "overture_division" in SOURCES, (
+            f"SOURCES missing 'overture_division'; keys: {list(SOURCES.keys())}"
         )
 
     def test_overture_division_attribution_url(self):
-        from garganorn.quadtree import ATTRIBUTION
-        assert ATTRIBUTION.get("overture_division") == "https://docs.overturemaps.org/attribution/", (
+        from garganorn.quadtree import SOURCES
+        assert SOURCES["overture_division"].attribution == "https://docs.overturemaps.org/attribution/", (
             f"Expected overture attribution URL, "
-            f"got {ATTRIBUTION.get('overture_division')!r}"
+            f"got {SOURCES['overture_division'].attribution!r}"
         )
 
 
@@ -80,15 +100,15 @@ class TestCoordExprs:
         )
 
     def test_matches_overture_expressions(self):
-        """overture_division coord exprs should match overture's (same bbox schema)."""
+        """overture_division coord exprs should match overture_place's (same bbox schema)."""
         from garganorn.quadtree import _coord_exprs
-        ov_lon, ov_lat = _coord_exprs("overture")
+        ov_lon, ov_lat = _coord_exprs("overture_place")
         div_lon, div_lat = _coord_exprs("overture_division")
         assert div_lon == ov_lon, (
-            f"overture_division lon_expr {div_lon!r} != overture {ov_lon!r}"
+            f"overture_division lon_expr {div_lon!r} != overture_place {ov_lon!r}"
         )
         assert div_lat == ov_lat, (
-            f"overture_division lat_expr {div_lat!r} != overture {ov_lat!r}"
+            f"overture_division lat_expr {div_lat!r} != overture_place {ov_lat!r}"
         )
 
 
@@ -168,11 +188,11 @@ class TestPipelineSkipsImportanceVariants:
             "importance/variants for overture_division"
         )
 
-    def test_overture_division_registered_in_source_pk(self):
-        """overture_division must be in SOURCE_PK for the pipeline to accept it."""
-        from garganorn.quadtree import SOURCE_PK
-        assert "overture_division" in SOURCE_PK, (
-            "overture_division must be in SOURCE_PK before pipeline can run"
+    def test_overture_division_registered_in_sources(self):
+        """overture_division must be in SOURCES for the pipeline to accept it."""
+        from garganorn.quadtree import SOURCES
+        assert "overture_division" in SOURCES, (
+            "overture_division must be in SOURCES before pipeline can run"
         )
 
 
@@ -277,8 +297,8 @@ class TestExportStripJsonNulls:
 
         for (record_json,) in rows:
             record = json.loads(record_json)
-            attrs = record["value"]["attributes"]
-            rkey = record["value"]["rkey"]
+            attrs = record["attributes"]
+            rkey = record["rkey"]
 
             null_keys = [k for k, v in attrs.items() if v is None]
             assert not null_keys, (

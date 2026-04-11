@@ -279,10 +279,10 @@ class Server:
         
 if __name__ == "__main__":
     import sys
-    from database import OvertureMaps, FoursquareOSP
+    from database import OverturePlaces, FoursquareOSP
 
     dbs = [
-        OvertureMaps("db/overture-maps.duckdb"),
+        OverturePlaces("db/overture-maps.duckdb"),
         FoursquareOSP("db/fsq-osp.duckdb"),  # Uncomment if you have the Foursquare database
     ]
     gazetteer = Server("places.atgeo.org", dbs, logging.getLogger())

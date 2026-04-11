@@ -3,8 +3,7 @@ import pytest
 import yaml
 
 from garganorn.config import load_config
-from garganorn.database import FoursquareOSP, OvertureMaps
-from garganorn.boundaries import OvertureDivision
+from garganorn.database import FoursquareOSP, OverturePlaces, OvertureDivisions
 
 
 def _write_config(tmp_path, data):
@@ -58,16 +57,16 @@ def test_foursquare_type_creates_foursquare_osp(tmp_path):
     assert isinstance(dbs[0], FoursquareOSP)
 
 
-def test_overture_type_creates_overture_maps(tmp_path):
-    """'overture' type creates an OvertureMaps instance."""
+def test_overture_place_type_creates_overture_places(tmp_path):
+    """'overture_place' type creates an OverturePlaces instance."""
     fake_db = tmp_path / "ovr.duckdb"
     fake_db.touch()
     config_path = _write_config(tmp_path, {
-        "databases": [{"type": "overture", "path": str(fake_db)}]
+        "databases": [{"type": "overture_place", "path": str(fake_db)}]
     })
     repo, dbs, *_ = load_config(config_path)
     assert len(dbs) == 1
-    assert isinstance(dbs[0], OvertureMaps)
+    assert isinstance(dbs[0], OverturePlaces)
 
 
 def test_boundaries_path_from_config(tmp_path):
@@ -138,8 +137,8 @@ def test_config_without_tiles_returns_4tuple_with_none(tmp_path):
     assert result[3] is None
 
 
-def test_overture_division_type_creates_overture_division(tmp_path):
-    """'overture_division' database type creates an OvertureDivision instance."""
+def test_overture_division_type_creates_overture_divisions(tmp_path):
+    """'overture_division' database type creates an OvertureDivisions instance."""
     fake_db = tmp_path / "boundaries.duckdb"
     fake_db.touch()
     config_path = _write_config(tmp_path, {
@@ -147,4 +146,4 @@ def test_overture_division_type_creates_overture_division(tmp_path):
     })
     repo, dbs, boundaries_path, *_ = load_config(config_path)
     assert len(dbs) == 1
-    assert isinstance(dbs[0], OvertureDivision)
+    assert isinstance(dbs[0], OvertureDivisions)

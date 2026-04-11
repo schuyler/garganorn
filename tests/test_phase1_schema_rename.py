@@ -97,18 +97,18 @@ def test_within_description_has_no_level_word():
 # Part 2: Collection rename
 # ---------------------------------------------------------------------------
 
-def test_overture_maps_collection_attribute():
-    """OvertureMaps.collection must equal 'org.atgeo.places.overture.place'.
+def test_overture_places_collection_attribute():
+    """OverturePlaces.collection must equal 'org.atgeo.places.overture.place'.
 
     The Overture collection is being renamed from 'org.atgeo.places.overture'
     to 'org.atgeo.places.overture.place' to align with the Overture divisions
     migration naming convention.
-    FAILS until OvertureMaps.collection is updated in garganorn/database.py.
+    FAILS until OverturePlaces.collection is updated in garganorn/database.py.
     """
-    from garganorn.database import OvertureMaps
-    db = OvertureMaps(":memory:")
+    from garganorn.database import OverturePlaces
+    db = OverturePlaces(":memory:")
     assert db.collection == "org.atgeo.places.overture.place", (
-        f"OvertureMaps.collection should be 'org.atgeo.places.overture.place'. "
+        f"OverturePlaces.collection should be 'org.atgeo.places.overture.place'. "
         f"Got: {db.collection!r}. "
         "Update the collection class attribute in garganorn/database.py."
     )

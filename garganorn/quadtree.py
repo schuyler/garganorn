@@ -15,22 +15,11 @@ from pathlib import Path
 
 import duckdb
 import yaml
+from .database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
 
 log = logging.getLogger(__name__)
 
-SOURCE_PK = {
-    "fsq": "fsq_place_id",
-    "overture": "id",
-    "osm": "rkey",
-    "overture_division": "id",
-}
-
-ATTRIBUTION = {
-    "fsq": "https://docs.foursquare.com/data-products/docs/access-fsq-os-places",
-    "overture": "https://docs.overturemaps.org/attribution/",
-    "osm": "https://www.openstreetmap.org/copyright",
-    "overture_division": "https://docs.overturemaps.org/attribution/",
-}
+SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions]}
 
 REPO = "places.atgeo.org"
 
@@ -44,7 +33,7 @@ def _coord_exprs(source, alias=""):
     with that table alias (e.g. "t.longitude" instead of "longitude").
     """
     prefix = f"{alias}." if alias else ""
-    if source in ("overture", "overture_division"):
+    if source in ("overture_place", "overture_division"):
         return (f"({prefix}bbox.xmin + {prefix}bbox.xmax) / 2.0",
                 f"({prefix}bbox.ymin + {prefix}bbox.ymax) / 2.0")
     return f"{prefix}longitude", f"{prefix}latitude"
@@ -227,7 +216,8 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
         # String concatenation avoids json.loads/json.dumps overhead.
         # ATTRIBUTION values must be JSON-safe (no quotes, backslashes, or control chars).
         joined = ",".join(records)
-        payload = f'{{"attribution":"{ATTRIBUTION[source]}","records":[{joined}]}}'
+        source_cls = SOURCES[source]
+        payload = f'{{"collection":"{source_cls.collection}","attribution":"{source_cls.attribution}","records":[{joined}]}}'
         subdir = os.path.join(output_dir, qk[:6])
         os.makedirs(subdir, exist_ok=True)
         with gzip.open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
@@ -298,7 +288,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
     Old timestamped directories beyond the two most recent are removed.
 
     Args:
-        source: Pipeline source key (fsq, overture, osm, overture_division).
+        source: Pipeline source key (foursquare, overture_place, osm, overture_division).
         parquet_glob: Parquet path(s). String glob for single-parquet sources;
             (division_parquet, division_area_parquet) tuple for overture_division;
             (node_parquet, way_parquet) tuple for osm.
@@ -357,7 +347,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                     density_norm=10.0, idf_norm=18.0)
             run_sql("variants", f"{source}_variants.sql")
 
-        pk_expr = SOURCE_PK[source]
+        pk_expr = SOURCES[source].source_pk
         run_sql("tile assignment", "compute_tile_assignments.sql",
                 pk_expr=pk_expr, min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
 
@@ -522,8 +512,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Build quadtree tile exports from place parquet data."
     )
-    parser.add_argument("--source", required=True, choices=["fsq", "overture", "osm", "overture_division"],
-                        help="Data source: fsq, overture, osm, or overture_division")
+    parser.add_argument("--source", required=True, choices=["foursquare", "overture_place", "osm", "overture_division"],
+                        help="Data source: foursquare, overture_place, osm, or overture_division")
     parser.add_argument("--parquet", default=None,
                         help="Parquet glob pattern (fsq, overture)")
     parser.add_argument("--parquet-dir", default=None, dest="parquet_dir",
