@@ -76,138 +76,88 @@ def _strip_memory_limit(sql: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# FSQ export test helpers
+# Export test configuration and unified DB builder
 # ---------------------------------------------------------------------------
 
-_FSQ_EXPORT_PLACES = [
-    # (fsq_place_id, name, lat, lon, importance, country)
-    ("exp001", "Blue Bottle Coffee", 37.7749, -122.4194, 72, "US"),
-    ("exp002", "Golden Gate Park", 37.7694, -122.4862, 85, "US"),
-    ("exp003", "Tartine Bakery", 37.7617, -122.4243, 68, "US"),
-    # place with null country — should produce no address location
-    ("exp004", "Mystery Spot", 37.7800, -122.4300, 40, None),
-]
-
-_EXPORT_TILE_QK = "023130"
-
-
-def _make_fsq_export_db(conn, places_rows=None):
-    """Populate `conn` with minimal `places` and `tile_assignments` tables."""
-    if places_rows is None:
-        places_rows = _FSQ_EXPORT_PLACES
-
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            fsq_place_id        VARCHAR,
-            name                VARCHAR,
-            latitude            DOUBLE,
-            longitude           DOUBLE,
-            importance          INTEGER,
-            address             VARCHAR,
-            locality            VARCHAR,
-            region              VARCHAR,
-            postcode            VARCHAR,
-            country             VARCHAR,
-            admin_region        VARCHAR,
-            post_town           VARCHAR,
-            po_box              VARCHAR,
-            date_created        DATE,
-            date_refreshed      DATE,
-            tel                 VARCHAR,
-            website             VARCHAR,
-            email               VARCHAR,
-            facebook_id         VARCHAR,
-            instagram           VARCHAR,
-            twitter             VARCHAR,
-            fsq_category_ids    VARCHAR[],
-            fsq_category_labels VARCHAR[],
-            placemaker_url      VARCHAR,
-            variants            STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-            qk17                VARCHAR
-        )
-    """)
-
-    for fsq_id, name, lat, lon, imp, country in places_rows:
-        country_val = f"'{country}'" if country is not None else "NULL"
-        conn.execute(f"""
+_EXPORT_CONFIGS = {
+    "foursquare": {
+        "sql_file": "foursquare_export_tiles.sql",
+        "places_rows": [
+            ("exp001", "Blue Bottle Coffee", 37.7749, -122.4194, 72, "US"),
+            ("exp002", "Golden Gate Park", 37.7694, -122.4862, 85, "US"),
+            ("exp003", "Tartine Bakery", 37.7617, -122.4243, 68, "US"),
+            ("exp004", "Mystery Spot", 37.7800, -122.4300, 40, None),
+        ],
+        "pk_col": "fsq_place_id",
+        "create_table": """
+            CREATE TABLE places (
+                fsq_place_id        VARCHAR,
+                name                VARCHAR,
+                latitude            DOUBLE,
+                longitude           DOUBLE,
+                importance          INTEGER,
+                address             VARCHAR,
+                locality            VARCHAR,
+                region              VARCHAR,
+                postcode            VARCHAR,
+                country             VARCHAR,
+                admin_region        VARCHAR,
+                post_town           VARCHAR,
+                po_box              VARCHAR,
+                date_created        DATE,
+                date_refreshed      DATE,
+                tel                 VARCHAR,
+                website             VARCHAR,
+                email               VARCHAR,
+                facebook_id         VARCHAR,
+                instagram           VARCHAR,
+                twitter             VARCHAR,
+                fsq_category_ids    VARCHAR[],
+                fsq_category_labels VARCHAR[],
+                placemaker_url      VARCHAR,
+                variants            STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                qk17                VARCHAR
+            )
+        """,
+        "insert_template": """
             INSERT INTO places
             SELECT
-                '{fsq_id}', '{name}', {lat}, {lon}, {imp},
+                '{pk}', '{name}', {lat}, {lon}, {imp},
                 NULL, NULL, NULL, NULL, {country_val},
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
                 ARRAY['13065143'], ARRAY['Food & Drink'],
                 NULL,
                 []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
                 ST_QuadKey({lon}, {lat}, 17)
-        """)
-
-    conn.execute("""
-        CREATE TABLE tile_assignments (
-            place_id VARCHAR,
-            tile_qk  VARCHAR
-        )
-    """)
-    for fsq_id, _name, _lat, _lon, _imp, _country in places_rows:
-        conn.execute(
-            "INSERT INTO tile_assignments VALUES (?, ?)",
-            [fsq_id, _EXPORT_TILE_QK],
-        )
-
-    conn.execute("""
-        CREATE TABLE place_containment (
-            place_id       VARCHAR,
-            relations_json VARCHAR
-        )
-    """)
-
-
-# ---------------------------------------------------------------------------
-# OSM export test helpers
-# ---------------------------------------------------------------------------
-
-_OSM_EXPORT_PLACES = [
-    # (osm_type, osm_id, rkey, name, lat, lon, importance, primary_category, tags)
-    ("n", 240109189, "n240109189", "Tartine Manufactory", 37.7612, -122.4195, 65,
-     "amenity=cafe", {"cuisine": "coffee", "addr:city": "San Francisco"}),
-    ("w", 50637691, "w50637691", "Dolores Park", 37.7596, -122.4269, 55,
-     "leisure=park", {}),
-]
-
-
-def _make_osm_export_db(conn, places_rows=None):
-    """Populate `conn` with minimal OSM `places` and `tile_assignments` tables."""
-    if places_rows is None:
-        places_rows = _OSM_EXPORT_PLACES
-
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            osm_type         VARCHAR,
-            osm_id           BIGINT,
-            rkey             VARCHAR,
-            name             VARCHAR,
-            latitude         DOUBLE,
-            longitude        DOUBLE,
-            geom             GEOMETRY,
-            primary_category VARCHAR,
-            tags             MAP(VARCHAR, VARCHAR),
-            bbox             STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance       INTEGER,
-            variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-            qk17             VARCHAR
-        )
-    """)
-
-    for osm_type, osm_id, rkey, name, lat, lon, imp, primary_category, tags in places_rows:
-        if tags:
-            map_entries = ", ".join(f"'{k}': '{v}'" for k, v in tags.items())
-            map_literal = f"MAP {{{map_entries}}}"
-        else:
-            map_literal = "MAP()::MAP(VARCHAR, VARCHAR)"
-        conn.execute(f"""
+        """,
+    },
+    "osm": {
+        "sql_file": "osm_export_tiles.sql",
+        "places_rows": [
+            ("n", 240109189, "n240109189", "Tartine Manufactory", 37.7612, -122.4195, 65,
+             "amenity=cafe", {"cuisine": "coffee", "addr:city": "San Francisco"}),
+            ("w", 50637691, "w50637691", "Dolores Park", 37.7596, -122.4269, 55,
+             "leisure=park", {}),
+        ],
+        "pk_col": "rkey",
+        "create_table": """
+            CREATE TABLE places (
+                osm_type         VARCHAR,
+                osm_id           BIGINT,
+                rkey             VARCHAR,
+                name             VARCHAR,
+                latitude         DOUBLE,
+                longitude        DOUBLE,
+                geom             GEOMETRY,
+                primary_category VARCHAR,
+                tags             MAP(VARCHAR, VARCHAR),
+                bbox             STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                importance       INTEGER,
+                variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                qk17             VARCHAR
+            )
+        """,
+        "insert_template": """
             INSERT INTO places VALUES (
                 '{osm_type}', {osm_id}, '{rkey}', '{name}', {lat}, {lon},
                 ST_Point({lon}, {lat}),
@@ -219,69 +169,39 @@ def _make_osm_export_db(conn, places_rows=None):
                 []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
                 ST_QuadKey({lon}, {lat}, 17)
             )
-        """)
-
-    conn.execute("""
-        CREATE TABLE tile_assignments (
-            place_id VARCHAR,
-            tile_qk  VARCHAR
-        )
-    """)
-    for _osm_type, _osm_id, rkey, _name, _lat, _lon, _imp, _primary_category, _tags in places_rows:
-        conn.execute("INSERT INTO tile_assignments VALUES (?, ?)", [rkey, _EXPORT_TILE_QK])
-
-    conn.execute("""
-        CREATE TABLE place_containment (
-            place_id       VARCHAR,
-            relations_json VARCHAR
-        )
-    """)
-
-
-# ---------------------------------------------------------------------------
-# Overture export test helpers
-# ---------------------------------------------------------------------------
-
-_OVERTURE_EXPORT_PLACES = [
-    # (id, name, lat, lon, importance)
-    ("ovr001", "Philz Coffee", 37.7749, -122.4194, 70),
-    ("ovr002", "Dolores Park", 37.7596, -122.4269, 55),
-]
-
-
-def _make_overture_export_db(conn, places_rows=None):
-    """Populate `conn` with minimal Overture `places` and `tile_assignments` tables."""
-    if places_rows is None:
-        places_rows = _OVERTURE_EXPORT_PLACES
-
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            id          VARCHAR,
-            geometry    GEOMETRY,
-            bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            names       STRUCT("primary" VARCHAR),
-            categories  STRUCT("primary" VARCHAR),
-            addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
-            websites    VARCHAR[],
-            socials     VARCHAR[],
-            emails      VARCHAR[],
-            phones      VARCHAR[],
-            brand       STRUCT(names STRUCT("primary" VARCHAR)),
-            confidence  DOUBLE,
-            version     INTEGER,
-            sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
-            importance  INTEGER,
-            variants    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-            qk17        VARCHAR
-        )
-    """)
-
-    for ovr_id, name, lat, lon, imp in places_rows:
-        conn.execute(f"""
+        """,
+    },
+    "overture_place": {
+        "sql_file": "overture_place_export_tiles.sql",
+        "places_rows": [
+            ("ovr001", "Philz Coffee", 37.7749, -122.4194, 70),
+            ("ovr002", "Dolores Park", 37.7596, -122.4269, 55),
+        ],
+        "pk_col": "id",
+        "create_table": """
+            CREATE TABLE places (
+                id          VARCHAR,
+                geometry    GEOMETRY,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                names       STRUCT("primary" VARCHAR),
+                categories  STRUCT("primary" VARCHAR),
+                addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+                websites    VARCHAR[],
+                socials     VARCHAR[],
+                emails      VARCHAR[],
+                phones      VARCHAR[],
+                brand       STRUCT(names STRUCT("primary" VARCHAR)),
+                confidence  DOUBLE,
+                version     INTEGER,
+                sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
+                importance  INTEGER,
+                variants    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                qk17        VARCHAR
+            )
+        """,
+        "insert_template": """
             INSERT INTO places VALUES (
-                '{ovr_id}',
+                '{pk}',
                 ST_Point({lon}, {lat}),
                 {{'xmin': {lon}-0.001, 'ymin': {lat}-0.001,
                   'xmax': {lon}+0.001, 'ymax': {lat}+0.001}},
@@ -296,68 +216,38 @@ def _make_overture_export_db(conn, places_rows=None):
                 []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
                 ST_QuadKey({lon}, {lat}, 17)
             )
-        """)
-
-    conn.execute("""
-        CREATE TABLE tile_assignments (
-            place_id VARCHAR,
-            tile_qk  VARCHAR
-        )
-    """)
-    for ovr_id, _name, _lat, _lon, _imp in places_rows:
-        conn.execute("INSERT INTO tile_assignments VALUES (?, ?)", [ovr_id, _EXPORT_TILE_QK])
-
-    conn.execute("""
-        CREATE TABLE place_containment (
-            place_id       VARCHAR,
-            relations_json VARCHAR
-        )
-    """)
-
-
-# ---------------------------------------------------------------------------
-# Overture division export test helpers
-# ---------------------------------------------------------------------------
-
-_DIVISION_EXPORT_PLACES = [
-    # (id, name, lat, lon, admin_level, subtype, country, region)
-    ("div001", "San Francisco", 37.7749, -122.4194, 3, "locality", "US", "US-CA"),
-    ("div002", "California", 37.5, -119.5, 2, "region", "US", "US-CA"),
-]
-
-
-def _make_division_export_db(conn, places_rows=None):
-    """Populate `conn` with minimal division `places` and `tile_assignments` tables."""
-    if places_rows is None:
-        places_rows = _DIVISION_EXPORT_PLACES
-
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            id             VARCHAR,
-            geometry       GEOMETRY,
-            admin_level    INTEGER,
-            names          STRUCT("primary" VARCHAR),
-            subtype        VARCHAR,
-            country        VARCHAR,
-            region         VARCHAR,
-            wikidata       VARCHAR,
-            population     BIGINT,
-            min_latitude   DOUBLE,
-            max_latitude   DOUBLE,
-            min_longitude  DOUBLE,
-            max_longitude  DOUBLE,
-            importance     INTEGER,
-            variants       STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-            qk17           VARCHAR
-        )
-    """)
-
-    for div_id, name, lat, lon, admin_level, subtype, country, region in places_rows:
-        conn.execute(f"""
+        """,
+    },
+    "overture_division": {
+        "sql_file": "overture_division_export_tiles.sql",
+        "places_rows": [
+            ("div001", "San Francisco", 37.7749, -122.4194, 3, "locality", "US", "US-CA"),
+            ("div002", "California", 37.5, -119.5, 2, "region", "US", "US-CA"),
+        ],
+        "pk_col": "id",
+        "create_table": """
+            CREATE TABLE places (
+                id             VARCHAR,
+                geometry       GEOMETRY,
+                admin_level    INTEGER,
+                names          STRUCT("primary" VARCHAR),
+                subtype        VARCHAR,
+                country        VARCHAR,
+                region         VARCHAR,
+                wikidata       VARCHAR,
+                population     BIGINT,
+                min_latitude   DOUBLE,
+                max_latitude   DOUBLE,
+                min_longitude  DOUBLE,
+                max_longitude  DOUBLE,
+                importance     INTEGER,
+                variants       STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                qk17           VARCHAR
+            )
+        """,
+        "insert_template": """
             INSERT INTO places VALUES (
-                '{div_id}',
+                '{pk}',
                 ST_Point({lon}, {lat}),
                 {admin_level},
                 {{'primary': '{name}'}},
@@ -374,16 +264,77 @@ def _make_division_export_db(conn, places_rows=None):
                 []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
                 ST_QuadKey({lon}, {lat}, 17)
             )
-        """)
+        """,
+    },
+}
 
+_EXPORT_TILE_QK = "023130"
+
+
+def _make_export_db(conn, source, places_rows=None):
+    """Create minimal export tables for any source.
+
+    Args:
+        conn: DuckDB connection
+        source: Source key (foursquare, osm, overture_place, overture_division)
+        places_rows: Optional custom rows (uses config default if None)
+    """
+    config = _EXPORT_CONFIGS[source]
+    if places_rows is None:
+        places_rows = config["places_rows"]
+
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute(config["create_table"])
+
+    # Insert rows based on source-specific logic
+    if source == "foursquare":
+        for pk, name, lat, lon, imp, country in places_rows:
+            country_val = f"'{country}'" if country is not None else "NULL"
+            conn.execute(config["insert_template"].format(
+                pk=pk, name=name, lat=lat, lon=lon, imp=imp, country_val=country_val
+            ))
+    elif source == "osm":
+        for osm_type, osm_id, rkey, name, lat, lon, imp, primary_category, tags in places_rows:
+            if tags:
+                map_entries = ", ".join(f"'{k}': '{v}'" for k, v in tags.items())
+                map_literal = f"MAP {{{map_entries}}}"
+            else:
+                map_literal = "MAP()::MAP(VARCHAR, VARCHAR)"
+            conn.execute(config["insert_template"].format(
+                osm_type=osm_type, osm_id=osm_id, rkey=rkey, name=name,
+                lat=lat, lon=lon, imp=imp, primary_category=primary_category,
+                map_literal=map_literal
+            ))
+    elif source == "overture_place":
+        for pk, name, lat, lon, imp in places_rows:
+            conn.execute(config["insert_template"].format(
+                pk=pk, name=name, lat=lat, lon=lon, imp=imp
+            ))
+    elif source == "overture_division":
+        for pk, name, lat, lon, admin_level, subtype, country, region in places_rows:
+            conn.execute(config["insert_template"].format(
+                pk=pk, name=name, lat=lat, lon=lon, admin_level=admin_level,
+                subtype=subtype, country=country, region=region
+            ))
+
+    # Create tile_assignments table
     conn.execute("""
         CREATE TABLE tile_assignments (
             place_id VARCHAR,
             tile_qk  VARCHAR
         )
     """)
-    for div_id, _name, _lat, _lon, _admin_level, _subtype, _country, _region in places_rows:
-        conn.execute("INSERT INTO tile_assignments VALUES (?, ?)", [div_id, _EXPORT_TILE_QK])
+
+    # Extract primary key values for tile_assignments
+    pk_col = config["pk_col"]
+    for row in places_rows:
+        if source == "foursquare":
+            pk_val = row[0]
+        elif source == "osm":
+            pk_val = row[2]  # rkey
+        elif source in ("overture_place", "overture_division"):
+            pk_val = row[0]
+        conn.execute("INSERT INTO tile_assignments VALUES (?, ?)", [pk_val, _EXPORT_TILE_QK])
 
     conn.execute("""
         CREATE TABLE place_containment (
@@ -397,184 +348,53 @@ def _make_division_export_db(conn, places_rows=None):
 # Tests: SQL export views emit flat records (no uri/value wrapper)
 # ---------------------------------------------------------------------------
 
-class TestFsqExportNoUriValueWrapper:
-    """FSQ export SQL should emit flat records without uri/value wrapper."""
-
-    def test_fsq_export_no_uri_value_wrapper(self, tmp_path):
-        """FSQ export SQL must produce flat records without uri/value wrapper.
-
-        This test FAILS against current code because fsq_export_tiles.sql
-        still produces the nested uri/value structure.
-        """
-        db_path = tmp_path / "test_fsq_flat.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-
-        raw_sql = _load_sql("foursquare_export_tiles.sql")
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        sql = sql.replace("${repo}", "https://example.com")
-        conn.execute(sql)
-
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        assert rows, "No rows returned from tile_export"
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            # FAIL: current structure has uri/value wrapper
-            assert "uri" not in parsed, (
-                f"Record should NOT have 'uri' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            assert "value" not in parsed, (
-                f"Record should NOT have 'value' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            # PASS: flat structure should have these at top level
-            assert "$type" in parsed, (
-                f"Flat record must have '$type' at top level. Got keys: {list(parsed)}"
-            )
-            assert parsed["$type"] == "org.atgeo.place", (
-                f"$type must be 'org.atgeo.place', got {parsed['$type']!r}"
-            )
-            assert "rkey" in parsed, (
-                f"Flat record must have 'rkey' at top level. Got keys: {list(parsed)}"
-            )
+def _assert_flat_record(parsed):
+    """Assert a record has flat structure (no uri/value wrapper)."""
+    assert "uri" not in parsed, (
+        f"Record should NOT have 'uri' key at top level. "
+        f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
+    )
+    assert "value" not in parsed, (
+        f"Record should NOT have 'value' key at top level. "
+        f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
+    )
+    assert "$type" in parsed, (
+        f"Flat record must have '$type' at top level. Got keys: {list(parsed)}"
+    )
+    assert parsed["$type"] == "org.atgeo.place", (
+        f"$type must be 'org.atgeo.place', got {parsed['$type']!r}"
+    )
+    assert "rkey" in parsed, (
+        f"Flat record must have 'rkey' at top level. Got keys: {list(parsed)}"
+    )
 
 
-class TestOsmExportNoUriValueWrapper:
-    """OSM export SQL should emit flat records without uri/value wrapper."""
+@pytest.mark.parametrize("source", ["foursquare", "osm", "overture_place", "overture_division"])
+def test_export_no_uri_value_wrapper(tmp_path, source):
+    """Export SQL must produce flat records without uri/value wrapper.
 
-    def test_osm_export_no_uri_value_wrapper(self, tmp_path):
-        """OSM export SQL must produce flat records without uri/value wrapper.
+    This test FAILS against current code because the export SQL files
+    still produce the nested uri/value structure.
 
-        This test FAILS against current code because osm_export_tiles.sql
-        still produces the nested uri/value structure.
-        """
-        db_path = tmp_path / "test_osm_flat.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_osm_export_db(conn)
+    Parametrized to test all four sources: foursquare, osm, overture_place, overture_division.
+    """
+    config = _EXPORT_CONFIGS[source]
+    db_path = tmp_path / f"test_{source}_flat.duckdb"
+    conn = duckdb.connect(str(db_path))
+    _make_export_db(conn, source)
 
-        raw_sql = _load_sql("osm_export_tiles.sql")
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        sql = sql.replace("${repo}", "https://example.com")
-        conn.execute(sql)
+    raw_sql = _load_sql(config["sql_file"])
+    sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+    sql = sql.replace("${repo}", "https://example.com")
+    conn.execute(sql)
 
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
+    rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
+    conn.close()
 
-        assert rows, "No rows returned from tile_export"
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            # FAIL: current structure has uri/value wrapper
-            assert "uri" not in parsed, (
-                f"Record should NOT have 'uri' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            assert "value" not in parsed, (
-                f"Record should NOT have 'value' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            # PASS: flat structure should have these at top level
-            assert "$type" in parsed, (
-                f"Flat record must have '$type' at top level. Got keys: {list(parsed)}"
-            )
-            assert parsed["$type"] == "org.atgeo.place", (
-                f"$type must be 'org.atgeo.place', got {parsed['$type']!r}"
-            )
-            assert "rkey" in parsed, (
-                f"Flat record must have 'rkey' at top level. Got keys: {list(parsed)}"
-            )
-
-
-class TestOvertureExportNoUriValueWrapper:
-    """Overture export SQL should emit flat records without uri/value wrapper."""
-
-    def test_overture_export_no_uri_value_wrapper(self, tmp_path):
-        """Overture export SQL must produce flat records without uri/value wrapper.
-
-        This test FAILS against current code because overture_export_tiles.sql
-        still produces the nested uri/value structure.
-        """
-        db_path = tmp_path / "test_overture_flat.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_overture_export_db(conn)
-
-        raw_sql = _load_sql("overture_place_export_tiles.sql")
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        sql = sql.replace("${repo}", "https://example.com")
-        conn.execute(sql)
-
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        assert rows, "No rows returned from tile_export"
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            # FAIL: current structure has uri/value wrapper
-            assert "uri" not in parsed, (
-                f"Record should NOT have 'uri' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            assert "value" not in parsed, (
-                f"Record should NOT have 'value' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            # PASS: flat structure should have these at top level
-            assert "$type" in parsed, (
-                f"Flat record must have '$type' at top level. Got keys: {list(parsed)}"
-            )
-            assert parsed["$type"] == "org.atgeo.place", (
-                f"$type must be 'org.atgeo.place', got {parsed['$type']!r}"
-            )
-            assert "rkey" in parsed, (
-                f"Flat record must have 'rkey' at top level. Got keys: {list(parsed)}"
-            )
-
-
-class TestOvertureDivisionExportNoUriValueWrapper:
-    """Overture division export SQL should emit flat records without uri/value wrapper."""
-
-    def test_overture_division_export_no_uri_value_wrapper(self, tmp_path):
-        """Overture division export SQL must produce flat records without uri/value wrapper.
-
-        This test FAILS against current code because overture_division_export_tiles.sql
-        still produces the nested uri/value structure.
-        """
-        db_path = tmp_path / "test_division_flat.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_division_export_db(conn)
-
-        raw_sql = _load_sql("overture_division_export_tiles.sql")
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        sql = sql.replace("${repo}", "https://example.com")
-        conn.execute(sql)
-
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        assert rows, "No rows returned from tile_export"
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            # FAIL: current structure has uri/value wrapper
-            assert "uri" not in parsed, (
-                f"Record should NOT have 'uri' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            assert "value" not in parsed, (
-                f"Record should NOT have 'value' key at top level. "
-                f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
-            )
-            # PASS: flat structure should have these at top level
-            assert "$type" in parsed, (
-                f"Flat record must have '$type' at top level. Got keys: {list(parsed)}"
-            )
-            assert parsed["$type"] == "org.atgeo.place", (
-                f"$type must be 'org.atgeo.place', got {parsed['$type']!r}"
-            )
-            assert "rkey" in parsed, (
-                f"Flat record must have 'rkey' at top level. Got keys: {list(parsed)}"
-            )
+    assert rows, "No rows returned from tile_export"
+    for (record_json,) in rows:
+        parsed = json.loads(record_json)
+        _assert_flat_record(parsed)
 
 
 # ---------------------------------------------------------------------------
@@ -659,7 +479,7 @@ class TestTileEnvelopeHasCollectionField:
         # Create a minimal FSQ database
         db_path = tmp_path / "test_tile_env.duckdb"
         conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
+        _make_export_db(conn, "foursquare")
 
         # Prepare tile_assignments for export
         conn.execute("SET enable_progress_bar = false")

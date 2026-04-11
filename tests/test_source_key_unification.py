@@ -23,69 +23,33 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 class TestCollectionClassAttributes:
     """Test that collection classes have source_key and source_pk attributes."""
 
-    def test_foursquare_osp_has_source_key(self):
-        """FoursquareOSP should have source_key == 'foursquare'."""
-        from garganorn.database import FoursquareOSP
-        assert hasattr(FoursquareOSP, 'source_key'), \
-            "FoursquareOSP missing source_key class attribute"
-        assert FoursquareOSP.source_key == "foursquare", \
-            f"FoursquareOSP.source_key should be 'foursquare', got {FoursquareOSP.source_key!r}"
+    @pytest.mark.parametrize("cls_name,expected", [
+        ("FoursquareOSP", "foursquare"),
+        ("OverturePlaces", "overture_place"),
+        ("OpenStreetMap", "osm"),
+        ("OvertureDivisions", "overture_division"),
+    ])
+    def test_source_key(self, cls_name, expected):
+        """Collection classes should have correct source_key class attribute."""
+        cls = getattr(importlib.import_module("garganorn.database"), cls_name)
+        assert hasattr(cls, 'source_key'), \
+            f"{cls_name} missing source_key class attribute"
+        assert cls.source_key == expected, \
+            f"{cls_name}.source_key should be {expected!r}, got {cls.source_key!r}"
 
-    def test_overture_places_has_source_key(self):
-        """OverturePlaces should have source_key == 'overture_place'."""
-        from garganorn.database import OverturePlaces
-        assert hasattr(OverturePlaces, 'source_key'), \
-            "OverturePlaces missing source_key class attribute"
-        assert OverturePlaces.source_key == "overture_place", \
-            f"OverturePlaces.source_key should be 'overture_place', got {OverturePlaces.source_key!r}"
-
-    def test_openstreetmap_has_source_key(self):
-        """OpenStreetMap should have source_key == 'osm'."""
-        from garganorn.database import OpenStreetMap
-        assert hasattr(OpenStreetMap, 'source_key'), \
-            "OpenStreetMap missing source_key class attribute"
-        assert OpenStreetMap.source_key == "osm", \
-            f"OpenStreetMap.source_key should be 'osm', got {OpenStreetMap.source_key!r}"
-
-    def test_overture_divisions_has_source_key(self):
-        """OvertureDivisions should have source_key == 'overture_division'."""
-        from garganorn.database import OvertureDivisions
-        assert hasattr(OvertureDivisions, 'source_key'), \
-            "OvertureDivisions missing source_key class attribute"
-        assert OvertureDivisions.source_key == "overture_division", \
-            f"OvertureDivisions.source_key should be 'overture_division', got {OvertureDivisions.source_key!r}"
-
-    def test_foursquare_osp_has_source_pk(self):
-        """FoursquareOSP should have source_pk == 'fsq_place_id'."""
-        from garganorn.database import FoursquareOSP
-        assert hasattr(FoursquareOSP, 'source_pk'), \
-            "FoursquareOSP missing source_pk class attribute"
-        assert FoursquareOSP.source_pk == "fsq_place_id", \
-            f"FoursquareOSP.source_pk should be 'fsq_place_id', got {FoursquareOSP.source_pk!r}"
-
-    def test_overture_places_has_source_pk(self):
-        """OverturePlaces should have source_pk == 'id'."""
-        from garganorn.database import OverturePlaces
-        assert hasattr(OverturePlaces, 'source_pk'), \
-            "OverturePlaces missing source_pk class attribute"
-        assert OverturePlaces.source_pk == "id", \
-            f"OverturePlaces.source_pk should be 'id', got {OverturePlaces.source_pk!r}"
-
-    def test_openstreetmap_has_source_pk(self):
-        """OpenStreetMap should have source_pk == 'rkey'."""
-        from garganorn.database import OpenStreetMap
-        assert hasattr(OpenStreetMap, 'source_pk'), \
-            "OpenStreetMap missing source_pk class attribute"
-        assert OpenStreetMap.source_pk == "rkey", \
-            f"OpenStreetMap.source_pk should be 'rkey', got {OpenStreetMap.source_pk!r}"
-
-    def test_overture_divisions_has_source_pk(self):
-        """OvertureDivisions should have source_pk == 'id'."""
-        from garganorn.database import OvertureDivisions
-        assert hasattr(OvertureDivisions, 'source_pk'), \
-            "OvertureDivisions missing source_pk class attribute"
-        assert OvertureDivisions.source_pk == "id", \
-            f"OvertureDivisions.source_pk should be 'id', got {OvertureDivisions.source_pk!r}"
+    @pytest.mark.parametrize("cls_name,expected", [
+        ("FoursquareOSP", "fsq_place_id"),
+        ("OverturePlaces", "id"),
+        ("OpenStreetMap", "rkey"),
+        ("OvertureDivisions", "id"),
+    ])
+    def test_source_pk(self, cls_name, expected):
+        """Collection classes should have correct source_pk class attribute."""
+        cls = getattr(importlib.import_module("garganorn.database"), cls_name)
+        assert hasattr(cls, 'source_pk'), \
+            f"{cls_name} missing source_pk class attribute"
+        assert cls.source_pk == expected, \
+            f"{cls_name}.source_pk should be {expected!r}, got {cls.source_pk!r}"
 
 
 class TestClassRenaming:
@@ -170,101 +134,31 @@ class TestQuadtreeRegistry:
 class TestSQLFileNames:
     """Test that SQL files are renamed from old names to new names."""
 
-    def test_foursquare_import_sql_exists(self):
-        """foursquare_import.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "foursquare_import.sql"
+    NEW_SQL_FILES = [
+        "foursquare_import.sql", "foursquare_importance.sql",
+        "foursquare_variants.sql", "foursquare_export_tiles.sql",
+        "overture_place_import.sql", "overture_place_importance.sql",
+        "overture_place_variants.sql", "overture_place_export_tiles.sql",
+    ]
+
+    OLD_SQL_FILES = [
+        "fsq_import.sql", "fsq_importance.sql", "fsq_variants.sql", "fsq_export_tiles.sql",
+        "overture_import.sql", "overture_importance.sql", "overture_variants.sql", "overture_export_tiles.sql",
+    ]
+
+    @pytest.mark.parametrize("filename", NEW_SQL_FILES)
+    def test_new_sql_file_exists(self, filename):
+        """New SQL files should exist after refactoring."""
+        path = REPO_ROOT / "garganorn" / "sql" / filename
         assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
+            f"SQL file {filename} should exist"
 
-    def test_foursquare_importance_sql_exists(self):
-        """foursquare_importance.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "foursquare_importance.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_foursquare_variants_sql_exists(self):
-        """foursquare_variants.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "foursquare_variants.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_foursquare_export_tiles_sql_exists(self):
-        """foursquare_export_tiles.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "foursquare_export_tiles.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_overture_place_import_sql_exists(self):
-        """overture_place_import.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_overture_place_importance_sql_exists(self):
-        """overture_place_importance.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_place_importance.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_overture_place_variants_sql_exists(self):
-        """overture_place_variants.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_place_variants.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_overture_place_export_tiles_sql_exists(self):
-        """overture_place_export_tiles.sql should exist."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_place_export_tiles.sql"
-        assert path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should exist"
-
-    def test_fsq_import_sql_removed(self):
-        """fsq_import.sql should NOT exist (renamed to foursquare_import.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "fsq_import.sql"
+    @pytest.mark.parametrize("filename", OLD_SQL_FILES)
+    def test_old_sql_file_removed(self, filename):
+        """Old SQL files should NOT exist after refactoring."""
+        path = REPO_ROOT / "garganorn" / "sql" / filename
         assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to foursquare_import.sql)"
-
-    def test_fsq_importance_sql_removed(self):
-        """fsq_importance.sql should NOT exist (renamed to foursquare_importance.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "fsq_importance.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to foursquare_importance.sql)"
-
-    def test_fsq_variants_sql_removed(self):
-        """fsq_variants.sql should NOT exist (renamed to foursquare_variants.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "fsq_variants.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to foursquare_variants.sql)"
-
-    def test_fsq_export_tiles_sql_removed(self):
-        """fsq_export_tiles.sql should NOT exist (renamed to foursquare_export_tiles.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "fsq_export_tiles.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to foursquare_export_tiles.sql)"
-
-    def test_overture_import_sql_removed(self):
-        """overture_import.sql should NOT exist (renamed to overture_place_import.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_import.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to overture_place_import.sql)"
-
-    def test_overture_importance_sql_removed(self):
-        """overture_importance.sql should NOT exist (renamed to overture_place_importance.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_importance.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to overture_place_importance.sql)"
-
-    def test_overture_variants_sql_removed(self):
-        """overture_variants.sql should NOT exist (renamed to overture_place_variants.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_variants.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to overture_place_variants.sql)"
-
-    def test_overture_export_tiles_sql_removed(self):
-        """overture_export_tiles.sql should NOT exist (renamed to overture_place_export_tiles.sql)."""
-        path = REPO_ROOT / "garganorn" / "sql" / "overture_export_tiles.sql"
-        assert not path.exists(), \
-            f"SQL file {path.relative_to(REPO_ROOT)} should NOT exist (renamed to overture_place_export_tiles.sql)"
+            f"SQL file {filename} should NOT exist (renamed)"
 
     # overture_division files should keep their names
     def test_overture_division_import_sql_unchanged(self):
