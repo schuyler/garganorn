@@ -230,7 +230,7 @@ if [ ! -d "$cache_dir" ] || [ -z "$(ls "$cache_dir"/*.parquet 2>/dev/null)" ]; t
 fi
 
 # Count cached files (must be exactly 100 for FSQ)
-cached_count=$(find "$cache_dir" -maxdepth 1 -name '*.parquet' -type f | wc -l)
+cached_count=$(find "$cache_dir" -maxdepth 1 -name '*.parquet' -type f | wc -l | tr -d ' ')
 if [ "$cached_count" -ne 100 ]; then
     echo "Incomplete FSQ cache: found $cached_count files, expected 100 in $cache_dir"
     echo "Run download-fsq.sh to complete the cache."
