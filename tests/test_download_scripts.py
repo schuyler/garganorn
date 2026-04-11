@@ -55,7 +55,7 @@ class TestFsqImportCacheEnforcement:
         # can skip S3 discovery and check the cache directly.
         result = _run(
             "import-fsq-extract.sh",
-            ["--cache-dir", "/tmp/nonexistent-garganorn-test"] + SAMPLE_BBOX,
+            ["--cache-dir", str(tmp_path / "nonexistent")] + SAMPLE_BBOX,
         )
 
         assert result.returncode == 1, (
@@ -115,7 +115,7 @@ class TestOvertureImportCacheEnforcement:
         # can skip S3 discovery and check the cache directly.
         result = _run(
             "import-overture-extract.sh",
-            ["--cache-dir", "/tmp/nonexistent-garganorn-test"] + SAMPLE_BBOX,
+            ["--cache-dir", str(tmp_path / "nonexistent")] + SAMPLE_BBOX,
         )
 
         assert result.returncode == 1, (
