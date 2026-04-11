@@ -39,12 +39,159 @@ def _coord_exprs(source, alias=""):
     return f"{prefix}longitude", f"{prefix}latitude"
 
 
+def _run_containment(con, qk_prefix, bbox, zoom, pk_expr, lon_expr, lat_expr,
+                     collection_prefix, stats):
+    """Process a single tile: clip boundaries, run phase-1/phase-2 containment.
+
+    Inserts matching rows into place_containment. Updates stats in-place.
+
+    Args:
+        con: Open DuckDB connection with `places` and attached `bnd` database.
+        qk_prefix: Quadkey prefix string for this tile (length == zoom).
+        bbox: (lon_min, lat_min, lon_max, lat_max) bounding box for qk_prefix.
+        zoom: Tile zoom level (== len(qk_prefix)).
+        pk_expr: SQL expression for place primary key.
+        lon_expr: SQL expression for place longitude.
+        lat_expr: SQL expression for place latitude.
+        collection_prefix: NSID prefix for boundary rkey values.
+        stats: Mutable dict; this function increments leaf_tiles and updates
+            max_depth. The subdivisions key is not read or written here.
+    """
+    stats["leaf_tiles"] += 1
+    stats["max_depth"] = max(stats["max_depth"], zoom)
+    t_tile = time.monotonic()
+
+    # Step 0: pre-filter and clip boundaries to tile envelope
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE tile_boundaries AS
+        SELECT id, admin_level,
+               ST_Intersection(geometry, ST_MakeEnvelope(?, ?, ?, ?)) AS geometry,
+               greatest(min_latitude, ?) AS min_latitude,
+               least(max_latitude, ?)    AS max_latitude,
+               greatest(min_longitude, ?) AS min_longitude,
+               least(max_longitude, ?)    AS max_longitude
+        FROM bnd.places
+        WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?))
+    """, [bbox[0], bbox[1], bbox[2], bbox[3],   # ST_Intersection envelope
+          bbox[1], bbox[3], bbox[0], bbox[2],   # bbox clamping (lat_min, lat_max, lon_min, lon_max)
+          bbox[0], bbox[1], bbox[2], bbox[3]])  # ST_Intersects WHERE
+
+    tile_boundary_count = con.execute(
+        "SELECT count(*) FROM tile_boundaries"
+    ).fetchone()[0]
+
+    # Phase 1: materialize full-tile containment matches as a temp table
+    # so Phase 2 can use NOT EXISTS anti-join to skip them
+    con.execute("""
+        CREATE OR REPLACE TEMP TABLE phase1 AS
+        SELECT id, admin_level FROM tile_boundaries
+        WHERE ST_Contains(geometry, ST_MakeEnvelope(?, ?, ?, ?))
+    """, [bbox[0], bbox[1], bbox[2], bbox[3]])
+
+    phase1_count = con.execute("SELECT count(*) FROM phase1").fetchone()[0]
+
+    # Phase 1 bulk assignment: CROSS JOIN all tile places with phase1 boundaries
+    # Phase 2: per-point ST_Contains only for boundaries NOT in phase1
+    # Combine and insert into place_containment
+    con.execute(f"""
+        INSERT INTO place_containment
+        WITH bulk_assign AS (
+            SELECT {pk_expr} AS pk,
+                   '{collection_prefix}:' || ph.id AS rkey,
+                   ph.admin_level
+            FROM places p
+            CROSS JOIN phase1 ph
+            WHERE LEFT(p.qk17, ?) = ?
+        ),
+        edge_matches AS (
+            SELECT {pk_expr} AS pk,
+                   '{collection_prefix}:' || b.id AS rkey,
+                   b.admin_level
+            FROM places p
+            JOIN tile_boundaries b
+                ON {lat_expr} BETWEEN b.min_latitude AND b.max_latitude
+               AND {lon_expr} BETWEEN b.min_longitude AND b.max_longitude
+               AND ST_Contains(b.geometry, ST_Point({lon_expr}, {lat_expr}))
+            WHERE LEFT(p.qk17, ?) = ?
+              AND NOT EXISTS (
+                  SELECT 1 FROM phase1 ph WHERE ph.id = b.id
+              )
+        ),
+        all_matches AS (
+            SELECT * FROM bulk_assign
+            UNION ALL
+            SELECT * FROM edge_matches
+        )
+        SELECT pk, to_json({{within: list(
+            {{rkey: rkey}}
+            ORDER BY admin_level ASC
+        )}})::VARCHAR
+        FROM all_matches
+        GROUP BY pk
+    """, [zoom, qk_prefix, zoom, qk_prefix])
+
+    elapsed = time.monotonic() - t_tile
+    log.info("compute_containment: z%d qk=%s boundaries=%d phase1=%d (%.1fs)",
+             zoom, qk_prefix, tile_boundary_count, phase1_count, elapsed)
+
+
+def _process_tile(con, qk_prefix, pk_expr, lon_expr, lat_expr,
+                  collection_prefix, max_boundaries, max_zoom, stats):
+    """Recursively process a tile, subdividing if boundary count exceeds max_boundaries.
+
+    Subdivides into 4 children (quadkey digits 0-3) when the tile has more
+    than max_boundaries boundaries and zoom < max_zoom. Otherwise delegates
+    to _run_containment for the actual spatial join.
+
+    Args:
+        con: Open DuckDB connection.
+        qk_prefix: Quadkey prefix for this tile.
+        pk_expr: SQL expression for place primary key.
+        lon_expr: SQL expression for place longitude.
+        lat_expr: SQL expression for place latitude.
+        collection_prefix: NSID prefix for boundary rkey values.
+        max_boundaries: Subdivision threshold.
+        max_zoom: Maximum zoom level; no further subdivision beyond this.
+        stats: Mutable dict with keys subdivisions, leaf_tiles, max_depth.
+    """
+    zoom = len(qk_prefix)
+    bbox = quadkey_to_bbox(qk_prefix)
+
+    # Count boundaries intersecting this tile
+    count = con.execute("""
+        SELECT count(*) FROM bnd.places
+        WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?))
+    """, [bbox[0], bbox[1], bbox[2], bbox[3]]).fetchone()[0]
+
+    if count > max_boundaries and zoom < max_zoom:
+        stats["subdivisions"] += 1
+        for child in '0123':
+            _process_tile(con, qk_prefix + child, pk_expr, lon_expr, lat_expr,
+                          collection_prefix, max_boundaries, max_zoom, stats)
+        return
+
+    if count > max_boundaries:
+        log.warning("compute_containment: z%d qk=%s has %d boundaries "
+                    "(exceeds %d at max zoom)", zoom, qk_prefix, count,
+                    max_boundaries)
+
+    _run_containment(con, qk_prefix, bbox, zoom, pk_expr, lon_expr, lat_expr,
+                     collection_prefix, stats)
+
+
 def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
-                        collection_prefix="org.atgeo.places.overture.division"):
+                        collection_prefix="org.atgeo.places.overture.division",
+                        max_boundaries=200, max_zoom=14):
     """Populate place_containment with boundary relations for each place.
 
     Creates place_containment(place_id, relations_json). Returns an empty
     table if boundaries_db is None.
+
+    Uses an adaptive quadtree strategy: starting from z6 seed tiles, each
+    tile is subdivided into 4 children (up to max_zoom) if the number of
+    intersecting boundaries exceeds max_boundaries. This reduces per-tile
+    boundary counts in dense areas while keeping coarse tiles for sparse
+    regions.
 
     Args:
         con: Open DuckDB connection with a `places` table (must have qk17 column).
@@ -56,16 +203,18 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
             Parameterized so the same function can be reused if the boundary
             source or collection changes without altering callers.
             Defaults to "org.atgeo.places.overture.division".
+        max_boundaries: Maximum number of boundaries allowed in a tile before
+            it is subdivided. Defaults to 200.
+        max_zoom: Maximum zoom level for subdivision. Tiles at this zoom are
+            processed even if they exceed max_boundaries. Defaults to 14.
 
     The boundaries database is attached under the alias `bnd` (generic, not
     source-specific) and detached when processing completes. The `bnd.places`
     table must have columns `id`, `geometry`, `admin_level`, `min_latitude`,
     `max_latitude`, `min_longitude`, `max_longitude`.
 
-    Places are grouped by z6 quadkey tile so each spatial join operates on
-    a small spatial partition. Within each tile, a three-step approach
-    reduces both boundary count and vertex complexity before running
-    per-point containment:
+    Within each leaf tile, a three-step approach reduces both boundary count
+    and vertex complexity before running per-point containment:
 
       Step 0 (pre-filter and clip): ST_Intersects with R-tree narrows
       boundaries to those overlapping the tile envelope. ST_Intersection
@@ -88,10 +237,11 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
     other division metadata are not inlined here; clients resolve them from
     the division tile for each rkey.
 
-    Correctness depends on each place belonging to exactly one z6 tile
-    (determined by its qk17 prefix). The CROSS JOIN in phase 1 assigns
-    all phase-1 boundaries to every place in that tile; if a place appeared
-    in multiple tiles, it would receive duplicate boundary assignments.
+    Correctness depends on each place belonging to exactly one leaf tile
+    (determined by the appropriate prefix of its qk17). The CROSS JOIN in
+    phase 1 assigns all phase-1 boundaries to every place in that tile; if a
+    place appeared in multiple tiles, it would receive duplicate boundary
+    assignments.
     """
     con.execute("LOAD spatial")
     con.execute("""
@@ -110,84 +260,13 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
             row[0]
             for row in con.execute("SELECT DISTINCT LEFT(qk17, 6) FROM places").fetchall()
         ]
-        total = len(z6_tiles)
-        log.info("compute_containment: processing %d z6 tiles", total)
-        for i, z6 in enumerate(z6_tiles, 1):
-            bbox = quadkey_to_bbox(z6)
-            t_tile = time.monotonic()
-
-            # Step 0: pre-filter and clip boundaries to tile envelope
-            con.execute("""
-                CREATE OR REPLACE TEMP TABLE tile_boundaries AS
-                SELECT id, admin_level,
-                       ST_Intersection(geometry, ST_MakeEnvelope(?, ?, ?, ?)) AS geometry,
-                       greatest(min_latitude, ?) AS min_latitude,
-                       least(max_latitude, ?)    AS max_latitude,
-                       greatest(min_longitude, ?) AS min_longitude,
-                       least(max_longitude, ?)    AS max_longitude
-                FROM bnd.places
-                WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?))
-            """, [bbox[0], bbox[1], bbox[2], bbox[3],   # ST_Intersection envelope
-                  bbox[1], bbox[3], bbox[0], bbox[2],   # bbox clamping (lat_min, lat_max, lon_min, lon_max)
-                  bbox[0], bbox[1], bbox[2], bbox[3]])  # ST_Intersects WHERE
-
-            tile_boundary_count = con.execute(
-                "SELECT count(*) FROM tile_boundaries"
-            ).fetchone()[0]
-
-            # Phase 1: materialize full-tile containment matches as a temp table
-            # so Phase 2 can use NOT EXISTS anti-join to skip them
-            con.execute("""
-                CREATE OR REPLACE TEMP TABLE phase1 AS
-                SELECT id, admin_level FROM tile_boundaries
-                WHERE ST_Contains(geometry, ST_MakeEnvelope(?, ?, ?, ?))
-            """, [bbox[0], bbox[1], bbox[2], bbox[3]])
-
-            phase1_count = con.execute("SELECT count(*) FROM phase1").fetchone()[0]
-
-            # Phase 1 bulk assignment: CROSS JOIN all tile places with phase1 boundaries
-            # Phase 2: per-point ST_Contains only for boundaries NOT in phase1
-            # Combine and insert into place_containment
-            con.execute(f"""
-                INSERT INTO place_containment
-                WITH bulk_assign AS (
-                    SELECT {pk_expr} AS pk,
-                           '{collection_prefix}:' || ph.id AS rkey,
-                           ph.admin_level
-                    FROM places p
-                    CROSS JOIN phase1 ph
-                    WHERE LEFT(p.qk17, 6) = ?
-                ),
-                edge_matches AS (
-                    SELECT {pk_expr} AS pk,
-                           '{collection_prefix}:' || b.id AS rkey,
-                           b.admin_level
-                    FROM places p
-                    JOIN tile_boundaries b
-                        ON {lat_expr} BETWEEN b.min_latitude AND b.max_latitude
-                       AND {lon_expr} BETWEEN b.min_longitude AND b.max_longitude
-                       AND ST_Contains(b.geometry, ST_Point({lon_expr}, {lat_expr}))
-                    WHERE LEFT(p.qk17, 6) = ?
-                      AND NOT EXISTS (
-                          SELECT 1 FROM phase1 ph WHERE ph.id = b.id
-                      )
-                ),
-                all_matches AS (
-                    SELECT * FROM bulk_assign
-                    UNION ALL
-                    SELECT * FROM edge_matches
-                )
-                SELECT pk, to_json({{within: list(
-                    {{rkey: rkey}}
-                    ORDER BY admin_level ASC
-                )}})::VARCHAR
-                FROM all_matches
-                GROUP BY pk
-            """, [z6, z6])
-
-            elapsed = time.monotonic() - t_tile
-            log.info("compute_containment: tile %d/%d z6=%s boundaries=%d phase1=%d (%.1fs)",
-                     i, total, z6, tile_boundary_count, phase1_count, elapsed)
+        stats = {"subdivisions": 0, "leaf_tiles": 0, "max_depth": 0}
+        log.info("compute_containment: processing %d z6 seed tiles", len(z6_tiles))
+        for z6 in z6_tiles:
+            _process_tile(con, z6, pk_expr, lon_expr, lat_expr,
+                          collection_prefix, max_boundaries, max_zoom, stats)
+        log.info("compute_containment: %d leaf tiles, %d subdivisions, max depth z%d",
+                 stats["leaf_tiles"], stats["subdivisions"], stats["max_depth"])
     finally:
         con.execute("DROP TABLE IF EXISTS tile_boundaries")
         con.execute("DROP TABLE IF EXISTS phase1")
@@ -383,6 +462,8 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                        min_longitude, max_longitude,
                        importance, variants
                 FROM places
+                WHERE admin_level BETWEEN 0 AND 2
+                   OR subtype = 'locality'
                 ORDER BY ST_Hilbert(geometry,
                     {'min_x': -180.0, 'min_y': -90.0,
                      'max_x': 180.0, 'max_y': 90.0}::BOX_2D)

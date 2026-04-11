@@ -2132,10 +2132,10 @@ class TestContainmentInExport:
         with caplog.at_level(logging.INFO, logger="garganorn.quadtree"):
             compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
-        # Find per-tile log lines
+        # Find per-tile log lines (format: "compute_containment: z%d qk=...")
         tile_lines = [
             r.message for r in caplog.records
-            if "compute_containment: tile" in r.message
+            if r.message.startswith("compute_containment: z") and "qk=" in r.message
         ]
         assert len(tile_lines) > 0, (
             "No per-tile log lines found from compute_containment"
