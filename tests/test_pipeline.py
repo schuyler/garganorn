@@ -1023,7 +1023,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
 
         with pytest.raises(RuntimeError, match="boom"):
-            with patch("garganorn.quadtree.export_tiles", side_effect=RuntimeError("boom")):
+            with patch("garganorn.stages.export_tiles", side_effect=RuntimeError("boom")):
                 run_pipeline(
                     "foursquare",
                     fsq_parquet,

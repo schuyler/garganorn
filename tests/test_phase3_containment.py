@@ -297,11 +297,11 @@ class TestComputeContainmentAdaptive:
 
 class TestBoundaryExportFilter:
     def test_run_pipeline_has_boundary_filter(self):
-        """run_pipeline's boundary export CTAS should include a subtype/admin_level filter."""
-        from garganorn import quadtree
-        source = inspect.getsource(quadtree.run_pipeline)
+        """stage_boundary_export CTAS should include a subtype/admin_level filter."""
+        from garganorn import stages
+        source = inspect.getsource(stages.stage_boundary_export)
         # The boundary export CTAS should filter by admin_level and subtype
         assert "admin_level BETWEEN 0 AND 2" in source or "admin_level between 0 and 2" in source.lower(), \
-            "run_pipeline boundary export should filter by admin_level"
+            "stage_boundary_export should filter by admin_level"
         assert "subtype = 'locality'" in source or "subtype='locality'" in source, \
-            "run_pipeline boundary export should filter by subtype='locality'"
+            "stage_boundary_export should filter by subtype='locality'"

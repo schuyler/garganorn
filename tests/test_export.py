@@ -517,17 +517,24 @@ class TestExportTiles:
                 captured_messages.append(record.getMessage())
 
         handler = _CapturingHandler()
+        # Capture logs from both quadtree (for backward compat) and stages (actual implementation)
         import garganorn.quadtree as _qt_module
+        import garganorn.stages as _stages_module
         logger = logging.getLogger(_qt_module.__name__)
+        stages_logger = logging.getLogger(_stages_module.__name__)
         logger.addHandler(handler)
+        stages_logger.addHandler(handler)
         old_level = logger.level
         logger.setLevel(logging.DEBUG)
+        stages_logger.setLevel(logging.DEBUG)
         try:
             with patch("pathlib.Path.read_text", return_value=fake_sql):
                 export_tiles(mock_con, str(output_dir), "foursquare")
         finally:
             logger.removeHandler(handler)
+            stages_logger.removeHandler(handler)
             logger.setLevel(old_level)
+            stages_logger.setLevel(old_level)
 
         # Find progress log messages that fire at the 1000-tile boundary.
         progress_msgs = [m for m in captured_messages if "wrote" in m and "tiles" in m]
@@ -582,17 +589,23 @@ class TestExportTiles:
                 captured_messages.append(record.getMessage())
 
         import garganorn.quadtree as _qt_module
+        import garganorn.stages as _stages_module
         logger = logging.getLogger(_qt_module.__name__)
+        stages_logger = logging.getLogger(_stages_module.__name__)
         handler = _CapturingHandler()
         logger.addHandler(handler)
+        stages_logger.addHandler(handler)
         old_level = logger.level
         logger.setLevel(logging.DEBUG)
+        stages_logger.setLevel(logging.DEBUG)
         try:
             with patch("pathlib.Path.read_text", return_value=fake_sql):
                 export_tiles(mock_con, str(output_dir), "foursquare")
         finally:
             logger.removeHandler(handler)
+            stages_logger.removeHandler(handler)
             logger.setLevel(old_level)
+            stages_logger.setLevel(old_level)
 
         # Current code emits 'queried N tiles' before the loop.
         # After the fix that message is gone; instead there's a post-loop message.
@@ -787,7 +800,7 @@ class TestExportTiles:
 
         fake_sql = "SELECT tile_qk, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
-            with patch("garganorn.quadtree.json.loads",
+            with patch("garganorn.stages.json.loads",
                        side_effect=AssertionError(
                            "flush_tile must not call json.loads; "
                            "records are already valid JSON strings"
@@ -2129,7 +2142,7 @@ class TestContainmentInExport:
             "ST_QuadKey(-122.4194, 37.7749, 17))"
         )
 
-        with caplog.at_level(logging.INFO, logger="garganorn.quadtree"):
+        with caplog.at_level(logging.INFO, logger="garganorn.stages"):
             compute_containment(conn, str(division_db_path), "fsq_place_id", "longitude", "latitude")
 
         # Find per-tile log lines (format: "compute_containment: z%d qk=...")
