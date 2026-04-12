@@ -1,3 +1,6 @@
+-- LEFT JOIN density_parquet to bring in z15 tile density scores.
+-- The density extract runs globally once (in stage_density_extract) and
+-- is reused across all place sources via ${density_parquet}.
 CREATE TEMP TABLE t_idf AS
 SELECT
     category,
@@ -11,12 +14,11 @@ FROM (
 CROSS JOIN (SELECT count(*) AS total FROM places WHERE fsq_category_ids IS NOT NULL) N
 GROUP BY category, N.total;
 
+CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('${density_parquet}');
 CREATE TEMP TABLE place_density AS
-SELECT fsq_place_id,
-       ln(1 + count(*) OVER (
-           PARTITION BY left(qk17, 15)
-       )) AS density_score
-FROM places;
+SELECT p.fsq_place_id, coalesce(d.density_score, 0) AS density_score
+FROM places p
+LEFT JOIN density_tiles d ON d.tile_qk15 = left(p.qk17, 15);
 
 CREATE TEMP TABLE place_idf AS
 SELECT
@@ -42,6 +44,7 @@ LEFT JOIN place_idf i USING (fsq_place_id);
 
 DROP TABLE places;
 ALTER TABLE places_scored RENAME TO places;
+DROP TABLE density_tiles;
 DROP TABLE place_density;
 DROP TABLE place_idf;
 DROP TABLE t_idf;

@@ -842,13 +842,13 @@ class TestOvertureExportTiles:
 
     _SUBS = {"repo": "places.atgeo.org"}
 
-    def _run_full_pipeline(self, conn, parquet_glob):
+    def _run_full_pipeline(self, conn, parquet_glob, density_parquet):
         """Run all Overture pipeline SQL stages on conn."""
         # 1. Import
         run_overture_import(conn, parquet_glob)
 
         # 2. Importance
-        raw = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        raw = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0", "density_parquet": density_parquet})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
 
         # 3. Variants
@@ -883,7 +883,7 @@ class TestOvertureExportTiles:
                 return parsed
         return None
 
-    def test_overture_export_addresses_inline(self, overture_parquet, tmp_path):
+    def test_overture_export_addresses_inline(self, overture_parquet, density_parquet, tmp_path):
         """ov001 (one address entry with country='US', region='US-CA') must have an
         address location entry with country='US' and region='CA' (trimmed at '-').
 
@@ -892,7 +892,7 @@ class TestOvertureExportTiles:
         db_path = tmp_path / "test_ov_export_addr.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        self._run_full_pipeline(conn, overture_parquet)
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
         record = self._get_record(conn, "ov001")
         conn.close()
         assert record is not None, "ov001 must appear in tile_export"
@@ -907,12 +907,12 @@ class TestOvertureExportTiles:
             f"Expected region='CA' (trimmed from 'US-CA'); got {addr['region']!r}"
         )
 
-    def test_overture_export_no_addresses_no_error(self, overture_parquet, tmp_path):
+    def test_overture_export_no_addresses_no_error(self, overture_parquet, density_parquet, tmp_path):
         """ov003 (addresses=NULL) must render without error with exactly 1 location (geo only)."""
         db_path = tmp_path / "test_ov_export_no_addr.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        self._run_full_pipeline(conn, overture_parquet)
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
         record = self._get_record(conn, "ov003")
         conn.close()
         assert record is not None, "ov003 must appear in tile_export"
@@ -924,7 +924,7 @@ class TestOvertureExportTiles:
             f"Only location must be geo type; got {locations[0]['$type']!r}"
         )
 
-    def test_overture_export_all_null_country_addresses(self, overture_parquet, tmp_path):
+    def test_overture_export_all_null_country_addresses(self, overture_parquet, density_parquet, tmp_path):
         """ov008 (addresses=[{country:NULL,...}]) must render with exactly 1 location (geo only).
 
         list_filter must remove all entries with NULL country, yielding an empty address list.
@@ -932,7 +932,7 @@ class TestOvertureExportTiles:
         db_path = tmp_path / "test_ov_export_null_country.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        self._run_full_pipeline(conn, overture_parquet)
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
         record = self._get_record(conn, "ov008")
         conn.close()
         assert record is not None, "ov008 must appear in tile_export"
@@ -945,7 +945,7 @@ class TestOvertureExportTiles:
             f"Only location must be geo type; got {locations[0]['$type']!r}"
         )
 
-    def test_no_null_fields_in_locations(self, overture_parquet, tmp_path):
+    def test_no_null_fields_in_locations(self, overture_parquet, density_parquet, tmp_path):
         """No location in any record must contain a key with a None/null value.
 
         Fails against current code: list_concat unions geo and address struct types,
@@ -955,7 +955,7 @@ class TestOvertureExportTiles:
         db_path = tmp_path / "test_ov_no_null_loc.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        self._run_full_pipeline(conn, overture_parquet)
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
         rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         conn.close()
         assert rows, "No rows returned from tile_export"
@@ -970,7 +970,7 @@ class TestOvertureExportTiles:
                     "Locations must contain only fields belonging to their type."
                 )
 
-    def test_overture_export_mixed_null_country_addresses(self, overture_parquet, tmp_path):
+    def test_overture_export_mixed_null_country_addresses(self, overture_parquet, density_parquet, tmp_path):
         """ov009 (one null-country entry + one non-null-country entry) must render with
         exactly 1 address location — the non-null-country entry only.
 
@@ -979,7 +979,7 @@ class TestOvertureExportTiles:
         db_path = tmp_path / "test_ov_export_mixed.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        self._run_full_pipeline(conn, overture_parquet)
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
         record = self._get_record(conn, "ov009")
         conn.close()
         assert record is not None, "ov009 must appear in tile_export"
@@ -1018,7 +1018,7 @@ class TestOvertureExportTiles:
             "overture_place_export_tiles.sql must use p.bbox.xmax for longitude computation"
         )
 
-    def test_overture_export_latlon_matches_bbox_mean(self, overture_parquet, tmp_path):
+    def test_overture_export_latlon_matches_bbox_mean(self, overture_parquet, density_parquet, tmp_path):
         """Exported latitude/longitude must equal bbox center coordinates.
 
         Regression guard: passes against both old (st_centroid) and new (bbox mean)
@@ -1027,7 +1027,7 @@ class TestOvertureExportTiles:
         db_path = tmp_path / "test_ov_export_latlon.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        self._run_full_pipeline(conn, overture_parquet)
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
         record = self._get_record(conn, "ov001")
         conn.close()
 
@@ -1203,7 +1203,7 @@ class TestContainmentInExport:
     # Test 3: Overture export includes relations.within when containment present
     # ------------------------------------------------------------------
 
-    def test_overture_relations_with_containment(self, overture_parquet, tmp_path):
+    def test_overture_relations_with_containment(self, overture_parquet, density_parquet, tmp_path):
         """Overture export must include relations.within when place_containment populated.
 
         Fails in Red phase because overture_place_export_tiles.sql has `relations: '{{}}'::JSON`
@@ -1215,7 +1215,7 @@ class TestContainmentInExport:
 
         # Run the full Overture pipeline to get places + tile_assignments
         run_overture_import(conn, overture_parquet)
-        raw = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        raw = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0", "density_parquet": density_parquet})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
         raw = _load_sql("overture_place_variants.sql", {})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
@@ -1260,7 +1260,7 @@ class TestContainmentInExport:
     # Test 4: OSM export includes relations.within when containment present
     # ------------------------------------------------------------------
 
-    def test_osm_relations_with_containment(self, osm_parquet, tmp_path):
+    def test_osm_relations_with_containment(self, osm_parquet, density_parquet, tmp_path):
         """OSM export must include relations.within when place_containment populated.
 
         Fails in Red phase because osm_export_tiles.sql has `relations: '{{}}'::JSON`
@@ -1272,7 +1272,7 @@ class TestContainmentInExport:
 
         # Run the full OSM pipeline
         run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        raw = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        raw = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0", "density_parquet": density_parquet})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
         raw = _load_sql("osm_variants.sql", {})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))

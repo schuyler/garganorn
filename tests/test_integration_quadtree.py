@@ -108,18 +108,18 @@ def _make_single_place_parquet(tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def pipeline_output(fsq_parquet, tmp_path_factory):
+def pipeline_output(fsq_parquet, density_parquet, tmp_path_factory):
     """Run FSQ pipeline once; return resolved current/ directory path."""
     output_dir = tmp_path_factory.mktemp("integration")
     run_pipeline("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
-                 str(output_dir), memory_limit="4GB", max_per_tile=100)
+                 str(output_dir), memory_limit="4GB", max_per_tile=100, density_parquet=density_parquet)
     current = output_dir / "foursquare" / "current"
     assert current.exists()
     return current
 
 
 @pytest.fixture
-def empty_pipeline_output(fsq_parquet, tmp_path):
+def empty_pipeline_output(fsq_parquet, density_parquet, tmp_path):
     """Pipeline with bbox in open ocean — no places survive import.
 
     Function-scoped. The returned path (current symlink) may not exist if
@@ -128,7 +128,7 @@ def empty_pipeline_output(fsq_parquet, tmp_path):
     output_dir = tmp_path / "empty"
     output_dir.mkdir()
     run_pipeline("foursquare", fsq_parquet, (0.0, 0.0, 0.01, 0.01),
-                 str(output_dir), memory_limit="4GB", max_per_tile=100)
+                 str(output_dir), memory_limit="4GB", max_per_tile=100, density_parquet=density_parquet)
     # Empty pipeline may not create current symlink if no records are written.
     # Return the source dir so callers can handle either case.
     current = output_dir / "foursquare" / "current"
@@ -136,23 +136,23 @@ def empty_pipeline_output(fsq_parquet, tmp_path):
 
 
 @pytest.fixture
-def single_place_output(tmp_path):
+def single_place_output(density_parquet, tmp_path):
     """Pipeline with exactly one place. Function-scoped; uses _make_single_place_parquet."""
     parquet_glob = _make_single_place_parquet(tmp_path / "parquet")
     output_dir = tmp_path / "single"
     output_dir.mkdir()
     run_pipeline("foursquare", parquet_glob, (-122.55, 37.60, -122.30, 37.85),
-                 str(output_dir), memory_limit="4GB", max_per_tile=100)
+                 str(output_dir), memory_limit="4GB", max_per_tile=100, density_parquet=density_parquet)
     return output_dir / "foursquare" / "current"
 
 
 @pytest.fixture
-def dense_cluster_output(fsq_parquet, tmp_path):
+def dense_cluster_output(fsq_parquet, density_parquet, tmp_path):
     """Pipeline with max_per_tile=1 to force quadtree subdivision. Function-scoped."""
     output_dir = tmp_path / "dense"
     output_dir.mkdir()
     run_pipeline("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
-                 str(output_dir), memory_limit="4GB", max_per_tile=1)
+                 str(output_dir), memory_limit="4GB", max_per_tile=1, density_parquet=density_parquet)
     return output_dir / "foursquare" / "current"
 
 
@@ -413,21 +413,21 @@ class TestExportWorkersParity:
         """Clear LRU cache between tests to prevent cross-test tile data bleed."""
         TileBackedCollection._cached_read_tile.cache_clear()
 
-    def test_workers_produce_identical_output(self, fsq_parquet, tmp_path):
+    def test_workers_produce_identical_output(self, fsq_parquet, density_parquet, tmp_path):
         """run_pipeline with export_workers=1 and export_workers=4 produce the same tiles."""
         bbox = (-122.55, 37.60, -122.30, 37.85)
 
         out1 = tmp_path / "workers1"
         out1.mkdir()
         run_pipeline("foursquare", fsq_parquet, bbox, str(out1),
-                     memory_limit="4GB", max_per_tile=100, export_workers=1)
+                     memory_limit="4GB", max_per_tile=100, export_workers=1, density_parquet=density_parquet)
         current1 = out1 / "foursquare" / "current"
         assert current1.exists(), "current symlink must exist for export_workers=1 run"
 
         out4 = tmp_path / "workers4"
         out4.mkdir()
         run_pipeline("foursquare", fsq_parquet, bbox, str(out4),
-                     memory_limit="4GB", max_per_tile=100, export_workers=4)
+                     memory_limit="4GB", max_per_tile=100, export_workers=4, density_parquet=density_parquet)
         current4 = out4 / "foursquare" / "current"
         assert current4.exists(), "current symlink must exist for export_workers=4 run"
 

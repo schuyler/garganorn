@@ -19,12 +19,14 @@ from .stages import (
     write_manifest,
     write_manifest_db,
     stage_import,
+    stage_density_extract,
     stage_importance,
     stage_variants,
     stage_tile_assignment,
     stage_containment,
     stage_export,
     stage_manifest,
+    stage_division_importance_backfill,
     stage_boundary_export,
 )
 
@@ -35,7 +37,7 @@ SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenSt
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None):
     """Run the full import-assign-containment-export pipeline for a data source.
 
     Stage logic is delegated to individual functions in garganorn.stages.
@@ -84,16 +86,23 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
     try:
         stage_import(con, source, parquet_glob, bbox, memory_limit, t0)
-        if source not in ("overture_division",):
-            stage_importance(con, source, t0)
+
+        if density_parquet is None:
+            raise ValueError("density_parquet is required for importance computation")
+
+        if source == "overture_division":
+            stage_boundary_export(con, source, source_dir, t0)
+            stage_division_importance_backfill(con, density_parquet, t0)
+        else:
+            stage_importance(con, source, t0, density_parquet)
             stage_variants(con, source, t0)
+
         pk_expr = SOURCES[source].source_pk
         stage_tile_assignment(con, source, pk_expr, max_per_tile, t0)
         lon_expr, lat_expr = _coord_exprs(source, alias="p")
         stage_containment(con, source, f"p.{pk_expr}", lon_expr, lat_expr, boundaries_db, t0)
         manifest = stage_export(con, source, tile_dir, t0, export_workers)
         stage_manifest(con, manifest, source, tile_dir, t0)
-        stage_boundary_export(con, source, source_dir, t0)
     except Exception:
         con.close()
         raise
@@ -181,6 +190,8 @@ def main():
                         help="Path to division parquet (overture_division only)")
     parser.add_argument("--division-area-parquet", default=None, dest="division_area_parquet",
                         help="Path to division_area parquet (overture_division only)")
+    parser.add_argument("--density-parquet", default=None, dest="density_parquet",
+                        help="Path to density_tiles.parquet (from density_extract stage)")
 
     args = parser.parse_args()
 
@@ -248,6 +259,7 @@ def main():
         max_per_tile=max_per_tile,
         boundaries_db=boundaries_db,
         export_workers=args.export_workers,
+        density_parquet=args.density_parquet,
     )
 
 

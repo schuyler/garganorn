@@ -936,6 +936,27 @@ def overture_parquet(tmp_path_factory):
 
 
 @pytest.fixture(scope="session")
+def density_parquet(overture_parquet, tmp_path_factory):
+    """Extract z15 density tiles from Overture parquet; return path to density.parquet.
+
+    This fixture depends on overture_parquet and runs stage_density_extract()
+    to produce a shared density parquet file that all importance tests can use.
+    The fixture is session-scoped so the density extraction runs once per test run.
+
+    The density parquet has schema (tile_qk15 VARCHAR, density_score DOUBLE).
+    """
+    import time
+    from garganorn.stages import stage_density_extract
+
+    base = tmp_path_factory.mktemp("density_parquet")
+    output_path = base / "density.parquet"
+
+    stage_density_extract(overture_parquet, str(output_path), time.monotonic())
+
+    return str(output_path)
+
+
+@pytest.fixture(scope="session")
 def osm_parquet(tmp_path_factory):
     """Write OSM-schema node and way parquet files; return dict with 'node' and 'way' globs."""
 
@@ -1056,3 +1077,124 @@ def osm_parquet(tmp_path_factory):
         "node": str(base / "node_data.parquet"),
         "way": str(base / "way_data.parquet"),
     }
+
+
+@pytest.fixture(scope="session")
+def division_parquet(tmp_path_factory):
+    """Write Overture division and division_area parquet files for testing.
+
+    Returns a tuple of (division_parquet_path, division_area_parquet_path).
+    """
+    base = tmp_path_factory.mktemp("division_parquet")
+    division_path = base / "division.parquet"
+    division_area_path = base / "division_area.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+
+    # Division parquet (metadata)
+    conn.execute("""
+        CREATE TABLE tmp_division (
+            id VARCHAR,
+            names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
+            subtype VARCHAR,
+            country VARCHAR,
+            region VARCHAR,
+            wikidata VARCHAR,
+            population BIGINT,
+            parent_division_id VARCHAR
+        )
+    """)
+
+    # Insert SF locality
+    conn.execute("""
+        INSERT INTO tmp_division VALUES (
+            'div_locality_sf',
+            {'primary': 'San Francisco', 'common': map(['en'], ['San Francisco']), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            'locality',
+            'US',
+            'US-CA',
+            'Q62',
+            874961,
+            NULL
+        )
+    """)
+
+    # Insert US country
+    conn.execute("""
+        INSERT INTO tmp_division VALUES (
+            'div_country_us',
+            {'primary': 'United States', 'common': map(['en'], ['United States']), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            'country',
+            'US',
+            NULL,
+            'Q30',
+            331000000,
+            NULL
+        )
+    """)
+
+    # Insert region
+    conn.execute("""
+        INSERT INTO tmp_division VALUES (
+            'div_region_ca',
+            {'primary': 'California', 'common': map(['en'], ['California']), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            'region',
+            'US',
+            'US-CA',
+            'Q99',
+            39538223,
+            'div_country_us'
+        )
+    """)
+
+    conn.execute(f"COPY tmp_division TO '{division_path}' (FORMAT PARQUET)")
+
+    # Division area parquet (geometries)
+    conn.execute("""
+        CREATE TABLE tmp_division_area (
+            division_id VARCHAR,
+            admin_level INTEGER,
+            is_land BOOLEAN,
+            geometry VARCHAR,
+            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+        )
+    """)
+
+    # SF locality area
+    conn.execute("""
+        INSERT INTO tmp_division_area VALUES (
+            'div_locality_sf',
+            3,
+            true,
+            'POLYGON((-122.55 37.6, -122.55 37.85, -122.30 37.85, -122.30 37.6, -122.55 37.6))',
+            {'xmin': -122.55, 'ymin': 37.6, 'xmax': -122.30, 'ymax': 37.85}
+        )
+    """)
+
+    # US country area
+    conn.execute("""
+        INSERT INTO tmp_division_area VALUES (
+            'div_country_us',
+            1,
+            true,
+            'POLYGON((-125 25, -125 49, -65 49, -65 25, -125 25))',
+            {'xmin': -125.0, 'ymin': 25.0, 'xmax': -65.0, 'ymax': 49.0}
+        )
+    """)
+
+    # California region area
+    conn.execute("""
+        INSERT INTO tmp_division_area VALUES (
+            'div_region_ca',
+            2,
+            true,
+            'POLYGON((-124.5 32.5, -124.5 42.0, -114.1 42.0, -114.1 32.5, -124.5 32.5))',
+            {'xmin': -124.5, 'ymin': 32.5, 'xmax': -114.1, 'ymax': 42.0}
+        )
+    """)
+
+    conn.execute(f"COPY tmp_division_area TO '{division_area_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return (str(division_path), str(division_area_path))

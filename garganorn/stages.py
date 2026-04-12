@@ -442,10 +442,53 @@ def stage_import(con, source, parquet_glob, bbox, memory_limit, t0):
                  xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
 
-def stage_importance(con, source, t0, density_norm=10.0, idf_norm=18.0):
-    """Compute importance scores. Guard for overture_division is in the caller."""
+def stage_density_extract(parquet_glob: str, output_path: str, t0: float) -> None:
+    """Extract z15 density tiles from Overture place parquet.
+
+    Runs a global density extract (no bbox filter) against the source
+    parquet file. Groups places by their z15 quadtile and computes
+    ln(1 + count) as density_score. Output is written to output_path
+    and reused in importance computation across all place sources.
+
+    Args:
+        parquet_glob: Glob pattern for Overture place parquet files.
+        output_path: Destination path for density parquet output.
+        t0: Start time for logging (monotonic time).
+    """
+    log.info("density_extract: starting (ephemeral connection)")
+    sql = (_SQL_DIR / "density_extract.sql").read_text()
+    sql = sql.replace("${parquet_glob}", str(parquet_glob))
+    con = duckdb.connect()
+    try:
+        con.execute(sql)
+        con.execute(f"COPY density_tiles TO '{output_path}' (FORMAT PARQUET)")
+        count = con.execute("SELECT count(*) FROM density_tiles").fetchone()[0]
+        log.info("density_extract: done (%.1fs, %d z15 tiles)",
+                 time.monotonic() - t0, count)
+    finally:
+        con.close()
+
+
+def stage_importance(con, source, t0, density_parquet, density_norm=10.0, idf_norm=18.0):
+    """Compute importance scores using density and IDF.
+
+    Runs source-specific importance SQL which LEFT JOINs density_parquet
+    (z15 tile density from stage_density_extract) and computes IDF scores
+    per category. Final importance = 60% density + 40% IDF, both normalized
+    and clamped to [0, 100].
+
+    Args:
+        con: Open DuckDB connection with places table.
+        source: Source key for SQL filename lookup.
+        t0: Start time for logging.
+        density_parquet: Path to z15 density parquet from stage_density_extract.
+        density_norm: Density score normalization factor (default 10.0).
+        idf_norm: IDF score normalization factor (default 18.0).
+
+    Note: Caller must guard for overture_division (no importance computation).
+    """
     _run_sql(con, source, "importance", f"{source}_importance.sql", t0,
-             density_norm=density_norm, idf_norm=idf_norm)
+             density_parquet=density_parquet, density_norm=density_norm, idf_norm=idf_norm)
 
 
 def stage_variants(con, source, t0):
@@ -477,6 +520,27 @@ def stage_manifest(con, manifest, source, tile_dir, t0):
     """Write manifest.json and manifest.duckdb."""
     write_manifest(manifest, tile_dir, source)
     write_manifest_db(con, tile_dir, source)
+
+
+def stage_division_importance_backfill(con, density_parquet, t0,
+                                       density_norm=10.0, pop_norm=20.0):
+    """Backfill division importance from density + population.
+
+    Localities get 60% density + 40% population. Non-localities get
+    population only. Density is the average density_score of z15 tiles
+    whose centroids fall within the division's bbox.
+
+    Args:
+        con: Open DuckDB connection with places table (overture_division schema).
+        density_parquet: Path to density_tiles.parquet (must have centroid_lon/centroid_lat).
+        t0: Start time for logging (monotonic time).
+        density_norm: Density score normalization factor (default 10.0).
+        pop_norm: Population normalization factor (default 20.0).
+    """
+    _run_sql(con, "overture_division", "importance backfill",
+             "division_importance_backfill.sql", t0,
+             density_parquet=density_parquet, density_norm=density_norm,
+             pop_norm=pop_norm)
 
 
 def stage_boundary_export(con, source, source_dir, t0):

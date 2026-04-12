@@ -204,43 +204,46 @@ class TestOsmImportance:
         sql_path = REPO_ROOT / "garganorn" / "sql" / "osm_importance.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
-    def _run_importance(self, conn):
+    def _run_importance(self, conn, density_parquet=None):
         """Load and execute osm_importance.sql on `conn`."""
-        raw_sql = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        substitutions = {"density_norm": "10.0", "idf_norm": "18.0"}
+        if density_parquet is not None:
+            substitutions["density_parquet"] = density_parquet
+        raw_sql = _load_sql("osm_importance.sql", substitutions)
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
-    def test_importance_column_exists(self, osm_parquet, tmp_path):
+    def test_importance_column_exists(self, osm_parquet, density_parquet, tmp_path):
         """After osm_importance.sql, `places` must have an `importance` column."""
         db_path = tmp_path / "test_osm_imp_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "importance" in cols, f"importance column missing; found: {cols}"
 
-    def test_importance_is_integer(self, osm_parquet, tmp_path):
+    def test_importance_is_integer(self, osm_parquet, density_parquet, tmp_path):
         """The `importance` column must be INTEGER type."""
         db_path = tmp_path / "test_osm_imp_type.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert describe.get("importance") in ("INTEGER", "INT", "INT4", "SIGNED"), (
             f"importance column type unexpected: {describe.get('importance')}"
         )
 
-    def test_importance_range(self, osm_parquet, tmp_path):
+    def test_importance_range(self, osm_parquet, density_parquet, tmp_path):
         """All importance values must be in [0, 100]."""
         db_path = tmp_path / "test_osm_imp_range.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         bad = conn.execute("""
             SELECT rkey, importance
             FROM places
@@ -301,6 +304,22 @@ class TestOsmImportance:
             )
         """)
         conn.execute(f"COPY tmp_cluster_ways TO '{way_path}' (FORMAT PARQUET)")
+
+        # Build a custom density parquet for this test's data.
+        # OSM schema uses lon/lat columns directly.
+        density_dir = tmp_path / "density"
+        density_dir.mkdir()
+        density_path = density_dir / "density.parquet"
+
+        conn.execute(f"""
+            CREATE TEMP TABLE tmp_density AS
+            SELECT
+                left(ST_QuadKey(lon, lat, 17), 15) AS tile_qk15,
+                ln(1 + count(*)) AS density_score
+            FROM tmp_cluster
+            GROUP BY left(ST_QuadKey(lon, lat, 17), 15)
+        """)
+        conn.execute(f"COPY tmp_density TO '{density_path}' (FORMAT PARQUET)")
         conn.close()
 
         global_bbox = dict(xmin=-180, xmax=180, ymin=-90, ymax=90)
@@ -308,8 +327,7 @@ class TestOsmImportance:
         conn = _duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_osm_import(conn, str(node_path), str(way_path), bbox=global_bbox)
-        raw_sql = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+        self._run_importance(conn, str(density_path))
         rows = conn.execute("SELECT rkey, importance FROM places ORDER BY rkey").fetchall()
         conn.close()
 

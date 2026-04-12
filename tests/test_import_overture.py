@@ -152,43 +152,46 @@ class TestOvertureImportance:
         sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_importance.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
-    def _run_importance(self, conn):
+    def _run_importance(self, conn, density_parquet=None):
         """Load and execute overture_place_importance.sql on `conn`."""
-        raw_sql = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0"})
+        substitutions = {"density_norm": "10.0", "idf_norm": "18.0"}
+        if density_parquet is not None:
+            substitutions["density_parquet"] = density_parquet
+        raw_sql = _load_sql("overture_place_importance.sql", substitutions)
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
-    def test_importance_column_added(self, overture_parquet, tmp_path):
+    def test_importance_column_added(self, overture_parquet, density_parquet, tmp_path):
         """After overture_place_importance.sql, `places` must have an `importance` column."""
         db_path = tmp_path / "test_ov_imp_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, overture_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "importance" in cols, f"importance column missing; found: {cols}"
 
-    def test_importance_column_is_integer(self, overture_parquet, tmp_path):
+    def test_importance_column_is_integer(self, overture_parquet, density_parquet, tmp_path):
         """The `importance` column must be INTEGER type."""
         db_path = tmp_path / "test_ov_imp_type.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, overture_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert describe.get("importance") in ("INTEGER", "INT", "INT4", "SIGNED"), (
             f"importance column type unexpected: {describe.get('importance')}"
         )
 
-    def test_importance_values_in_range(self, overture_parquet, tmp_path):
+    def test_importance_values_in_range(self, overture_parquet, density_parquet, tmp_path):
         """All importance values must be in [0, 100]."""
         db_path = tmp_path / "test_ov_imp_range.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, overture_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         bad = conn.execute("""
             SELECT id, importance
             FROM places
@@ -197,20 +200,20 @@ class TestOvertureImportance:
         conn.close()
         assert not bad, f"Rows with out-of-range importance: {bad}"
 
-    def test_importance_not_null(self, overture_parquet, tmp_path):
+    def test_importance_not_null(self, overture_parquet, density_parquet, tmp_path):
         """All surviving rows must have a non-NULL importance value."""
         db_path = tmp_path / "test_ov_imp_notnull.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, overture_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         nulls = conn.execute("""
             SELECT id FROM places WHERE importance IS NULL
         """).fetchall()
         conn.close()
         assert not nulls, f"Rows with NULL importance: {nulls}"
 
-    def test_unique_category_scores_higher(self, overture_parquet, tmp_path):
+    def test_unique_category_scores_higher(self, overture_parquet, density_parquet, tmp_path):
         """A place with a unique category should score higher than one with a common category (IDF).
 
         ov001 has 'coffee_shop' which appears in 3 of 7 surviving rows
@@ -223,7 +226,7 @@ class TestOvertureImportance:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, overture_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         rows = conn.execute("""
             SELECT id, importance FROM places WHERE id IN ('ov001', 'ov005') ORDER BY id
         """).fetchall()
@@ -296,6 +299,25 @@ class TestOvertureImportance:
 
         parquet_glob = str(tmp_path / "*.parquet")
 
+        # Build a custom density parquet for this test's data.
+        # Overture schema uses bbox struct, so compute quadkey from bbox center.
+        density_dir = tmp_path / "density"
+        density_dir.mkdir()
+        density_path = density_dir / "density.parquet"
+
+        conn = _duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute(f"""
+            CREATE TEMP TABLE tmp_density AS
+            SELECT
+                left(ST_QuadKey((bbox.xmin + bbox.xmax) / 2.0, (bbox.ymin + bbox.ymax) / 2.0, 17), 15) AS tile_qk15,
+                ln(1 + count(*)) AS density_score
+            FROM read_parquet('{parquet_path}')
+            GROUP BY left(ST_QuadKey((bbox.xmin + bbox.xmax) / 2.0, (bbox.ymin + bbox.ymax) / 2.0, 17), 15)
+        """)
+        conn.execute(f"COPY tmp_density TO '{density_path}' (FORMAT PARQUET)")
+        conn.close()
+
         # Global bbox covering both SF and Tokyo.
         global_bbox = dict(xmin=-180, xmax=180, ymin=-90, ymax=90)
 
@@ -303,7 +325,7 @@ class TestOvertureImportance:
         conn = _duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, parquet_glob, bbox=global_bbox)
-        self._run_importance(conn)
+        self._run_importance(conn, str(density_path))
         rows = conn.execute("""
             SELECT id, importance
             FROM places

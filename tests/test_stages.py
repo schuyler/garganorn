@@ -80,7 +80,7 @@ class TestStageImport:
         assert count > 0, "places table should have rows after import"
         con.close()
 
-    def test_bbox_filter_fsq(self, fsq_parquet, tmp_path):
+    def test_bbox_filter_fsq(self, fsq_parquet, density_parquet, tmp_path):
         """stage_import with bbox filters records to bounding box.
 
         Verify that the count matches what run_pipeline produces with the same bbox.
@@ -99,7 +99,7 @@ class TestStageImport:
 
         # Then, run full pipeline and read total count from manifest.duckdb
         output_dir = str(tmp_path / "output")
-        run_pipeline("foursquare", fsq_parquet, bbox, output_dir, memory_limit="4GB")
+        run_pipeline("foursquare", fsq_parquet, bbox, output_dir, memory_limit="4GB", density_parquet=density_parquet)
 
         current_link = Path(output_dir) / "foursquare" / "current"
         timestamp_dir = os.readlink(str(current_link))
@@ -121,7 +121,7 @@ class TestStageImport:
 class TestStageImportance:
     """Tests for stage_importance function which adds importance column."""
 
-    def test_adds_importance_fsq(self, fsq_parquet, tmp_path):
+    def test_adds_importance_fsq(self, fsq_parquet, density_parquet, tmp_path):
         """stage_importance for foursquare adds importance column with non-zero values."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -131,7 +131,7 @@ class TestStageImportance:
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
 
         # Then add importance
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
 
         # Verify importance column exists and has non-zero values
         rows = con.execute(
@@ -140,7 +140,7 @@ class TestStageImportance:
         assert rows > 0, "Some places should have importance > 0"
         con.close()
 
-    def test_skipped_for_division(self, overture_parquet, tmp_path):
+    def test_skipped_for_division(self, overture_parquet, density_parquet, tmp_path):
         """stage_importance works correctly for non-division sources.
 
         The guard is in the caller (run_pipeline), but stage_importance itself
@@ -154,7 +154,7 @@ class TestStageImportance:
         stage_import(con, "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
 
         # Add importance (this should work)
-        stage_importance(con, "overture_place", t0)
+        stage_importance(con, "overture_place", t0, density_parquet)
 
         # Verify importance column exists
         rows = con.execute(
@@ -171,7 +171,7 @@ class TestStageImportance:
 class TestStageTileAssignment:
     """Tests for stage_tile_assignment function."""
 
-    def test_creates_tile_assignments(self, fsq_parquet, tmp_path):
+    def test_creates_tile_assignments(self, fsq_parquet, density_parquet, tmp_path):
         """stage_tile_assignment creates tile_assignments table after import + importance."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -179,7 +179,7 @@ class TestStageTileAssignment:
 
         # Run import + importance
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
 
         # Run tile assignment
@@ -209,7 +209,7 @@ class TestStageOrchestration:
                 records_by_qk[qk] = data["records"]
         return records_by_qk
 
-    def test_stages_match_run_pipeline(self, fsq_parquet, tmp_path):
+    def test_stages_match_run_pipeline(self, fsq_parquet, density_parquet, tmp_path):
         """Calling stages manually produces tile record content identical to run_pipeline.
 
         Manifest timestamps may differ, but tile record content must match.
@@ -232,7 +232,7 @@ class TestStageOrchestration:
 
         # Import + importance + variants
         stage_import(con, "foursquare", fsq_parquet, bbox, "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
 
         # Tile assignment
@@ -252,7 +252,7 @@ class TestStageOrchestration:
         con.close()
 
         # Run full pipeline for comparison
-        run_pipeline("foursquare", fsq_parquet, bbox, str(pipeline_dir), memory_limit="4GB")
+        run_pipeline("foursquare", fsq_parquet, bbox, str(pipeline_dir), memory_limit="4GB", density_parquet=density_parquet)
 
         # Compare tile records
         stages_records = self._read_tile_records(stages_tile_dir)
@@ -297,7 +297,7 @@ class TestStageOrchestration:
 class TestStageContainment:
     """Tests for stage_containment function."""
 
-    def test_creates_place_containment(self, fsq_parquet, division_db_path, tmp_path):
+    def test_creates_place_containment(self, fsq_parquet, density_parquet, division_db_path, tmp_path):
         """stage_containment creates place_containment table when boundaries_db is provided."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -305,7 +305,7 @@ class TestStageContainment:
 
         # Run up to tile assignment
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
@@ -319,7 +319,7 @@ class TestStageContainment:
         assert count >= 0, "place_containment table should exist"
         con.close()
 
-    def test_no_boundaries_creates_empty_table(self, fsq_parquet, tmp_path):
+    def test_no_boundaries_creates_empty_table(self, fsq_parquet, density_parquet, tmp_path):
         """stage_containment with boundaries_db=None creates empty place_containment table."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -327,7 +327,7 @@ class TestStageContainment:
 
         # Run up to tile assignment
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
@@ -349,7 +349,7 @@ class TestStageContainment:
 class TestStageExport:
     """Tests for stage_export function."""
 
-    def test_writes_gzipped_tiles(self, fsq_parquet, tmp_path):
+    def test_writes_gzipped_tiles(self, fsq_parquet, density_parquet, tmp_path):
         """stage_export writes gzipped JSON tile files to output directory."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -357,7 +357,7 @@ class TestStageExport:
 
         # Run up to containment
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
@@ -387,7 +387,7 @@ class TestStageExport:
 class TestStageManifest:
     """Tests for stage_manifest function."""
 
-    def test_writes_manifest_json(self, fsq_parquet, tmp_path):
+    def test_writes_manifest_json(self, fsq_parquet, density_parquet, tmp_path):
         """stage_manifest writes manifest.json with expected structure."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -395,7 +395,7 @@ class TestStageManifest:
 
         # Run up to export
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
@@ -422,7 +422,7 @@ class TestStageManifest:
         assert isinstance(data["quadkeys"], list), "quadkeys should be a list"
         con.close()
 
-    def test_writes_manifest_duckdb(self, fsq_parquet, tmp_path):
+    def test_writes_manifest_duckdb(self, fsq_parquet, density_parquet, tmp_path):
         """stage_manifest writes manifest.duckdb with record_tiles table."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -430,7 +430,7 @@ class TestStageManifest:
 
         # Run up to export
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0)
+        stage_importance(con, "foursquare", t0, density_parquet)
         stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)

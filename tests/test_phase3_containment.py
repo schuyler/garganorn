@@ -4,6 +4,7 @@ import inspect
 import pytest
 import duckdb
 
+
 from garganorn.boundaries import BoundaryLookup
 
 
@@ -228,7 +229,7 @@ class TestComputeContainmentAdaptive:
 
         compute_containment(con, str(division_db_path), pk_expr="pk",
                            lon_expr="longitude", lat_expr="latitude",
-                           max_boundaries=1)
+                           max_boundaries=1, max_zoom=10)
 
         rows = {r[0]: json.loads(r[1]) for r in con.execute("SELECT * FROM place_containment").fetchall()}
         con.close()
@@ -277,7 +278,7 @@ class TestComputeContainmentAdaptive:
         con2.execute("INSERT INTO places VALUES ('nyc', -73.9712, 40.7831, '03201011013023231')")
         compute_containment(con2, str(division_db_path), pk_expr="pk",
                             lon_expr="longitude", lat_expr="latitude",
-                            max_boundaries=2)
+                            max_boundaries=2, max_zoom=10)
         subdivided = {r[0]: json.loads(r[1]) for r in con2.execute("SELECT * FROM place_containment").fetchall()}
         con2.close()
 

@@ -204,44 +204,46 @@ class TestFsqImportance:
         sql_path = REPO_ROOT / "garganorn" / "sql" / "foursquare_importance.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
-    def _run_importance(self, conn):
+    def _run_importance(self, conn, density_parquet=None):
         """Load, substitute, and execute foursquare_importance.sql on `conn`."""
         substitutions: dict = {"density_norm": "10.0", "idf_norm": "18.0"}
+        if density_parquet is not None:
+            substitutions["density_parquet"] = density_parquet
         raw_sql = _load_sql("foursquare_importance.sql", substitutions)
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
-    def test_importance_column_added(self, fsq_parquet, tmp_path):
+    def test_importance_column_added(self, fsq_parquet, density_parquet, tmp_path):
         """After foursquare_importance.sql, `places` must have an `importance` column."""
         db_path = tmp_path / "test_importance_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_fsq_import(conn, fsq_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "importance" in cols, f"importance column missing; found: {cols}"
 
-    def test_importance_column_is_integer(self, fsq_parquet, tmp_path):
+    def test_importance_column_is_integer(self, fsq_parquet, density_parquet, tmp_path):
         """The `importance` column must be INTEGER type."""
         db_path = tmp_path / "test_importance_type.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_fsq_import(conn, fsq_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert describe.get("importance") in ("INTEGER", "INT", "INT4", "SIGNED"), (
             f"importance column type unexpected: {describe.get('importance')}"
         )
 
-    def test_importance_values_in_range(self, fsq_parquet, tmp_path):
+    def test_importance_values_in_range(self, fsq_parquet, density_parquet, tmp_path):
         """All importance values must be in [0, 100]."""
         db_path = tmp_path / "test_importance_range.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_fsq_import(conn, fsq_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         bad = conn.execute("""
             SELECT fsq_place_id, importance
             FROM places
@@ -250,20 +252,20 @@ class TestFsqImportance:
         conn.close()
         assert not bad, f"Rows with out-of-range importance: {bad}"
 
-    def test_importance_not_null(self, fsq_parquet, tmp_path):
+    def test_importance_not_null(self, fsq_parquet, density_parquet, tmp_path):
         """All surviving rows must have a non-NULL importance value."""
         db_path = tmp_path / "test_importance_notnull.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_fsq_import(conn, fsq_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         nulls = conn.execute("""
             SELECT fsq_place_id FROM places WHERE importance IS NULL
         """).fetchall()
         conn.close()
         assert not nulls, f"Rows with NULL importance: {nulls}"
 
-    def test_diverse_venue_scores_higher_than_single_category(self, fsq_parquet, tmp_path):
+    def test_diverse_venue_scores_higher_than_single_category(self, fsq_parquet, density_parquet, tmp_path):
         """fsq008 has 4 category IDs; fsq001 has 1. fsq008 should score > fsq001.
 
         Strict inequality is guaranteed by the fixture:
@@ -279,7 +281,7 @@ class TestFsqImportance:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_fsq_import(conn, fsq_parquet)
-        self._run_importance(conn)
+        self._run_importance(conn, density_parquet)
         rows = conn.execute("""
             SELECT fsq_place_id, importance
             FROM places
@@ -360,6 +362,25 @@ class TestFsqImportance:
 
         parquet_glob = str(tmp_path / "*.parquet")
 
+        # Build a custom density parquet for this test's data.
+        # Use ST_QuadKey(lon, lat, 17) and left(qk17, 15) to match density_extract.sql.
+        density_dir = tmp_path / "density"
+        density_dir.mkdir()
+        density_path = density_dir / "density.parquet"
+
+        conn = _duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute(f"""
+            CREATE TEMP TABLE tmp_density AS
+            SELECT
+                left(ST_QuadKey(longitude, latitude, 17), 15) AS tile_qk15,
+                ln(1 + count(*)) AS density_score
+            FROM read_parquet('{parquet_path}')
+            GROUP BY left(ST_QuadKey(longitude, latitude, 17), 15)
+        """)
+        conn.execute(f"COPY tmp_density TO '{density_path}' (FORMAT PARQUET)")
+        conn.close()
+
         # Global bbox covering both SF and Tokyo.
         global_bbox = dict(xmin=-180, xmax=180, ymin=-90, ymax=90)
 
@@ -367,7 +388,7 @@ class TestFsqImportance:
         conn = _duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_fsq_import(conn, parquet_glob, bbox=global_bbox)
-        self._run_importance(conn)
+        self._run_importance(conn, str(density_path))
         rows = conn.execute("""
             SELECT fsq_place_id, importance
             FROM places

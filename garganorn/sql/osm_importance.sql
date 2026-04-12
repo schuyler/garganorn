@@ -1,3 +1,6 @@
+-- LEFT JOIN density_parquet to bring in z15 tile density scores.
+-- The density extract runs globally once (in stage_density_extract) and
+-- is reused across all place sources via ${density_parquet}.
 CREATE TEMP TABLE t_idf AS
 SELECT primary_category AS category,
     count(*) AS n_places,
@@ -7,12 +10,11 @@ CROSS JOIN (SELECT count(*) AS total FROM places WHERE primary_category IS NOT N
 WHERE primary_category IS NOT NULL
 GROUP BY primary_category, N.total;
 
+CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('${density_parquet}');
 CREATE TEMP TABLE place_density AS
-SELECT rkey,
-       ln(1 + count(*) OVER (
-           PARTITION BY left(qk17, 15)
-       )) AS density_score
-FROM places;
+SELECT p.rkey, coalesce(d.density_score, 0) AS density_score
+FROM places p
+LEFT JOIN density_tiles d ON d.tile_qk15 = left(p.qk17, 15);
 
 CREATE TEMP TABLE place_idf AS
 SELECT
@@ -37,6 +39,7 @@ DROP TABLE places;
 ALTER TABLE places_scored RENAME TO places;
 -- idx_rkey is preserved through this RENAME.
 -- osm_variants.sql does its own CTAS which destroys it and recreates it there.
+DROP TABLE density_tiles;
 DROP TABLE place_density;
 DROP TABLE place_idf;
 DROP TABLE t_idf;
