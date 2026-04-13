@@ -9,6 +9,7 @@ exists because stages.py must not import from quadtree.py (circular import risk)
 and quadtree.py needs to import from stages.py for backward compatibility.
 Consider consolidating in a future refactor.
 """
+import glob as glob_module
 import gzip
 import json
 import logging
@@ -35,6 +36,30 @@ _SOURCES = {
 
 REPO = "places.atgeo.org"
 _SQL_DIR = Path(__file__).parent / "sql"
+
+
+def _is_output_fresh(output_path: str, input_paths: list[str]) -> bool:
+    """True if output exists and is strictly newer than all inputs.
+
+    Equal timestamps count as stale (triggering a rebuild).
+    Returns False if input_paths is empty or output doesn't exist.
+    """
+    if not input_paths:
+        return False
+    if not os.path.exists(output_path):
+        return False
+    out_mtime = os.path.getmtime(output_path)
+    for inp in input_paths:
+        if not os.path.exists(inp):
+            return False
+        if os.path.getmtime(inp) >= out_mtime:
+            return False
+    return True
+
+
+def _resolve_glob_paths(pattern: str) -> list[str]:
+    """Expand a glob pattern to a sorted list of file paths."""
+    return sorted(glob_module.glob(pattern))
 
 
 def _run_sql(con, source, stage, filename, t0, **params):
@@ -442,7 +467,8 @@ def stage_import(con, source, parquet_glob, bbox, memory_limit, t0):
                  xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
 
-def stage_density_extract(parquet_glob: str, output_path: str, t0: float) -> None:
+def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
+                          force: bool = False) -> None:
     """Extract z15 density tiles from Overture place parquet.
 
     Runs a global density extract (no bbox filter) against the source
@@ -454,7 +480,13 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float) -> Non
         parquet_glob: Glob pattern for Overture place parquet files.
         output_path: Destination path for density parquet output.
         t0: Start time for logging (monotonic time).
+        force: If True, re-run even if output is fresh. Default False.
     """
+    if not force:
+        input_files = _resolve_glob_paths(parquet_glob)
+        if _is_output_fresh(output_path, input_files):
+            log.info("density_extract: skipping (output is fresh)")
+            return
     log.info("density_extract: starting (ephemeral connection)")
     sql = (_SQL_DIR / "density_extract.sql").read_text()
     sql = sql.replace("${parquet_glob}", str(parquet_glob))

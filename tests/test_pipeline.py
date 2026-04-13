@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import logging
 import os
 import re
 import sys
@@ -887,6 +888,7 @@ class TestTimestampedExport:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            force=True,
         )
 
     def test_creates_timestamped_subdir(self, fsq_parquet, density_parquet, tmp_path):
@@ -1083,4 +1085,322 @@ class TestTimestampedExport:
         assert not leftover_dbs, (
             f"run_pipeline must not leave non-manifest .duckdb files under {fsq_dir}: "
             f"{leftover_dbs}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestRunPipelineMtime
+# ---------------------------------------------------------------------------
+
+
+class TestRunPipelineMtime:
+    """Tests for mtime-based caching in run_pipeline().
+
+    These tests FAIL because the force parameter and mtime skip logic
+    don't exist yet. This is TDD red phase.
+    """
+
+    @pytest.fixture
+    def small_fsq_parquet(self, tmp_path):
+        """Create a minimal Foursquare parquet file for mtime testing."""
+        parquet_path = tmp_path / "fsq_places.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        # Schema must match tests/conftest.py fsq_parquet fixture exactly
+        conn.execute("""
+            CREATE TABLE tmp_fsq (
+                fsq_place_id        VARCHAR,
+                name                VARCHAR,
+                latitude            DOUBLE,
+                longitude           DOUBLE,
+                bbox                STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                geom                VARCHAR,
+                date_refreshed      DATE,
+                date_closed         DATE,
+                date_created        DATE,
+                address             VARCHAR,
+                locality            VARCHAR,
+                region              VARCHAR,
+                postcode            VARCHAR,
+                country             VARCHAR,
+                admin_region        VARCHAR,
+                post_town           VARCHAR,
+                po_box              VARCHAR,
+                tel                 VARCHAR,
+                website             VARCHAR,
+                email               VARCHAR,
+                facebook_id         VARCHAR,
+                instagram           VARCHAR,
+                twitter             VARCHAR,
+                fsq_category_ids    VARCHAR[],
+                fsq_category_labels VARCHAR[],
+                placemaker_url      VARCHAR
+            )
+        """)
+
+        # Insert 2 rows of realistic test data matching FSQ_ROWS format
+        conn.execute("""
+            INSERT INTO tmp_fsq VALUES (
+                'fsq001', 'Blue Bottle Coffee', 37.7749, -122.4194,
+                {'xmin': -122.4204, 'ymin': 37.7739, 'xmax': -122.4184, 'ymax': 37.7759},
+                'POINT(-122.4194 37.7749)',
+                '2022-01-01',
+                NULL,
+                NULL,
+                '66 Mint St', 'San Francisco', 'CA', '94103', 'US',
+                'CA', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                ['13065143']::VARCHAR[],
+                NULL::VARCHAR[],
+                NULL
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO tmp_fsq VALUES (
+                'fsq002', 'Golden Gate Park', 37.7694, -122.4862,
+                {'xmin': -122.4872, 'ymin': 37.7684, 'xmax': -122.4852, 'ymax': 37.7704},
+                'POINT(-122.4862 37.7694)',
+                '2021-06-15',
+                NULL,
+                NULL,
+                '501 Stanyan St', 'San Francisco', 'CA', '94117', 'US',
+                'CA', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                ['16000178', '16000179']::VARCHAR[],
+                NULL::VARCHAR[],
+                NULL
+            )
+        """)
+
+        conn.execute(f"COPY tmp_fsq TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        return str(parquet_path)
+
+    @pytest.fixture
+    def small_density_parquet(self, tmp_path, small_fsq_parquet):
+        """Create a minimal density parquet for testing."""
+        parquet_path = tmp_path / "density.parquet"
+
+        conn = duckdb.connect(":memory:")
+
+        conn.execute("""
+            CREATE TABLE tmp_density (
+                tile_qk15     VARCHAR,
+                density_score DOUBLE,
+                centroid_lon  DOUBLE,
+                centroid_lat  DOUBLE
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO tmp_density VALUES
+                ('023022222222222', 1.5, -122.4194, 37.7749),
+                ('023022222222223', 2.0, -122.4862, 37.7694)
+        """)
+
+        conn.execute(f"COPY tmp_density TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        return str(parquet_path)
+
+    def test_skips_when_manifest_fresh(self, small_fsq_parquet, small_density_parquet, tmp_path, caplog):
+        """run_pipeline skips when manifest.json mtime is newer than input.
+
+        This test FAILS because mtime skip logic doesn't exist yet.
+        """
+        import logging
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "mtime_skip_out"
+        output_dir.mkdir()
+
+        # First run
+        with caplog.at_level(logging.INFO):
+            run_pipeline(
+                "foursquare",
+                small_fsq_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                str(output_dir),
+                memory_limit="4GB",
+                density_parquet=small_density_parquet,
+            )
+
+        # Verify first run created output
+        fsq_dir = output_dir / "foursquare"
+        assert fsq_dir.exists()
+        current_link = fsq_dir / "current"
+        assert current_link.is_symlink()
+        first_target = os.readlink(str(current_link))
+
+        # Set manifest.json mtime to the future
+        manifest_path = fsq_dir / "current" / "manifest.json"
+        future_time = time.time() + 3600
+        os.utime(manifest_path, (future_time, future_time))
+
+        # Second run: should skip
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            run_pipeline(
+                "foursquare",
+                small_fsq_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                str(output_dir),
+                memory_limit="4GB",
+                density_parquet=small_density_parquet,
+            )
+
+        # Verify no new timestamped dir was created
+        second_target = os.readlink(str(current_link))
+        assert second_target == first_target, (
+            "Should not create new timestamped dir when manifest is fresh"
+        )
+
+        # Verify skip message was logged
+        assert any("skip" in record.message.lower() for record in caplog.records), (
+            "Should log skip message when manifest is fresh"
+        )
+
+    def test_runs_when_manifest_missing(self, small_fsq_parquet, small_density_parquet, tmp_path, caplog):
+        """run_pipeline runs normally when manifest.json doesn't exist.
+
+        This test FAILS because mtime skip logic doesn't exist yet.
+        """
+        import logging
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "mtime_missing_out"
+        output_dir.mkdir()
+
+        # Verify no manifest exists
+        fsq_dir = output_dir / "foursquare"
+        assert not fsq_dir.exists()
+
+        # Run pipeline
+        with caplog.at_level(logging.INFO):
+            run_pipeline(
+                "foursquare",
+                small_fsq_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                str(output_dir),
+                memory_limit="4GB",
+                density_parquet=small_density_parquet,
+            )
+
+        # Verify output was created
+        assert fsq_dir.exists()
+        current_link = fsq_dir / "current"
+        assert current_link.is_symlink()
+        manifest_path = current_link / "manifest.json"
+        assert manifest_path.exists()
+
+    def test_runs_when_input_newer(self, small_fsq_parquet, small_density_parquet, tmp_path, caplog):
+        """run_pipeline re-runs when input parquet is newer than manifest.json.
+
+        This test FAILS because mtime skip logic doesn't exist yet.
+        """
+        import logging
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "mtime_newer_out"
+        output_dir.mkdir()
+
+        # First run
+        run_pipeline(
+            "foursquare",
+            small_fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            density_parquet=small_density_parquet,
+        )
+
+        fsq_dir = output_dir / "foursquare"
+        current_link = fsq_dir / "current"
+        first_target = os.readlink(str(current_link))
+
+        # Set manifest.json mtime to the past
+        manifest_path = current_link / "manifest.json"
+        past_time = time.time() - 3600
+        os.utime(manifest_path, (past_time, past_time))
+
+        # Touch input to make it newer
+        time.sleep(0.01)
+        # Re-write the input to update its mtime using DuckDB
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute(f"""
+            CREATE TABLE tmp_fsq AS SELECT * FROM read_parquet('{small_fsq_parquet}')
+        """)
+        conn.execute(f"COPY tmp_fsq TO '{small_fsq_parquet}' (FORMAT PARQUET)")
+        conn.close()
+
+        # Second run: should re-run
+        time.sleep(1)  # timestamped dirs use %Y%m%dT%H%M%S
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            run_pipeline(
+                "foursquare",
+                small_fsq_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                str(output_dir),
+                memory_limit="4GB",
+                density_parquet=small_density_parquet,
+            )
+
+        # Verify new timestamped dir was created
+        second_target = os.readlink(str(current_link))
+        assert second_target != first_target, (
+            "Should create new timestamped dir when input is newer"
+        )
+
+    def test_force_overrides_fresh(self, small_fsq_parquet, small_density_parquet, tmp_path, caplog):
+        """run_pipeline with force=True re-runs even when manifest is fresh.
+
+        This test FAILS because the force parameter doesn't exist yet.
+        """
+        import logging
+        from garganorn.quadtree import run_pipeline
+
+        output_dir = tmp_path / "mtime_force_out"
+        output_dir.mkdir()
+
+        # First run
+        run_pipeline(
+            "foursquare",
+            small_fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            density_parquet=small_density_parquet,
+        )
+
+        fsq_dir = output_dir / "foursquare"
+        current_link = fsq_dir / "current"
+        first_target = os.readlink(str(current_link))
+
+        # Set manifest.json mtime to the future
+        manifest_path = current_link / "manifest.json"
+        future_time = time.time() + 3600
+        os.utime(manifest_path, (future_time, future_time))
+
+        # Second run with force=True: should re-run despite fresh manifest
+        time.sleep(1)  # timestamped dirs use %Y%m%dT%H%M%S
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            run_pipeline(
+                "foursquare",
+                small_fsq_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                str(output_dir),
+                memory_limit="4GB",
+                density_parquet=small_density_parquet,
+                force=True,
+            )
+
+        # Verify new timestamped dir was created
+        second_target = os.readlink(str(current_link))
+        assert second_target != first_target, (
+            "Should create new timestamped dir when force=True"
         )

@@ -12,6 +12,7 @@ Tests are organized by stage function:
 import time
 import json
 import gzip
+import logging
 import os
 from pathlib import Path
 
@@ -453,6 +454,167 @@ class TestStageManifest:
         assert count > 0, "record_tiles table should have rows"
         con_check.close()
         con.close()
+
+
+# ---------------------------------------------------------------------------
+# TestStageDensityExtractMtime
+# ---------------------------------------------------------------------------
+
+
+class TestStageDensityExtractMtime:
+    """Tests for mtime-based caching in stage_density_extract().
+
+    These tests FAIL because the force parameter and mtime skip logic
+    don't exist yet. This is TDD red phase.
+    """
+
+    @pytest.fixture
+    def small_overture_parquet(self, tmp_path):
+        """Create a minimal Overture place parquet file for mtime testing."""
+        parquet_path = tmp_path / "overture_places.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        conn.execute("""
+            CREATE TABLE tmp_ov (
+                id          VARCHAR,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                geometry    VARCHAR,
+                names       STRUCT("primary" VARCHAR),
+                categories  STRUCT("primary" VARCHAR)
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO tmp_ov VALUES (
+                'ovr001',
+                {'xmin': -122.5, 'ymin': 37.7, 'xmax': -122.4, 'ymax': 37.8},
+                'POINT(-122.45 37.75)',
+                {'primary': 'Place 1'},
+                {'primary': NULL}
+            )
+        """)
+
+        conn.execute("""
+            INSERT INTO tmp_ov VALUES (
+                'ovr002',
+                {'xmin': -122.45, 'ymin': 37.75, 'xmax': -122.35, 'ymax': 37.85},
+                'POINT(-122.4 37.8)',
+                {'primary': 'Place 2'},
+                {'primary': NULL}
+            )
+        """)
+
+        conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        return str(parquet_path)
+
+    @pytest.fixture
+    def density_output(self, tmp_path):
+        """Path for density output file in tmp_path."""
+        return str(tmp_path / "density_test.parquet")
+
+    def test_skips_when_output_fresh(self, small_overture_parquet, density_output, caplog):
+        """stage_density_extract skips when output mtime is newer than input.
+
+        This test FAILS because mtime skip logic doesn't exist yet.
+        """
+        import time
+        from garganorn.stages import stage_density_extract
+
+        # First run: create output
+        with caplog.at_level(logging.INFO):
+            stage_density_extract(small_overture_parquet, density_output, time.monotonic())
+
+        assert os.path.exists(density_output), "First run should create output"
+
+        # Set output mtime to the future
+        future_time = time.time() + 3600  # 1 hour in the future
+        os.utime(density_output, (future_time, future_time))
+
+        # Second run: should skip
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            stage_density_extract(small_overture_parquet, density_output, time.monotonic())
+
+        # Verify skip message was logged
+        assert any("skip" in record.message.lower() for record in caplog.records), (
+            "Should log skip message when output is fresh"
+        )
+
+    def test_runs_when_output_missing(self, small_overture_parquet, density_output, caplog):
+        """stage_density_extract runs normally when output doesn't exist.
+
+        This test FAILS because mtime skip logic doesn't exist yet.
+        """
+        import time
+        from garganorn.stages import stage_density_extract
+
+        assert not os.path.exists(density_output), "Output should not exist initially"
+
+        with caplog.at_level(logging.INFO):
+            stage_density_extract(small_overture_parquet, density_output, time.monotonic())
+
+        assert os.path.exists(density_output), "Should create output when missing"
+        # Verify it ran (not skipped)
+        assert any("starting" in record.message.lower() for record in caplog.records), (
+            "Should log starting message when output is missing"
+        )
+
+    def test_runs_when_input_newer(self, small_overture_parquet, density_output, caplog):
+        """stage_density_extract re-runs when input parquet is newer than output.
+
+        This test FAILS because mtime skip logic doesn't exist yet.
+        """
+        import time
+        from garganorn.stages import stage_density_extract
+
+        # First run: create output
+        stage_density_extract(small_overture_parquet, density_output, time.monotonic())
+        assert os.path.exists(density_output)
+
+        # Touch input to make it newer
+        time.sleep(0.01)  # Small delay to ensure mtime difference
+        past_time = time.time() - 3600  # 1 hour ago
+        os.utime(density_output, (past_time, past_time))
+
+        # Second run: should re-run because input is newer
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            stage_density_extract(small_overture_parquet, density_output, time.monotonic())
+
+        # Verify it re-ran (not skipped)
+        assert any("starting" in record.message.lower() for record in caplog.records), (
+            "Should log starting message when input is newer"
+        )
+
+    def test_force_overrides_fresh(self, small_overture_parquet, density_output, caplog):
+        """stage_density_extract with force=True re-runs even when output is fresh.
+
+        This test FAILS because the force parameter doesn't exist yet.
+        """
+        import time
+        from garganorn.stages import stage_density_extract
+
+        # First run: create output
+        stage_density_extract(small_overture_parquet, density_output, time.monotonic())
+        assert os.path.exists(density_output)
+
+        # Set output mtime to the future
+        future_time = time.time() + 3600
+        os.utime(density_output, (future_time, future_time))
+
+        # Second run with force=True: should re-run despite fresh output
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            stage_density_extract(small_overture_parquet, density_output, time.monotonic(), force=True)
+
+        # Verify it re-ran (not skipped)
+        assert any("starting" in record.message.lower() for record in caplog.records), (
+            "Should log starting message when force=True"
+        )
 
 
 # ---------------------------------------------------------------------------

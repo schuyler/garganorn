@@ -1,4 +1,5 @@
 import argparse
+import glob
 import logging
 import os
 import re
@@ -28,6 +29,7 @@ from .stages import (
     stage_manifest,
     stage_division_importance_backfill,
     stage_boundary_export,
+    _is_output_fresh,
 )
 
 log = logging.getLogger(__name__)
@@ -37,7 +39,32 @@ SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenSt
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None):
+def _collect_input_files(source, parquet_glob, density_parquet, boundaries_db):
+    """Collect all input file paths for mtime comparison."""
+    files = []
+
+    if source == "osm":
+        node_glob, way_glob = parquet_glob
+        files.extend(glob.glob(node_glob))
+        files.extend(glob.glob(way_glob))
+    elif source == "overture_division":
+        division_parquet, division_area_parquet = parquet_glob
+        if os.path.exists(division_parquet):
+            files.append(division_parquet)
+        if os.path.exists(division_area_parquet):
+            files.append(division_area_parquet)
+    else:
+        files.extend(glob.glob(parquet_glob))
+
+    if density_parquet and os.path.exists(density_parquet):
+        files.append(density_parquet)
+    if boundaries_db and os.path.exists(boundaries_db):
+        files.append(boundaries_db)
+
+    return sorted(files)
+
+
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, force=False):
     """Run the full import-assign-containment-export pipeline for a data source.
 
     Stage logic is delegated to individual functions in garganorn.stages.
@@ -75,8 +102,19 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         max_per_tile: Maximum records assigned to a single tile.
         boundaries_db: Path to boundaries.duckdb for containment enrichment, or None.
         export_workers: Thread count for tile gzip compression. Defaults to CPU count.
+        density_parquet: Path to density_tiles.parquet from stage_density_extract.
+        force: If True, re-run even if output is fresh. Default False.
     """
     source_dir = os.path.join(output_dir, source)
+    manifest_path = os.path.join(source_dir, "current", "manifest.json")
+
+    if not force:
+        input_files = _collect_input_files(source, parquet_glob,
+                                            density_parquet, boundaries_db)
+        if _is_output_fresh(manifest_path, input_files):
+            log.info("[%s] pipeline: skipping (manifest is fresh)", source)
+            return
+
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     tile_dir = os.path.join(source_dir, timestamp)
     os.makedirs(tile_dir, exist_ok=True)
@@ -192,6 +230,8 @@ def main():
                         help="Path to division_area parquet (overture_division only)")
     parser.add_argument("--density-parquet", default=None, dest="density_parquet",
                         help="Path to density_tiles.parquet (from density_extract stage)")
+    parser.add_argument("--force", action="store_true", default=False,
+                        help="Force re-run even if output is up-to-date")
 
     args = parser.parse_args()
 
@@ -260,6 +300,7 @@ def main():
         boundaries_db=boundaries_db,
         export_workers=args.export_workers,
         density_parquet=args.density_parquet,
+        force=args.force,
     )
 
 
