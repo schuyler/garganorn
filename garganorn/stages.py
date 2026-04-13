@@ -108,6 +108,10 @@ def _run_containment(con, qk_prefix, bbox, zoom, pk_expr, lon_expr, lat_expr,
     stats["max_depth"] = max(stats["max_depth"], zoom)
     t_tile = time.monotonic()
 
+    # Ensure pk_expr is qualified with table alias to avoid ambiguity
+    if '.' not in pk_expr:
+        pk_expr = f"p.{pk_expr}"
+
     # Step 0: pre-filter and clip boundaries to tile envelope
     con.execute("""
         CREATE OR REPLACE TEMP TABLE tile_boundaries AS
@@ -291,6 +295,7 @@ def compute_containment(con, boundaries_db, pk_expr, lon_expr, lat_expr,
     assignments.
     """
     con.execute("LOAD spatial")
+    con.execute("DROP TABLE IF EXISTS place_containment")
     con.execute("""
         CREATE TABLE place_containment (
             place_id       VARCHAR,

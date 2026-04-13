@@ -38,6 +38,77 @@ SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenSt
 
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
+STAGE_ORDER = {
+    'default': ['import', 'importance', 'variants', 'tile_assignment', 'containment', 'export', 'manifest'],
+    'overture_division': ['import', 'boundary_export', 'division_importance_backfill', 'tile_assignment', 'containment', 'export', 'manifest'],
+}
+
+
+def _ensure_sentinel_table(con):
+    """Create sentinel table if it doesn't exist. Call once after connect."""
+    try:
+        con.execute("SELECT 1 FROM _pipeline_progress LIMIT 1")
+    except duckdb.CatalogException:
+        con.execute("""
+            CREATE TABLE _pipeline_progress (
+                stage VARCHAR PRIMARY KEY,
+                completed_at VARCHAR
+            )
+        """)
+
+
+def _read_sentinel(con):
+    """Return set of completed stage names."""
+    _ensure_sentinel_table(con)
+    rows = con.execute("SELECT stage FROM _pipeline_progress").fetchall()
+    return {row[0] for row in rows}
+
+
+def _mark_complete(con, stage):
+    """Mark a stage as complete and checkpoint."""
+    con.execute("DELETE FROM _pipeline_progress WHERE stage = ?", [stage])
+    con.execute("INSERT INTO _pipeline_progress VALUES (?, ?)",
+                [stage, datetime.now(timezone.utc).isoformat()])
+    con.execute("CHECKPOINT")
+
+
+def _find_incomplete_run(source_dir, source):
+    """Find the most recent timestamped dir with a work DB but no manifest."""
+    # First, collect all directories that are symlink targets
+    symlink_targets = set()
+    for d in os.listdir(source_dir):
+        ts_dir = os.path.join(source_dir, d)
+        if os.path.islink(ts_dir):
+            target = os.readlink(ts_dir)
+            # Resolve relative symlinks
+            if not os.path.isabs(target):
+                target = os.path.join(source_dir, d, os.path.pardir, target)
+                target = os.path.normpath(target)
+            # Add the target directory (not the symlink itself)
+            symlink_targets.add(os.path.realpath(ts_dir))
+
+    candidates = []
+    for d in sorted(os.listdir(source_dir), reverse=True):
+        if not _TIMESTAMP_RE.match(d):
+            continue
+        ts_dir = os.path.join(source_dir, d)
+        # Skip symlinks AND directories that are symlink targets
+        if not os.path.isdir(ts_dir) or os.path.islink(ts_dir) or os.path.realpath(ts_dir) in symlink_targets:
+            continue
+        db_path = os.path.join(ts_dir, f".{source}_work.duckdb")
+        manifest = os.path.join(ts_dir, "manifest.json")
+        if os.path.exists(db_path) and not os.path.exists(manifest):
+            # Verify the DB is readable (not corrupted)
+            try:
+                test_con = duckdb.connect(db_path)
+                test_con.execute("SELECT 1")
+                test_con.close()
+                candidates.append(ts_dir)
+            except duckdb.Error:
+                # Corrupted DB, skip this candidate
+                log.warning("Corrupted working DB at %s, skipping", db_path)
+    return candidates[0] if candidates else None
+
 
 def _collect_input_files(source, parquet_glob, density_parquet, boundaries_db):
     """Collect all input file paths for mtime comparison."""
@@ -115,50 +186,131 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             log.info("[%s] pipeline: skipping (manifest is fresh)", source)
             return
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-    tile_dir = os.path.join(source_dir, timestamp)
-    os.makedirs(tile_dir, exist_ok=True)
-    db_path = os.path.join(tile_dir, f".{source}_work.duckdb")
+    # Check for incomplete run before creating new timestamp
+    incomplete_dir = None
+    if os.path.exists(source_dir):
+        incomplete_dir = _find_incomplete_run(source_dir, source)
+        if incomplete_dir and force:
+            # Delete the incomplete run's working DB
+            work_db = os.path.join(incomplete_dir, f".{source}_work.duckdb")
+            try:
+                os.remove(work_db)
+                log.info("[%s] Deleted incomplete run's working DB: %s", source, work_db)
+            except OSError:
+                pass
+            incomplete_dir = None
+
+    # Determine stage order for this source
+    stage_order_key = 'overture_division' if source == 'overture_division' else 'default'
+    stage_order = STAGE_ORDER[stage_order_key]
+
+    # Set up directory and working DB
+    if incomplete_dir:
+        # Resume from incomplete run
+        tile_dir = incomplete_dir
+        db_path = os.path.join(tile_dir, f".{source}_work.duckdb")
+        log.info("[%s] Resuming from incomplete run: %s", source, tile_dir)
+    else:
+        # Create new timestamped directory
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+        tile_dir = os.path.join(source_dir, timestamp)
+        os.makedirs(tile_dir, exist_ok=True)
+        db_path = os.path.join(tile_dir, f".{source}_work.duckdb")
+
     con = duckdb.connect(db_path)
+    _ensure_sentinel_table(con)  # Always create sentinel table on first open
     t0 = time.monotonic()
 
-    try:
-        stage_import(con, source, parquet_glob, bbox, memory_limit, t0)
+    # Read sentinel to get completed stages
+    completed = _read_sentinel(con) if incomplete_dir else set()
+    if incomplete_dir:
+        log.info("[%s] Resuming from %s, completed stages: %s",
+                 source, incomplete_dir, sorted(completed))
 
-        if density_parquet is None:
-            raise ValueError("density_parquet is required for importance computation")
+    try:
+        if 'import' not in completed:
+            stage_import(con, source, parquet_glob, bbox, memory_limit, t0)
+            _mark_complete(con, 'import')
+        else:
+            log.info("[%s] Skipping 'import' stage (already complete)", source)
 
         if source == "overture_division":
-            stage_boundary_export(con, source, source_dir, t0)
-            stage_division_importance_backfill(con, density_parquet, t0)
+            if 'boundary_export' not in completed:
+                stage_boundary_export(con, source, source_dir, t0)
+                _mark_complete(con, 'boundary_export')
+            else:
+                log.info("[%s] Skipping 'boundary_export' stage (already complete)", source)
+
+            if 'division_importance_backfill' not in completed:
+                stage_division_importance_backfill(con, density_parquet, t0)
+                _mark_complete(con, 'division_importance_backfill')
+            else:
+                log.info("[%s] Skipping 'division_importance_backfill' stage (already complete)", source)
         else:
-            stage_importance(con, source, t0, density_parquet)
-            stage_variants(con, source, t0)
+            if 'importance' not in completed:
+                stage_importance(con, source, t0, density_parquet)
+                _mark_complete(con, 'importance')
+            else:
+                log.info("[%s] Skipping 'importance' stage (already complete)", source)
+
+            if 'variants' not in completed:
+                stage_variants(con, source, t0)
+                _mark_complete(con, 'variants')
+            else:
+                log.info("[%s] Skipping 'variants' stage (already complete)", source)
 
         pk_expr = SOURCES[source].source_pk
-        stage_tile_assignment(con, source, pk_expr, max_per_tile, t0)
+
+        if 'tile_assignment' not in completed:
+            stage_tile_assignment(con, source, pk_expr, max_per_tile, t0)
+            _mark_complete(con, 'tile_assignment')
+        else:
+            log.info("[%s] Skipping 'tile_assignment' stage (already complete)", source)
+
         lon_expr, lat_expr = _coord_exprs(source, alias="p")
-        stage_containment(con, source, f"p.{pk_expr}", lon_expr, lat_expr, boundaries_db, t0)
-        manifest = stage_export(con, source, tile_dir, t0, export_workers)
-        stage_manifest(con, manifest, source, tile_dir, t0)
+
+        if 'containment' not in completed:
+            stage_containment(con, source, f"p.{pk_expr}", lon_expr, lat_expr, boundaries_db, t0)
+            _mark_complete(con, 'containment')
+        else:
+            log.info("[%s] Skipping 'containment' stage (already complete)", source)
+
+        if 'export' not in completed:
+            manifest = stage_export(con, source, tile_dir, t0, export_workers)
+            _mark_complete(con, 'export')
+        else:
+            log.info("[%s] Skipping 'export' stage (already complete)", source)
+            # Read manifest from file for resumed runs
+            import json
+            with open(os.path.join(tile_dir, "manifest.json")) as f:
+                manifest = json.load(f)
+
+        if 'manifest' not in completed:
+            stage_manifest(con, manifest, source, tile_dir, t0)
+            _mark_complete(con, 'manifest')
+        else:
+            log.info("[%s] Skipping 'manifest' stage (already complete)", source)
     except Exception:
         con.close()
         raise
     con.close()
-    try:
-        os.remove(db_path)
-    except OSError:
-        pass
 
-    # Atomically swap the `current` symlink to the new timestamped directory
-    link_path = os.path.join(source_dir, "current")
-    tmp_link = link_path + ".tmp"
-    try:
-        os.remove(tmp_link)
-    except OSError:
-        pass
-    os.symlink(timestamp, tmp_link)
-    os.rename(tmp_link, link_path)
+    # Only delete working DB and update symlink for fresh runs, not resumed runs
+    if not incomplete_dir:
+        try:
+            os.remove(db_path)
+        except OSError:
+            pass
+
+        # Atomically swap the `current` symlink to the new timestamped directory
+        link_path = os.path.join(source_dir, "current")
+        tmp_link = link_path + ".tmp"
+        try:
+            os.remove(tmp_link)
+        except OSError:
+            pass
+        os.symlink(timestamp, tmp_link)
+        os.rename(tmp_link, link_path)
 
     # Clean up old timestamped dirs: keep current + previous, delete older
     ts_dirs = sorted(
