@@ -71,7 +71,7 @@ def run_fsq_import(conn, parquet_glob, bbox=None):
     if bbox is None:
         bbox = SF_BBOX
     # Create empty density and IDF temp tables for test imports (importance defaults to 0)
-    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score WHERE 1=0;"
+    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
     idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
     substitutions = {
         "memory_limit": "4GB",
@@ -94,7 +94,7 @@ def run_overture_import(conn, parquet_glob, bbox=None):
     if bbox is None:
         bbox = OV_BBOX
     # Create empty density and IDF temp tables for test imports (importance defaults to 0)
-    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score WHERE 1=0;"
+    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
     idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
     substitutions = {
         "memory_limit": "4GB",
@@ -119,7 +119,7 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None):
     if way_glob is None:
         way_glob = node_glob
     # Create empty density and IDF temp tables for test imports (importance defaults to 0)
-    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score WHERE 1=0;"
+    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
     idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
     # Load OSM category case SQL
     osm_category_case = (REPO_ROOT / "garganorn" / "sql" / "_osm_category_case.sql").read_text().strip()

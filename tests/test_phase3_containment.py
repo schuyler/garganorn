@@ -298,11 +298,15 @@ class TestComputeContainmentAdaptive:
 
 class TestBoundaryExportFilter:
     def test_run_pipeline_has_boundary_filter(self):
-        """stage_boundary_export CTAS should include a subtype/admin_level filter."""
+        """export_boundaries_db CTAS should include a subtype/admin_level filter.
+
+        After Phase 3 refactoring, the boundary export logic is in export_boundaries_db()
+        instead of stage_boundary_export(). The filter should still be present.
+        """
         from garganorn import stages
-        source = inspect.getsource(stages.stage_boundary_export)
+        source = inspect.getsource(stages.export_boundaries_db)
         # The boundary export CTAS should filter by admin_level and subtype
         assert "admin_level BETWEEN 0 AND 2" in source or "admin_level between 0 and 2" in source.lower(), \
-            "stage_boundary_export should filter by admin_level"
+            "export_boundaries_db should filter by admin_level"
         assert "subtype = 'locality'" in source or "subtype='locality'" in source, \
-            "stage_boundary_export should filter by subtype='locality'"
+            "export_boundaries_db should filter by subtype='locality'"

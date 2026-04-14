@@ -1189,15 +1189,20 @@ class TestRunPipelineMtime:
             CREATE TABLE tmp_density (
                 tile_qk15     VARCHAR,
                 density_score DOUBLE,
-                centroid_lon  DOUBLE,
-                centroid_lat  DOUBLE
+                tile_xmin     DOUBLE,
+                tile_ymin     DOUBLE,
+                tile_xmax     DOUBLE,
+                tile_ymax     DOUBLE
             )
         """)
 
+        # Tile bounds computed from quadkeys using quadkey_to_bbox
+        # '023022222222222' -> (-122.490234375, 37.74809924204635, -122.4609375, 37.76595435305952)
+        # '023022222222223' -> (-122.490234375, 37.76595435305952, -122.4609375, 37.78380942582586)
         conn.execute("""
             INSERT INTO tmp_density VALUES
-                ('023022222222222', 1.5, -122.4194, 37.7749),
-                ('023022222222223', 2.0, -122.4862, 37.7694)
+                ('023022222222222', 1.5, -122.490234375, 37.74809924204635, -122.4609375, 37.76595435305952),
+                ('023022222222223', 2.0, -122.490234375, 37.76595435305952, -122.4609375, 37.78380942582586)
         """)
 
         conn.execute(f"COPY tmp_density TO '{parquet_path}' (FORMAT PARQUET)")

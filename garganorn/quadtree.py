@@ -26,7 +26,7 @@ from .stages import (
     stage_containment,
     stage_export,
     stage_manifest,
-    stage_boundary_export,
+    export_boundaries_db,
     _is_output_fresh,
 )
 
@@ -36,6 +36,9 @@ SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenSt
 
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
+# STAGE_ORDER defines the sentinel-tracked pipeline stages.
+# boundary_export is NOT included: it's a special case called directly in run_pipeline()
+# for overture_division only, between import and tile_assignment.
 STAGE_ORDER = ['import', 'tile_assignment', 'containment', 'export', 'manifest']
 
 
@@ -146,9 +149,16 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
          (no-op if boundaries_db is None).
       4. Export tiles: write gzipped JSON tile files to a timestamped subdirectory.
       5. Manifest: write manifest.json and manifest.duckdb for tile serving.
-      6. DuckDB boundary export (overture_division only): write boundaries.duckdb with
-         Hilbert-sorted geometries and an R-tree index for use by other sources'
-         containment stage. Runs between import and tile_assignment as a special case.
+
+    Phase 3: Boundary export (overture_division only) uses export_boundaries_db()
+    standalone function. Called directly by run_pipeline() after import stage.
+    Writes boundaries.duckdb with Hilbert-sorted geometries and R-tree index for
+    other sources' containment stage.
+
+    Phase 4: density_parquet includes tile bounds (tile_xmin, tile_ymin, tile_xmax,
+    tile_ymax) computed by stage_density_extract via Python post-processing using
+    quadkey_to_bbox(). This enables bbox-overlap joins in overture_division_import.sql
+    for accurate density scoring of small localities.
 
     Output layout:
       <output_dir>/<source>/<timestamp>/   -- tile files, manifests
@@ -231,7 +241,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         # Special case: overture_division boundary_export runs after import
         if source == "overture_division":
             if 'boundary_export' not in completed:
-                stage_boundary_export(con, source, source_dir, t0)
+                export_boundaries_db(db_path, source_dir, t0)
                 _mark_complete(con, 'boundary_export')
             else:
                 log.info("[%s] Skipping 'boundary_export' stage (already complete)", source)
