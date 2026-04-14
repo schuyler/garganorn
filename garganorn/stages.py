@@ -506,6 +506,54 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
         con.close()
 
 
+def stage_idf(source, parquet_glob, output_path, t0, force=False):
+    """Compute IDF scores per category from raw parquet.
+
+    Reads source parquet directly (ephemeral DuckDB connection), computes
+    ln(N_total / n_places) per category, and writes results to output_path
+    as a parquet file with columns (category, n_places, idf_score).
+
+    Args:
+        source: Source key (foursquare, overture_place, osm).
+        parquet_glob: Parquet path(s). String for FSQ/Overture;
+            (node_glob, way_glob) tuple for OSM.
+        output_path: Destination path for IDF parquet output.
+        t0: Start time for logging (monotonic time).
+        force: If True, re-run even if output is fresh. Default False.
+    """
+    if source not in ("foursquare", "overture_place", "osm"):
+        raise ValueError(f"unsupported source for IDF: {source}")
+
+    if not force:
+        if source == "osm":
+            node_glob, way_glob = parquet_glob
+            input_files = _resolve_glob_paths(node_glob) + _resolve_glob_paths(way_glob)
+        else:
+            input_files = _resolve_glob_paths(parquet_glob)
+        if _is_output_fresh(output_path, input_files):
+            log.info("idf: skipping (output is fresh)")
+            return
+
+    log.info("idf: starting (ephemeral connection)")
+    sql = (_SQL_DIR / f"{source}_idf.sql").read_text()
+
+    if source == "osm":
+        node_glob, way_glob = parquet_glob
+        sql = sql.replace("${node_parquet}", str(node_glob))
+        sql = sql.replace("${way_parquet}", str(way_glob))
+    else:
+        sql = sql.replace("${parquet_glob}", str(parquet_glob))
+
+    con = duckdb.connect()
+    try:
+        con.execute(sql)
+        con.execute(f"COPY idf_scores TO '{output_path}' (FORMAT PARQUET)")
+        count = con.execute("SELECT count(*) FROM idf_scores").fetchone()[0]
+        log.info("idf: done (%.1fs, %d categories)", time.monotonic() - t0, count)
+    finally:
+        con.close()
+
+
 def stage_importance(con, source, t0, density_parquet, density_norm=10.0, idf_norm=18.0):
     """Compute importance scores using density and IDF.
 

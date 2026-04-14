@@ -21,6 +21,7 @@ from .stages import (
     write_manifest_db,
     stage_import,
     stage_density_extract,
+    stage_idf,
     stage_importance,
     stage_variants,
     stage_tile_assignment,
@@ -382,10 +383,31 @@ def main():
                         help="Path to division_area parquet (overture_division only)")
     parser.add_argument("--density-parquet", default=None, dest="density_parquet",
                         help="Path to density_tiles.parquet (from density_extract stage)")
+    parser.add_argument("--idf-parquet", default=None, dest="idf_parquet",
+                        help="Path for IDF scores parquet output (triggers IDF-only mode)")
     parser.add_argument("--force", action="store_true", default=False,
                         help="Force re-run even if output is up-to-date")
 
     args = parser.parse_args()
+
+    # IDF mode: compute IDF scores and exit early
+    if args.idf_parquet is not None:
+        if args.source == "overture_division":
+            parser.error("IDF computation is not supported for overture_division")
+        if args.source == "osm":
+            if args.parquet_dir is None:
+                parser.error("--source osm requires --parquet-dir for IDF mode")
+            parquet_glob = (
+                f"{args.parquet_dir}/type=node/*.parquet",
+                f"{args.parquet_dir}/type=way/*.parquet",
+            )
+        else:
+            if args.parquet is None:
+                parser.error(f"--source {args.source} requires --parquet for IDF mode")
+            parquet_glob = args.parquet
+        t0 = time.monotonic()
+        stage_idf(args.source, parquet_glob, args.idf_parquet, t0, force=args.force)
+        return
 
     if args.source == "osm":
         if args.parquet_dir is None:
