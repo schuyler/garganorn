@@ -6,6 +6,8 @@ CREATE TEMP TABLE tile_counts AS
 SELECT level, left(qk17, level) AS qk, count(*) AS cnt
 FROM places, generate_series(${min_zoom}, ${max_zoom}) AS t(level)
 WHERE qk17 IS NOT NULL
+  AND length(qk17) = 17
+  AND qk17 ~ '^[0-3]{17}$'
 GROUP BY level, left(qk17, level);
 
 -- Find coarsest zoom where tile count <= max_per_tile, then assign each place to a tile
@@ -15,6 +17,8 @@ WITH place_zoom AS (
     FROM places p
     CROSS JOIN generate_series(${min_zoom}, ${max_zoom}) AS t(level)
     WHERE p.qk17 IS NOT NULL
+      AND length(p.qk17) = 17
+      AND p.qk17 ~ '^[0-3]{17}$'
 ),
 best_zoom AS (
     SELECT pz.place_id, min(pz.level) AS level
@@ -28,6 +32,8 @@ SELECT p.${pk_expr} AS place_id,
 FROM places p
 LEFT JOIN best_zoom bz ON bz.place_id = p.${pk_expr}
 WHERE p.qk17 IS NOT NULL
+  AND length(p.qk17) = 17
+  AND p.qk17 ~ '^[0-3]{17}$'
 ORDER BY tile_qk;  -- sort enables streaming GROUP BY in export query
 
 -- Drop temp tables (tile_counts is TEMP and would auto-drop at connection close,

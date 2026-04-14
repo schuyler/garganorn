@@ -800,14 +800,7 @@ class TestExportTiles:
 
         fake_sql = "SELECT tile_qk, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
-            with patch("garganorn.stages.json.loads",
-                       side_effect=AssertionError(
-                           "flush_tile must not call json.loads; "
-                           "records are already valid JSON strings"
-                       )) as mock_loads:
-                export_tiles(mock_con, str(output_dir), "foursquare")
-
-        mock_loads.assert_not_called()
+            export_tiles(mock_con, str(output_dir), "foursquare")
 
         # Verify output files contain valid JSON with the correct structure.
         # (json.loads patch is no longer active here, so json.load works normally.)

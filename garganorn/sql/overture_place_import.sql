@@ -12,10 +12,16 @@ ${idf_cte}
 CREATE TABLE places AS
 WITH ov_base AS (
     SELECT * EXCLUDE (geometry), geometry::GEOMETRY AS geometry,
-           ST_QuadKey((bbox.xmin + bbox.xmax) / 2.0, (bbox.ymin + bbox.ymax) / 2.0, 17) AS qk17
+           -- SPATIAL-1: Validate coordinate range before calling ST_QuadKey
+           CASE WHEN (LEAST(bbox.xmin, bbox.xmax) + GREATEST(bbox.xmin, bbox.xmax)) / 2.0 BETWEEN -180 AND 180
+                  AND (LEAST(bbox.ymin, bbox.ymax) + GREATEST(bbox.ymin, bbox.ymax)) / 2.0 BETWEEN -90 AND 90
+                THEN ST_QuadKey(
+                    (LEAST(bbox.xmin, bbox.xmax) + GREATEST(bbox.xmin, bbox.xmax)) / 2.0,
+                    (LEAST(bbox.ymin, bbox.ymax) + GREATEST(bbox.ymin, bbox.ymax)) / 2.0, 17)
+                ELSE NULL END AS qk17
     FROM '${parquet_glob}'
-    WHERE bbox.xmin >= ${xmin} AND bbox.xmax <= ${xmax}
-      AND bbox.ymin >= ${ymin} AND bbox.ymax <= ${ymax}
+    WHERE bbox.xmax >= ${xmin} AND bbox.xmin <= ${xmax}
+      AND bbox.ymax >= ${ymin} AND bbox.ymin <= ${ymax}
       AND geometry IS NOT NULL
 ),
 ov_density AS (

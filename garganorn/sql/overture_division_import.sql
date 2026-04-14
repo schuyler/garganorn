@@ -34,8 +34,8 @@ division_area AS (
     FROM '${division_area_parquet}'
     WHERE is_land = true
       AND geometry IS NOT NULL
-      AND bbox.xmin >= ${xmin} AND bbox.xmax <= ${xmax}
-      AND bbox.ymin >= ${ymin} AND bbox.ymax <= ${ymax}
+      AND bbox.xmax >= ${xmin} AND bbox.xmin <= ${xmax}
+      AND bbox.ymax >= ${ymin} AND bbox.ymin <= ${ymax}
 ),
 merged_areas AS (
     -- Merge multiple land-area geometries per division into one.
@@ -56,7 +56,7 @@ division_base AS (
         d.region,
         ma.admin_level,
         d.wikidata,
-        d.population,
+        greatest(coalesce(d.population, 0), 0) AS population,
         d.parent_division_id,
         -- bbox is derived from the merged geometry; used for tile assignment and export
         {'xmin': ST_XMin(ma.geometry), 'ymin': ST_YMin(ma.geometry),
@@ -74,15 +74,18 @@ division_base AS (
     FROM division d
     JOIN merged_areas ma ON ma.division_id = d.id
 ),
--- Compute average density for localities: find all z15 density tile centroids
--- that fall within the locality's bounding box.
+-- Compute average density for localities: find all z15 density tiles whose
+-- bbox intersects the locality's bounding box. Uses bbox-overlap join
+-- (not centroid-point-in-bbox) to ensure small localities receive density scores.
 division_density AS (
     SELECT p.id,
            coalesce(avg(d.density_score), 0) AS avg_density
     FROM division_base p
     LEFT JOIN density_tiles d
-        ON d.centroid_lon BETWEEN p.min_longitude AND p.max_longitude
-       AND d.centroid_lat BETWEEN p.min_latitude AND p.max_latitude
+        ON d.tile_xmin <= p.max_longitude
+       AND d.tile_xmax >= p.min_longitude
+       AND d.tile_ymin <= p.max_latitude
+       AND d.tile_ymax >= p.min_latitude
     WHERE p.subtype = 'locality'
     GROUP BY p.id
 )
@@ -91,9 +94,9 @@ SELECT
     CASE
         WHEN db.subtype = 'locality' THEN
             round(60 * least(coalesce(dd.avg_density, 0) / ${density_norm}, 1.0)
-                + 40 * least(ln(1 + coalesce(db.population, 0)) / ${pop_norm}, 1.0))::INTEGER
+                + 40 * least(ln(1 + db.population) / ${pop_norm}, 1.0))::INTEGER
         ELSE
-            round(40 * least(ln(1 + coalesce(db.population, 0)) / ${pop_norm}, 1.0))::INTEGER
+            round(40 * least(ln(1 + db.population) / ${pop_norm}, 1.0))::INTEGER
     END AS importance,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM division_base db

@@ -140,7 +140,10 @@ SELECT
         60 * least(coalesce(nd.density_score, 0) / ${density_norm}, 1.0)
       + 40 * least(coalesce(ni.idf_score, 0) / ${idf_norm}, 1.0)
     )::INTEGER AS importance,
-    ST_QuadKey(f.longitude, f.latitude, 17) AS qk17,
+    -- SPATIAL-1: Validate coordinate range before calling ST_QuadKey
+    CASE WHEN f.longitude BETWEEN -180 AND 180 AND f.latitude BETWEEN -90 AND 90
+         THEN ST_QuadKey(f.longitude, f.latitude, 17)
+         ELSE NULL END AS qk17,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM filtered f
 LEFT JOIN node_density nd ON nd.rkey = f.osm_type || f.osm_id::VARCHAR
@@ -237,6 +240,7 @@ way_centroids AS (
     FROM way_node_refs wnr
     JOIN node_coords nc ON wnr.node_ref = nc.id
     GROUP BY wnr.osm_id
+    HAVING avg(nc.lat) IS NOT NULL AND avg(nc.lon) IS NOT NULL  -- DATA-1: Filter ways with no valid nodes
 ),
 way_base AS (
     SELECT
@@ -301,7 +305,10 @@ SELECT
         60 * least(coalesce(wd.density_score, 0) / ${density_norm}, 1.0)
       + 40 * least(coalesce(wi.idf_score, 0) / ${idf_norm}, 1.0)
     )::INTEGER AS importance,
-    ST_QuadKey(wb.longitude, wb.latitude, 17) AS qk17,
+    -- SPATIAL-1: Validate coordinate range before calling ST_QuadKey
+    CASE WHEN wb.longitude BETWEEN -180 AND 180 AND wb.latitude BETWEEN -90 AND 90
+         THEN ST_QuadKey(wb.longitude, wb.latitude, 17)
+         ELSE NULL END AS qk17,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM way_base wb
 LEFT JOIN way_density wd ON wd.rkey = 'w' || wb.osm_id::VARCHAR

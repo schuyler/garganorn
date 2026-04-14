@@ -1,9 +1,12 @@
+import logging
 from pathlib import Path
 from typing import TypedDict, Optional
 import tempfile
 import os
 import shutil
 import unicodedata
+
+log = logging.getLogger(__name__)
 
 import math
 import duckdb
@@ -238,6 +241,10 @@ class Database:
             norm_q = Database._strip_accents(q.lower())
             params["norm_q"] = norm_q
             trigrams = self._compute_trigrams(q)
+            # EXPORT-1/EXPORT-12: Guard against empty trigram list (short queries, non-ASCII)
+            if q and not trigrams:
+                log.warning("query '%s' produced no trigrams; returning empty results", q)
+                return []
             for i, tri in enumerate(trigrams):
                 params[f"g{i}"] = tri
             importance_floor = compute_importance_floor(area_km2)

@@ -13,10 +13,13 @@ CREATE TABLE places AS
 WITH fsq_base AS (
     SELECT * EXCLUDE (geom),
            geom::GEOMETRY AS geom,
-           ST_QuadKey(longitude, latitude, 17) AS qk17
+           -- SPATIAL-1: Validate coordinate range before calling ST_QuadKey
+           CASE WHEN longitude BETWEEN -180 AND 180 AND latitude BETWEEN -90 AND 90
+                THEN ST_QuadKey(longitude, latitude, 17)
+                ELSE NULL END AS qk17
     FROM '${parquet_glob}'
-    WHERE bbox.xmin >= ${xmin} AND bbox.xmax <= ${xmax}
-      AND bbox.ymin >= ${ymin} AND bbox.ymax <= ${ymax}
+    WHERE bbox.xmax >= ${xmin} AND bbox.xmin <= ${xmax}
+      AND bbox.ymax >= ${ymin} AND bbox.ymin <= ${ymax}
       AND date_refreshed > '2020-03-15'
       AND date_closed IS NULL
       AND longitude != 0 AND latitude != 0
@@ -35,6 +38,7 @@ fsq_idf AS (
          unnest(f.fsq_category_ids) AS t(category)
     LEFT JOIN idf_scores i ON i.category = t.category
     WHERE f.fsq_category_ids IS NOT NULL
+      AND len(f.fsq_category_ids) > 0  -- DATA-8: Skip empty category arrays
     GROUP BY f.fsq_place_id
 )
 SELECT b.*,

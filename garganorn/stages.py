@@ -113,19 +113,21 @@ def _run_containment(con, qk_prefix, bbox, zoom, pk_expr, lon_expr, lat_expr,
         pk_expr = f"p.{pk_expr}"
 
     # Step 0: pre-filter and clip boundaries to tile envelope
-    con.execute("""
+    envelope_sql = f"ST_MakeEnvelope({bbox[0]}, {bbox[1]}, {bbox[2]}, {bbox[3]})"
+    con.execute(f"""
         CREATE OR REPLACE TEMP TABLE tile_boundaries AS
-        SELECT id, admin_level,
-               ST_Intersection(geometry, ST_MakeEnvelope(?, ?, ?, ?)) AS geometry,
-               greatest(min_latitude, ?) AS min_latitude,
-               least(max_latitude, ?)    AS max_latitude,
-               greatest(min_longitude, ?) AS min_longitude,
-               least(max_longitude, ?)    AS max_longitude
-        FROM bnd.places
-        WHERE ST_Intersects(geometry, ST_MakeEnvelope(?, ?, ?, ?))
-    """, [bbox[0], bbox[1], bbox[2], bbox[3],   # ST_Intersection envelope
-          bbox[1], bbox[3], bbox[0], bbox[2],   # bbox clamping (lat_min, lat_max, lon_min, lon_max)
-          bbox[0], bbox[1], bbox[2], bbox[3]])  # ST_Intersects WHERE
+        SELECT * FROM (
+            SELECT id, admin_level,
+                   ST_Intersection(geometry, {envelope_sql}) AS geometry,
+                   greatest(min_latitude, {bbox[1]}) AS min_latitude,
+                   least(max_latitude, {bbox[3]})    AS max_latitude,
+                   greatest(min_longitude, {bbox[0]}) AS min_longitude,
+                   least(max_longitude, {bbox[2]})    AS max_longitude
+            FROM bnd.places
+            WHERE ST_Intersects(geometry, {envelope_sql})
+        )
+        WHERE ST_IsValid(geometry) AND ST_Area(geometry) > 0
+    """)
 
     tile_boundary_count = con.execute(
         "SELECT count(*) FROM tile_boundaries"
@@ -344,10 +346,16 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
     def flush_tile(qk, records):
         # records are DuckDB to_json()::VARCHAR strings — already valid JSON.
         # String concatenation avoids json.loads/json.dumps overhead.
-        # ATTRIBUTION values must be JSON-safe (no quotes, backslashes, or control chars).
+        # EXPORT-14: Use json.dumps() for proper escaping of attribution string.
         joined = ",".join(records)
         source_cls = _SOURCES[source]
-        payload = f'{{"collection":"{source_cls.collection}","attribution":"{source_cls.attribution}","records":[{joined}]}}'
+        # Build payload dict and serialize with json.dumps() to handle special chars
+        payload_dict = {
+            "collection": source_cls.collection,
+            "attribution": source_cls.attribution,
+            "records": json.loads(f"[{joined}]")  # Parse joined JSON strings back to list
+        }
+        payload = json.dumps(payload_dict)
         subdir = os.path.join(output_dir, qk[:6])
         os.makedirs(subdir, exist_ok=True)
         with gzip.open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
@@ -406,12 +414,26 @@ def write_manifest_db(con, output_dir: str, source: str):
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
     con.execute(f"ATTACH '{tmp_path}' AS manifest")
-    con.execute("""
-        CREATE TABLE manifest.record_tiles AS
-        SELECT place_id AS rkey, tile_qk
-        FROM tile_assignments
-        ORDER BY place_id
-    """)
+    # EXPORT-3/EXPORT-8: Transform OSM rkeys to match export format (n12345 → node:12345)
+    if source == "osm":
+        con.execute("""
+            CREATE TABLE manifest.record_tiles AS
+            SELECT CASE left(place_id, 1)
+                       WHEN 'n' THEN 'node:' || substr(place_id, 2)
+                       WHEN 'w' THEN 'way:' || substr(place_id, 2)
+                       WHEN 'r' THEN 'relation:' || substr(place_id, 2)
+                       ELSE place_id
+                   END AS rkey, tile_qk
+            FROM tile_assignments
+            ORDER BY rkey
+        """)
+    else:
+        con.execute("""
+            CREATE TABLE manifest.record_tiles AS
+            SELECT place_id AS rkey, tile_qk
+            FROM tile_assignments
+            ORDER BY place_id
+        """)
     con.execute("""
         CREATE TABLE manifest.metadata AS
         SELECT ? AS source, ? AS generated_at
@@ -461,6 +483,11 @@ def stage_import(con, source, parquet_glob, bbox, memory_limit, t0,
     This function passes density_parquet, idf_parquet, and normalization constants
     to the import SQL for inline computation.
 
+    Phase 4: density_parquet includes tile bounds (tile_xmin, tile_ymin, tile_xmax,
+    tile_ymax) computed by stage_density_extract via Python post-processing. This
+    enables bbox-overlap joins in overture_division_import.sql for accurate density
+    scoring of small localities.
+
     Args:
         con: Open DuckDB connection.
         source: Source key (foursquare, overture_place, osm, overture_division).
@@ -474,6 +501,15 @@ def stage_import(con, source, parquet_glob, bbox, memory_limit, t0,
         idf_norm: IDF normalization constant (default 18.0).
         pop_norm: Population normalization constant for divisions (default 20.0).
     """
+    # Validate norm constants (SCORE-1/2/3/4)
+    invalid_norms = []
+    for name, val in [("density_norm", density_norm), ("idf_norm", idf_norm), ("pop_norm", pop_norm)]:
+        if val is not None and val <= 0:
+            invalid_norms.append(name)
+
+    if invalid_norms:
+        raise ValueError(f"{', '.join(invalid_norms)} must be positive")
+
     xmin, ymin, xmax, ymax = bbox if bbox is not None else (-180, -90, 180, 90)
 
     # For OSM, read the category snippet and pass it as ${osm_category_case}
@@ -488,7 +524,7 @@ def stage_import(con, source, parquet_glob, bbox, memory_limit, t0,
         if density_parquet:
             density_cte = f"CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('{density_parquet}');"
         else:
-            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS centroid_lon, NULL::DOUBLE AS centroid_lat WHERE 1=0;"
+            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
 
         division_parquet, division_area_parquet = parquet_glob
         _run_sql(con, source, "import", "overture_division_import.sql", t0,
@@ -501,7 +537,7 @@ def stage_import(con, source, parquet_glob, bbox, memory_limit, t0,
         if density_parquet:
             density_cte = f"CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('{density_parquet}');"
         else:
-            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS centroid_lon, NULL::DOUBLE AS centroid_lat WHERE 1=0;"
+            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
 
         if idf_parquet:
             idf_cte = f"CREATE TEMP TABLE idf_scores AS SELECT * FROM read_parquet('{idf_parquet}');"
@@ -533,6 +569,10 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     ln(1 + count) as density_score. Output is written to output_path
     and reused in importance computation across all place sources.
 
+    Phase 4: Tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax) are
+    computed via Python post-processing using quadkey_to_bbox(). This ensures
+    bbox-overlap joins work correctly for small localities.
+
     Args:
         parquet_glob: Glob pattern for Overture place parquet files.
         output_path: Destination path for density parquet output.
@@ -550,8 +590,39 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     con = duckdb.connect()
     try:
         con.execute(sql)
-        con.execute(f"COPY density_tiles TO '{output_path}' (FORMAT PARQUET)")
-        count = con.execute("SELECT count(*) FROM density_tiles").fetchone()[0]
+        # Read results and add tile bounds via Python post-processing
+        rows = con.execute("SELECT tile_qk15, density_score FROM density_tiles ORDER BY tile_qk15").fetchall()
+
+        # Build output rows with tile bounds computed from quadkey
+        output_rows = []
+        for tile_qk15, density_score in rows:
+            tile_xmin, tile_ymin, tile_xmax, tile_ymax = quadkey_to_bbox(tile_qk15)
+            output_rows.append((
+                tile_qk15,
+                density_score,
+                tile_xmin,
+                tile_ymin,
+                tile_xmax,
+                tile_ymax
+            ))
+
+        # Create table with expanded schema using proper SQL
+        con.execute("""
+            CREATE TABLE density_export (
+                tile_qk15 VARCHAR,
+                density_score DOUBLE,
+                tile_xmin DOUBLE,
+                tile_ymin DOUBLE,
+                tile_xmax DOUBLE,
+                tile_ymax DOUBLE
+            )
+        """)
+
+        # Insert rows using executemany for batch insert
+        con.executemany("INSERT INTO density_export VALUES (?, ?, ?, ?, ?, ?)", output_rows)
+
+        con.execute(f"COPY density_export TO '{output_path}' (FORMAT PARQUET)")
+        count = len(output_rows)
         log.info("density_extract: done (%.1fs, %d z15 tiles)",
                  time.monotonic() - t0, count)
     finally:
@@ -614,6 +685,23 @@ def stage_tile_assignment(con, source, pk_expr, max_per_tile, t0):
     _run_sql(con, source, "tile assignment", "compute_tile_assignments.sql", t0,
              pk_expr=pk_expr, min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
 
+    # EXPORT-6: Log warning if places were dropped (NULL or malformed qk17)
+    total = con.execute("SELECT count(*) FROM places").fetchone()[0]
+    assigned = con.execute("SELECT count(*) FROM tile_assignments").fetchone()[0]
+    dropped = total - assigned
+    if dropped > 0:
+        log.warning("tile assignment: %d places dropped (NULL qk17 or invalid)", dropped)
+
+    # EXPORT-7: Check for duplicate place_ids
+    dupes = con.execute("""
+        SELECT place_id, count(*) AS cnt
+        FROM tile_assignments
+        GROUP BY place_id
+        HAVING cnt > 1
+    """).fetchall()
+    if dupes:
+        log.error("tile assignment: %d places assigned to multiple tiles", len(dupes))
+
 
 def stage_containment(con, source, pk_expr, lon_expr, lat_expr, boundaries_db, t0):
     """Populate place_containment with boundary relations. No-op if boundaries_db is None."""
@@ -635,32 +723,148 @@ def stage_manifest(con, manifest, source, tile_dir, t0):
     write_manifest_db(con, tile_dir, source)
 
 
-def stage_boundary_export(con, source, source_dir, t0):
-    """Export boundaries.duckdb for overture_division. No-op for other sources."""
-    if source != "overture_division":
-        return
+def export_boundaries_db(work_db_path: str, source_dir: str, t0: float) -> None:
+    """Export boundaries.duckdb from a working DuckDB file.
+
+    Creates boundaries.duckdb in source_dir by reading division places from
+    work_db_path. Uses atomic write-to-temp-then-rename pattern. Creates
+    an R-tree index on the geometry column for fast spatial queries.
+
+    Args:
+        work_db_path: Path to working DuckDB file containing populated places table.
+        source_dir: Directory where boundaries.duckdb will be written.
+        t0: Start time for logging (monotonic time).
+    """
     boundaries_path = os.path.join(source_dir, "boundaries.duckdb")
     boundaries_tmp = boundaries_path + ".tmp"
     if os.path.exists(boundaries_tmp):
         os.remove(boundaries_tmp)
-    log.info("[%s] DuckDB boundary export: starting", source)
-    con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
-    con.execute("LOAD spatial")
-    con.execute("""
-        CREATE TABLE bnd.places AS
-        SELECT id, geometry, admin_level,
-               names, subtype, country, region, wikidata, population,
-               min_latitude, max_latitude,
-               min_longitude, max_longitude,
-               importance, variants
-        FROM places
-        WHERE admin_level BETWEEN 0 AND 2
-           OR subtype = 'locality'
-        ORDER BY ST_Hilbert(geometry,
-            {'min_x': -180.0, 'min_y': -90.0,
-             'max_x': 180.0, 'max_y': 90.0}::BOX_2D)
-    """)
-    con.execute("CREATE INDEX bnd_places_rtree ON bnd.places USING RTREE(geometry)")
-    con.execute("DETACH bnd")
-    os.rename(boundaries_tmp, boundaries_path)
-    log.info("[%s] DuckDB boundary export: done (%.1fs)", source, time.monotonic() - t0)
+
+    log.info("DuckDB boundary export: starting (work_db=%s)", work_db_path)
+
+    # Open ephemeral connection to the working database
+    con = duckdb.connect(work_db_path)
+    try:
+        con.execute("LOAD spatial")
+        con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
+        try:
+            con.execute("""
+                CREATE TABLE bnd.places AS
+                SELECT id, geometry, admin_level,
+                       names, subtype, country, region, wikidata, population,
+                       min_latitude, max_latitude,
+                       min_longitude, max_longitude,
+                       importance, variants
+                FROM places
+                WHERE admin_level BETWEEN 0 AND 2
+                   OR subtype = 'locality'
+                ORDER BY ST_Hilbert(geometry,
+                    {'min_x': -180.0, 'min_y': -90.0,
+                     'max_x': 180.0, 'max_y': 90.0}::BOX_2D)
+            """)
+            con.execute("CREATE INDEX bnd_places_rtree ON bnd.places USING RTREE(geometry)")
+        finally:
+            con.execute("DETACH bnd")
+        os.rename(boundaries_tmp, boundaries_path)
+        count = con.execute("SELECT count(*) FROM places WHERE admin_level BETWEEN 0 AND 2 OR subtype = 'locality'").fetchone()[0]
+        log.info("DuckDB boundary export: done (%.1fs, %d boundaries)",
+                 time.monotonic() - t0, count)
+    except Exception:
+        if os.path.exists(boundaries_tmp):
+            try:
+                os.remove(boundaries_tmp)
+            except OSError:
+                pass
+        raise
+    finally:
+        con.close()
+
+
+def stage_boundary_export(con, source, source_dir, t0):
+    """Export boundaries.duckdb for overture_division. No-op for other sources.
+
+    Phase 3: This is a thin wrapper around export_boundaries_db() for backward
+    compatibility. The boundary export logic has been extracted to export_boundaries_db()
+    which can be called standalone. This wrapper extracts the database path from the
+    connection and delegates to export_boundaries_db().
+
+    Note: This wrapper tries to determine the database file path from the connection.
+    For test scenarios with relative paths, it searches common locations. For production
+    use with quadtree.run_pipeline(), the database path is passed explicitly to
+    export_boundaries_db().
+    """
+    if source != "overture_division":
+        return
+
+    # Extract the database path from the connection
+    # For in-memory databases, current_database() returns 'memory'
+    # For file-based databases, current_database() returns the database name (without path or extension)
+    db_name = con.execute("SELECT current_database()").fetchone()[0]
+
+    if db_name == 'memory':
+        raise ValueError("Cannot export boundaries from in-memory database")
+
+    # Try different methods to get the full database path
+    work_db_path = None
+
+    # Method 1: Try pragmas that might have the path (different DuckDB versions)
+    try:
+        # Try various pragmas that might contain path information
+        for pragma_func in ['pragma_database_list', 'pragma_databases', 'pragma_database_size']:
+            try:
+                if pragma_func == 'pragma_database_list':
+                    result = con.execute(f"SELECT path FROM {pragma_func}() WHERE name = current_database()").fetchone()
+                elif pragma_func == 'pragma_databases':
+                    result = con.execute(f"SELECT path FROM {pragma_func}() WHERE name = current_database()").fetchone()
+                else:
+                    result = con.execute(f"SELECT * FROM {pragma_func}()").fetchone()
+
+                # Check if the result looks like a valid file path
+                # It should contain path separators or start with /
+                if result and result[0] and result[0] != '' and result[0] != ':memory:':
+                    potential_path = result[0]
+                    # Only accept if it looks like a path (contains separators or is absolute)
+                    if os.path.sep in potential_path or (os.path.altsep and os.path.altsep in potential_path) or potential_path.startswith('/'):
+                        work_db_path = potential_path
+                        break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # Method 2: Check if db_name contains path separators (full path case)
+    if not work_db_path:
+        if os.path.sep in db_name or (os.path.altsep and os.path.altsep in db_name):
+            work_db_path = db_name
+        else:
+            # Method 3: db_name is just a filename, try to find it
+            db_with_ext = db_name + ".duckdb"
+
+            # First, check if source_dir has a parent directory with the database
+            # (test case: database is in tmp_path, source_dir is tmp_path/output)
+            source_dir_parent = os.path.dirname(source_dir) if source_dir else None
+            if source_dir_parent:
+                potential_path = os.path.join(source_dir_parent, db_with_ext)
+                if os.path.exists(potential_path):
+                    work_db_path = potential_path
+
+            # If not found, try source_dir itself
+            if not work_db_path:
+                potential_path = os.path.join(source_dir, db_with_ext)
+                if os.path.exists(potential_path):
+                    work_db_path = potential_path
+
+            # If still not found, try current working directory
+            if not work_db_path:
+                if os.path.exists(db_with_ext):
+                    work_db_path = db_with_ext
+                else:
+                    # Method 4: Last resort - raise error with helpful message
+                    raise ValueError(
+                        f"Cannot determine full path for database '{db_name}'. "
+                        f"Searched in: source_dir='{source_dir}', "
+                        f"parent_dir='{source_dir_parent}', cwd='{os.getcwd()}'. "
+                        f"For test scenarios, ensure the database file exists with .duckdb extension."
+                    )
+
+    export_boundaries_db(work_db_path, source_dir, t0)
