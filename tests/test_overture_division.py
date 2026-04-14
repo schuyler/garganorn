@@ -129,63 +129,59 @@ class TestSQLFiles:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline skips importance/variants for overture_division
+# Pipeline computes importance/variants inline for all sources (Phase 2)
 # ---------------------------------------------------------------------------
 
 class TestPipelineSkipsImportanceVariants:
-    """run_pipeline must skip importance and variants stages for overture_division.
+    """run_pipeline computes importance/variants inline for all sources (Phase 2).
 
-    The current code unconditionally runs importance and variants for all
-    sources. Phase 2 must add a conditional to skip these for
-    overture_division (which computes importance=0 and variants=[] inline
-    in its import SQL).
+    Phase 2 eliminated separate importance and variants stages. All sources
+    now compute these values inline during import. overture_division uses
+    a hybrid formula (density+population) and sets variants=[] inline in
+    its import SQL.
     """
 
-    def test_importance_skipped_for_overture_division(self):
-        """The run_pipeline code path for overture_division must not call
-        run_sql with 'importance' stage.
+    def test_importance_computed_inline_for_overture_division(self):
+        """run_pipeline computes importance inline during import for all sources.
 
-        We verify this by inspecting the source code of run_pipeline for a
-        conditional that guards the importance/variants calls. The current
-        code has no such guard, so this test fails until the conditional is
-        added.
+        Phase 2 eliminated separate importance/variants stages. We verify this
+        by checking that run_pipeline passes density_parquet and idf_parquet
+        to stage_import (which computes importance inline in the SQL CTAS).
         """
         import inspect
         from garganorn.quadtree import run_pipeline
 
         source_code = inspect.getsource(run_pipeline)
 
-        # The implementation must contain a conditional that checks for
-        # overture_division before running importance/variants.
-        # Look for the skip pattern described in the design.
-        assert "overture_division" in source_code, (
-            "run_pipeline source code does not mention 'overture_division'; "
-            "expected a conditional to skip importance/variants stages"
+        # Phase 2: run_pipeline must pass density_parquet and idf_parquet to stage_import
+        assert "stage_import(" in source_code, "run_pipeline must call stage_import"
+        assert "density_parquet=" in source_code, (
+            "run_pipeline must pass density_parquet to stage_import for inline importance"
+        )
+        # overture_division doesn't use IDF, but other sources do
+        assert "idf_parquet=" in source_code, (
+            "run_pipeline must pass idf_parquet to stage_import for inline importance"
         )
 
-    def test_variants_skipped_for_overture_division(self):
-        """The run_pipeline code must skip variants for overture_division.
+    def test_variants_computed_inline_for_overture_division(self):
+        """run_pipeline computes variants inline during import for all sources.
 
-        Same approach: inspect source code for the conditional guard.
+        Phase 2 eliminated the separate variants stage. We verify this by
+        checking that run_pipeline no longer calls a separate variants stage.
+        overture_division sets variants=[] inline in its import SQL.
         """
         import inspect
         from garganorn.quadtree import run_pipeline
 
         source_code = inspect.getsource(run_pipeline)
 
-        # The current code unconditionally calls:
-        #   run_sql("variants", f"{source}_variants.sql")
-        # After Phase 2, there must be a conditional wrapping this call
-        # that excludes overture_division.
-        # We check that overture_division appears near importance/variants logic.
-        has_skip = (
-            'overture_division' in source_code
-            and ('not in' in source_code or 'skip' in source_code.lower()
-                 or '!=' in source_code)
+        # Phase 2: run_pipeline must NOT call a separate variants stage
+        assert "stage_variants" not in source_code, (
+            "run_pipeline must not call stage_variants (Phase 2 eliminated this stage)"
         )
-        assert has_skip, (
-            "run_pipeline does not contain a conditional to skip "
-            "importance/variants for overture_division"
+        # Verify that stage_import is called (variants are computed inline in import SQL)
+        assert "stage_import(" in source_code, (
+            "run_pipeline must call stage_import (variants computed inline)"
         )
 
     def test_overture_division_registered_in_sources(self):

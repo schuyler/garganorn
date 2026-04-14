@@ -70,6 +70,9 @@ FSQ_ROWS = [
 def run_fsq_import(conn, parquet_glob, bbox=None):
     if bbox is None:
         bbox = SF_BBOX
+    # Create empty density and IDF temp tables for test imports (importance defaults to 0)
+    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score WHERE 1=0;"
+    idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
     substitutions = {
         "memory_limit": "4GB",
         "parquet_glob": parquet_glob,
@@ -77,6 +80,10 @@ def run_fsq_import(conn, parquet_glob, bbox=None):
         "xmax": bbox["xmax"],
         "ymin": bbox["ymin"],
         "ymax": bbox["ymax"],
+        "density_cte": density_cte,
+        "idf_cte": idf_cte,
+        "density_norm": 10.0,
+        "idf_norm": 18.0,
     }
     raw_sql = _load_sql("foursquare_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
@@ -86,6 +93,9 @@ def run_fsq_import(conn, parquet_glob, bbox=None):
 def run_overture_import(conn, parquet_glob, bbox=None):
     if bbox is None:
         bbox = OV_BBOX
+    # Create empty density and IDF temp tables for test imports (importance defaults to 0)
+    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score WHERE 1=0;"
+    idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
     substitutions = {
         "memory_limit": "4GB",
         "parquet_glob": parquet_glob,
@@ -93,6 +103,10 @@ def run_overture_import(conn, parquet_glob, bbox=None):
         "xmax": bbox["xmax"],
         "ymin": bbox["ymin"],
         "ymax": bbox["ymax"],
+        "density_cte": density_cte,
+        "idf_cte": idf_cte,
+        "density_norm": 10.0,
+        "idf_norm": 18.0,
     }
     raw_sql = _load_sql("overture_place_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
@@ -104,6 +118,11 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None):
         bbox = OSM_SF_BBOX
     if way_glob is None:
         way_glob = node_glob
+    # Create empty density and IDF temp tables for test imports (importance defaults to 0)
+    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score WHERE 1=0;"
+    idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
+    # Load OSM category case SQL
+    osm_category_case = (REPO_ROOT / "garganorn" / "sql" / "_osm_category_case.sql").read_text().strip()
     substitutions = {
         "memory_limit": "4GB",
         "node_parquet": node_glob,
@@ -112,6 +131,11 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None):
         "xmax": bbox["xmax"],
         "ymin": bbox["ymin"],
         "ymax": bbox["ymax"],
+        "density_cte": density_cte,
+        "idf_cte": idf_cte,
+        "density_norm": 10.0,
+        "idf_norm": 18.0,
+        "osm_category_case": osm_category_case,
     }
     raw_sql = _load_sql("osm_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))

@@ -452,24 +452,76 @@ def bboxes_intersect(a, b):
     return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
 
 
-def stage_import(con, source, parquet_glob, bbox, memory_limit, t0):
-    """Import parquet data into places table. Handles bbox unpacking and source dispatch."""
+def stage_import(con, source, parquet_glob, bbox, memory_limit, t0,
+                  density_parquet=None, idf_parquet=None,
+                  density_norm=10.0, idf_norm=18.0, pop_norm=20.0):
+    """Import parquet data into places table. Handles bbox unpacking and source dispatch.
+
+    Phase 2: importance and variants computation are now absorbed into the import stage.
+    This function passes density_parquet, idf_parquet, and normalization constants
+    to the import SQL for inline computation.
+
+    Args:
+        con: Open DuckDB connection.
+        source: Source key (foursquare, overture_place, osm, overture_division).
+        parquet_glob: Parquet path(s).
+        bbox: (xmin, ymin, xmax, ymax) or None for global.
+        memory_limit: DuckDB memory limit string.
+        t0: Start time for logging.
+        density_parquet: Path to density_tiles.parquet (optional, defaults to empty).
+        idf_parquet: Path to idf_scores.parquet (optional, defaults to empty for fsq/overture/osm).
+        density_norm: Density normalization constant (default 10.0).
+        idf_norm: IDF normalization constant (default 18.0).
+        pop_norm: Population normalization constant for divisions (default 20.0).
+    """
     xmin, ymin, xmax, ymax = bbox if bbox is not None else (-180, -90, 180, 90)
+
+    # For OSM, read the category snippet and pass it as ${osm_category_case}
+    osm_category_case = None
     if source == "osm":
-        node_parquet, way_parquet = parquet_glob
-        _run_sql(con, source, "import", "osm_import.sql", t0,
-                 memory_limit=memory_limit, node_parquet=node_parquet,
-                 way_parquet=way_parquet, xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
-    elif source == "overture_division":
+        osm_category_case = (_SQL_DIR / "_osm_category_case.sql").read_text().strip()
+
+    # Build density and IDF CTEs based on whether paths are provided
+    # When None, create empty temp tables (LEFT JOINs produce NULL, importance defaults to 0)
+    if source == "overture_division":
+        # Divisions only use density, no IDF
+        if density_parquet:
+            density_cte = f"CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('{density_parquet}');"
+        else:
+            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS centroid_lon, NULL::DOUBLE AS centroid_lat WHERE 1=0;"
+
         division_parquet, division_area_parquet = parquet_glob
         _run_sql(con, source, "import", "overture_division_import.sql", t0,
                  memory_limit=memory_limit, division_parquet=division_parquet,
                  division_area_parquet=division_area_parquet,
-                 xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
+                 xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
+                 density_cte=density_cte, density_norm=density_norm, pop_norm=pop_norm)
     else:
-        _run_sql(con, source, "import", f"{source}_import.sql", t0,
-                 memory_limit=memory_limit, parquet_glob=parquet_glob,
-                 xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
+        # FSQ, Overture, OSM use both density and IDF
+        if density_parquet:
+            density_cte = f"CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('{density_parquet}');"
+        else:
+            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS centroid_lon, NULL::DOUBLE AS centroid_lat WHERE 1=0;"
+
+        if idf_parquet:
+            idf_cte = f"CREATE TEMP TABLE idf_scores AS SELECT * FROM read_parquet('{idf_parquet}');"
+        else:
+            idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
+
+        if source == "osm":
+            node_parquet, way_parquet = parquet_glob
+            _run_sql(con, source, "import", "osm_import.sql", t0,
+                     memory_limit=memory_limit, node_parquet=node_parquet,
+                     way_parquet=way_parquet, xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
+                     osm_category_case=osm_category_case,
+                     density_cte=density_cte, idf_cte=idf_cte,
+                     density_norm=density_norm, idf_norm=idf_norm)
+        else:
+            _run_sql(con, source, "import", f"{source}_import.sql", t0,
+                     memory_limit=memory_limit, parquet_glob=parquet_glob,
+                     xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
+                     density_cte=density_cte, idf_cte=idf_cte,
+                     density_norm=density_norm, idf_norm=idf_norm)
 
 
 def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
@@ -537,8 +589,11 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False):
     log.info("idf: starting (ephemeral connection)")
     sql = (_SQL_DIR / f"{source}_idf.sql").read_text()
 
+    # For OSM, read the category snippet and pass it as ${osm_category_case}
     if source == "osm":
         node_glob, way_glob = parquet_glob
+        osm_category_case = (_SQL_DIR / "_osm_category_case.sql").read_text().strip()
+        sql = sql.replace("${osm_category_case}", osm_category_case)
         sql = sql.replace("${node_parquet}", str(node_glob))
         sql = sql.replace("${way_parquet}", str(way_glob))
     else:
@@ -552,33 +607,6 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False):
         log.info("idf: done (%.1fs, %d categories)", time.monotonic() - t0, count)
     finally:
         con.close()
-
-
-def stage_importance(con, source, t0, density_parquet, density_norm=10.0, idf_norm=18.0):
-    """Compute importance scores using density and IDF.
-
-    Runs source-specific importance SQL which LEFT JOINs density_parquet
-    (z15 tile density from stage_density_extract) and computes IDF scores
-    per category. Final importance = 60% density + 40% IDF, both normalized
-    and clamped to [0, 100].
-
-    Args:
-        con: Open DuckDB connection with places table.
-        source: Source key for SQL filename lookup.
-        t0: Start time for logging.
-        density_parquet: Path to z15 density parquet from stage_density_extract.
-        density_norm: Density score normalization factor (default 10.0).
-        idf_norm: IDF score normalization factor (default 18.0).
-
-    Note: Caller must guard for overture_division (no importance computation).
-    """
-    _run_sql(con, source, "importance", f"{source}_importance.sql", t0,
-             density_parquet=density_parquet, density_norm=density_norm, idf_norm=idf_norm)
-
-
-def stage_variants(con, source, t0):
-    """Compute name variants. Guard for overture_division is in the caller."""
-    _run_sql(con, source, "variants", f"{source}_variants.sql", t0)
 
 
 def stage_tile_assignment(con, source, pk_expr, max_per_tile, t0):
@@ -605,27 +633,6 @@ def stage_manifest(con, manifest, source, tile_dir, t0):
     """Write manifest.json and manifest.duckdb."""
     write_manifest(manifest, tile_dir, source)
     write_manifest_db(con, tile_dir, source)
-
-
-def stage_division_importance_backfill(con, density_parquet, t0,
-                                       density_norm=10.0, pop_norm=20.0):
-    """Backfill division importance from density + population.
-
-    Localities get 60% density + 40% population. Non-localities get
-    population only. Density is the average density_score of z15 tiles
-    whose centroids fall within the division's bbox.
-
-    Args:
-        con: Open DuckDB connection with places table (overture_division schema).
-        density_parquet: Path to density_tiles.parquet (must have centroid_lon/centroid_lat).
-        t0: Start time for logging (monotonic time).
-        density_norm: Density score normalization factor (default 10.0).
-        pop_norm: Population normalization factor (default 20.0).
-    """
-    _run_sql(con, "overture_division", "importance backfill",
-             "division_importance_backfill.sql", t0,
-             density_parquet=density_parquet, density_norm=density_norm,
-             pop_norm=pop_norm)
 
 
 def stage_boundary_export(con, source, source_dir, t0):

@@ -1,6 +1,5 @@
 -- Compute IDF scores per OSM primary category from raw node and way parquets.
--- Uses UNION ALL to combine node and way data, applies the same CASE expression
--- from osm_import.sql to extract primary_category from tags.
+-- Uses _osm_category_case.sql snippet substitution to share CASE expression with osm_import.sql.
 -- Filters to named elements only (tags['name'] IS NOT NULL).
 -- No category whitelists/blacklists (global IDF).
 DROP TABLE IF EXISTS idf_scores;
@@ -11,46 +10,14 @@ SELECT
     ln(N.total::DOUBLE / count(*)::DOUBLE) AS idf_score
 FROM (
     SELECT
-        CASE
-            WHEN tags['amenity'] IS NOT NULL THEN 'amenity=' || tags['amenity']
-            WHEN tags['shop'] IS NOT NULL THEN 'shop=' || tags['shop']
-            WHEN tags['tourism'] IS NOT NULL THEN 'tourism=' || tags['tourism']
-            WHEN tags['leisure'] IS NOT NULL THEN 'leisure=' || tags['leisure']
-            WHEN tags['office'] IS NOT NULL THEN 'office=' || tags['office']
-            WHEN tags['craft'] IS NOT NULL THEN 'craft=' || tags['craft']
-            WHEN tags['healthcare'] IS NOT NULL THEN 'healthcare=' || tags['healthcare']
-            WHEN tags['historic'] IS NOT NULL THEN 'historic=' || tags['historic']
-            WHEN tags['natural'] IS NOT NULL THEN 'natural=' || tags['natural']
-            WHEN tags['man_made'] IS NOT NULL THEN 'man_made=' || tags['man_made']
-            WHEN tags['aeroway'] IS NOT NULL THEN 'aeroway=' || tags['aeroway']
-            WHEN tags['railway'] IS NOT NULL THEN 'railway=' || tags['railway']
-            WHEN tags['public_transport'] IS NOT NULL
-                THEN 'public_transport=' || tags['public_transport']
-            WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
-        END AS primary_category
+        ${osm_category_case} AS primary_category
     FROM read_parquet('${node_parquet}')
     WHERE tags['name'] IS NOT NULL
 
     UNION ALL
 
     SELECT
-        CASE
-            WHEN tags['amenity'] IS NOT NULL THEN 'amenity=' || tags['amenity']
-            WHEN tags['shop'] IS NOT NULL THEN 'shop=' || tags['shop']
-            WHEN tags['tourism'] IS NOT NULL THEN 'tourism=' || tags['tourism']
-            WHEN tags['leisure'] IS NOT NULL THEN 'leisure=' || tags['leisure']
-            WHEN tags['office'] IS NOT NULL THEN 'office=' || tags['office']
-            WHEN tags['craft'] IS NOT NULL THEN 'craft=' || tags['craft']
-            WHEN tags['healthcare'] IS NOT NULL THEN 'healthcare=' || tags['healthcare']
-            WHEN tags['historic'] IS NOT NULL THEN 'historic=' || tags['historic']
-            WHEN tags['natural'] IS NOT NULL THEN 'natural=' || tags['natural']
-            WHEN tags['man_made'] IS NOT NULL THEN 'man_made=' || tags['man_made']
-            WHEN tags['aeroway'] IS NOT NULL THEN 'aeroway=' || tags['aeroway']
-            WHEN tags['railway'] IS NOT NULL THEN 'railway=' || tags['railway']
-            WHEN tags['public_transport'] IS NOT NULL
-                THEN 'public_transport=' || tags['public_transport']
-            WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
-        END AS primary_category
+        ${osm_category_case} AS primary_category
     FROM read_parquet('${way_parquet}')
     WHERE tags['name'] IS NOT NULL
 ) combined

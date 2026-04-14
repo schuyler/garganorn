@@ -22,13 +22,10 @@ from .stages import (
     stage_import,
     stage_density_extract,
     stage_idf,
-    stage_importance,
-    stage_variants,
     stage_tile_assignment,
     stage_containment,
     stage_export,
     stage_manifest,
-    stage_division_importance_backfill,
     stage_boundary_export,
     _is_output_fresh,
 )
@@ -39,10 +36,7 @@ SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenSt
 
 _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
 
-STAGE_ORDER = {
-    'default': ['import', 'importance', 'variants', 'tile_assignment', 'containment', 'export', 'manifest'],
-    'overture_division': ['import', 'boundary_export', 'division_importance_backfill', 'tile_assignment', 'containment', 'export', 'manifest'],
-}
+STAGE_ORDER = ['import', 'tile_assignment', 'containment', 'export', 'manifest']
 
 
 def _ensure_sentinel_table(con):
@@ -111,7 +105,7 @@ def _find_incomplete_run(source_dir, source):
     return candidates[0] if candidates else None
 
 
-def _collect_input_files(source, parquet_glob, density_parquet, boundaries_db):
+def _collect_input_files(source, parquet_glob, density_parquet, idf_parquet, boundaries_db):
     """Collect all input file paths for mtime comparison."""
     files = []
 
@@ -130,30 +124,31 @@ def _collect_input_files(source, parquet_glob, density_parquet, boundaries_db):
 
     if density_parquet and os.path.exists(density_parquet):
         files.append(density_parquet)
+    if idf_parquet and os.path.exists(idf_parquet):
+        files.append(idf_parquet)
     if boundaries_db and os.path.exists(boundaries_db):
         files.append(boundaries_db)
 
     return sorted(files)
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, force=False):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False):
     """Run the full import-assign-containment-export pipeline for a data source.
 
     Stage logic is delegated to individual functions in garganorn.stages.
     This orchestrator handles connection lifecycle, directory setup, and cleanup.
 
-    Stages:
+    Stages (Phase 2 restructuring):
       1. Import: load parquet into a `places` DuckDB table via source-specific SQL.
-      2. Importance + variants: compute search ranking and name variants (skipped for
-         overture_division, which inlines importance=0 and variants=[] in the import SQL).
-      3. Tile assignment: assign each place to one or more quadtree tiles.
-      4. Containment: populate place_containment with admin boundary relations
+         Importance and variants are now computed inline during import.
+      2. Tile assignment: assign each place to one or more quadtree tiles.
+      3. Containment: populate place_containment with admin boundary relations
          (no-op if boundaries_db is None).
-      5. Export tiles: write gzipped JSON tile files to a timestamped subdirectory.
-      6. Manifest: write manifest.json and manifest.duckdb for tile serving.
-      7. DuckDB boundary export (overture_division only): write boundaries.duckdb with
+      4. Export tiles: write gzipped JSON tile files to a timestamped subdirectory.
+      5. Manifest: write manifest.json and manifest.duckdb for tile serving.
+      6. DuckDB boundary export (overture_division only): write boundaries.duckdb with
          Hilbert-sorted geometries and an R-tree index for use by other sources'
-         containment stage.
+         containment stage. Runs between import and tile_assignment as a special case.
 
     Output layout:
       <output_dir>/<source>/<timestamp>/   -- tile files, manifests
@@ -175,6 +170,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         boundaries_db: Path to boundaries.duckdb for containment enrichment, or None.
         export_workers: Thread count for tile gzip compression. Defaults to CPU count.
         density_parquet: Path to density_tiles.parquet from stage_density_extract.
+        idf_parquet: Path to idf_scores.parquet from stage_idf (required for fsq/overture/osm).
         force: If True, re-run even if output is fresh. Default False.
     """
     source_dir = os.path.join(output_dir, source)
@@ -182,7 +178,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
     if not force:
         input_files = _collect_input_files(source, parquet_glob,
-                                            density_parquet, boundaries_db)
+                                            density_parquet, idf_parquet, boundaries_db)
         if _is_output_fresh(manifest_path, input_files):
             log.info("[%s] pipeline: skipping (manifest is fresh)", source)
             return
@@ -200,10 +196,6 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             except OSError:
                 pass
             incomplete_dir = None
-
-    # Determine stage order for this source
-    stage_order_key = 'overture_division' if source == 'overture_division' else 'default'
-    stage_order = STAGE_ORDER[stage_order_key]
 
     # Set up directory and working DB
     if incomplete_dir:
@@ -230,35 +222,19 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
     try:
         if 'import' not in completed:
-            stage_import(con, source, parquet_glob, bbox, memory_limit, t0)
+            stage_import(con, source, parquet_glob, bbox, memory_limit, t0,
+                        density_parquet=density_parquet, idf_parquet=idf_parquet)
             _mark_complete(con, 'import')
         else:
             log.info("[%s] Skipping 'import' stage (already complete)", source)
 
+        # Special case: overture_division boundary_export runs after import
         if source == "overture_division":
             if 'boundary_export' not in completed:
                 stage_boundary_export(con, source, source_dir, t0)
                 _mark_complete(con, 'boundary_export')
             else:
                 log.info("[%s] Skipping 'boundary_export' stage (already complete)", source)
-
-            if 'division_importance_backfill' not in completed:
-                stage_division_importance_backfill(con, density_parquet, t0)
-                _mark_complete(con, 'division_importance_backfill')
-            else:
-                log.info("[%s] Skipping 'division_importance_backfill' stage (already complete)", source)
-        else:
-            if 'importance' not in completed:
-                stage_importance(con, source, t0, density_parquet)
-                _mark_complete(con, 'importance')
-            else:
-                log.info("[%s] Skipping 'importance' stage (already complete)", source)
-
-            if 'variants' not in completed:
-                stage_variants(con, source, t0)
-                _mark_complete(con, 'variants')
-            else:
-                log.info("[%s] Skipping 'variants' stage (already complete)", source)
 
         pk_expr = SOURCES[source].source_pk
 
@@ -474,6 +450,7 @@ def main():
         boundaries_db=boundaries_db,
         export_workers=args.export_workers,
         density_parquet=args.density_parquet,
+        idf_parquet=args.idf_parquet,
         force=args.force,
     )
 

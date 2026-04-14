@@ -5,9 +5,11 @@ After implementation, they should pass.
 
 Tests are organized by stage function:
 - TestStageImport: tests for stage_import()
-- TestStageImportance: tests for stage_importance()
 - TestStageTileAssignment: tests for stage_tile_assignment()
 - TestStageOrchestration: integration test verifying stages match run_pipeline()
+
+Note: TestStageImportance was removed after Phase 2 changes, as importance
+and variants are now computed inline during stage_import.
 """
 import time
 import json
@@ -22,8 +24,6 @@ import duckdb
 # These imports will fail with ImportError until garganorn.stages is implemented
 from garganorn.stages import (
     stage_import,
-    stage_importance,
-    stage_variants,
     stage_tile_assignment,
     stage_containment,
     stage_export,
@@ -116,56 +116,6 @@ class TestStageImport:
 
 
 # ---------------------------------------------------------------------------
-# TestStageImportance
-# ---------------------------------------------------------------------------
-
-class TestStageImportance:
-    """Tests for stage_importance function which adds importance column."""
-
-    def test_adds_importance_fsq(self, fsq_parquet, density_parquet, tmp_path):
-        """stage_importance for foursquare adds importance column with non-zero values."""
-        con = duckdb.connect(str(tmp_path / "test.duckdb"))
-        con.execute("INSTALL spatial; LOAD spatial;")
-        t0 = time.monotonic()
-
-        # First import
-        stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-
-        # Then add importance
-        stage_importance(con, "foursquare", t0, density_parquet)
-
-        # Verify importance column exists and has non-zero values
-        rows = con.execute(
-            "SELECT COUNT(*) FROM places WHERE importance > 0"
-        ).fetchone()[0]
-        assert rows > 0, "Some places should have importance > 0"
-        con.close()
-
-    def test_skipped_for_division(self, overture_parquet, density_parquet, tmp_path):
-        """stage_importance works correctly for non-division sources.
-
-        The guard is in the caller (run_pipeline), but stage_importance itself
-        should work when called for any source that has a places table.
-        """
-        con = duckdb.connect(str(tmp_path / "test.duckdb"))
-        con.execute("INSTALL spatial; LOAD spatial;")
-        t0 = time.monotonic()
-
-        # Import overture_place data
-        stage_import(con, "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-
-        # Add importance (this should work)
-        stage_importance(con, "overture_place", t0, density_parquet)
-
-        # Verify importance column exists
-        rows = con.execute(
-            "SELECT COUNT(*) FROM places WHERE importance IS NOT NULL"
-        ).fetchone()[0]
-        assert rows > 0, "All places should have importance set"
-        con.close()
-
-
-# ---------------------------------------------------------------------------
 # TestStageTileAssignment
 # ---------------------------------------------------------------------------
 
@@ -173,15 +123,13 @@ class TestStageTileAssignment:
     """Tests for stage_tile_assignment function."""
 
     def test_creates_tile_assignments(self, fsq_parquet, density_parquet, tmp_path):
-        """stage_tile_assignment creates tile_assignments table after import + importance."""
+        """stage_tile_assignment creates tile_assignments table after import."""
         con = duckdb.connect(str(tmp_path / "test.duckdb"))
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Run import + importance
+        # Run import (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
 
         # Run tile assignment
         pk_expr = SOURCES["foursquare"].source_pk  # "fsq_place_id"
@@ -231,10 +179,8 @@ class TestStageOrchestration:
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Import + importance + variants
+        # Import (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, bbox, "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
 
         # Tile assignment
         pk_expr = SOURCES["foursquare"].source_pk
@@ -304,10 +250,8 @@ class TestStageContainment:
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Run up to tile assignment
+        # Run up to tile assignment (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
 
@@ -326,10 +270,8 @@ class TestStageContainment:
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Run up to tile assignment
+        # Run up to tile assignment (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
 
@@ -356,10 +298,8 @@ class TestStageExport:
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Run up to containment
+        # Run up to containment (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
         lon_expr, lat_expr = "p.longitude", "p.latitude"
@@ -394,10 +334,8 @@ class TestStageManifest:
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Run up to export
+        # Run up to export (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
         lon_expr, lat_expr = "p.longitude", "p.latitude"
@@ -429,10 +367,8 @@ class TestStageManifest:
         con.execute("INSTALL spatial; LOAD spatial;")
         t0 = time.monotonic()
 
-        # Run up to export
+        # Run up to export (importance and variants are now computed inline)
         stage_import(con, "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85), "4GB", t0)
-        stage_importance(con, "foursquare", t0, density_parquet)
-        stage_variants(con, "foursquare", t0)
         pk_expr = SOURCES["foursquare"].source_pk
         stage_tile_assignment(con, "foursquare", pk_expr, 100, t0)
         lon_expr, lat_expr = "p.longitude", "p.latitude"

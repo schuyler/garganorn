@@ -844,18 +844,10 @@ class TestOvertureExportTiles:
 
     def _run_full_pipeline(self, conn, parquet_glob, density_parquet):
         """Run all Overture pipeline SQL stages on conn."""
-        # 1. Import
+        # 1. Import (includes importance and variants computation)
         run_overture_import(conn, parquet_glob)
 
-        # 2. Importance
-        raw = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0", "density_parquet": density_parquet})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
-
-        # 3. Variants
-        raw = _load_sql("overture_place_variants.sql", {})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
-
-        # 4. Tile assignments (pk_expr='id' for Overture)
+        # 2. Tile assignments (pk_expr='id' for Overture)
         run_tile_assignments(conn, pk_expr="id", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
         # 4b. Empty place_containment (no boundaries in pipeline tests)
@@ -1215,10 +1207,6 @@ class TestContainmentInExport:
 
         # Run the full Overture pipeline to get places + tile_assignments
         run_overture_import(conn, overture_parquet)
-        raw = _load_sql("overture_place_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0", "density_parquet": density_parquet})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
-        raw = _load_sql("overture_place_variants.sql", {})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
         run_tile_assignments(conn, pk_expr="id", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
         # Populate place_containment for ov001
@@ -1270,12 +1258,8 @@ class TestContainmentInExport:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
 
-        # Run the full OSM pipeline
+        # Run the full OSM pipeline (includes importance and variants computation)
         run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
-        raw = _load_sql("osm_importance.sql", {"density_norm": "10.0", "idf_norm": "18.0", "density_parquet": density_parquet})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
-        raw = _load_sql("osm_variants.sql", {})
-        conn.execute(_strip_spatial_install(_strip_memory_limit(raw)))
         run_tile_assignments(conn, pk_expr="rkey", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
         # Get a valid rkey from the imported places to use for containment

@@ -135,15 +135,13 @@ class TestSQLFileNames:
     """Test that SQL files are renamed from old names to new names."""
 
     NEW_SQL_FILES = [
-        "foursquare_import.sql", "foursquare_importance.sql",
-        "foursquare_variants.sql", "foursquare_export_tiles.sql",
-        "overture_place_import.sql", "overture_place_importance.sql",
-        "overture_place_variants.sql", "overture_place_export_tiles.sql",
+        "foursquare_import.sql", "foursquare_export_tiles.sql",
+        "overture_place_import.sql", "overture_place_export_tiles.sql",
     ]
 
     OLD_SQL_FILES = [
-        "fsq_import.sql", "fsq_importance.sql", "fsq_variants.sql", "fsq_export_tiles.sql",
-        "overture_import.sql", "overture_importance.sql", "overture_variants.sql", "overture_export_tiles.sql",
+        "fsq_import.sql", "fsq_export_tiles.sql",
+        "overture_import.sql", "overture_export_tiles.sql",
     ]
 
     @pytest.mark.parametrize("filename", NEW_SQL_FILES)

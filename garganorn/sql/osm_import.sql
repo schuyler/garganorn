@@ -3,6 +3,12 @@ DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
 INSTALL spatial; LOAD spatial;
 
+-- Load density and IDF parquet files as temp tables
+-- When parquet path is None, create empty temp tables (LEFT JOINs produce NULL, importance defaults to 0)
+${density_cte}
+${idf_cte}
+
+-- Import OSM nodes and ways, compute importance inline (Phase 2: density+IDF+importance unified in import CTAS)
 CREATE TABLE places (
     osm_type         VARCHAR,
     osm_id           BIGINT,
@@ -15,7 +21,8 @@ CREATE TABLE places (
     tags             MAP(VARCHAR, VARCHAR),
     bbox             STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
     importance       INTEGER DEFAULT 0,
-    qk17             VARCHAR               -- quadkey at zoom 17; computed inline during INSERT
+    qk17             VARCHAR,              -- quadkey at zoom 17; computed inline during INSERT
+    variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
 );
 
 INSERT INTO places
@@ -27,23 +34,7 @@ WITH filtered AS (
         lat AS latitude,
         lon AS longitude,
         tags,
-        CASE
-            WHEN tags['amenity'] IS NOT NULL THEN 'amenity=' || tags['amenity']
-            WHEN tags['shop'] IS NOT NULL THEN 'shop=' || tags['shop']
-            WHEN tags['tourism'] IS NOT NULL THEN 'tourism=' || tags['tourism']
-            WHEN tags['leisure'] IS NOT NULL THEN 'leisure=' || tags['leisure']
-            WHEN tags['office'] IS NOT NULL THEN 'office=' || tags['office']
-            WHEN tags['craft'] IS NOT NULL THEN 'craft=' || tags['craft']
-            WHEN tags['healthcare'] IS NOT NULL THEN 'healthcare=' || tags['healthcare']
-            WHEN tags['historic'] IS NOT NULL THEN 'historic=' || tags['historic']
-            WHEN tags['natural'] IS NOT NULL THEN 'natural=' || tags['natural']
-            WHEN tags['man_made'] IS NOT NULL THEN 'man_made=' || tags['man_made']
-            WHEN tags['aeroway'] IS NOT NULL THEN 'aeroway=' || tags['aeroway']
-            WHEN tags['railway'] IS NOT NULL THEN 'railway=' || tags['railway']
-            WHEN tags['public_transport'] IS NOT NULL
-                THEN 'public_transport=' || tags['public_transport']
-            WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
-        END AS primary_category
+        ${osm_category_case} AS primary_category
     FROM read_parquet('${node_parquet}')
     WHERE lat IS NOT NULL AND lon IS NOT NULL
       AND (
@@ -99,20 +90,35 @@ WITH filtered AS (
                 'neighbourhood', 'quarter', 'island', 'square')
             AND tags['name'] IS NOT NULL)
       )
+),
+node_density AS (
+    SELECT
+        osm_type || osm_id::VARCHAR AS rkey,
+        coalesce(d.density_score, 0) AS density_score
+    FROM filtered f
+    LEFT JOIN density_tiles d ON d.tile_qk15 = left(ST_QuadKey(f.longitude, f.latitude, 17), 15)
+    WHERE f.longitude IS NOT NULL AND f.latitude IS NOT NULL
+),
+node_idf AS (
+    SELECT
+        osm_type || osm_id::VARCHAR AS rkey,
+        coalesce(i.idf_score, 0) AS idf_score
+    FROM filtered f
+    LEFT JOIN idf_scores i ON i.category = f.primary_category
 )
 SELECT
-    osm_type,
-    osm_id,
-    osm_type || osm_id::VARCHAR AS rkey,
-    name,
-    latitude,
-    longitude,
-    ST_Point(longitude, latitude) AS geom,
-    primary_category,
+    f.osm_type,
+    f.osm_id,
+    f.osm_type || f.osm_id::VARCHAR AS rkey,
+    f.name,
+    f.latitude,
+    f.longitude,
+    ST_Point(f.longitude, f.latitude) AS geom,
+    f.primary_category,
     map_from_entries(
         list_filter(
-            map_entries(tags),
-            e -> e.key != split_part(primary_category, '=', 1)
+            map_entries(f.tags),
+            e -> e.key != split_part(f.primary_category, '=', 1)
                AND (
                    e.key LIKE 'name:%'
                    OR e.key IN (
@@ -126,17 +132,23 @@ SELECT
                )
         )
     ) AS tags,
-    {'xmin': longitude - 0.0001,
-     'ymin': latitude - 0.0001,
-     'xmax': longitude + 0.0001,
-     'ymax': latitude + 0.0001} AS bbox,
-    0 AS importance,
-    ST_QuadKey(longitude, latitude, 17) AS qk17
-FROM filtered
-WHERE primary_category IS NOT NULL
-  AND name IS NOT NULL
-  AND longitude >= ${xmin} AND longitude <= ${xmax}
-  AND latitude >= ${ymin} AND latitude <= ${ymax};
+    {'xmin': f.longitude - 0.0001,
+     'ymin': f.latitude - 0.0001,
+     'xmax': f.longitude + 0.0001,
+     'ymax': f.latitude + 0.0001} AS bbox,
+    round(
+        60 * least(coalesce(nd.density_score, 0) / ${density_norm}, 1.0)
+      + 40 * least(coalesce(ni.idf_score, 0) / ${idf_norm}, 1.0)
+    )::INTEGER AS importance,
+    ST_QuadKey(f.longitude, f.latitude, 17) AS qk17,
+    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
+FROM filtered f
+LEFT JOIN node_density nd ON nd.rkey = f.osm_type || f.osm_id::VARCHAR
+LEFT JOIN node_idf ni ON ni.rkey = f.osm_type || f.osm_id::VARCHAR
+WHERE f.primary_category IS NOT NULL
+  AND f.name IS NOT NULL
+  AND f.longitude >= ${xmin} AND f.longitude <= ${xmax}
+  AND f.latitude >= ${ymin} AND f.latitude <= ${ymax};
 
 INSERT INTO places
 WITH qualifying_ways AS (
@@ -145,23 +157,7 @@ WITH qualifying_ways AS (
         tags['name'] AS name,
         nds,
         tags,
-        CASE
-            WHEN tags['amenity'] IS NOT NULL THEN 'amenity=' || tags['amenity']
-            WHEN tags['shop'] IS NOT NULL THEN 'shop=' || tags['shop']
-            WHEN tags['tourism'] IS NOT NULL THEN 'tourism=' || tags['tourism']
-            WHEN tags['leisure'] IS NOT NULL THEN 'leisure=' || tags['leisure']
-            WHEN tags['office'] IS NOT NULL THEN 'office=' || tags['office']
-            WHEN tags['craft'] IS NOT NULL THEN 'craft=' || tags['craft']
-            WHEN tags['healthcare'] IS NOT NULL THEN 'healthcare=' || tags['healthcare']
-            WHEN tags['historic'] IS NOT NULL THEN 'historic=' || tags['historic']
-            WHEN tags['natural'] IS NOT NULL THEN 'natural=' || tags['natural']
-            WHEN tags['man_made'] IS NOT NULL THEN 'man_made=' || tags['man_made']
-            WHEN tags['aeroway'] IS NOT NULL THEN 'aeroway=' || tags['aeroway']
-            WHEN tags['railway'] IS NOT NULL THEN 'railway=' || tags['railway']
-            WHEN tags['public_transport'] IS NOT NULL
-                THEN 'public_transport=' || tags['public_transport']
-            WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
-        END AS primary_category
+        ${osm_category_case} AS primary_category
     FROM read_parquet('${way_parquet}')
     WHERE (
         (tags['amenity'] IS NOT NULL
@@ -241,20 +237,49 @@ way_centroids AS (
     FROM way_node_refs wnr
     JOIN node_coords nc ON wnr.node_ref = nc.id
     GROUP BY wnr.osm_id
+),
+way_base AS (
+    SELECT
+        qw.osm_id,
+        qw.name,
+        qw.tags,
+        qw.primary_category,
+        wc.latitude,
+        wc.longitude
+    FROM qualifying_ways qw
+    JOIN way_centroids wc ON qw.osm_id = wc.osm_id
+    WHERE qw.primary_category IS NOT NULL
+      AND qw.name IS NOT NULL
+      AND wc.longitude >= ${xmin} AND wc.longitude <= ${xmax}
+      AND wc.latitude >= ${ymin} AND wc.latitude <= ${ymax}
+),
+way_density AS (
+    SELECT
+        'w' || osm_id::VARCHAR AS rkey,
+        coalesce(d.density_score, 0) AS density_score
+    FROM way_base wb
+    LEFT JOIN density_tiles d ON d.tile_qk15 = left(ST_QuadKey(wb.longitude, wb.latitude, 17), 15)
+),
+way_idf AS (
+    SELECT
+        'w' || osm_id::VARCHAR AS rkey,
+        coalesce(i.idf_score, 0) AS idf_score
+    FROM way_base wb
+    LEFT JOIN idf_scores i ON i.category = wb.primary_category
 )
 SELECT
     'w' AS osm_type,
-    qw.osm_id,
-    'w' || qw.osm_id::VARCHAR AS rkey,
-    qw.name,
-    wc.latitude,
-    wc.longitude,
-    ST_Point(wc.longitude, wc.latitude) AS geom,
-    qw.primary_category,
+    wb.osm_id,
+    'w' || wb.osm_id::VARCHAR AS rkey,
+    wb.name,
+    wb.latitude,
+    wb.longitude,
+    ST_Point(wb.longitude, wb.latitude) AS geom,
+    wb.primary_category,
     map_from_entries(
         list_filter(
-            map_entries(qw.tags),
-            e -> e.key != split_part(qw.primary_category, '=', 1)
+            map_entries(wb.tags),
+            e -> e.key != split_part(wb.primary_category, '=', 1)
                AND (
                    e.key LIKE 'name:%'
                    OR e.key IN (
@@ -268,22 +293,24 @@ SELECT
                )
         )
     ) AS tags,
-    {'xmin': wc.longitude - 0.0001,
-     'ymin': wc.latitude - 0.0001,
-     'xmax': wc.longitude + 0.0001,
-     'ymax': wc.latitude + 0.0001} AS bbox,
-    0 AS importance,
-    ST_QuadKey(wc.longitude, wc.latitude, 17) AS qk17
--- NOTE: INNER JOIN silently drops ways whose member nodes are absent from
--- ${node_parquet} (e.g. cross-shard references or null-coordinate nodes).
--- This is expected behavior for bounded-region imports.
-FROM qualifying_ways qw
-JOIN way_centroids wc ON qw.osm_id = wc.osm_id
-WHERE qw.primary_category IS NOT NULL
-  AND qw.name IS NOT NULL
-  AND wc.longitude >= ${xmin} AND wc.longitude <= ${xmax}
-  AND wc.latitude >= ${ymin} AND wc.latitude <= ${ymax};
+    {'xmin': wb.longitude - 0.0001,
+     'ymin': wb.latitude - 0.0001,
+     'xmax': wb.longitude + 0.0001,
+     'ymax': wb.latitude + 0.0001} AS bbox,
+    round(
+        60 * least(coalesce(wd.density_score, 0) / ${density_norm}, 1.0)
+      + 40 * least(coalesce(wi.idf_score, 0) / ${idf_norm}, 1.0)
+    )::INTEGER AS importance,
+    ST_QuadKey(wb.longitude, wb.latitude, 17) AS qk17,
+    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
+FROM way_base wb
+LEFT JOIN way_density wd ON wd.rkey = 'w' || wb.osm_id::VARCHAR
+LEFT JOIN way_idf wi ON wi.rkey = 'w' || wb.osm_id::VARCHAR;
 
 DELETE FROM places WHERE geom IS NULL;
 
 CREATE INDEX idx_rkey ON places(rkey);
+
+-- Drop temp tables
+DROP TABLE density_tiles;
+DROP TABLE idf_scores;

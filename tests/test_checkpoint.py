@@ -136,46 +136,33 @@ class TestSentinelTableHelpers:
 
 
 class TestStageOrder:
-    """Tests for STAGE_ORDER constant."""
+    """Tests for STAGE_ORDER constant (Phase 2: now a simple list)."""
 
-    def test_stage_order_structure(self):
-        """STAGE_ORDER has correct keys and structure."""
+    def test_stage_order_is_list(self):
+        """STAGE_ORDER is a simple list after Phase 2 restructuring."""
         from garganorn.quadtree import STAGE_ORDER
 
-        assert isinstance(STAGE_ORDER, dict)
-        assert set(STAGE_ORDER.keys()) == {"default", "overture_division"}
+        assert isinstance(STAGE_ORDER, list)
 
-    def test_default_stage_order(self):
-        """STAGE_ORDER['default'] has correct stage sequence."""
+    def test_stage_order_has_expected_stages(self):
+        """STAGE_ORDER contains the expected stage names in order."""
         from garganorn.quadtree import STAGE_ORDER
 
-        default = STAGE_ORDER["default"]
-        assert isinstance(default, list)
-        assert default == [
+        assert STAGE_ORDER == [
             "import",
-            "importance",
-            "variants",
             "tile_assignment",
             "containment",
             "export",
             "manifest",
         ]
 
-    def test_overture_division_stage_order(self):
-        """STAGE_ORDER['overture_division'] has correct stage sequence."""
+    def test_stage_order_no_old_stages(self):
+        """STAGE_ORDER does not contain old stage names."""
         from garganorn.quadtree import STAGE_ORDER
 
-        division = STAGE_ORDER["overture_division"]
-        assert isinstance(division, list)
-        assert division == [
-            "import",
-            "boundary_export",
-            "division_importance_backfill",
-            "tile_assignment",
-            "containment",
-            "export",
-            "manifest",
-        ]
+        old_stage_names = ['importance', 'variants', 'division_importance_backfill']
+        for old_name in old_stage_names:
+            assert old_name not in STAGE_ORDER
 
 
 class TestFindIncompleteRun:
@@ -324,6 +311,117 @@ class TestFindIncompleteRun:
         # Should log a warning about the corrupted DB
         assert any("Corrupted working DB" in record.message
                    for record in caplog.records)
+
+
+class TestPhase2Restructuring:
+    """Tests for Phase 2 pipeline restructuring.
+
+    Phase 2 merges importance and variants computation into the import stage.
+    These tests FAIL against the current code and PASS after Phase 2 implementation.
+    """
+
+    def test_stage_order_is_simple_list(self):
+        """STAGE_ORDER must be a simple list, not a dict."""
+        from garganorn.quadtree import STAGE_ORDER
+
+        # Must be a list, not a dict
+        assert isinstance(STAGE_ORDER, list), (
+            f"STAGE_ORDER should be a list, got {type(STAGE_ORDER).__name__}"
+        )
+
+        # Must have the expected stage names in order
+        expected = ['import', 'tile_assignment', 'containment', 'export', 'manifest']
+        assert STAGE_ORDER == expected, (
+            f"STAGE_ORDER should be {expected}, got {STAGE_ORDER}"
+        )
+
+        # Old stage names must NOT be present
+        old_stage_names = ['importance', 'variants', 'division_importance_backfill']
+        for old_name in old_stage_names:
+            assert old_name not in STAGE_ORDER, (
+                f"Old stage name '{old_name}' should not be in STAGE_ORDER"
+            )
+
+    def test_old_stage_functions_removed(self):
+        """Old stage functions must be removed from garganorn.stages."""
+        import garganorn.stages as stages
+
+        # These functions should NOT exist after Phase 2
+        old_functions = [
+            'stage_importance',
+            'stage_variants',
+            'stage_division_importance_backfill',
+        ]
+
+        for func_name in old_functions:
+            assert not hasattr(stages, func_name), (
+                f"Old function '{func_name}' should be removed from garganorn.stages"
+            )
+
+    def test_old_sql_files_deleted(self):
+        """Old SQL files must be deleted after Phase 2."""
+        from pathlib import Path
+
+        sql_dir = Path(__file__).parent.parent / "garganorn" / "sql"
+
+        # These files should NOT exist after Phase 2
+        old_files = [
+            'foursquare_importance.sql',
+            'overture_place_importance.sql',
+            'osm_importance.sql',
+            'foursquare_variants.sql',
+            'overture_place_variants.sql',
+            'osm_variants.sql',
+            'division_importance_backfill.sql',
+        ]
+
+        for filename in old_files:
+            file_path = sql_dir / filename
+            assert not file_path.exists(), (
+                f"Old SQL file '{filename}' should be deleted"
+            )
+
+    def test_osm_category_snippet_exists(self):
+        """OSM category CASE expression must be extracted to a shared snippet."""
+        from pathlib import Path
+
+        snippet_path = Path(__file__).parent.parent / "garganorn" / "sql" / "_osm_category_case.sql"
+
+        assert snippet_path.exists(), (
+            "OSM category snippet '_osm_category_case.sql' should exist"
+        )
+
+        # Verify it contains a CASE expression with expected tags
+        content = snippet_path.read_text()
+
+        # Should have CASE expression
+        assert 'CASE' in content.upper(), (
+            "Snippet should contain a CASE expression"
+        )
+
+        # Should have expected OSM tags
+        expected_tags = ['amenity', 'shop', 'tourism', 'leisure', 'office']
+        for tag in expected_tags:
+            assert tag in content, (
+                f"Snippet should reference '{tag}' tag"
+            )
+
+    def test_stage_import_signature_has_new_params(self):
+        """stage_import must accept density_parquet and idf_parquet parameters."""
+        import inspect
+        from garganorn.stages import stage_import
+
+        sig = inspect.signature(stage_import)
+        params = list(sig.parameters.keys())
+
+        # New parameters that must be present after Phase 2
+        required_params = ['density_parquet', 'idf_parquet']
+
+        for param in required_params:
+            assert param in params, (
+                f"stage_import should have parameter '{param}', "
+                f"got: {params}"
+            )
 
 
 class TestComputeContainmentIdempotency:
