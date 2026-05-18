@@ -140,7 +140,7 @@ class Database:
             try:
                 shutil.rmtree(self.temp_dir)
             except OSError as e:
-                print(f"Warning: Could not remove temp directory {self.temp_dir}: {e}")
+                log.warning("Could not remove temp directory %s: %s", self.temp_dir, e)
             finally:
                 self.temp_dir = None
 
@@ -222,7 +222,19 @@ class Database:
         params: SearchParams = {"limit": limit}
         if bbox is not None:
             xmin, ymin, xmax, ymax = bbox
-            mid_lon = (xmin + xmax) / 2
+            # Handle antimeridian crossing (xmin > xmax)
+            if xmax > xmin:
+                # Normal bbox
+                mid_lon = (xmin + xmax) / 2
+                width_deg = xmax - xmin
+            else:
+                # Antimeridian crossing: normalize through 180° meridian
+                # Centroid should be near ±180°, not 0°
+                xmax_normalized = xmax + 360  # Convert -170 to 190
+                mid_lon = (xmin + xmax_normalized) / 2
+                if mid_lon > 180:
+                    mid_lon -= 360  # Normalize back to -180..180 range
+                width_deg = 360 + (xmax - xmin)  # Positive width
             mid_lat = (ymin + ymax) / 2
             params.update({
                 "centroid": f"POINT({mid_lon} {mid_lat})",
@@ -231,7 +243,7 @@ class Database:
                 "xmax": xmax,
                 "ymax": ymax,
             })
-            width_km = (xmax - xmin) * 111 * math.cos(math.radians(mid_lat))
+            width_km = width_deg * 111 * math.cos(math.radians(mid_lat))
             height_km = (ymax - ymin) * 111
             area_km2 = width_km * height_km
         else:
@@ -252,7 +264,7 @@ class Database:
             tokens = [t for t in norm_q.split() if t][:Database.MAX_QUERY_TOKENS]
             for i, token in enumerate(tokens):
                 params[f"t{i}"] = token
-        print(f"Searching with params: {params}")
+        log.debug("Searching with params: %s", params)
         result = self.execute(
             self.query_nearest(params, trigrams=trigrams), params
         )

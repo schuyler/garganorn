@@ -471,7 +471,33 @@ def quadkey_to_bbox(quadkey: str) -> tuple[float, float, float, float]:
 
 
 def bboxes_intersect(a, b):
-    return a[0] <= b[2] and a[2] >= b[0] and a[1] <= b[3] and a[3] >= b[1]
+    """Check if two bboxes intersect, handling antimeridian crossing.
+
+    For antimeridian-crossing bboxes (xmin > xmax), the bbox wraps around the
+    ±180° meridian. This function detects crossing and computes intersection
+    correctly for all combinations of normal and crossing bboxes.
+    """
+    a_crosses = a[0] > a[2]  # xmin > xmax indicates antimeridian crossing
+    b_crosses = b[0] > b[2]
+
+    # Latitude check is always the same (no wrapping in latitude)
+    if a[1] > b[3] or a[3] < b[1]:
+        return False
+
+    if not a_crosses and not b_crosses:
+        # Normal case: neither box crosses the antimeridian
+        return a[0] <= b[2] and a[2] >= b[0]
+
+    if a_crosses and not b_crosses:
+        # a wraps around: check if b overlaps the western or eastern part of a
+        return a[2] >= b[0] or a[0] <= b[2]
+
+    if not a_crosses and b_crosses:
+        # b wraps around: check if a overlaps the western or eastern part of b
+        return b[2] >= a[0] or b[0] <= a[2]
+
+    # Both wrap: they must overlap (both span the antimeridian)
+    return True
 
 
 def stage_import(con, source, parquet_glob, bbox, memory_limit, t0,

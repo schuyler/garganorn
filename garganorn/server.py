@@ -6,13 +6,15 @@ import lexrpc
 from lexrpc.base import XrpcError
 from garganorn.quadtree import BboxTooLarge
 
+_log = logging.getLogger(__name__)
+
 def load_lexicons():
     """Load all lexicon JSON files from the lexicon directory."""
     lexicons = []
     lexicon_path = files("garganorn") / "lexicon"
     
     if not lexicon_path.is_dir():
-        print("Warning: No lexicon directory found")
+        _log.warning("No lexicon directory found")
         return []
         
     for file_path in lexicon_path.iterdir():
@@ -22,9 +24,8 @@ def load_lexicons():
             try:
                 lexicon_data = json.load(f)
                 lexicons.append(lexicon_data)
-                #print(f"Loaded lexicon: {lexicon_data['id']} from {file_path.name}")
             except json.JSONDecodeError:
-                print(f"Error: Failed to parse {file_path.name} as JSON")
+                _log.error("Failed to parse %s as JSON", file_path.name)
     
     return lexicons
 
@@ -53,7 +54,6 @@ class Server:
         self.logger = logger
         for name, method in self.methods.items():
             """Register bound methods with the server."""
-            #print(f"Registering {name} to {method}")
             self.server.register(name, getattr(self, method))
         self.server.register("org.atgeo.getCoverage", self.get_coverage)
 
@@ -171,8 +171,13 @@ class Server:
             raise XrpcError("bbox values must be valid numbers", "InvalidBbox")
         if any(math.isnan(v) or math.isinf(v) for v in (xmin, ymin, xmax, ymax)):
             raise XrpcError("bbox values must be finite numbers", "InvalidBbox")
-        if xmin >= xmax or ymin >= ymax:
-            raise XrpcError("bbox requires xmin < xmax and ymin < ymax", "InvalidBbox")
+        if ymin >= ymax:
+            raise XrpcError("bbox requires ymin < ymax", "InvalidBbox")
+        # Allow antimeridian crossing (xmin > xmax) only when xmin is positive/eastern
+        # and xmax is negative/western, which indicates crossing the ±180° meridian.
+        # Reject xmin >= xmax in all other cases (truly invalid bboxes).
+        if xmin >= xmax and not (xmin > 0 and xmax < 0):
+            raise XrpcError("bbox requires xmin < xmax (unless crossing antimeridian with xmin > 0, xmax < 0)", "InvalidBbox")
         return (xmin, ymin, xmax, ymax)
 
     def _check_bbox_precision(self, bbox_str: str):
