@@ -63,7 +63,7 @@ class TestSpatial1CoordinateRangeValidation:
                        ST_Point(200.0, 37.7749) AS geometry,
                        {'primary': 'amenity=cafe'} AS categories,
                        {xmin: 200.0, xmax: 200.1, ymin: 37.7, ymax: 37.9} AS bbox,
-                       {'primary': 'Test Place', 'common': map_from_entries([]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
+                       {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
             con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
 
@@ -202,7 +202,7 @@ class TestSpatial4BboxOverlapFilter:
             con.execute("""
                 CREATE TABLE test_division AS
                 SELECT 'div001' AS id,
-                       {'primary': 'San Francisco', 'common': map_from_entries([]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names,
+                       {'primary': 'San Francisco', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names,
                        'locality' AS subtype,
                        'US' AS country,
                        NULL::VARCHAR AS region,
@@ -262,7 +262,7 @@ class TestSpatial4BboxOverlapFilter:
                        ST_Point(-122.5, 37.7749) AS geometry,
                        {'primary': 'amenity=cafe'} AS categories,
                        {xmin: -122.6, xmax: -122.4, ymin: 37.7, ymax: 37.9} AS bbox,
-                       {'primary': 'Test Place', 'common': map_from_entries([]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
+                       {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
             con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
 
@@ -412,7 +412,7 @@ class TestData3BboxNormalization:
                        ST_Point(-122.4194, 37.7749) AS geometry,
                        {'primary': 'amenity=cafe'} AS categories,
                        {xmin: -122.3, xmax: -122.5, ymin: 37.9, ymax: 37.7} AS bbox,
-                       {'primary': 'Test Place', 'common': map_from_entries([]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
+                       {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
             con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
 

@@ -343,7 +343,7 @@ class TestNegativePopulationClamping:
             COPY (
                 SELECT
                     'test_div_1' AS id,
-                    row('Test Division', map_from_entries([('en', 'Test Division')]), map_from_entries([]))::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
+                    row('Test Division', map_from_entries([('en', 'Test Division')]), MAP([],[]::VARCHAR[]))::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
                     'locality'::VARCHAR AS subtype,
                     'US'::VARCHAR AS country,
                     'CA'::VARCHAR AS region,
@@ -354,7 +354,7 @@ class TestNegativePopulationClamping:
                 UNION ALL
                 SELECT
                     'test_div_2' AS id,
-                    row('Test Division 2', map_from_entries([('en', 'Test Division 2')]), map_from_entries([]))::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
+                    row('Test Division 2', map_from_entries([('en', 'Test Division 2')]), MAP([],[]::VARCHAR[]))::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
                     'locality'::VARCHAR AS subtype,
                     'US'::VARCHAR AS country,
                     'NY'::VARCHAR AS region,
@@ -365,7 +365,7 @@ class TestNegativePopulationClamping:
                 UNION ALL
                 SELECT
                     'test_div_3' AS id,
-                    row('Test Division 3', map_from_entries([('en', 'Test Division 3')]), map_from_entries([]))::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
+                    row('Test Division 3', map_from_entries([('en', 'Test Division 3')]), MAP([],[]::VARCHAR[]))::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
                     'locality'::VARCHAR AS subtype,
                     'US'::VARCHAR AS country,
                     'TX'::VARCHAR AS region,
