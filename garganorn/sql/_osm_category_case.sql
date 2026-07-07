@@ -1,0 +1,17 @@
+CASE
+    WHEN tags['amenity'] IS NOT NULL THEN 'amenity=' || tags['amenity']
+    WHEN tags['shop'] IS NOT NULL THEN 'shop=' || tags['shop']
+    WHEN tags['tourism'] IS NOT NULL THEN 'tourism=' || tags['tourism']
+    WHEN tags['leisure'] IS NOT NULL THEN 'leisure=' || tags['leisure']
+    WHEN tags['office'] IS NOT NULL THEN 'office=' || tags['office']
+    WHEN tags['craft'] IS NOT NULL THEN 'craft=' || tags['craft']
+    WHEN tags['healthcare'] IS NOT NULL THEN 'healthcare=' || tags['healthcare']
+    WHEN tags['historic'] IS NOT NULL THEN 'historic=' || tags['historic']
+    WHEN tags['natural'] IS NOT NULL THEN 'natural=' || tags['natural']
+    WHEN tags['man_made'] IS NOT NULL THEN 'man_made=' || tags['man_made']
+    WHEN tags['aeroway'] IS NOT NULL THEN 'aeroway=' || tags['aeroway']
+    WHEN tags['railway'] IS NOT NULL THEN 'railway=' || tags['railway']
+    WHEN tags['public_transport'] IS NOT NULL
+        THEN 'public_transport=' || tags['public_transport']
+    WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
+END

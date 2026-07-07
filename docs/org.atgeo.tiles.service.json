@@ -1,0 +1,46 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.tiles.service",
+    "defs": {
+        "main": {
+            "type": "record",
+            "description": "Announces an atgeo tile service for a single collection. Published in the operator's repository, one record per served collection, keyed by the collection NSID. Clients discover an operator's tile services by enumerating this collection via com.atproto.repo.listRecords. See the atgeo protocol design, section 1.4.",
+            "key": "nsid",
+            "record": {
+                "type": "object",
+                "required": ["collection", "baseUrl", "kind"],
+                "properties": {
+                    "collection": {
+                        "type": "string",
+                        "format": "nsid",
+                        "description": "The record collection served by this tile set, e.g. 'org.atgeo.places.overture.place'. Must equal the record key."
+                    },
+                    "baseUrl": {
+                        "type": "string",
+                        "format": "uri",
+                        "description": "HTTPS base URL of the tile service. Tile and manifest paths are resolved relative to this."
+                    },
+                    "manifestPath": {
+                        "type": "string",
+                        "description": "Path to the coverage manifest, relative to baseUrl. Defaults to 'current/manifest.json' if omitted."
+                    },
+                    "kind": {
+                        "type": "string",
+                        "knownValues": ["gazetteer", "live"],
+                        "description": "'gazetteer' for batch-built reference datasets (records carry https URIs, cid null); 'live' for firehose-derived AppView tiles (records carry at:// URIs and CIDs)."
+                    },
+                    "attribution": {
+                        "type": "string",
+                        "description": "Human-readable data attribution, duplicated from the tile envelope for display in discovery UIs.",
+                        "maxGraphemes": 500
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "datetime",
+                        "description": "When this announcement was created or last materially updated."
+                    }
+                }
+            }
+        }
+    }
+}

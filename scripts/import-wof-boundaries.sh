@@ -106,14 +106,11 @@ rm -f "$output_db_tmp"
 
 echo "Building boundary database..."
 
-import_sql=$(cat <<EOSQL
-.bail on
+duckdb -bail "$output_db_tmp" <<EOSQL
 INSTALL sqlite;
 LOAD sqlite;
 INSTALL spatial;
 LOAD spatial;
-.headers off
-.mode list
 
 ATTACH '${source_db}' AS wof (TYPE sqlite, READ_ONLY);
 
@@ -168,7 +165,10 @@ WITH staged AS (
 )
 -- Exclude point geometries (no containment value)
 SELECT * FROM staged
-WHERE ST_GeometryType(geom) != 'POINT';
+WHERE ST_GeometryType(geom) != 'POINT'
+-- Hilbert-sort clusters spatially adjacent boundaries into the same row groups,
+-- making DuckDB zone maps effective for the bbox BETWEEN pre-filter in compute_containment.
+ORDER BY ST_Hilbert(geom, {'min_x': -180.0, 'min_y': -90.0, 'max_x': 180.0, 'max_y': 90.0}::BOX_2D);
 
 SELECT printf('[%s] Stage 1 complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 SELECT count(*) AS boundary_count FROM boundaries;
@@ -186,11 +186,11 @@ FROM (
             json_object(
                 'name', nm.name,
                 'language', nm.language,
-                'variant', nm.variant
+                'variant', nm.privateuse
             )
         )::VARCHAR AS names_json
     FROM wof.names nm
-    WHERE nm.variant IN ('preferred', 'variant')
+    WHERE nm.privateuse IN ('preferred', 'variant')
       AND nm.name IS NOT NULL
       AND length(nm.name) >= 1
       AND EXISTS (SELECT 1 FROM boundaries b2 WHERE b2.wof_id = nm.id)
@@ -230,9 +230,6 @@ DROP TABLE placetype_levels;
 ANALYZE;
 SELECT printf('[%s] Import complete.', strftime(now(), '%Y-%m-%dT%H:%M:%S'));
 EOSQL
-)
-
-echo "$import_sql" | duckdb "$output_db_tmp"
 
 # Atomic swap
 mv "$output_db_tmp" "$output_db"

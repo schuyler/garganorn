@@ -2,7 +2,7 @@
 import pytest
 import duckdb
 
-from garganorn.database import Database, FoursquareOSP, OvertureMaps
+from garganorn.database import Database, FoursquareOSP, OverturePlaces
 
 
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from garganorn.server import Server, load_lexicons
 # ---------------------------------------------------------------------------
 
 FSQ_COLLECTION = "org.atgeo.places.foursquare"
-OVR_COLLECTION = "org.atgeo.places.overture"
+OVR_COLLECTION = "org.atgeo.places.overture.place"
 
 SAMPLE_RECORD = {
     "$type": "org.atgeo.place",
@@ -291,7 +291,7 @@ def test_get_record_with_boundaries_includes_relations():
     # Mock BoundaryLookup
     mock_boundaries = MagicMock()
     mock_boundaries.containment.return_value = [
-        {"rkey": "org.atgeo.places.wof:85922583", "name": "San Francisco", "level": 50},
+        {"rkey": "org.atgeo.places.overture.division:85922583"},
     ]
 
     logger = logging.getLogger("test")
@@ -301,7 +301,8 @@ def test_get_record_with_boundaries_includes_relations():
     value = result["value"]
     assert "relations" in value
     assert "within" in value["relations"]
-    assert value["relations"]["within"][0]["name"] == "San Francisco"
+    assert value["relations"]["within"][0]["rkey"] == "org.atgeo.places.overture.division:85922583"
+    assert "name" not in value["relations"]["within"][0]
     # relations should NOT be at the envelope level
     assert "relations" not in result
 
@@ -467,6 +468,72 @@ def test_list_records_no_cursor_on_last_page():
         limit=100
     )
     assert "cursor" not in result
+
+
+TILE_COLLECTION = "org.atgeo.places.tile"
+TILE_ATTRIBUTION = "https://example.com/tile-attribution"
+
+
+class MockTileBackedCollection:
+    def __init__(self, collection=TILE_COLLECTION, record=None):
+        self.collection = collection
+        self.attribution = TILE_ATTRIBUTION
+        self._record = record
+
+    def get_record(self, repo, collection, rkey):
+        return self._record
+
+
+def test_get_record_tile_backed_response_shape():
+    """get_record on a tile-backed collection returns correct envelope shape."""
+    record = {
+        "rkey": "tile001",
+        "name": "Tile Place",
+        "importance": 5,
+    }
+    mock_col = MockTileBackedCollection(record=record)
+    logger = logging.getLogger("test")
+    server = Server("places.atgeo.org", [], logger,
+                    tile_collections={TILE_COLLECTION: mock_col})
+
+    result = server.get_record(
+        {}, repo="places.atgeo.org", collection=TILE_COLLECTION, rkey="tile001"
+    )
+
+    assert result["uri"] == f"https://places.atgeo.org/{TILE_COLLECTION}/tile001"
+    assert result["attribution"] == TILE_ATTRIBUTION
+    assert result["value"]["rkey"] == "tile001"
+    assert "_query" in result
+    assert result["importance"] == 5
+    assert "importance" not in result["value"]
+
+
+def test_get_record_tile_backed_missing_rkey():
+    """get_record raises RecordNotFound when tile-backed collection returns None."""
+    mock_col = MockTileBackedCollection(record=None)
+    logger = logging.getLogger("test")
+    server = Server("places.atgeo.org", [], logger,
+                    tile_collections={TILE_COLLECTION: mock_col})
+
+    with pytest.raises(XrpcError) as exc_info:
+        server.get_record(
+            {}, repo="places.atgeo.org", collection=TILE_COLLECTION, rkey="nonexistent"
+        )
+    assert exc_info.value.name == "RecordNotFound"
+
+
+def test_search_records_tile_only_collection_returns_error():
+    """search_records raises CollectionNotFound for tile-only collections (no search support)."""
+    mock_col = MockTileBackedCollection()
+    logger = logging.getLogger("test")
+    server = Server("places.atgeo.org", [], logger,
+                    tile_collections={TILE_COLLECTION: mock_col})
+
+    with pytest.raises(XrpcError) as exc_info:
+        server.search_records(
+            {}, collection=TILE_COLLECTION, latitude="37.7", longitude="-122.4"
+        )
+    assert exc_info.value.name == "CollectionNotFound"
 
 
 def test_get_record_boundaries_error_degrades_gracefully():

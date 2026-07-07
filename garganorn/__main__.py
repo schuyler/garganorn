@@ -1,5 +1,6 @@
 import os, logging
-from flask import Flask, abort
+from flask import Flask, abort, send_file
+from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
 from garganorn import Server
@@ -10,12 +11,37 @@ DEFAULT_CONFIG = "config.yaml"
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
-    repo, dbs, boundaries_path = load_config(config_path)
+    repo, dbs, boundaries_path, tiles_config = load_config(config_path)
 
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
     boundaries = BoundaryLookup(boundaries_path) if boundaries_path else None
-    gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries)
+    tile_manifests = {}
+    tile_collections = {}
+    max_coverage_tiles = 50
+    if tiles_config:
+        from garganorn.quadtree import TileManifest
+        from garganorn.tile_reader import TileBackedCollection
+        for collection, coll_cfg in tiles_config.get("collections", {}).items():
+            manifest_path = coll_cfg.get("manifest")
+            if manifest_path and not os.path.isfile(manifest_path):
+                app.logger.warning(
+                    "Tile manifest configured for %s but not found: %s (tile serving disabled for this collection)",
+                    collection, manifest_path,
+                )
+            if manifest_path and os.path.isfile(manifest_path):
+                tile_manifests[collection] = TileManifest(manifest_path, coll_cfg["base_url"])
+                if "tiles_dir" in coll_cfg:
+                    tile_collections[collection] = TileBackedCollection(
+                        collection=collection,
+                        manifest_db_path=manifest_path,
+                        tiles_dir=coll_cfg["tiles_dir"],
+                        attribution=coll_cfg.get("attribution", ""),
+                    )
+        max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
+    gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries,
+                       tile_manifests=tile_manifests, tile_collections=tile_collections,
+                       max_coverage_tiles=max_coverage_tiles)
     init_flask(gazetteer.server, app)
 
     lexicon_map = gazetteer.lexicon_map
@@ -53,6 +79,22 @@ def create_app():
         except XrpcError as e:
             status = 404 if e.name in ("CollectionNotFound", "RecordNotFound") else 400
             return {"error": e.name, "message": str(e)}, status
+
+    serve_dir = None
+    if tiles_config:
+        serve_dir = tiles_config.get("serve_dir")
+
+    @app.route("/tiles/<path:tile_path>")
+    def serve_tile(tile_path):
+        """Serve a gzipped JSON tile file with correct headers."""
+        if serve_dir is None:
+            return ("Not found", 404)
+        full_path = safe_join(serve_dir, tile_path)
+        if full_path is None or not os.path.isfile(full_path):
+            return ("Not found", 404)
+        response = send_file(full_path, mimetype="application/json")
+        response.headers["Content-Encoding"] = "gzip"
+        return response
 
     return app
 

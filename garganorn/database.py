@@ -1,9 +1,12 @@
+import logging
 from pathlib import Path
 from typing import TypedDict, Optional
 import tempfile
 import os
 import shutil
 import unicodedata
+
+log = logging.getLogger(__name__)
 
 import math
 import duckdb
@@ -137,7 +140,7 @@ class Database:
             try:
                 shutil.rmtree(self.temp_dir)
             except OSError as e:
-                print(f"Warning: Could not remove temp directory {self.temp_dir}: {e}")
+                log.warning("Could not remove temp directory %s: %s", self.temp_dir, e)
             finally:
                 self.temp_dir = None
 
@@ -219,7 +222,19 @@ class Database:
         params: SearchParams = {"limit": limit}
         if bbox is not None:
             xmin, ymin, xmax, ymax = bbox
-            mid_lon = (xmin + xmax) / 2
+            # Handle antimeridian crossing (xmin > xmax)
+            if xmax > xmin:
+                # Normal bbox
+                mid_lon = (xmin + xmax) / 2
+                width_deg = xmax - xmin
+            else:
+                # Antimeridian crossing: normalize through 180° meridian
+                # Centroid should be near ±180°, not 0°
+                xmax_normalized = xmax + 360  # Convert -170 to 190
+                mid_lon = (xmin + xmax_normalized) / 2
+                if mid_lon > 180:
+                    mid_lon -= 360  # Normalize back to -180..180 range
+                width_deg = 360 + (xmax - xmin)  # Positive width
             mid_lat = (ymin + ymax) / 2
             params.update({
                 "centroid": f"POINT({mid_lon} {mid_lat})",
@@ -228,7 +243,7 @@ class Database:
                 "xmax": xmax,
                 "ymax": ymax,
             })
-            width_km = (xmax - xmin) * 111 * math.cos(math.radians(mid_lat))
+            width_km = width_deg * 111 * math.cos(math.radians(mid_lat))
             height_km = (ymax - ymin) * 111
             area_km2 = width_km * height_km
         else:
@@ -238,6 +253,10 @@ class Database:
             norm_q = Database._strip_accents(q.lower())
             params["norm_q"] = norm_q
             trigrams = self._compute_trigrams(q)
+            # EXPORT-1/EXPORT-12: Guard against empty trigram list (short queries, non-ASCII)
+            if q and not trigrams:
+                log.warning("query '%s' produced no trigrams; returning empty results", q)
+                return []
             for i, tri in enumerate(trigrams):
                 params[f"g{i}"] = tri
             importance_floor = compute_importance_floor(area_km2)
@@ -245,7 +264,7 @@ class Database:
             tokens = [t for t in norm_q.split() if t][:Database.MAX_QUERY_TOKENS]
             for i, token in enumerate(tokens):
                 params[f"t{i}"] = token
-        print(f"Searching with params: {params}")
+        log.debug("Searching with params: %s", params)
         result = self.execute(
             self.query_nearest(params, trigrams=trigrams), params
         )
@@ -295,6 +314,8 @@ class Database:
 
 class FoursquareOSP(Database):
     collection = "org.atgeo.places.foursquare"
+    source_key = "foursquare"
+    source_pk = "fsq_place_id"
     attribution = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
 
     def record_columns(self):
@@ -621,8 +642,10 @@ class FoursquareOSP(Database):
             "attributes": result
         }
 
-class OvertureMaps(Database):
-    collection = "org.atgeo.places.overture"
+class OverturePlaces(Database):
+    collection = "org.atgeo.places.overture.place"
+    source_key = "overture_place"
+    source_pk = "id"
     attribution = "https://docs.overturemaps.org/attribution/"
 
     def record_columns(self):
@@ -957,6 +980,8 @@ class OvertureMaps(Database):
 
 class OpenStreetMap(Database):
     collection = "org.atgeo.places.osm"
+    source_key = "osm"
+    source_pk = "rkey"
     attribution = "https://www.openstreetmap.org/copyright"
 
     def record_columns(self):
@@ -1316,6 +1341,132 @@ class OpenStreetMap(Database):
         }
 
 
+class OvertureDivisions(Database):
+    """Minimal Database subclass for Overture division record resolution.
+
+    Supports get_record only. No search, no name_index.
+    """
+
+    collection = "org.atgeo.places.overture.division"
+    source_key = "overture_division"
+    source_pk = "id"
+    attribution = "https://docs.overturemaps.org/attribution/"
+
+    def connect(self):
+        """Connect to boundary database (no name_index validation)."""
+        if self.conn is None:
+            self.conn = duckdb.connect(str(self.db_path), read_only=True)
+            self.temp_dir = tempfile.mkdtemp(prefix='duckdb_temp_')
+            self.conn.execute(f"SET temp_directory='{self.temp_dir}'")
+            # Spatial extension is required to open files containing GEOMETRY
+            # columns — DuckDB cannot deserialize the type without it, even if
+            # no ST_* functions are called.
+            self._load_extension("spatial")
+        return self.conn
+
+    def record_columns(self):
+        return """
+            id AS rkey,
+            names,
+            subtype,
+            country,
+            region,
+            admin_level,
+            wikidata,
+            population,
+            min_latitude::decimal(10,6)::varchar AS min_latitude,
+            min_longitude::decimal(10,6)::varchar AS min_longitude,
+            max_latitude::decimal(10,6)::varchar AS max_latitude,
+            max_longitude::decimal(10,6)::varchar AS max_longitude,
+            variants
+        """
+
+    def query_record(self):
+        columns = self.record_columns()
+        return f"""
+            SELECT {columns}, importance
+            FROM places
+            WHERE id = $rkey
+        """
+
+    def process_record(self, result):
+        # Locations: bbox only (divisions are areas, not points)
+        locations = []
+        min_lat = result.pop("min_latitude", None)
+        min_lon = result.pop("min_longitude", None)
+        max_lat = result.pop("max_latitude", None)
+        max_lon = result.pop("max_longitude", None)
+        if all(v is not None for v in [min_lat, min_lon, max_lat, max_lon]):
+            locations.append({
+                "$type": "community.lexicon.location.bbox",
+                "north": max_lat,
+                "west": min_lon,
+                "south": min_lat,
+                "east": max_lon,
+            })
+
+        # Parse names struct into primary name + variants
+        names = result.pop("names", None)
+        name = None
+        variants = []
+        if names:
+            name = names.get("primary")
+            common = names.get("common")
+            if common and isinstance(common, dict):
+                for lang, lang_name in common.items():
+                    if lang_name and lang_name != name:
+                        variants.append({"name": lang_name, "language": lang})
+            rules = names.get("rules")
+            if rules:
+                for rule in rules:
+                    entry = {"name": rule["value"]}
+                    if rule.get("language"):
+                        entry["language"] = rule["language"]
+                    if rule.get("variant"):
+                        entry["type"] = rule["variant"]
+                    variants.append(entry)
+
+        # Note: pre-computed variants column is intentionally ignored to avoid
+        # duplication if the import pipeline later adds variant extraction.
+        # Names struct is the single source of truth for variants.
+        result.pop("variants", None)
+
+        # Build attributes
+        subtype = result.pop("subtype", None)
+        country = result.pop("country", None)
+        region = result.pop("region", None)
+        admin_level = result.pop("admin_level", None)
+        wikidata = result.pop("wikidata", None)
+        population = result.pop("population", None)
+
+        attributes = {}
+        if subtype:
+            attributes["subtype"] = subtype
+        if country:
+            attributes["country"] = country
+        if region:
+            attributes["region"] = region
+        if admin_level is not None:
+            attributes["admin_level"] = admin_level
+        if wikidata:
+            attributes["wikidata"] = wikidata
+        if population is not None and population > 0:
+            attributes["population"] = population
+
+        return {
+            "$type": "org.atgeo.place",
+            "collection": self.collection,
+            "rkey": result.pop("rkey"),
+            "locations": locations,
+            "name": name or "",
+            "variants": variants,
+            "attributes": attributes,
+        }
+
+    def query_nearest(self, _params, trigrams=None):
+        raise NotImplementedError("Division collection does not support search")
+
+
 if __name__ == "__main__":
     from pprint import pprint
 
@@ -1324,7 +1475,7 @@ if __name__ == "__main__":
     pprint(result)
     d.close()
 
-    d = OvertureMaps("db/overture-maps.duckdb")
+    d = OverturePlaces("db/overture-maps.duckdb")
     result = d.nearest(bbox=(-122.48, 37.73, -122.39, 37.82))
     pprint(result)
 

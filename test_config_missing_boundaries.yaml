@@ -1,0 +1,6 @@
+
+repo: places.atgeo.org
+databases:
+  - type: foursquare
+    path: tests/fixtures/test_foursquare.duckdb
+boundaries: /nonexistent/boundaries.duckdb

@@ -47,3 +47,6 @@ db/
 # DuckDB-specific files
 *.duckdb
 *.duckdb.wal
+
+# JSON tiles
+tiles/

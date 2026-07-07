@@ -1,7 +1,7 @@
-"""Tests for OvertureMaps database class."""
+"""Tests for OverturePlaces database class."""
 import pytest
 
-from garganorn.database import OvertureMaps, SearchParams
+from garganorn.database import OverturePlaces, SearchParams
 
 
 # ---------------------------------------------------------------------------
@@ -9,7 +9,7 @@ from garganorn.database import OvertureMaps, SearchParams
 # ---------------------------------------------------------------------------
 
 def _make_ovr(db_path=None):
-    db = OvertureMaps(db_path or ":memory:")
+    db = OverturePlaces(db_path or ":memory:")
     return db
 
 
@@ -83,7 +83,7 @@ def test_process_record_no_addresses():
 def test_search_columns_removed():
     """search_columns() method should not exist after eliminating places scan.
 
-    FAILS until search_columns is removed from OvertureMaps.
+    FAILS until search_columns is removed from OverturePlaces.
     """
     db = _make_ovr()
     assert not hasattr(db, 'search_columns'), (
@@ -112,7 +112,7 @@ def test_nearest_text(overture_db):
 
 def test_get_record(overture_db):
     """Known id returns a record with expected structure."""
-    record = overture_db.get_record("", "org.atgeo.places.overture", "ovr001")
+    record = overture_db.get_record("", "org.atgeo.places.overture.place", "ovr001")
     assert record is not None
     assert record["rkey"] == "ovr001"
     assert record["name"] == "Philz Coffee"
@@ -278,7 +278,7 @@ def test_single_token_no_blending_applied(overture_db):
 def test_overture_query_trigram_text_uses_norm_name():
     """Text path uses norm_name column, not runtime lower(strip_accents(name)).
 
-    FAILS until norm_name optimization is implemented for OvertureMaps.
+    FAILS until norm_name optimization is implemented for OverturePlaces.
     """
     db = _make_ovr()
     params: SearchParams = {"q": "anchor brewing", "limit": 10, "importance_floor": 0}
@@ -296,7 +296,7 @@ def test_overture_query_trigram_text_multi_token_uses_norm_name():
     In the multi-token branch, the name_tokens CTE splits candidate names into
     tokens. After Optimization 2, it should split norm_name (pre-computed) rather
     than calling lower(strip_accents(r.name)) at runtime.
-    FAILS until norm_name optimization is implemented for OvertureMaps.
+    FAILS until norm_name optimization is implemented for OverturePlaces.
     """
     db = _make_ovr()
     params: SearchParams = {
@@ -318,7 +318,7 @@ def test_overture_query_trigram_text_multi_token_uses_norm_name():
 def test_overture_query_trigram_spatial_uses_norm_name():
     """Spatial path uses norm_name column, not runtime lower(strip_accents(name)).
 
-    FAILS until norm_name optimization is implemented for OvertureMaps.
+    FAILS until norm_name optimization is implemented for OverturePlaces.
     """
     db = _make_ovr()
     params: SearchParams = {
@@ -339,7 +339,7 @@ def test_overture_query_trigram_spatial_uses_norm_name():
 def test_overture_query_trigram_spatial_multi_token_uses_norm_name():
     """Multi-token spatial path name_tokens CTE uses norm_name, not runtime normalization.
 
-    FAILS until norm_name optimization is implemented for OvertureMaps.
+    FAILS until norm_name optimization is implemented for OverturePlaces.
     """
     db = _make_ovr()
     params: SearchParams = {
@@ -366,7 +366,7 @@ def test_overture_query_trigram_text_uses_norm_q():
     After Optimization 2, nearest() pre-normalizes the query as norm_q and
     the SQL references $norm_q (a pre-computed scalar) instead of computing
     lower(strip_accents($q)) repeatedly at runtime.
-    FAILS until norm_name optimization is implemented for OvertureMaps.
+    FAILS until norm_name optimization is implemented for OverturePlaces.
     """
     db = _make_ovr()
     params: SearchParams = {"q": "anchor brewing", "limit": 10, "importance_floor": 0}
@@ -568,7 +568,7 @@ def test_nearest_attributes_match_get_record(overture_db):
     assert philz is not None, "Expected to find 'Philz Coffee' in nearest() results"
     rkey = philz["rkey"]
 
-    direct = overture_db.get_record("", "org.atgeo.places.overture", rkey)
+    direct = overture_db.get_record("", "org.atgeo.places.overture.place", rkey)
     assert direct is not None, f"get_record returned None for rkey={rkey}"
 
     assert philz["attributes"] == direct["attributes"], (

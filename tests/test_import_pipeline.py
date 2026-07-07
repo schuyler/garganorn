@@ -1103,10 +1103,10 @@ class TestImportOsmScript:
         )
 
     def test_script_references_osm_pbf_parquet(self):
-        """New import-osm.sh must reference osm-pbf-parquet."""
+        """import-osm.sh must delegate to extract-osm-parquet.sh (which calls osm-pbf-parquet)."""
         content = self._read_script()
-        assert "osm-pbf-parquet" in content, (
-            "import-osm.sh does not reference osm-pbf-parquet"
+        assert "extract-osm-parquet.sh" in content, (
+            "import-osm.sh does not delegate to extract-osm-parquet.sh"
         )
 
     def test_script_type_node_partition(self):
@@ -1394,24 +1394,28 @@ class TestImportOsmScript:
 
 
 class TestOsmiumPreFilter:
-    """Verify that import-osm.sh includes the osmium tags-filter pre-filtering stage."""
+    """Verify that extract-osm-parquet.sh includes the osmium tags-filter pre-filtering stage.
+
+    These tests now check extract-osm-parquet.sh, which owns stages 0-1 (osmium
+    filter + osm-pbf-parquet conversion). import-osm.sh delegates to it.
+    """
 
     @pytest.fixture(scope="class")
     def script_content(self):
         script_path = os.path.join(
-            os.path.dirname(__file__), "..", "scripts", "import-osm.sh"
+            os.path.dirname(__file__), "..", "scripts", "extract-osm-parquet.sh"
         )
         with open(script_path) as f:
             return f.read()
 
     def test_script_checks_osmium_dependency(self, script_content):
         assert "command -v osmium" in script_content, (
-            "import-osm.sh should check for osmium with 'command -v osmium'"
+            "extract-osm-parquet.sh should check for osmium with 'command -v osmium'"
         )
 
     def test_osmium_tags_filter_command_present(self, script_content):
         assert "osmium tags-filter" in script_content, (
-            "import-osm.sh should invoke 'osmium tags-filter'"
+            "extract-osm-parquet.sh should invoke 'osmium tags-filter'"
         )
 
     def test_all_category_tags_in_osmium_filter(self, script_content):
@@ -1431,21 +1435,21 @@ class TestOsmiumPreFilter:
 
     def test_filtered_pbf_cache_variable(self, script_content):
         assert "filtered.osm.pbf" in script_content, (
-            "import-osm.sh should reference a cached filtered PBF file"
+            "extract-osm-parquet.sh should reference a cached filtered PBF file"
         )
 
     def test_osm_pbf_parquet_uses_filtered_input(self, script_content):
         """osm-pbf-parquet should use the filtered PBF, not the original."""
         assert 'osm-pbf-parquet --input "$pbf_path"' not in script_content, (
-            "osm-pbf-parquet should use $pbf_input (filtered), not $pbf_path (original)"
+            "osm-pbf-parquet should use $filtered_pbf (filtered), not $pbf_path (original)"
         )
-        assert 'osm-pbf-parquet --input "$pbf_input"' in script_content, (
-            "osm-pbf-parquet must reference $pbf_input variable"
+        assert 'osm-pbf-parquet --input "$filtered_pbf"' in script_content, (
+            "osm-pbf-parquet must reference $filtered_pbf variable"
         )
 
     def test_parquet_cache_sentinel(self, script_content):
         assert "/.complete" in script_content, (
-            "import-osm.sh should use a .complete sentinel for parquet cache validation"
+            "extract-osm-parquet.sh should use a .complete sentinel for parquet cache validation"
         )
 
 
