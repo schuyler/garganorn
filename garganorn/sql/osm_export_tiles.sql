@@ -1,6 +1,7 @@
 CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
+    ta.place_id,
     to_json({
         "$type": 'org.atgeo.place',
         rkey: CASE left(p.rkey, 1)
@@ -33,4 +34,4 @@ SELECT
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.rkey
 LEFT JOIN place_containment pc ON pc.place_id = p.rkey
-ORDER BY ta.tile_qk;
+ORDER BY ta.tile_qk, ta.place_id;

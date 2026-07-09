@@ -1,8 +1,12 @@
-"""Failing tests for scoring bug fixes (SCORE-1/2/3/4/5).
+"""Tests for scoring behavior (SCORE-5).
 
-These tests verify the expected behavior for norm constant validation and
-negative population clamping. They MUST fail with the current code and
-pass after the fixes are implemented.
+TestNormConstantValidation was deleted in Phase 2 cleanup — norm constant
+validation (SCORE-1/2/3/4) is now covered by TestImportNormValidation in
+tests/test_import_fsq.py using the Phase 2 stage_import signature.
+
+This file retains TestNegativePopulationClamping (SCORE-5), which tests
+genuine domain behavior. It uses _transitional_import_phase1 (the legacy
+con-based interface) until the division import is fully ported in Phase 2b.
 """
 
 import os
@@ -13,307 +17,6 @@ import duckdb
 import pytest
 
 from garganorn.stages import stage_import
-
-
-class TestNormConstantValidation:
-    """Tests for SCORE-1/2/3/4: Norm constant validation in stage_import().
-
-    The stage_import() function should raise ValueError if any norm constant
-    (density_norm, idf_norm, pop_norm) is <= 0.
-    """
-
-    def setup_method(self):
-        """Set up a minimal test database with required schema."""
-        self.con = duckdb.connect()
-        self.con.execute("INSTALL spatial; LOAD spatial;")
-
-    def teardown_method(self):
-        """Clean up the test database."""
-        self.con.close()
-
-    def test_density_norm_zero_raises_error(self):
-        """density_norm=0 should raise ValueError before SQL execution."""
-        # Create a minimal valid parquet file for testing
-        with tempfile.TemporaryDirectory() as tmpdir:
-            parquet_path = os.path.join(tmpdir, "test.parquet")
-            # Create empty but valid parquet with required schema
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS fsq_place_id,
-                           NULL::VARCHAR AS name,
-                           NULL::DOUBLE AS latitude,
-                           NULL::DOUBLE AS longitude,
-                           NULL::DATE AS date_closed,
-                           NULL::TIMESTAMP AS date_refreshed,
-                           NULL::DOUBLE[] AS fsq_category_ids,
-                           NULL::GEOMETRY AS geom,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{parquet_path}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="density_norm.*must be positive"):
-                stage_import(
-                    self.con,
-                    source="foursquare",
-                    parquet_glob=parquet_path,
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=0.0,
-                    idf_norm=18.0,
-                    pop_norm=20.0
-                )
-
-    def test_density_norm_negative_raises_error(self):
-        """density_norm < 0 should raise ValueError before SQL execution."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            parquet_path = os.path.join(tmpdir, "test.parquet")
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS fsq_place_id,
-                           NULL::VARCHAR AS name,
-                           NULL::DOUBLE AS latitude,
-                           NULL::DOUBLE AS longitude,
-                           NULL::DATE AS date_closed,
-                           NULL::TIMESTAMP AS date_refreshed,
-                           NULL::DOUBLE[] AS fsq_category_ids,
-                           NULL::GEOMETRY AS geom,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{parquet_path}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="density_norm.*must be positive"):
-                stage_import(
-                    self.con,
-                    source="foursquare",
-                    parquet_glob=parquet_path,
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=-10.0,
-                    idf_norm=18.0,
-                    pop_norm=20.0
-                )
-
-    def test_idf_norm_zero_raises_error(self):
-        """idf_norm=0 should raise ValueError before SQL execution."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            parquet_path = os.path.join(tmpdir, "test.parquet")
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS fsq_place_id,
-                           NULL::VARCHAR AS name,
-                           NULL::DOUBLE AS latitude,
-                           NULL::DOUBLE AS longitude,
-                           NULL::DATE AS date_closed,
-                           NULL::TIMESTAMP AS date_refreshed,
-                           NULL::DOUBLE[] AS fsq_category_ids,
-                           NULL::GEOMETRY AS geom,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{parquet_path}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="idf_norm.*must be positive"):
-                stage_import(
-                    self.con,
-                    source="foursquare",
-                    parquet_glob=parquet_path,
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=10.0,
-                    idf_norm=0.0,
-                    pop_norm=20.0
-                )
-
-    def test_idf_norm_negative_raises_error(self):
-        """idf_norm < 0 should raise ValueError before SQL execution."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            parquet_path = os.path.join(tmpdir, "test.parquet")
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS fsq_place_id,
-                           NULL::VARCHAR AS name,
-                           NULL::DOUBLE AS latitude,
-                           NULL::DOUBLE AS longitude,
-                           NULL::DATE AS date_closed,
-                           NULL::TIMESTAMP AS date_refreshed,
-                           NULL::DOUBLE[] AS fsq_category_ids,
-                           NULL::GEOMETRY AS geom,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{parquet_path}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="idf_norm.*must be positive"):
-                stage_import(
-                    self.con,
-                    source="foursquare",
-                    parquet_glob=parquet_path,
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=10.0,
-                    idf_norm=-18.0,
-                    pop_norm=20.0
-                )
-
-    def test_pop_norm_zero_raises_error(self):
-        """pop_norm=0 should raise ValueError before SQL execution (overture_division)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            division_parquet = os.path.join(tmpdir, "division.parquet")
-            division_area_parquet = os.path.join(tmpdir, "division_area.parquet")
-
-            # Create empty but valid division parquet
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS id,
-                           NULL::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
-                           NULL::VARCHAR AS subtype,
-                           NULL::VARCHAR AS country,
-                           NULL::VARCHAR AS region,
-                           NULL::VARCHAR AS wikidata,
-                           NULL::BIGINT AS population,
-                           NULL::VARCHAR AS parent_division_id
-                    WHERE FALSE
-                ) TO '{division_parquet}' (FORMAT PARQUET)
-            """)
-
-            # Create empty but valid division_area parquet
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS division_id,
-                           NULL::INTEGER AS admin_level,
-                           NULL::GEOMETRY AS geometry,
-                           FALSE::BOOLEAN AS is_land,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{division_area_parquet}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="pop_norm.*must be positive"):
-                stage_import(
-                    self.con,
-                    source="overture_division",
-                    parquet_glob=(division_parquet, division_area_parquet),
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=10.0,
-                    idf_norm=18.0,
-                    pop_norm=0.0
-                )
-
-    def test_pop_norm_negative_raises_error(self):
-        """pop_norm < 0 should raise ValueError before SQL execution (overture_division)."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            division_parquet = os.path.join(tmpdir, "division.parquet")
-            division_area_parquet = os.path.join(tmpdir, "division_area.parquet")
-
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS id,
-                           NULL::STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), variants MAP(VARCHAR, VARCHAR[])) AS names,
-                           NULL::VARCHAR AS subtype,
-                           NULL::VARCHAR AS country,
-                           NULL::VARCHAR AS region,
-                           NULL::VARCHAR AS wikidata,
-                           NULL::BIGINT AS population,
-                           NULL::VARCHAR AS parent_division_id
-                    WHERE FALSE
-                ) TO '{division_parquet}' (FORMAT PARQUET)
-            """)
-
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS division_id,
-                           NULL::INTEGER AS admin_level,
-                           NULL::GEOMETRY AS geometry,
-                           FALSE::BOOLEAN AS is_land,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{division_area_parquet}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="pop_norm.*must be positive"):
-                stage_import(
-                    self.con,
-                    source="overture_division",
-                    parquet_glob=(division_parquet, division_area_parquet),
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=10.0,
-                    idf_norm=18.0,
-                    pop_norm=-20.0
-                )
-
-    def test_multiple_invalid_norms_raise_error(self):
-        """Multiple invalid norm constants should raise ValueError with all mentioned."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            parquet_path = os.path.join(tmpdir, "test.parquet")
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS fsq_place_id,
-                           NULL::VARCHAR AS name,
-                           NULL::DOUBLE AS latitude,
-                           NULL::DOUBLE AS longitude,
-                           NULL::DATE AS date_closed,
-                           NULL::TIMESTAMP AS date_refreshed,
-                           NULL::DOUBLE[] AS fsq_category_ids,
-                           NULL::GEOMETRY AS geom,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{parquet_path}' (FORMAT PARQUET)
-            """)
-
-            with pytest.raises(ValueError, match="density_norm.*idf_norm"):
-                stage_import(
-                    self.con,
-                    source="foursquare",
-                    parquet_glob=parquet_path,
-                    bbox=None,
-                    memory_limit="4GB",
-                    t0=0.0,
-                    density_norm=-10.0,
-                    idf_norm=0.0,
-                    pop_norm=20.0
-                )
-
-    def test_valid_norms_do_not_raise_error(self):
-        """All positive norm constants should not raise ValueError."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            parquet_path = os.path.join(tmpdir, "test.parquet")
-            self.con.execute(f"""
-                COPY (
-                    SELECT NULL::VARCHAR AS fsq_place_id,
-                           NULL::VARCHAR AS name,
-                           NULL::DOUBLE AS latitude,
-                           NULL::DOUBLE AS longitude,
-                           NULL::DATE AS date_closed,
-                           NULL::TIMESTAMP AS date_refreshed,
-                           NULL::DOUBLE[] AS fsq_category_ids,
-                           NULL::GEOMETRY AS geom,
-                           {{'xmin': 0.0, 'ymin': 0.0, 'xmax': 0.0, 'ymax': 0.0}} AS bbox
-                    WHERE FALSE
-                ) TO '{parquet_path}' (FORMAT PARQUET)
-            """)
-
-            # Should not raise any error
-            stage_import(
-                self.con,
-                source="foursquare",
-                parquet_glob=parquet_path,
-                bbox=None,
-                memory_limit="4GB",
-                t0=0.0,
-                density_norm=10.0,
-                idf_norm=18.0,
-                pop_norm=20.0
-            )
 
 
 class TestNegativePopulationClamping:
@@ -421,17 +124,11 @@ class TestNegativePopulationClamping:
         division_area_parquet = self._create_division_area_parquet()
 
         # Import divisions with negative population
-        stage_import(
-            self.con,
-            source="overture_division",
-            parquet_glob=(division_parquet, division_area_parquet),
-            bbox=None,
-            memory_limit="4GB",
-            t0=0.0,
-            density_norm=10.0,
-            idf_norm=18.0,
-            pop_norm=20.0
-        )
+        places_parquet = str(self.tmpdir_path / "places.parquet")
+        stage_import("overture_division", (division_parquet, division_area_parquet),
+                     None, places_parquet, memory_limit="4GB",
+                     density_norm=10.0, pop_norm=20.0, force=True)
+        self.con.execute(f"CREATE OR REPLACE TEMP TABLE places AS SELECT * FROM read_parquet('{places_parquet}')")
 
         # Check that all importance scores are non-negative
         result = self.con.execute("""
@@ -471,17 +168,11 @@ class TestNegativePopulationClamping:
         division_parquet = self._create_division_parquet()
         division_area_parquet = self._create_division_area_parquet()
 
-        stage_import(
-            self.con,
-            source="overture_division",
-            parquet_glob=(division_parquet, division_area_parquet),
-            bbox=None,
-            memory_limit="4GB",
-            t0=0.0,
-            density_norm=10.0,
-            idf_norm=18.0,
-            pop_norm=20.0
-        )
+        places_parquet = str(self.tmpdir_path / "places.parquet")
+        stage_import("overture_division", (division_parquet, division_area_parquet),
+                     None, places_parquet, memory_limit="4GB",
+                     density_norm=10.0, pop_norm=20.0, force=True)
+        self.con.execute(f"CREATE OR REPLACE TEMP TABLE places AS SELECT * FROM read_parquet('{places_parquet}')")
 
         # Check that no importance is NaN or NULL
         result = self.con.execute("""
@@ -515,17 +206,11 @@ class TestNegativePopulationClamping:
             "SQL should contain GREATEST() function to clamp negative population"
 
         # Actually import and verify behavior
-        stage_import(
-            self.con,
-            source="overture_division",
-            parquet_glob=(division_parquet, division_area_parquet),
-            bbox=None,
-            memory_limit="4GB",
-            t0=0.0,
-            density_norm=10.0,
-            idf_norm=18.0,
-            pop_norm=20.0
-        )
+        places_parquet = str(self.tmpdir_path / "places.parquet")
+        stage_import("overture_division", (division_parquet, division_area_parquet),
+                     None, places_parquet, memory_limit="4GB",
+                     density_norm=10.0, pop_norm=20.0, force=True)
+        self.con.execute(f"CREATE OR REPLACE TEMP TABLE places AS SELECT * FROM read_parquet('{places_parquet}')")
 
         # Verify the population value itself is clamped in the base table
         # (not just in the importance formula)

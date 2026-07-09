@@ -161,9 +161,9 @@ class TestBoundaryExportFilter:
         instead of stage_boundary_export(). The filter should still be present.
         """
         from garganorn import stages
-        source = inspect.getsource(stages.export_boundaries_db)
+        source = inspect.getsource(stages.stage_division_import)
         # The boundary export CTAS should filter by admin_level and subtype
         assert "admin_level BETWEEN 0 AND 2" in source or "admin_level between 0 and 2" in source.lower(), \
-            "export_boundaries_db should filter by admin_level"
+            "stage_division_import should filter by admin_level"
         assert "subtype = 'locality'" in source or "subtype='locality'" in source, \
-            "export_boundaries_db should filter by subtype='locality'"
+            "stage_division_import should filter by subtype='locality'"

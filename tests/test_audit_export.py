@@ -194,8 +194,10 @@ class TestOSMRkeyFormat:
 
         # Write manifest.duckdb using the stage function
         # This stores place_id (raw rkey) as rkey in record_tiles
-        write_manifest_db(con, str(tiles_dir), "osm")
+        ta_tmp = str(tiles_dir.parent / "ta_tmp.parquet")
+        con.execute(f"COPY tile_assignments TO '{ta_tmp}' (FORMAT PARQUET)")
         con.close()
+        write_manifest_db(ta_tmp, str(tiles_dir), "osm")
 
         manifest_db_path = tiles_dir / "manifest.duckdb"
 

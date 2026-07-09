@@ -17,7 +17,8 @@ import tempfile
 import duckdb
 import pytest
 
-from garganorn.quadtree import _coord_exprs, compute_containment
+from garganorn.quadtree import _coord_exprs
+from garganorn.stages import compute_containment
 
 
 # ---------------------------------------------------------------------------
@@ -178,17 +179,31 @@ class TestComputeContainmentOverture:
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         con.execute("INSERT INTO tile_assignments VALUES ('ovr001', ?)", [qk17[:6]])
 
-        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
-        pk_expr = "p.id"
+        # Write places and tile_assignments to parquet for Phase 2 API
+        places_parquet = str(tmp_path / "ovr001_places.parquet")
+        ta_parquet = str(tmp_path / "ovr001_ta.parquet")
+        con.execute(f"COPY (SELECT id, bbox, qk17 FROM places) TO '{places_parquet}' (FORMAT PARQUET)")
+        con.execute(f"COPY (SELECT place_id, tile_qk FROM tile_assignments) TO '{ta_parquet}' (FORMAT PARQUET)")
 
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
+        containment_dir = str(tmp_path / "containment")
         compute_containment(
-            con, division_path, pk_expr, lon_expr, lat_expr,
+            places_parquet, ta_parquet, division_path,
+            "id", lon_expr, lat_expr, containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "containment"),
+            force=True,
         )
 
-        # Verify the containment table was populated
-        rows = con.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
+        # Verify the containment parquets were populated
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir) if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+        ).fetchall()
+        check_con.close()
         assert len(rows) == 1, f"Expected 1 containment row, got {len(rows)}"
         assert rows[0][0] == "ovr001"
         assert "org.atgeo.places.overture.division:85922583" in rows[0][1]
@@ -230,16 +245,30 @@ class TestComputeContainmentOverture:
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         con.execute("INSERT INTO tile_assignments VALUES ('ovr002', ?)", [qk17[:6]])
 
-        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
-        pk_expr = "p.id"
+        # Write places and tile_assignments to parquet for Phase 2 API
+        places_parquet = str(tmp_path / "ovr002_places.parquet")
+        ta_parquet = str(tmp_path / "ovr002_ta.parquet")
+        con.execute(f"COPY (SELECT id, bbox, qk17 FROM places) TO '{places_parquet}' (FORMAT PARQUET)")
+        con.execute(f"COPY (SELECT place_id, tile_qk FROM tile_assignments) TO '{ta_parquet}' (FORMAT PARQUET)")
 
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
+        containment_dir = str(tmp_path / "containment")
         compute_containment(
-            con, division_path, pk_expr, lon_expr, lat_expr,
+            places_parquet, ta_parquet, division_path,
+            "id", lon_expr, lat_expr, containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "containment"),
+            force=True,
         )
 
-        rows = con.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir) if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+        ).fetchall()
+        check_con.close()
         assert len(rows) == 1
         relations = json.loads(rows[0][1])
         within = relations.get("within", [])

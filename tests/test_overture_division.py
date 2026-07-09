@@ -1,11 +1,16 @@
 """Tests for the Overture divisions pipeline and export."""
 
+import inspect
 import json
+import os
 import pathlib
+import time
 from unittest.mock import patch, MagicMock, call
 
 import duckdb
 import pytest
+
+import garganorn.stages as _stages
 
 from tests.quadtree_helpers import REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit
 
@@ -153,14 +158,17 @@ class TestPipelineSkipsImportanceVariants:
 
         source_code = inspect.getsource(run_pipeline)
 
-        # Phase 2: run_pipeline must pass density_parquet and idf_parquet to stage_import
-        assert "stage_import(" in source_code, "run_pipeline must call stage_import"
+        # The import call (which computes importance inline) must pass density_parquet
+        # and idf_parquet.  The call is currently routed through the transitional
+        # helper (_transitional_import_phase1) until G7 rewrites quadtree.py; the
+        # behavioral invariant — that importance is computed inline in the import SQL
+        # rather than via a separate stage — is unchanged.
         assert "density_parquet=" in source_code, (
-            "run_pipeline must pass density_parquet to stage_import for inline importance"
+            "run_pipeline must pass density_parquet to the import call for inline importance"
         )
         # overture_division doesn't use IDF, but other sources do
         assert "idf_parquet=" in source_code, (
-            "run_pipeline must pass idf_parquet to stage_import for inline importance"
+            "run_pipeline must pass idf_parquet to the import call for inline importance"
         )
 
     def test_variants_computed_inline_for_overture_division(self):
@@ -179,9 +187,11 @@ class TestPipelineSkipsImportanceVariants:
         assert "stage_variants" not in source_code, (
             "run_pipeline must not call stage_variants (Phase 2 eliminated this stage)"
         )
-        # Verify that stage_import is called (variants are computed inline in import SQL)
-        assert "stage_import(" in source_code, (
-            "run_pipeline must call stage_import (variants computed inline)"
+        # Variants are computed inline in the import SQL.  The import call is
+        # currently routed through _transitional_import_phase1 (TEMPORARY, until
+        # G7 rewrites quadtree.py); verify no separate variants stage exists.
+        assert "stage_variants(" not in source_code, (
+            "run_pipeline must not call stage_variants (variants computed inline)"
         )
 
     def test_overture_division_registered_in_sources(self):
@@ -316,3 +326,98 @@ class TestExportStripJsonNulls:
                 assert attrs["subtype"] == "county"
                 assert attrs["admin_level"] == 6
                 assert set(attrs.keys()) == {"subtype", "admin_level"}
+
+
+# ---------------------------------------------------------------------------
+# §7.2.5 Phase 2 division import artifact tests (RED)
+# ---------------------------------------------------------------------------
+
+class TestDivisionImportArtifactPhase2:
+    """§7.2.5: stage_import for overture_division must write both places.parquet
+    and boundaries.duckdb with unchanged schema.
+
+    Fails in Red phase because stage_import still takes 'con' as first arg.
+    """
+
+    _BBOX = (-122.55, 37.60, -122.30, 37.85)
+
+    def test_stage_import_no_con_parameter(self):
+        """stage_import must not take 'con' as its first parameter."""
+        params = list(inspect.signature(_stages.stage_import).parameters.keys())
+        assert params[0] != "con", (
+            f"stage_import must not have 'con' as first param; got {params[0]!r}"
+        )
+
+    def test_stage_division_import_writes_places_parquet(self, division_parquet, tmp_path):
+        """stage_import for overture_division must write places.parquet."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
+
+    def test_stage_division_import_writes_boundaries_duckdb(self, division_parquet, tmp_path):
+        """stage_import for overture_division must write boundaries.duckdb in the same dir."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        boundaries = tmp_path / "boundaries.duckdb"
+        assert boundaries.exists(), f"boundaries.duckdb not written alongside places.parquet"
+
+    def test_boundaries_duckdb_schema_unchanged(self, division_parquet, tmp_path):
+        """boundaries.duckdb must have admin_level column (schema unchanged in Phase 2)."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        boundaries = str(tmp_path / "boundaries.duckdb")
+        con = duckdb.connect()
+        con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
+        cols = {r[0] for r in con.execute("DESCRIBE bnd.places").fetchall()}
+        con.close()
+        assert "admin_level" in cols, (
+            f"boundaries.duckdb must have admin_level column; found: {cols}"
+        )
+
+    def test_boundaries_duckdb_has_rtree_index(self, division_parquet, tmp_path):
+        """boundaries.duckdb must have an R-tree index on geometry."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        boundaries = str(tmp_path / "boundaries.duckdb")
+        con = duckdb.connect()
+        con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
+        # duckdb_indexes() in DuckDB 1.2.1 has no index_type column; use index_name.
+        # The R-tree index is created with name "bnd_places_rtree".
+        indexes = con.execute(
+            "SELECT index_name FROM duckdb_indexes() WHERE database_name = 'bnd'"
+        ).fetchall()
+        con.close()
+        index_names = {r[0].lower() for r in indexes}
+        assert any("rtree" in name for name in index_names), (
+            f"boundaries.duckdb must have R-tree index; found index names: {index_names}"
+        )
+
+    def test_places_parquet_no_geometry_column(self, division_parquet, tmp_path):
+        """division places.parquet must not contain 'geometry' column."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        con = duckdb.connect()
+        cols = {r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{output}')"
+        ).fetchall()}
+        con.close()
+        assert "geometry" not in cols, (
+            f"division places.parquet must not contain 'geometry' column; found: {cols}"
+        )
+
+    def test_single_meta_gates_both_artifacts(self, division_parquet, tmp_path):
+        """Deleting boundaries.duckdb must make stage_import stale (single meta gates both)."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        mtime1 = os.path.getmtime(output)
+        # Remove boundaries.duckdb to simulate it being stale/missing
+        boundaries = tmp_path / "boundaries.duckdb"
+        boundaries.unlink()
+        time.sleep(0.05)
+        # Rerun without force — must rebuild because boundaries.duckdb is gone
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        mtime2 = os.path.getmtime(output)
+        assert mtime2 > mtime1, (
+            "stage_import must rebuild when boundaries.duckdb is missing "
+            "(single meta gates both artifacts)"
+        )

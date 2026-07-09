@@ -1,11 +1,19 @@
 """Tests for overture_place_import.sql."""
 
+import inspect
+import json
+import os
+import pathlib
+import time
+
 import duckdb
 import pytest
 from tests.quadtree_helpers import (
     REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit,
     OV_BBOX, run_overture_import,
 )
+
+import garganorn.stages as _stages
 
 
 # ---------------------------------------------------------------------------
@@ -134,3 +142,68 @@ class TestOvertureImport:
         assert describe["geometry"] == "GEOMETRY", (
             f"Expected geometry to be GEOMETRY, got {describe['geometry']}"
         )
+
+
+# ---------------------------------------------------------------------------
+# §7.2 Phase 2 import artifact tests (RED — overture_place)
+# ---------------------------------------------------------------------------
+
+class TestOvertureImportArtifactPhase2:
+    """§7.2: stage_import must write places.parquet without 'geometry' column.
+
+    All tests fail in Red phase because stage_import still takes 'con'
+    as its first positional argument.
+    """
+
+    _BBOX = (-122.55, 37.60, -122.30, 37.85)
+
+    def test_stage_import_no_con_parameter(self):
+        """stage_import must not take 'con' as its first parameter."""
+        params = list(inspect.signature(_stages.stage_import).parameters.keys())
+        assert params[0] != "con", (
+            f"stage_import must not have 'con' as first param; got {params[0]!r}"
+        )
+
+    def test_stage_import_writes_places_parquet(self, overture_parquet, tmp_path):
+        """stage_import must write places.parquet for overture_place."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
+
+    def test_places_parquet_no_geometry_column(self, overture_parquet, tmp_path):
+        """places.parquet must not contain the 'geometry' column (§3.2 EXCLUDE)."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        con = duckdb.connect()
+        cols = {r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{output}')"
+        ).fetchall()}
+        con.close()
+        assert "geometry" not in cols, (
+            f"places.parquet must not contain 'geometry' column; found: {cols}"
+        )
+
+    def test_places_parquet_retains_bbox_struct(self, overture_parquet, tmp_path):
+        """places.parquet must retain the 'bbox' struct (used by _coord_exprs)."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        con = duckdb.connect()
+        cols = {r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{output}')"
+        ).fetchall()}
+        con.close()
+        assert "bbox" in cols, (
+            f"places.parquet must retain 'bbox' struct; found: {cols}"
+        )
+
+    def test_places_parquet_qk17_sorted_nulls_last(self, overture_parquet, tmp_path):
+        """places.parquet must be sorted by qk17 NULLS LAST."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        con = duckdb.connect()
+        rows = [r[0] for r in con.execute(
+            f"SELECT qk17 FROM read_parquet('{output}')"
+        ).fetchall()]
+        con.close()
+        non_null = [v for v in rows if v is not None]
+        assert non_null == sorted(non_null), "qk17 values must be in sorted order"

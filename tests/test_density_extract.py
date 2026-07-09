@@ -78,3 +78,143 @@ class TestDensityExtract:
         # All should contribute to density since there's no bbox filter.
         # We expect at least 1 density tile (probably 1-5 given the small fixture).
         assert count > 0, f"Expected at least 1 density tile, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# §7.1.6 Sort pin — density parquet must be non-decreasing on tile_qk15
+# ---------------------------------------------------------------------------
+
+class TestDensitySortPin:
+    """§7.1.6: density_tiles.parquet must be non-decreasing on tile_qk15.
+
+    Phase 2 spec §3.1 makes the ORDER BY tile_qk15 explicit. The test
+    pins this invariant as a regression guard.
+    """
+
+    def test_density_sorted_by_tile_qk15(self, overture_parquet, tmp_path):
+        """density_tiles.parquet must be sorted non-decreasingly on tile_qk15."""
+        output = tmp_path / "density.parquet"
+        stage_density_extract(overture_parquet, str(output), time.monotonic())
+        conn = duckdb.connect()
+        qks = [r[0] for r in conn.execute(
+            f"SELECT tile_qk15 FROM read_parquet('{output}')"
+        ).fetchall()]
+        conn.close()
+        assert qks == sorted(qks), (
+            f"density_tiles.parquet must be sorted by tile_qk15; "
+            f"got out-of-order: {[(a, b) for a, b in zip(qks, qks[1:]) if a > b][:3]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §3.1/§2.2/§2.3 Gate #13 Finding #2 — density finalize via .meta.json sidecar
+# ---------------------------------------------------------------------------
+
+class TestDensityMetaSidecar:
+    """§3.1/§2.2 tests for stage_density_extract producing a .meta.json sidecar.
+
+    All tests fail RED because the current stage_density_extract writes output
+    directly via `COPY density_export TO '{output_path}'` without calling
+    finalize_artifact, so no .meta.json is ever written.
+
+    The green implementer must:
+      1. Write to <output_path>.tmp first (via COPY).
+      2. Call finalize_artifact(tmp, output_path, params={}, inputs=resolved_paths)
+         which atomically renames .tmp → output and writes .meta.json last.
+      3. Replace _is_output_fresh() gate with artifact_fresh() (meta-aware).
+    """
+
+    def test_meta_json_written_after_stage(self, overture_parquet, tmp_path):
+        """§2.2: after stage_density_extract, <output_path>.meta.json must exist.
+
+        meta.json must contain:
+          - 'params': {} (density stage has no named parameters)
+          - 'inputs': [list of resolved source parquet paths from the glob]
+
+        Fails RED because current stage_density_extract uses direct COPY (no finalize_artifact).
+        """
+        import json as _json
+        output = tmp_path / "density.parquet"
+        meta_path = tmp_path / "density.parquet.meta.json"
+
+        stage_density_extract(overture_parquet, str(output), time.monotonic())
+
+        assert output.exists(), "density.parquet must be written"
+        assert meta_path.exists(), (
+            f"density.parquet.meta.json must be written by finalize_artifact; "
+            "fails RED because current stage uses direct COPY with no meta sidecar"
+        )
+        meta = _json.loads(meta_path.read_text())
+        assert "params" in meta, (
+            f"meta.json must have 'params' key; got keys: {list(meta)}"
+        )
+        assert "inputs" in meta, (
+            f"meta.json must have 'inputs' key; got keys: {list(meta)}"
+        )
+        assert meta["params"] == {}, (
+            f"density_extract params must be empty dict (no stage parameters); "
+            f"got {meta['params']!r}"
+        )
+        assert isinstance(meta["inputs"], list) and len(meta["inputs"]) > 0, (
+            f"meta.json 'inputs' must be a non-empty list of resolved parquet paths; "
+            f"got {meta.get('inputs')!r}"
+        )
+
+    def test_stale_tmp_clobbered(self, overture_parquet, tmp_path):
+        """§2.3 rule 1: a stale <output_path>.tmp is removed before building.
+
+        After the call: output is correct AND meta.json exists.
+        Current code already removes .tmp at stage start; this test adds the
+        assertion that meta.json is also written.
+
+        Fails RED because meta.json is not written by the current implementation.
+        """
+        output = tmp_path / "density.parquet"
+        tmp_file = tmp_path / "density.parquet.tmp"
+        meta_path = tmp_path / "density.parquet.meta.json"
+
+        # Plant garbage .tmp that must be removed at stage start
+        tmp_file.write_bytes(b"garbage data from a previous interrupted run")
+        assert tmp_file.exists(), "Test setup: .tmp must exist before the call"
+
+        stage_density_extract(overture_parquet, str(output), time.monotonic())
+
+        assert output.exists(), "density.parquet must be written"
+        assert not tmp_file.exists(), (
+            ".tmp file must be cleaned up by stage_density_extract "
+            "(current code already does this, but meta.json is still missing)"
+        )
+        assert meta_path.exists(), (
+            "density.parquet.meta.json must exist after stage; "
+            "fails RED because current implementation does not call finalize_artifact"
+        )
+
+    def test_freshness_meta_driven(self, overture_parquet, tmp_path):
+        """§2.2: freshness must be driven by artifact_fresh(), not _is_output_fresh().
+
+        artifact_fresh(output, resolved_inputs, {}) must return True after a successful
+        stage_density_extract, enabling the second call to be a no-op.
+
+        Fails RED because:
+          - current code never writes .meta.json
+          - artifact_fresh() returns False (missing meta)
+          - the assertion that artifact_fresh returns True therefore fails
+        """
+        from garganorn.stages import artifact_fresh, _resolve_glob_paths
+
+        output = tmp_path / "density.parquet"
+
+        stage_density_extract(overture_parquet, str(output), time.monotonic())
+        assert output.exists(), "density.parquet must be written"
+
+        # Resolve the actual input file paths that finalize_artifact should record in meta.
+        resolved_inputs = _resolve_glob_paths(overture_parquet)
+        assert resolved_inputs, "overture_parquet fixture must resolve to at least one file"
+
+        # artifact_fresh must return True for the just-built fresh artifact.
+        # Fails RED because current code never writes .meta.json (artifact_fresh returns False).
+        assert artifact_fresh(str(output), resolved_inputs, {}), (
+            "artifact_fresh(density.parquet, resolved_inputs, {}) must return True "
+            "after a successful stage_density_extract; "
+            "fails RED because no .meta.json is written by the current implementation"
+        )

@@ -1,4 +1,7 @@
-"""Red tests: compute_containment covering rewrite (§7.2 of covering-containment-design.md).
+"""Red tests: compute_containment covering rewrite + Phase 2 relocation.
+
+Contains existing Phase-1 red tests (§7.2 of covering-containment-design.md)
+and Phase-2 containment relocation tests (§7.4 of phase2-artifacts-design.md).
 
 Tests call compute_containment with the new Phase-1 signature (covering_dir,
 containment_dir instead of max_boundaries, max_zoom).  Against the current
@@ -19,6 +22,7 @@ import gzip
 import inspect
 import json
 import os
+import time
 
 import duckdb
 import pytest
@@ -169,26 +173,33 @@ class TestContainmentBehaviorPorts:
 
     def test_rkey_only_relations_sf_point(self, simple_boundaries_db, tmp_path):
         """SF point: place_containment relations have only 'rkey' keys, division prefix."""
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "rkeys_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023010")], "rkeys_ta.parquet"
         )
         covering_dir = str(tmp_path / "rkeys_covering")
         from garganorn.covering import stage_covering
         stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        # New signature: covering_dir and containment_dir replace max_boundaries/max_zoom.
-        # Fails with TypeError on old code — right red reason.
+        containment_dir = str(tmp_path / "rkeys_containment")
         compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             collection_prefix=_COLLECTION_PREFIX,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "rkeys_containment"),
+            force=True,
         )
-        rows = con.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir) if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+        ).fetchall()
+        check_con.close()
         assert len(rows) > 0, "SF point should have containment rows"
         for _, relations_json in rows:
             data = json.loads(relations_json)
@@ -204,22 +215,31 @@ class TestContainmentBehaviorPorts:
 
     def test_sf_point_expected_boundary_ids(self, simple_boundaries_db, tmp_path):
         """SF point: rkeys include continent, country, region, locality; exclude Manhattan."""
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "sfid_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023010")], "sfid_ta.parquet"
         )
         from garganorn.covering import stage_covering
         sfid_covering = str(tmp_path / "sfid_covering")
         stage_covering(str(simple_boundaries_db), sfid_covering, cover_min_zoom=4, cover_max_zoom=12)
+        containment_dir = str(tmp_path / "sfid_containment")
         compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=sfid_covering,
-            containment_dir=str(tmp_path / "sfid_containment"),
+            force=True,
         )
-        rows = con.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir) if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+        ).fetchall()
+        check_con.close()
         assert len(rows) > 0
         rkeys = {
             e["rkey"]
@@ -234,36 +254,58 @@ class TestContainmentBehaviorPorts:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 2 — ordering: within by level ASC, NULL levels last
+# §7.2 item 2 — ordering: within by level ASC, NULL levels last (Phase 2 sig)
 # ---------------------------------------------------------------------------
 
 class TestContainmentOrdering:
-    """§7.2 item 2: within list ordered by level ASC; NULL admin_level rows appear last."""
+    """§7.2 item 2: within list ordered by level ASC; NULL admin_level rows last.
+
+    Ported to Phase 2 signature per §7.4.1.  Fails RED with TypeError.
+    """
 
     def test_within_ordered_by_level_asc(self, simple_boundaries_db, tmp_path):
-        """The within list is sorted by level ASC (continent=0 first, locality=3 last)."""
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
-        )
+        """The within list is sorted by level ASC (continent=0 first, locality=3 last).
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         from garganorn.covering import stage_covering
         ord_covering = str(tmp_path / "ord_covering")
         stage_covering(str(simple_boundaries_db), ord_covering, cover_min_zoom=4, cover_max_zoom=12)
-        compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=ord_covering,
-            containment_dir=str(tmp_path / "ord_containment"),
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "ord_places.parquet"
         )
-        rows = con.execute("SELECT relations_json FROM place_containment").fetchall()
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023130")], "ord_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "ord_containment")
+
+        # Fails RED with TypeError (Phase 2 signature not yet implemented)
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(simple_boundaries_db),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+            covering_dir=ord_covering,
+        )
+
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect(":memory:")
+        rows = check_con.execute(
+            "SELECT relations_json FROM read_parquet(?)", [parquet_files]
+        ).fetchall()
         assert len(rows) > 0
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
             assert len(within) > 1, "SF point should be in multiple boundaries"
             rkeys = [e["rkey"] for e in within]
-            # continent (level=0) must come before locality (level=3)
             continent_idx = next(
                 (i for i, r in enumerate(rkeys) if r.endswith(":div_continent_na")), None
             )
@@ -277,8 +319,10 @@ class TestContainmentOrdering:
             )
 
     def test_null_admin_level_boundaries_last(self, tmp_path):
-        """Boundary with NULL admin_level appears after non-NULL levels in within."""
-        # Create boundaries DB with one NULL-level boundary
+        """Boundary with NULL admin_level appears after non-NULL levels in within.
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         null_db_path = tmp_path / "null_level.duckdb"
         conn = duckdb.connect(str(null_db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -293,14 +337,12 @@ class TestContainmentOrdering:
                 max_longitude DOUBLE
             )
         """)
-        # admin_level=2 boundary
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_named', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
                 2, -10.0, 10.0, -10.0, 10.0
             )
         """)
-        # NULL admin_level boundary (locality equivalent)
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_null', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
@@ -310,20 +352,39 @@ class TestContainmentOrdering:
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
         conn.close()
 
-        con = _make_places_con([("p0", 0.0, 0.0, "30000000000000000")])
         from garganorn.covering import stage_covering
         null_covering = str(tmp_path / "null_covering")
         stage_covering(str(null_db_path), null_covering, cover_min_zoom=4, cover_max_zoom=12)
-        compute_containment(
-            con,
-            str(null_db_path),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=null_covering,
-            containment_dir=str(tmp_path / "null_containment"),
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p0", 0.0, 0.0)], "null_places.parquet"
         )
-        rows = con.execute("SELECT relations_json FROM place_containment").fetchall()
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p0", "30000000000000000"[:6])], "null_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "null_containment")
+
+        # Fails RED with TypeError
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(null_db_path),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+            covering_dir=null_covering,
+        )
+
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect(":memory:")
+        rows = check_con.execute(
+            "SELECT relations_json FROM read_parquet(?)", [parquet_files]
+        ).fetchall()
         assert len(rows) > 0
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
@@ -337,16 +398,22 @@ class TestContainmentOrdering:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 3 — brute-force oracle parity
+# §7.2 item 3 — brute-force oracle parity (Phase 2 signature)
 # ---------------------------------------------------------------------------
 
 class TestBruteForceOracle:
-    """§7.2 item 3: compute_containment pair set == brute-force ST_Contains for all places."""
+    """§7.2 item 3: compute_containment pair set == brute-force ST_Contains.
+
+    Ported to Phase 2 signature: compute_containment(places_parquet,
+    tile_assignments_parquet, ...) per §7.4.1.  Fails RED because the current
+    implementation still takes 'con' as its first argument.
+    """
 
     def test_parity_with_direct_st_contains_simple_boundaries(self, simple_boundaries_db, tmp_path):
-        """(place_id, boundary_id) pairs from compute_containment match direct ST_Contains."""
-        # Import garganorn.covering to build the covering dir.
-        # Fails with ModuleNotFoundError until covering.py exists — right red reason.
+        """(place_id, boundary_id) pairs from compute_containment match direct ST_Contains.
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError (wrong signature).
+        """
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "oracle_covering")
@@ -357,52 +424,72 @@ class TestBruteForceOracle:
             cover_max_zoom=12,
         )
 
-        places = [
-            ("p_sf", -122.4194, 37.7749, "02301020333300320"),
-            ("p_nyc", -73.9712, 40.7831, "03201011013023231"),
-            ("p_ocean", -150.0, 20.0, "00000000000000000"),
-        ]
-        # Compute qk17s via DuckDB for ocean point
+        # Compute correct qk17 values
         tmp_con = duckdb.connect(":memory:")
         tmp_con.execute("INSTALL spatial; LOAD spatial;")
-        corrected = []
-        for pid, lon, lat, _ in places:
-            qk17 = tmp_con.execute(
-                "SELECT ST_QuadKey(?, ?, 17)", [lon, lat]
-            ).fetchone()[0]
-            corrected.append((pid, lon, lat, qk17))
+        raw_places = [
+            ("p_sf", -122.4194, 37.7749),
+            ("p_nyc", -73.9712, 40.7831),
+            ("p_ocean", -150.0, 20.0),
+        ]
+        places_with_qk = [
+            (pid, lon, lat)
+            for pid, lon, lat in raw_places
+        ]
 
-        con = _make_places_con(corrected)
-        compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "oracle_containment"),
+        places_parquet = _make_parquet_places(tmp_path, places_with_qk, "oracle_places.parquet")
+
+        # tile_qk = left(qk17, 6) for each place
+        ta_rows = []
+        for pid, lon, lat in places_with_qk:
+            qk17 = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [lon, lat]).fetchone()[0]
+            if qk17:
+                ta_rows.append((pid, qk17[:6]))
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, ta_rows, "oracle_ta.parquet"
         )
 
-        # collect compute_containment pairs
-        cc_pairs = set()
-        for place_id, rel_json in con.execute(
-            "SELECT place_id, relations_json FROM place_containment"
-        ).fetchall():
-            for entry in json.loads(rel_json)["within"]:
-                boundary_id = entry["rkey"].split(":", 1)[1]
-                cc_pairs.add((place_id, boundary_id))
+        containment_dir = str(tmp_path / "oracle_containment")
+        # Phase 2 signature: places_parquet, tile_assignments_parquet, boundaries_db, ...
+        # Fails RED with TypeError because current implementation takes 'con' first.
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(simple_boundaries_db),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+            covering_dir=covering_dir,
+        )
 
-        # brute-force oracle
+        # Read results from containment parquet files
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        cc_pairs = set()
+        if parquet_files:
+            check_con = duckdb.connect(":memory:")
+            for place_id, rel_json in check_con.execute(
+                "SELECT place_id, relations_json FROM read_parquet(?)",
+                [parquet_files],
+            ).fetchall():
+                for entry in json.loads(rel_json)["within"]:
+                    boundary_id = entry["rkey"].split(":", 1)[1]
+                    cc_pairs.add((place_id, boundary_id))
+
+        # brute-force oracle via ST_Contains
         oracle_con = duckdb.connect(":memory:")
         oracle_con.execute("INSTALL spatial; LOAD spatial;")
         oracle_con.execute(f"ATTACH '{simple_boundaries_db}' AS bnd (READ_ONLY)")
         oracle_pairs = set()
-        for pid, lon, lat, _ in corrected:
-            matching_boundaries = oracle_con.execute(
+        for pid, lon, lat in places_with_qk:
+            for (bid,) in oracle_con.execute(
                 "SELECT id FROM bnd.places WHERE ST_Contains(geometry, ST_Point(?, ?))",
                 [lon, lat],
-            ).fetchall()
-            for (bid,) in matching_boundaries:
+            ).fetchall():
                 oracle_pairs.add((pid, bid))
 
         assert cc_pairs == oracle_pairs, (
@@ -412,7 +499,10 @@ class TestBruteForceOracle:
         )
 
     def test_no_duplicate_rkeys_in_within(self, simple_boundaries_db, tmp_path):
-        """Each boundary appears at most once in a place's within list (no DISTINCT needed)."""
+        """Each boundary appears at most once in a place's within list.
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "nodup_covering")
@@ -422,19 +512,37 @@ class TestBruteForceOracle:
             cover_min_zoom=4,
             cover_max_zoom=12,
         )
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "nodup_places.parquet"
         )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023130")], "nodup_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "nodup_containment")
+
+        # Fails RED with TypeError (wrong signature)
         compute_containment(
-            con,
+            places_parquet,
+            tile_assignments_parquet,
             str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "nodup_containment"),
         )
-        rows = con.execute("SELECT relations_json FROM place_containment").fetchall()
+
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert len(parquet_files) > 0, "No containment parquets written"
+        check_con = duckdb.connect(":memory:")
+        rows = check_con.execute(
+            "SELECT relations_json FROM read_parquet(?)", [parquet_files]
+        ).fetchall()
         assert len(rows) > 0
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
@@ -445,74 +553,88 @@ class TestBruteForceOracle:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 4 — containment artifact layout
+# §7.2 item 4 — containment artifact layout (Phase 2 signature)
 # ---------------------------------------------------------------------------
 
 class TestContainmentArtifacts:
-    """§7.2 item 4: containment/<qk4>.parquet written, schema and sort correct."""
+    """§7.2 item 4: containment/<qk4>.parquet written, schema and sort correct.
+
+    Ported to Phase 2 signature per §7.4.1.  Fails RED with TypeError.
+    """
 
     def test_containment_parquets_written(self, simple_boundaries_db, tmp_path):
-        """compute_containment writes containment/<qk4>.parquet files."""
+        """compute_containment writes containment/<qk4>.parquet files.
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "art_covering")
-        stage_covering(
-            str(simple_boundaries_db),
-            covering_dir,
-            cover_min_zoom=4,
-            cover_max_zoom=12,
-        )
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        containment_dir = str(tmp_path / "art_containment")
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "art_places.parquet"
         )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023130")], "art_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "art_containment")
+
+        # Fails RED with TypeError (Phase 2 signature not yet implemented)
         compute_containment(
-            con,
+            places_parquet,
+            tile_assignments_parquet,
             str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
             covering_dir=covering_dir,
-            containment_dir=containment_dir,
         )
 
         assert os.path.isdir(containment_dir), "containment_dir not created"
         parquets = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
         assert len(parquets) > 0, "No containment/<qk4>.parquet files written"
-
-        # verify file names are length-4 quadkey prefixes
         for fname in parquets:
             stem = fname[:-8]
             assert len(stem) == 4, f"{fname!r}: stem not length 4"
             assert all(c in "0123" for c in stem), f"{fname!r}: non-quadkey chars"
 
     def test_containment_parquet_schema(self, simple_boundaries_db, tmp_path):
-        """Each containment parquet has columns (tile_qk, place_id, relations_json)."""
+        """Each containment parquet has columns (tile_qk, place_id, relations_json).
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "sch_covering")
-        stage_covering(
-            str(simple_boundaries_db),
-            covering_dir,
-            cover_min_zoom=4,
-            cover_max_zoom=12,
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "sch_places.parquet"
+        )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023130")], "sch_ta.parquet"
         )
         containment_dir = str(tmp_path / "sch_containment")
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
-        )
+
+        # Fails RED with TypeError
         compute_containment(
-            con,
+            places_parquet,
+            tile_assignments_parquet,
             str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
             covering_dir=covering_dir,
-            containment_dir=containment_dir,
         )
-        parquets = [os.path.join(containment_dir, f)
-                    for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+
+        parquets = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
         assert len(parquets) > 0
         check_con = duckdb.connect(":memory:")
         cols = {
@@ -526,40 +648,40 @@ class TestContainmentArtifacts:
         assert "relations_json" in cols
 
     def test_containment_parquet_sorted_tile_qk_place_id(self, simple_boundaries_db, tmp_path):
-        """Each containment parquet is sorted by (tile_qk, place_id)."""
+        """Each containment parquet is sorted by (tile_qk, place_id).
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "srt_covering")
-        stage_covering(
-            str(simple_boundaries_db),
-            covering_dir,
-            cover_min_zoom=4,
-            cover_max_zoom=12,
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        places_parquet = _make_parquet_places(
+            tmp_path,
+            [("p_sf", -122.4194, 37.7749), ("p_nyc", -73.9712, 40.7831)],
+            "srt_places.parquet",
+        )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path,
+            [("p_sf", "023130"), ("p_nyc", "032010")],
+            "srt_ta.parquet",
         )
         containment_dir = str(tmp_path / "srt_containment")
-        places = [
-            ("p_sf", -122.4194, 37.7749, "02301020333300320"),
-            ("p_nyc", -73.9712, 40.7831, "03201011013023231"),
-        ]
-        tmp_con = duckdb.connect(":memory:")
-        tmp_con.execute("INSTALL spatial; LOAD spatial;")
-        corrected = [
-            (pid, lon, lat, tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [lon, lat]).fetchone()[0])
-            for pid, lon, lat, _ in places
-        ]
-        con = _make_places_con(corrected)
+
+        # Fails RED with TypeError
         compute_containment(
-            con,
+            places_parquet,
+            tile_assignments_parquet,
             str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
             covering_dir=covering_dir,
-            containment_dir=containment_dir,
         )
-        parquet_files = [
-            f for f in os.listdir(containment_dir) if f.endswith(".parquet")
-        ]
+
+        parquet_files = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
         check_con = duckdb.connect(":memory:")
         for fname in parquet_files:
             path = os.path.join(containment_dir, fname)
@@ -569,34 +691,36 @@ class TestContainmentArtifacts:
             assert rows == sorted(rows), f"{fname}: not sorted by (tile_qk, place_id)"
 
     def test_tile_qk_in_parquet_matches_tile_assignments(self, simple_boundaries_db, tmp_path):
-        """tile_qk in containment parquets agrees with tile_assignments for each place."""
+        """tile_qk in containment parquets agrees with tile_assignments for each place.
+
+        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        """
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "tqk_covering")
-        stage_covering(
-            str(simple_boundaries_db),
-            covering_dir,
-            cover_min_zoom=4,
-            cover_max_zoom=12,
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        tile_qk = "023130"
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "tqk_places.parquet"
+        )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", tile_qk)], "tqk_ta.parquet"
         )
         containment_dir = str(tmp_path / "tqk_containment")
-        tmp_con = duckdb.connect(":memory:")
-        tmp_con.execute("INSTALL spatial; LOAD spatial;")
-        qk17 = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [-122.4194, 37.7749]).fetchone()[0]
-        tile_qk = qk17[:6]
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, qk17)],
-            tile_qk_map={"p_sf": tile_qk},
-        )
+
+        # Fails RED with TypeError
         compute_containment(
-            con,
+            places_parquet,
+            tile_assignments_parquet,
             str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
             covering_dir=covering_dir,
-            containment_dir=containment_dir,
         )
+
         parquets = [
             os.path.join(containment_dir, f)
             for f in os.listdir(containment_dir)
@@ -609,11 +733,9 @@ class TestContainmentArtifacts:
                 "SELECT DISTINCT tile_qk FROM read_parquet(?)", [parquets]
             ).fetchall()
         }
-        # Every tile_qk in containment must have been in tile_assignments
-        ta_tile_qks = {r[0] for r in con.execute("SELECT DISTINCT tile_qk FROM tile_assignments").fetchall()}
-        assert tile_qks_in_parquets.issubset(ta_tile_qks), (
-            f"Containment tile_qk values not in tile_assignments: "
-            f"{tile_qks_in_parquets - ta_tile_qks}"
+        assert tile_qks_in_parquets.issubset({tile_qk}), (
+            f"Containment tile_qk values not in expected set: "
+            f"{tile_qks_in_parquets - {tile_qk}}"
         )
 
 
@@ -625,62 +747,79 @@ class TestQ3Degradation:
     """§7.2 item 5: boundaries_db=None, missing/empty covering_dir → empty place_containment."""
 
     def test_boundaries_db_none_gives_empty_containment(self, tmp_path):
-        """boundaries_db=None → place_containment is created empty (Q3 preserved)."""
-        con = _make_places_con([("p1", 0.0, 0.0, "22222222222222222")])
-        compute_containment(
-            con,
-            None,  # boundaries_db=None
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=str(tmp_path / "q3_no_bnd_covering"),
-            containment_dir=str(tmp_path / "q3_no_bnd_containment"),
+        """boundaries_db=None → containment is created empty (Q3 preserved)."""
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p1", 0.0, 0.0)], "q3_no_bnd_places.parquet"
         )
-        rows = con.execute("SELECT * FROM place_containment").fetchall()
-        assert rows == [], (
-            f"boundaries_db=None should yield empty place_containment, got: {rows}"
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p1", "222222")], "q3_no_bnd_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "q3_no_bnd_containment")
+        compute_containment(
+            places_parquet, ta_parquet, None,
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=str(tmp_path / "q3_no_bnd_covering"),
+            force=True,
+        )
+        parquet_files = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+        assert parquet_files == [], (
+            f"boundaries_db=None should yield no containment parquets, got: {parquet_files}"
+        )
+        meta = json.loads(open(os.path.join(containment_dir, "_meta.json")).read())
+        assert meta.get("empty") is True, (
+            f"boundaries_db=None should set empty=True in _meta.json, got: {meta}"
         )
 
     def test_missing_covering_dir_gives_empty_containment(self, simple_boundaries_db, tmp_path):
-        """covering_dir that does not exist → place_containment is created empty."""
-        con = _make_places_con([("p1", -122.4194, 37.7749, "02301020333300320")])
+        """covering_dir that does not exist → containment is created empty."""
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p1", -122.4194, 37.7749)], "q3_no_cov_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p1", "023010")], "q3_no_cov_ta.parquet"
+        )
         missing_dir = str(tmp_path / "does_not_exist")
         assert not os.path.exists(missing_dir)
+        containment_dir = str(tmp_path / "q3_no_cov_containment")
         compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=missing_dir,
-            containment_dir=str(tmp_path / "q3_no_cov_containment"),
+            force=True,
         )
-        rows = con.execute("SELECT * FROM place_containment").fetchall()
-        assert rows == [], (
-            "Missing covering_dir should yield empty place_containment, got non-empty"
+        parquet_files = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+        assert parquet_files == [], (
+            "Missing covering_dir should yield no containment parquets, got non-empty"
         )
+        meta = json.loads(open(os.path.join(containment_dir, "_meta.json")).read())
+        assert meta.get("empty") is True
 
     def test_empty_covering_dir_gives_empty_containment(self, simple_boundaries_db, tmp_path):
-        """An empty covering_dir (no parquet files) → place_containment is empty."""
+        """An empty covering_dir (no parquet files) → containment is empty."""
         covering_dir = str(tmp_path / "empty_covering")
         os.makedirs(covering_dir)  # exists but empty
-        con = _make_places_con([("p1", -122.4194, 37.7749, "02301020333300320")])
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p1", -122.4194, 37.7749)], "q3_empty_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p1", "023010")], "q3_empty_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "q3_empty_containment")
         compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "q3_empty_containment"),
+            force=True,
         )
-        rows = con.execute("SELECT * FROM place_containment").fetchall()
-        assert rows == [], (
-            "Empty covering_dir should yield empty place_containment, got non-empty"
+        parquet_files = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+        assert parquet_files == [], (
+            "Empty covering_dir should yield no containment parquets, got non-empty"
         )
+        meta = json.loads(open(os.path.join(containment_dir, "_meta.json")).read())
+        assert meta.get("empty") is True
 
     def test_place_outside_all_boundaries_absent_from_output(self, simple_boundaries_db, tmp_path):
-        """Place with no containing boundary must not appear in place_containment."""
+        """Place with no containing boundary must not appear in containment."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "absent_covering")
@@ -694,22 +833,35 @@ class TestQ3Degradation:
         tmp_con = duckdb.connect(":memory:")
         tmp_con.execute("INSTALL spatial; LOAD spatial;")
         qk17 = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [-150.0, 20.0]).fetchone()[0]
-        con = _make_places_con([("p_ocean", -150.0, 20.0, qk17)])
+        tmp_con.close()
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_ocean", -150.0, 20.0)], "absent_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_ocean", qk17[:6])], "absent_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "absent_containment")
         compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "absent_containment"),
+            force=True,
         )
-        rows = con.execute(
-            "SELECT * FROM place_containment WHERE place_id = 'p_ocean'"
-        ).fetchall()
-        assert rows == [], (
-            f"Place in the ocean should have no containment rows, got: {rows}"
-        )
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        if parquet_files:
+            check_con = duckdb.connect()
+            rows = check_con.execute(
+                f"SELECT * FROM read_parquet({parquet_files!r}) WHERE place_id = 'p_ocean'"
+            ).fetchall()
+            check_con.close()
+            assert rows == [], (
+                f"Place in the ocean should have no containment rows, got: {rows}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -756,10 +908,10 @@ class TestExportIntegration:
     def test_place_containment_view_join_compatible_with_export(
         self, simple_boundaries_db, tmp_path
     ):
-        """place_containment VIEW created by compute_containment is join-compatible with export SQL.
+        """Containment parquets are join-compatible with export SQL.
 
-        The export SQL joins place_containment on place_id. Verify the VIEW exists
-        and has the expected columns after compute_containment runs.
+        Verifies that containment output has (place_id, relations_json) columns
+        and can be joined with places data.
         """
         from garganorn.covering import stage_covering
 
@@ -770,34 +922,44 @@ class TestExportIntegration:
             cover_min_zoom=4,
             cover_max_zoom=12,
         )
-        con = _make_places_con(
-            [("p_sf", -122.4194, 37.7749, "02301020333300320")]
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "compat_places.parquet"
         )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023010")], "compat_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "compat_containment")
         compute_containment(
-            con,
-            str(simple_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "compat_containment"),
+            force=True,
         )
 
-        # place_containment should be a VIEW or TABLE with (place_id, relations_json)
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert len(parquet_files) > 0, "containment parquets must exist"
+        check_con = duckdb.connect()
         cols = {
             row[0]
-            for row in con.execute("DESCRIBE SELECT * FROM place_containment").fetchall()
+            for row in check_con.execute(
+                "DESCRIBE SELECT * FROM read_parquet(?)", [parquet_files[:1]]
+            ).fetchall()
         }
         assert "place_id" in cols, "place_containment missing 'place_id' column"
         assert "relations_json" in cols, "place_containment missing 'relations_json' column"
 
         # join on place_id should work
-        result = con.execute("""
+        result = check_con.execute(f"""
             SELECT pc.place_id, pc.relations_json
-            FROM place_containment pc
-            JOIN places p ON p.pk = pc.place_id
+            FROM read_parquet({parquet_files!r}) pc
+            JOIN read_parquet('{places_parquet}') p ON p.place_id = pc.place_id
         """).fetchall()
-        assert len(result) > 0, "JOIN between place_containment and places returned no rows"
+        assert len(result) > 0, "JOIN between containment parquets and places returned no rows"
+        check_con.close()
 
 
 # ---------------------------------------------------------------------------
@@ -897,19 +1059,32 @@ class TestAntimeridianEdgeArm:
         tmp_con = duckdb.connect(":memory:")
         tmp_con.execute("INSTALL spatial; LOAD spatial;")
         qk17_east = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [175.0, 0.0]).fetchone()[0]
-        con = _make_places_con([("p_east", 175.0, 0.0, qk17_east)])
-        compute_containment(
-            con,
-            str(antimeridian_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "ami_e_containment"),
+        tmp_con.close()
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_east", 175.0, 0.0)], "ami_e_places.parquet"
         )
-        rows = con.execute(
-            "SELECT place_id FROM place_containment WHERE place_id = 'p_east'"
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_east", qk17_east[:6])], "ami_e_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "ami_e_containment")
+        compute_containment(
+            places_parquet, ta_parquet, str(antimeridian_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir,
+            force=True,
+        )
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert len(parquet_files) > 0, "No containment parquets for east lobe place"
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id FROM read_parquet({parquet_files!r}) WHERE place_id = 'p_east'"
         ).fetchall()
+        check_con.close()
         assert len(rows) == 1, (
             f"East lobe place (lon=175) should be in containment; got {rows}"
         )
@@ -928,19 +1103,32 @@ class TestAntimeridianEdgeArm:
         tmp_con = duckdb.connect(":memory:")
         tmp_con.execute("INSTALL spatial; LOAD spatial;")
         qk17_west = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [-175.0, 0.0]).fetchone()[0]
-        con = _make_places_con([("p_west", -175.0, 0.0, qk17_west)])
-        compute_containment(
-            con,
-            str(antimeridian_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "ami_w_containment"),
+        tmp_con.close()
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_west", -175.0, 0.0)], "ami_w_places.parquet"
         )
-        rows = con.execute(
-            "SELECT place_id FROM place_containment WHERE place_id = 'p_west'"
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_west", qk17_west[:6])], "ami_w_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "ami_w_containment")
+        compute_containment(
+            places_parquet, ta_parquet, str(antimeridian_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir,
+            force=True,
+        )
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert len(parquet_files) > 0, "No containment parquets for west lobe place"
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id FROM read_parquet({parquet_files!r}) WHERE place_id = 'p_west'"
         ).fetchall()
+        check_con.close()
         assert len(rows) == 1, (
             f"West lobe place (lon=-175) should be in containment; got {rows}"
         )
@@ -967,24 +1155,35 @@ class TestAntimeridianEdgeArm:
         tmp_con = duckdb.connect(":memory:")
         tmp_con.execute("INSTALL spatial; LOAD spatial;")
         qk17_gap = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [0.0, 0.0]).fetchone()[0]
-        con = _make_places_con([("p_gap", 0.0, 0.0, qk17_gap)])
-        compute_containment(
-            con,
-            str(antimeridian_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
-            covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "ami_g_containment"),
+        tmp_con.close()
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_gap", 0.0, 0.0)], "ami_g_places.parquet"
         )
-        rows = con.execute(
-            "SELECT relations_json FROM place_containment WHERE place_id = 'p_gap'"
-        ).fetchall()
-        rkeys = {
-            e["rkey"]
-            for (rel_json,) in rows
-            for e in json.loads(rel_json)["within"]
-        }
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_gap", qk17_gap[:6])], "ami_g_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "ami_g_containment")
+        compute_containment(
+            places_parquet, ta_parquet, str(antimeridian_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir,
+            force=True,
+        )
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        rkeys = set()
+        if parquet_files:
+            check_con = duckdb.connect()
+            for (rel_json,) in check_con.execute(
+                f"SELECT relations_json FROM read_parquet({parquet_files!r}) WHERE place_id = 'p_gap'"
+            ).fetchall():
+                for e in json.loads(rel_json)["within"]:
+                    rkeys.add(e["rkey"])
+            check_con.close()
         ami_rkey = f"{_COLLECTION_PREFIX}:ami_boundary"
         gap_rkey = f"{_COLLECTION_PREFIX}:gap_boundary"
         assert ami_rkey not in rkeys, (
@@ -1026,31 +1225,46 @@ class TestAntimeridianEdgeArm:
         qk17_east = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [175.0, 0.0]).fetchone()[0]
         qk17_west = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [-175.0, 0.0]).fetchone()[0]
         qk17_gap = tmp_con.execute("SELECT ST_QuadKey(?,?,17)", [0.0, 0.0]).fetchone()[0]
+        tmp_con.close()
 
-        con = _make_places_con([
-            ("p_east", 175.0, 0.0, qk17_east),
-            ("p_west", -175.0, 0.0, qk17_west),
-            ("p_gap", 0.0, 0.0, qk17_gap),
-        ])
+        places_parquet = _make_parquet_places(
+            tmp_path,
+            [("p_east", 175.0, 0.0), ("p_west", -175.0, 0.0), ("p_gap", 0.0, 0.0)],
+            "all3_places.parquet",
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path,
+            [
+                ("p_east", qk17_east[:6]),
+                ("p_west", qk17_west[:6]),
+                ("p_gap", qk17_gap[:6]),
+            ],
+            "all3_ta.parquet",
+        )
+        containment_dir = str(tmp_path / "all3_containment")
         compute_containment(
-            con,
-            str(antimeridian_boundaries_db),
-            pk_expr="pk",
-            lon_expr="longitude",
-            lat_expr="latitude",
+            places_parquet, ta_parquet, str(antimeridian_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir,
-            containment_dir=str(tmp_path / "all3_containment"),
+            force=True,
         )
 
         ami_rkey = f"{_COLLECTION_PREFIX}:ami_boundary"
         gap_rkey = f"{_COLLECTION_PREFIX}:gap_boundary"
 
-        # Collect per-place rkeys from place_containment
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
         place_rkeys = {}
-        for place_id, rel_json in con.execute(
-            "SELECT place_id, relations_json FROM place_containment"
-        ).fetchall():
-            place_rkeys[place_id] = {e["rkey"] for e in json.loads(rel_json)["within"]}
+        if parquet_files:
+            check_con = duckdb.connect()
+            for place_id, rel_json in check_con.execute(
+                f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+            ).fetchall():
+                place_rkeys[place_id] = {e["rkey"] for e in json.loads(rel_json)["within"]}
+            check_con.close()
 
         assert ami_rkey in place_rkeys.get("p_east", set()), (
             "East lobe place (lon=175) should appear with ami_boundary"
@@ -1065,4 +1279,414 @@ class TestAntimeridianEdgeArm:
         assert gap_rkey in place_rkeys.get("p_gap", set()), (
             "Gap place (lon=0) should appear with gap_boundary "
             "(confirms the covering was seeded for the gap region)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §7.4 Phase 2 containment relocation tests (RED)
+# ---------------------------------------------------------------------------
+
+def _make_parquet_places(tmp_path, places, filename="places.parquet"):
+    """Write places.parquet with (place_id, qk17, latitude, longitude)."""
+    path = str(tmp_path / filename)
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    rows_sql = ", ".join(
+        f"('{pid}', {lat}, {lon}, ST_QuadKey({lon}, {lat}, 17))"
+        for pid, lon, lat in places
+    )
+    con.execute(f"""
+        COPY (
+            SELECT place_id, latitude, longitude, qk17
+            FROM (VALUES {rows_sql}) t(place_id, latitude, longitude, qk17)
+        ) TO '{path}' (FORMAT PARQUET)
+    """)
+    con.close()
+    return path
+
+
+def _make_parquet_tile_assignments(tmp_path, assignments, filename="tile_assignments.parquet"):
+    """Write tile_assignments.parquet with (place_id, tile_qk)."""
+    path = str(tmp_path / filename)
+    con = duckdb.connect()
+    rows_sql = ", ".join(f"('{pid}', '{tqk}')" for pid, tqk in assignments)
+    con.execute(f"""
+        COPY (
+            SELECT place_id, tile_qk
+            FROM (VALUES {rows_sql}) t(place_id, tile_qk)
+        ) TO '{path}' (FORMAT PARQUET)
+    """)
+    con.close()
+    return path
+
+
+class TestContainmentRelocationPhase2:
+    """§7.4: compute_containment must use parquet inputs and write to <src>/containment/.
+
+    All tests fail in Red phase because compute_containment still takes 'con'
+    as its first parameter.
+    """
+
+    _SF_PLACES = [
+        ("p001", -122.4194, 37.7749),
+        ("p002", -122.4862, 37.7694),
+    ]
+
+    def test_compute_containment_no_con_parameter(self):
+        """compute_containment must not take 'con' as its first parameter."""
+        params = list(inspect.signature(compute_containment).parameters.keys())
+        assert params[0] != "con", (
+            f"compute_containment must not have 'con' as first param; got {params[0]!r}. "
+            "Phase 2 drops the connection argument."
+        )
+
+    def test_compute_containment_has_places_parquet_param(self):
+        """compute_containment must accept a places_parquet parameter."""
+        params = list(inspect.signature(compute_containment).parameters.keys())
+        assert "places_parquet" in params, (
+            f"compute_containment missing places_parquet param; params: {params}"
+        )
+
+    def test_compute_containment_writes_to_containment_dir(
+        self, simple_boundaries_db, tmp_path
+    ):
+        """compute_containment must write its output under <src>/containment/ (not run dir)."""
+        places_parquet = _make_parquet_places(tmp_path, self._SF_PLACES)
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path,
+            [("p001", "023130"), ("p002", "023130")],
+        )
+        containment_dir = str(tmp_path / "containment")
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(simple_boundaries_db),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+        )
+        assert os.path.isdir(containment_dir), (
+            f"compute_containment must create containment directory at {containment_dir}"
+        )
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        assert os.path.exists(meta_path), (
+            f"containment/_meta.json must exist at {meta_path}"
+        )
+
+    def test_compute_containment_q3_boundaries_none(self, tmp_path):
+        """With boundaries_db=None, compute_containment must still write containment/_meta.json."""
+        places_parquet = _make_parquet_places(tmp_path, self._SF_PLACES)
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p001", "023130")],
+        )
+        containment_dir = str(tmp_path / "containment_q3")
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            None,              # boundaries_db=None → Q3 degradation
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+        )
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        assert os.path.exists(meta_path), (
+            "Q3 degradation: containment/_meta.json must exist even when boundaries_db=None"
+        )
+
+    def test_compute_containment_freshness_against_places_parquet(
+        self, simple_boundaries_db, tmp_path
+    ):
+        """Touching places.parquet must make containment stale and trigger rebuild."""
+        places_parquet = _make_parquet_places(tmp_path, self._SF_PLACES)
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p001", "023130")],
+        )
+        containment_dir = str(tmp_path / "containment")
+        compute_containment(
+            places_parquet, tile_assignments_parquet,
+            str(simple_boundaries_db), "place_id", "longitude", "latitude",
+            containment_dir,
+        )
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        mtime1 = os.path.getmtime(meta_path)
+        # Touch places.parquet to make containment stale
+        time.sleep(0.05)
+        os.utime(places_parquet, None)
+        time.sleep(0.05)
+        compute_containment(
+            places_parquet, tile_assignments_parquet,
+            str(simple_boundaries_db), "place_id", "longitude", "latitude",
+            containment_dir,
+        )
+        mtime2 = os.path.getmtime(meta_path)
+        assert mtime2 > mtime1, (
+            "compute_containment must rebuild when places.parquet is touched"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §7.4.3 Dir-swap atomicity matrix (mirrors §7.1.7 covering tests)
+# ---------------------------------------------------------------------------
+
+class TestContainmentDirSwapAtomicity:
+    """§7.4.3: dir-swap atomicity matrix for containment.
+
+    Mirrors the covering §7.1.7 atomicity tests:
+      1. Leftover .tmp before build → clobbered, correct output
+      2. Leftover .old with dir missing → cleared, correct output
+      3. Partial .tmp (no _meta.json) from crash → next build correct
+
+    All tests fail RED because compute_containment does not yet accept parquet inputs.
+    """
+
+    _SF_PLACES = [("p001", -122.4194, 37.7749)]
+    _SF_ASSIGNMENTS = [("p001", "023130")]
+
+    def _build(self, tmp_path, simple_boundaries_db, covering_dir, containment_dir,
+                places_file="at_places.parquet", ta_file="at_ta.parquet"):
+        places_parquet = _make_parquet_places(tmp_path, self._SF_PLACES, places_file)
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, self._SF_ASSIGNMENTS, ta_file
+        )
+        # Fails RED: wrong signature (con expected, not places_parquet)
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(simple_boundaries_db),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+            covering_dir=covering_dir,
+        )
+
+    def test_leftover_tmp_before_build_is_clobbered(
+        self, simple_boundaries_db, tmp_path
+    ):
+        """Leftover containment.tmp/ before build must be clobbered, not reused.
+
+        Fails RED with TypeError (Phase 2 signature not yet implemented).
+        """
+        from garganorn.covering import stage_covering
+        covering_dir = str(tmp_path / "at_covering")
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        containment_dir = str(tmp_path / "containment")
+        # Plant stale containment.tmp/ (leftover from previous crash during build)
+        stale_tmp = tmp_path / "containment.tmp"
+        stale_tmp.mkdir()
+        (stale_tmp / "stale.parquet").write_bytes(b"garbage-leftover")
+
+        self._build(tmp_path, simple_boundaries_db, covering_dir, containment_dir)
+
+        assert not stale_tmp.exists(), (
+            "stale containment.tmp/ must be clobbered before build"
+        )
+        assert os.path.isdir(containment_dir), "containment/ must exist after build"
+        assert os.path.exists(os.path.join(containment_dir, "_meta.json")), (
+            "_meta.json must exist after successful build"
+        )
+
+    def test_leftover_old_with_dir_missing_is_cleared(
+        self, simple_boundaries_db, tmp_path
+    ):
+        """Leftover containment.old/ (containment/ missing) → build must clear and succeed.
+
+        Fails RED with TypeError.
+        """
+        from garganorn.covering import stage_covering
+        covering_dir = str(tmp_path / "at2_covering")
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        containment_dir = str(tmp_path / "containment2")
+        # Simulate crash state: .old exists but final dir does not
+        stale_old = tmp_path / "containment2.old"
+        stale_old.mkdir()
+        (stale_old / "old_data.parquet").write_bytes(b"old-data")
+
+        self._build(
+            tmp_path, simple_boundaries_db, covering_dir, containment_dir,
+            "at2_places.parquet", "at2_ta.parquet"
+        )
+
+        assert not stale_old.exists(), "stale containment.old/ must be removed after build"
+        assert os.path.isdir(containment_dir), "containment/ must be created"
+
+    def test_partial_tmp_from_crash_is_rebuilt(
+        self, simple_boundaries_db, tmp_path
+    ):
+        """Partial containment.tmp/ (no _meta.json) from crash → next build correct.
+
+        Fails RED with TypeError.
+        """
+        from garganorn.covering import stage_covering
+        covering_dir = str(tmp_path / "at3_covering")
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        containment_dir = str(tmp_path / "containment3")
+        # Partial .tmp: has a parquet file but no _meta.json (crash mid-build)
+        partial_tmp = tmp_path / "containment3.tmp"
+        partial_tmp.mkdir()
+        (partial_tmp / "0230.parquet").write_bytes(b"partial-crash-data")
+        # No _meta.json → directory is stale; must be rebuilt from scratch
+
+        self._build(
+            tmp_path, simple_boundaries_db, covering_dir, containment_dir,
+            "at3_places.parquet", "at3_ta.parquet"
+        )
+
+        assert not partial_tmp.exists(), "partial .tmp must be cleaned up"
+        assert os.path.isdir(containment_dir), "containment/ must be created"
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        assert os.path.exists(meta_path), "_meta.json must exist after successful rebuild"
+
+
+# ---------------------------------------------------------------------------
+# §7.4.4 Q3 export relations: {} + idempotency (ported from test_checkpoint.py)
+# ---------------------------------------------------------------------------
+
+class TestContainmentQ3ExportAndIdempotency:
+    """§7.4.4: Q3 empty containment → relations:{} in export; idempotency.
+
+    Ported from TestComputeContainmentIdempotency in test_checkpoint.py (§6/§7.9).
+    Uses Phase 2 signature.  All tests fail RED with TypeError.
+    """
+
+    def test_compute_containment_idempotent_q3(self, tmp_path):
+        """Calling compute_containment twice (boundaries_db=None) must not error; second call
+        is a no-op (containment dir already fresh).
+
+        Fails RED with TypeError (Phase 2 signature not yet implemented).
+        """
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p001", -122.4, 37.7)], "idem_places.parquet"
+        )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p001", "023130")], "idem_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "idem_containment")
+
+        # First call
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            None,  # boundaries_db=None → Q3 degradation
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+        )
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        assert os.path.exists(meta_path), "_meta.json must exist after first call"
+        mtime1 = os.path.getmtime(meta_path)
+
+        # Second call must be a no-op (containment is fresh)
+        time.sleep(0.05)
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            None,
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+        )
+        mtime2 = os.path.getmtime(meta_path)
+        assert mtime2 == mtime1, (
+            "Second call with fresh inputs must be a no-op (idempotency)"
+        )
+
+    def test_compute_containment_idempotent_with_boundaries(
+        self, simple_boundaries_db, tmp_path
+    ):
+        """compute_containment is idempotent even with boundaries_db.
+
+        Ported from TestComputeContainmentIdempotency::test_compute_containment_with_boundaries_idempotent.
+        Fails RED with TypeError.
+        """
+        from garganorn.covering import stage_covering
+        covering_dir = str(tmp_path / "idem2_covering")
+        stage_covering(
+            str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12
+        )
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p001", -122.4194, 37.7749)], "idem2_places.parquet"
+        )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p001", "023130")], "idem2_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "idem2_containment")
+
+        # First call
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(simple_boundaries_db),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+            covering_dir=covering_dir,
+        )
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        mtime1 = os.path.getmtime(meta_path)
+
+        # Second call (idempotency)
+        time.sleep(0.05)
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            str(simple_boundaries_db),
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+            covering_dir=covering_dir,
+        )
+        mtime2 = os.path.getmtime(meta_path)
+        assert mtime2 == mtime1, (
+            "Second call with fresh inputs and boundaries must be a no-op"
+        )
+
+    def test_q3_containment_dir_only_has_meta_json(self, tmp_path):
+        """Q3: boundaries_db=None → containment/ contains only _meta.json (no parquets).
+
+        Fails RED with TypeError.
+        """
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p001", 0.0, 0.0)], "q3_places.parquet"
+        )
+        tile_assignments_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p001", "300000")], "q3_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "q3_containment")
+
+        compute_containment(
+            places_parquet,
+            tile_assignments_parquet,
+            None,  # Q3 degradation
+            "place_id",
+            "longitude",
+            "latitude",
+            containment_dir,
+        )
+
+        assert os.path.isdir(containment_dir), "containment/ must be created even in Q3"
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        assert os.path.exists(meta_path), "_meta.json must exist in Q3 mode"
+
+        # In Q3 mode, no .parquet files (no containment data)
+        parquets = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+        assert len(parquets) == 0, (
+            f"Q3 containment must have no .parquet files; found: {parquets}"
+        )
+
+        # The meta should record "empty": true
+        with open(meta_path) as f:
+            meta = json.load(f)
+        assert meta.get("empty") is True, (
+            f"Q3 containment _meta.json must have 'empty': true; got: {meta}"
         )

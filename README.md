@@ -49,9 +49,11 @@ See [`docs/s2_duckdb_design.md`](docs/s2_duckdb_design.md) for design details.
 
 ## Tile export pipeline
 
-`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/`, with a `current` symlink pointing to the latest run.
+`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, and `density`, `idf`, and `covering` build the shared artifacts the sources depend on. Invoking it with no subcommand is an error — use `run`.
 
-Supported sources:
+Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes a parquet artifact alongside — `places.parquet`, `tile_assignments.parquet`, `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless.
+
+Supported sources (for `run --source`):
 
 | `--source` | Input | Collection |
 |---|---|---|
@@ -64,11 +66,11 @@ Supported sources:
 
 Imports Overture Maps administrative boundaries from the `division` and `division_area` parquet themes. Produces two outputs:
 
-- **Tile files** under `<output>/overture_division/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, admin_level, wikidata, population).
+- **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, admin_level, wikidata, population).
 - **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries. Used by the venue tile pipeline via `--boundaries`.
 
 ```
-python -m garganorn.quadtree \
+python -m garganorn.quadtree run \
   --source overture_division \
   --division-parquet /data/overture/division.parquet \
   --division-area-parquet /data/overture/division_area.parquet \
@@ -78,14 +80,14 @@ python -m garganorn.quadtree \
 To enrich another source's tiles with division containment (adds `relations.within` to each record):
 
 ```
-python -m garganorn.quadtree \
+python -m garganorn.quadtree run \
   --source overture_place \
   --parquet '/data/overture/places/*.parquet' \
   --boundaries /srv/tiles/overture_division/boundaries.duckdb \
   --output /srv/tiles
 ```
 
-Optional arguments (all sources):
+Optional arguments (`run`, all sources):
 
 | Argument | Default | Description |
 |---|---|---|
@@ -93,7 +95,16 @@ Optional arguments (all sources):
 | `--memory-limit` | `48GB` | DuckDB memory limit |
 | `--max-per-tile` | `1000` | Maximum records per tile |
 | `--export-workers` | CPU count | Threads for tile gzip compression |
-| `--config` | none | YAML config file (can set `tiles.memory_limit`, `tiles.max_per_tile`, `tiles.boundaries`) |
+| `--force` | off | Rebuild every stage, ignoring artifact freshness |
+| `--config` | none | YAML config file; `run` reads `memory_limit` and `max_per_tile` from the `pipeline:` section (`all` reads the rest) |
+
+To build every configured source in one shot:
+
+```
+python -m garganorn.quadtree all --config config.yaml
+```
+
+`all` runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
 
 ## Running the server
 

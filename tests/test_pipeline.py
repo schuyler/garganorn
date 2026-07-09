@@ -48,15 +48,15 @@ class TestRunPipeline:
             density_parquet=density_parquet,
         )
 
-        # At least one tile file under output_dir/foursquare/current/
+        # At least one tile file under output_dir/foursquare/tiles/current/
         fsq_dir = output_dir / "foursquare"
-        current_dir = fsq_dir / "current"
+        current_dir = fsq_dir / "tiles" / "current"
         gz_files = list(current_dir.rglob("*.json.gz")) if current_dir.exists() else []
         assert gz_files, (
             f"run_pipeline must write at least one .json.gz under {current_dir}"
         )
 
-        # manifest.json must exist under current/
+        # manifest.json must exist under tiles/current/
         manifest_path = current_dir / "manifest.json"
         assert manifest_path.exists(), (
             f"run_pipeline must write manifest.json at {manifest_path}"
@@ -97,10 +97,10 @@ class TestRunPipeline:
         )
 
         fsq_dir = output_dir / "foursquare"
-        gz_files = list((fsq_dir / "current").rglob("*.json.gz")) if (fsq_dir / "current").exists() else []
-        assert gz_files, f"run_pipeline must write at least one .json.gz under {fsq_dir / 'current'}"
+        gz_files = list((fsq_dir / "tiles" / "current").rglob("*.json.gz")) if (fsq_dir / "tiles" / "current").exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {fsq_dir / 'tiles' / 'current'}"
 
-        manifest_path = output_dir / "foursquare" / "current" / "manifest.duckdb"
+        manifest_path = output_dir / "foursquare" / "tiles" / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -153,10 +153,10 @@ class TestRunPipeline:
         )
 
         ov_dir = output_dir / "overture_place"
-        gz_files = list((ov_dir / "current").rglob("*.json.gz")) if (ov_dir / "current").exists() else []
-        assert gz_files, f"run_pipeline must write at least one .json.gz under {ov_dir / 'current'}"
+        gz_files = list((ov_dir / "tiles" / "current").rglob("*.json.gz")) if (ov_dir / "tiles" / "current").exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {ov_dir / 'tiles' / 'current'}"
 
-        manifest_path = ov_dir / "current" / "manifest.duckdb"
+        manifest_path = ov_dir / "tiles" / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -209,10 +209,10 @@ class TestRunPipeline:
         )
 
         osm_dir = output_dir / "osm"
-        gz_files = list((osm_dir / "current").rglob("*.json.gz")) if (osm_dir / "current").exists() else []
-        assert gz_files, f"run_pipeline must write at least one .json.gz under {osm_dir / 'current'}"
+        gz_files = list((osm_dir / "tiles" / "current").rglob("*.json.gz")) if (osm_dir / "tiles" / "current").exists() else []
+        assert gz_files, f"run_pipeline must write at least one .json.gz under {osm_dir / 'tiles' / 'current'}"
 
-        manifest_path = osm_dir / "current" / "manifest.duckdb"
+        manifest_path = osm_dir / "tiles" / "current" / "manifest.duckdb"
         assert manifest_path.exists(), f"manifest.duckdb must exist at {manifest_path}"
 
         con = _duckdb.connect(str(manifest_path), read_only=True)
@@ -359,6 +359,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "foursquare",
             "--parquet", "db/cache/foursquare/*.parquet",
             "--output", output_dir,
@@ -400,6 +401,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-122.55", "37.60", "-122.30", "37.85",
@@ -430,13 +432,13 @@ class TestQuadtreeMainCLI:
     # ------------------------------------------------------------------
 
     def test_config_defaults_and_cli_override(self, tmp_path):
-        """--config must set tiles.memory_limit/max_per_tile as defaults; CLI overrides."""
+        """--config must set pipeline.memory_limit/max_per_tile as defaults; CLI overrides."""
         from garganorn.quadtree import main
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(textwrap.dedent("""\
             repo: places.atgeo.org
-            tiles:
+            pipeline:
               memory_limit: "16GB"
               max_per_tile: 250
         """))
@@ -445,6 +447,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "foursquare",
             "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -472,13 +475,13 @@ class TestQuadtreeMainCLI:
         )
 
     def test_config_defaults_used_when_no_cli_flags(self, tmp_path):
-        """When --config is set but CLI flags are absent, config values are used."""
+        """When --config is set but CLI flags are absent, pipeline: config values are used."""
         from garganorn.quadtree import main
 
         config_path = tmp_path / "config.yaml"
         config_path.write_text(textwrap.dedent("""\
             repo: places.atgeo.org
-            tiles:
+            pipeline:
               memory_limit: "16GB"
               max_per_tile: 250
         """))
@@ -487,6 +490,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "foursquare",
             "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -523,6 +527,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "foursquare",
             "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -602,6 +607,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "osm",
             "--parquet-dir", "/some/dir",
             "--output", str(tmp_path / "tiles_osm"),
@@ -681,6 +687,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "foursquare",
             "--parquet", "db/cache/foursquare/*.parquet",
             "--output", str(tmp_path / "tiles_no_bbox"),
@@ -701,6 +708,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "foursquare",
             "--parquet", "db/cache/foursquare/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -730,6 +738,7 @@ class TestQuadtreeMainCLI:
 
         argv = [
             "garganorn.quadtree",
+            "run",
             "--source", "osm",
             "--parquet-dir", "/some/dir",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -892,7 +901,7 @@ class TestTimestampedExport:
         )
 
     def test_creates_timestamped_subdir(self, fsq_parquet, density_parquet, tmp_path):
-        """run_pipeline must create a timestamped subdirectory under output_dir/foursquare/."""
+        """run_pipeline must create a timestamped subdirectory under output_dir/foursquare/tiles/."""
         output_dir = tmp_path / "ts_subdir_out"
         output_dir.mkdir()
         self._run(fsq_parquet, density_parquet, output_dir)
@@ -900,13 +909,16 @@ class TestTimestampedExport:
         fsq_dir = output_dir / "foursquare"
         assert fsq_dir.exists(), f"output_dir/foursquare/ must exist; got {list(output_dir.iterdir())}"
 
+        # Phase 2: timestamped dirs live under foursquare/tiles/
+        tiles_dir = fsq_dir / "tiles"
+        assert tiles_dir.exists(), f"foursquare/tiles/ must exist; got {list(fsq_dir.iterdir())}"
         ts_dirs = [
-            d for d in fsq_dir.iterdir()
+            d for d in tiles_dir.iterdir()
             if d.is_dir() and not d.is_symlink() and self._TIMESTAMP_RE.match(d.name)
         ]
         assert ts_dirs, (
             f"run_pipeline must create a timestamped subdir matching {self._TIMESTAMP_RE.pattern!r} "
-            f"under {fsq_dir}; found: {[d.name for d in fsq_dir.iterdir()]}"
+            f"under {tiles_dir}; found: {[d.name for d in tiles_dir.iterdir()]}"
         )
 
         gz_files = list(ts_dirs[0].rglob("*.json.gz"))
@@ -915,20 +927,22 @@ class TestTimestampedExport:
         )
 
     def test_creates_current_symlink(self, fsq_parquet, density_parquet, tmp_path):
-        """run_pipeline must create a `current` symlink under output_dir/foursquare/."""
+        """run_pipeline must create a `current` symlink under output_dir/foursquare/tiles/."""
         output_dir = tmp_path / "ts_symlink_out"
         output_dir.mkdir()
         self._run(fsq_parquet, density_parquet, output_dir)
 
         fsq_dir = output_dir / "foursquare"
-        current = fsq_dir / "current"
+        # Phase 2: canonical symlink is foursquare/tiles/current → <timestamp>
+        current = fsq_dir / "tiles" / "current"
         assert os.path.islink(str(current)), (
-            f"output_dir/foursquare/current must be a symlink; got {list(fsq_dir.iterdir())}"
+            f"output_dir/foursquare/tiles/current must be a symlink; "
+            f"got {list((fsq_dir / 'tiles').iterdir())}"
         )
 
         target = os.readlink(str(current))
         assert self._TIMESTAMP_RE.match(target), (
-            f"current symlink target must match {self._TIMESTAMP_RE.pattern!r}; got {target!r}"
+            f"tiles/current symlink target must match {self._TIMESTAMP_RE.pattern!r}; got {target!r}"
         )
 
     def test_second_run_swaps_symlink(self, fsq_parquet, density_parquet, tmp_path):
@@ -938,25 +952,25 @@ class TestTimestampedExport:
         self._run(fsq_parquet, density_parquet, output_dir)
 
         fsq_dir = output_dir / "foursquare"
-        first_target = os.readlink(str(fsq_dir / "current"))
+        first_target = os.readlink(str(fsq_dir / "tiles" / "current"))
 
         time.sleep(1)
         self._run(fsq_parquet, density_parquet, output_dir)
 
-        second_target = os.readlink(str(fsq_dir / "current"))
+        second_target = os.readlink(str(fsq_dir / "tiles" / "current"))
         assert second_target != first_target, (
             f"After second run, current symlink must point to a different dir; "
             f"both runs produced {second_target!r}"
         )
 
         # First run's dir must still exist (kept as previous)
-        first_dir = fsq_dir / first_target
+        first_dir = fsq_dir / "tiles" / first_target
         assert first_dir.exists(), (
             f"First run's dir {first_dir} must still exist after second run"
         )
 
         # Tiles accessible through current
-        gz_files = list((fsq_dir / "current").rglob("*.json.gz"))
+        gz_files = list((fsq_dir / "tiles" / "current").rglob("*.json.gz"))
         assert gz_files, "Tiles must be accessible through the current symlink after second run"
 
     def test_third_run_cleans_oldest(self, fsq_parquet, density_parquet, tmp_path):
@@ -966,7 +980,9 @@ class TestTimestampedExport:
         self._run(fsq_parquet, density_parquet, output_dir)
 
         fsq_dir = output_dir / "foursquare"
-        first_target = os.readlink(str(fsq_dir / "current"))
+        # Phase 2: use tiles/current symlink (target is a bare timestamp)
+        tiles_dir = fsq_dir / "tiles"
+        first_target = os.readlink(str(tiles_dir / "current"))
 
         time.sleep(1)
         self._run(fsq_parquet, density_parquet, output_dir)
@@ -975,7 +991,7 @@ class TestTimestampedExport:
         self._run(fsq_parquet, density_parquet, output_dir)
 
         ts_dirs = [
-            d for d in fsq_dir.iterdir()
+            d for d in tiles_dir.iterdir()
             if d.is_dir() and not d.is_symlink() and self._TIMESTAMP_RE.match(d.name)
         ]
         assert len(ts_dirs) == 2, (
@@ -983,7 +999,7 @@ class TestTimestampedExport:
             f"found {len(ts_dirs)}: {[d.name for d in ts_dirs]}"
         )
 
-        first_dir = fsq_dir / first_target
+        first_dir = tiles_dir / first_target
         assert not first_dir.exists(), (
             f"First run's dir {first_dir} must have been deleted after third run"
         )
@@ -994,7 +1010,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
         self._run(fsq_parquet, density_parquet, output_dir)
 
-        current_dir = output_dir / "foursquare" / "current"
+        current_dir = output_dir / "foursquare" / "tiles" / "current"
         gz_files = list(current_dir.rglob("*.json.gz"))
         assert gz_files, f"No .json.gz files found under {current_dir}"
 
@@ -1011,7 +1027,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
         self._run(fsq_parquet, density_parquet, output_dir)
 
-        current_dir = output_dir / "foursquare" / "current"
+        current_dir = output_dir / "foursquare" / "tiles" / "current"
 
         manifest_json = current_dir / "manifest.json"
         assert manifest_json.exists(), f"manifest.json must exist at {manifest_json}"
@@ -1033,7 +1049,7 @@ class TestTimestampedExport:
         output_dir.mkdir()
 
         with pytest.raises(RuntimeError, match="boom"):
-            with patch("garganorn.stages.export_tiles", side_effect=RuntimeError("boom")):
+            with patch("garganorn.stages.write_manifest_db", side_effect=RuntimeError("boom")):
                 run_pipeline(
                     "foursquare",
                     fsq_parquet,
@@ -1047,9 +1063,11 @@ class TestTimestampedExport:
         fsq_dir = output_dir / "foursquare"
         assert fsq_dir.exists(), "source dir must exist even after failed run"
 
-        # Partial timestamped dir should be left for debugging
+        # Phase 2: partial timestamped dir is under foursquare/tiles/
+        tiles_dir = fsq_dir / "tiles"
+        assert tiles_dir.exists(), "foursquare/tiles/ must exist even after failed run"
         ts_dirs = [
-            d for d in fsq_dir.iterdir()
+            d for d in tiles_dir.iterdir()
             if d.is_dir() and not d.is_symlink() and self._TIMESTAMP_RE.match(d.name)
         ]
         assert len(ts_dirs) == 1, (
@@ -1057,18 +1075,10 @@ class TestTimestampedExport:
             f"found: {[d.name for d in ts_dirs]}"
         )
 
-        # current symlink must NOT exist — swap didn't happen
-        current_link = fsq_dir / "current"
+        # Phase 2 canonical symlink must NOT exist — swap didn't happen
+        current_link = tiles_dir / "current"
         assert not current_link.is_symlink(), (
-            "current symlink must not exist after a failed run"
-        )
-
-        # Work .duckdb must be present in the partial dir for debugging
-        partial_dir = ts_dirs[0]
-        work_dbs = list(partial_dir.glob(".*_work.duckdb"))
-        assert work_dbs, (
-            f"Failed run must leave the work .duckdb in the partial dir for debugging; "
-            f"found nothing under {partial_dir}"
+            "tiles/current symlink must not exist after a failed run"
         )
 
     def test_work_db_in_timestamped_dir(self, fsq_parquet, density_parquet, tmp_path):
@@ -1235,12 +1245,12 @@ class TestRunPipelineMtime:
         # Verify first run created output
         fsq_dir = output_dir / "foursquare"
         assert fsq_dir.exists()
-        current_link = fsq_dir / "current"
+        current_link = fsq_dir / "tiles" / "current"
         assert current_link.is_symlink()
         first_target = os.readlink(str(current_link))
 
         # Set manifest.json mtime to the future
-        manifest_path = fsq_dir / "current" / "manifest.json"
+        manifest_path = fsq_dir / "tiles" / "current" / "manifest.json"
         future_time = time.time() + 3600
         os.utime(manifest_path, (future_time, future_time))
 
@@ -1295,7 +1305,7 @@ class TestRunPipelineMtime:
 
         # Verify output was created
         assert fsq_dir.exists()
-        current_link = fsq_dir / "current"
+        current_link = fsq_dir / "tiles" / "current"
         assert current_link.is_symlink()
         manifest_path = current_link / "manifest.json"
         assert manifest_path.exists()
@@ -1322,7 +1332,7 @@ class TestRunPipelineMtime:
         )
 
         fsq_dir = output_dir / "foursquare"
-        current_link = fsq_dir / "current"
+        current_link = fsq_dir / "tiles" / "current"
         first_target = os.readlink(str(current_link))
 
         # Set manifest.json mtime to the past
@@ -1382,7 +1392,7 @@ class TestRunPipelineMtime:
         )
 
         fsq_dir = output_dir / "foursquare"
-        current_link = fsq_dir / "current"
+        current_link = fsq_dir / "tiles" / "current"
         first_target = os.readlink(str(current_link))
 
         # Set manifest.json mtime to the future
@@ -1408,4 +1418,100 @@ class TestRunPipelineMtime:
         second_target = os.readlink(str(current_link))
         assert second_target != first_target, (
             "Should create new timestamped dir when force=True"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §7.5 Phase 2 export/pipeline tests (RED)
+# ---------------------------------------------------------------------------
+
+class TestExportPhase2:
+    """§7.5: Phase 2 export layout — tiles under <src>/tiles/current/, manifests written last.
+
+    Tests §7.5.4 (run-dir lifecycle: tiles relocate to <src>/tiles/,
+    manifest.json written last, symlink swap, keep-2).
+
+    Fails in Red phase because run_pipeline still writes tiles under
+    <src>/<timestamp>/ (Phase 1 layout) instead of <src>/tiles/<timestamp>/.
+    """
+
+    def test_tiles_under_tiles_subdir(self, fsq_parquet, density_parquet, tmp_path):
+        """run_pipeline must write tiles under <src>/tiles/current/, not <src>/current/."""
+        from garganorn.quadtree import run_pipeline
+        output_dir = tmp_path / "pipeline_out"
+        output_dir.mkdir()
+        run_pipeline(
+            "foursquare",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+            density_parquet=density_parquet,
+        )
+        # Phase 2 layout: tiles under <src>/tiles/current/
+        tiles_current = output_dir / "foursquare" / "tiles" / "current"
+        assert tiles_current.exists(), (
+            f"Phase 2: tiles must be at <src>/tiles/current/, not found at {tiles_current}"
+        )
+        gz_files = list(tiles_current.rglob("*.json.gz"))
+        assert gz_files, (
+            f"run_pipeline must write at least one .json.gz under {tiles_current}"
+        )
+
+    def test_manifest_json_written_last(self, fsq_parquet, density_parquet, tmp_path):
+        """manifest.json must have a later mtime than manifest.duckdb (written last §3.6.5)."""
+        from garganorn.quadtree import run_pipeline
+        output_dir = tmp_path / "pipeline_out2"
+        output_dir.mkdir()
+        run_pipeline(
+            "foursquare",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+            density_parquet=density_parquet,
+        )
+        # Find the timestamped run dir via the current symlink
+        tiles_current = output_dir / "foursquare" / "tiles" / "current"
+        manifest_json = tiles_current / "manifest.json"
+        manifest_duckdb = tiles_current / "manifest.duckdb"
+        assert manifest_json.exists(), f"manifest.json not found at {manifest_json}"
+        assert manifest_duckdb.exists(), f"manifest.duckdb not found at {manifest_duckdb}"
+        assert os.path.getmtime(manifest_json) >= os.path.getmtime(manifest_duckdb), (
+            "manifest.json must be written after manifest.duckdb (it is the completeness marker)"
+        )
+
+    def test_stage_export_new_signature(self):
+        """stage_export must not take 'con' as its first parameter."""
+        import inspect
+        from garganorn.stages import stage_export
+        params = list(inspect.signature(stage_export).parameters.keys())
+        assert params[0] != "con", (
+            f"stage_export must not have 'con' as first param; got {params[0]!r}. "
+            "Phase 2 drops the connection argument."
+        )
+
+    def test_no_working_duckdb_after_pipeline(self, fsq_parquet, density_parquet, tmp_path):
+        """run_pipeline must not leave a working .duckdb in the output tree."""
+        from garganorn.quadtree import run_pipeline
+        output_dir = tmp_path / "pipeline_out3"
+        output_dir.mkdir()
+        run_pipeline(
+            "foursquare",
+            fsq_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+            density_parquet=density_parquet,
+        )
+        # Only manifest.duckdb and boundaries.duckdb are permitted .duckdb files
+        duckdb_files = [
+            f for f in output_dir.rglob("*.duckdb")
+            if f.name not in ("manifest.duckdb", "boundaries.duckdb")
+        ]
+        assert not duckdb_files, (
+            f"run_pipeline must not leave working .duckdb files; found: {duckdb_files}"
         )

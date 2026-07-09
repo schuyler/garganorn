@@ -635,3 +635,29 @@ class TestStageIdfUnsupportedSource:
 
         with pytest.raises(ValueError, match="unsupported|invalid|unknown"):
             stage_idf("nonexistent_source", "/dev/null", output_path, t0)
+
+
+# ---------------------------------------------------------------------------
+# §7.1.6 Sort pin — idf.parquet must be non-decreasing on category
+# ---------------------------------------------------------------------------
+
+class TestIdfSortPin:
+    """§7.1.6: idf.parquet must be non-decreasing on 'category'.
+
+    Phase 2 spec §3.2 makes ORDER BY category explicit.  If the current
+    implementation produces an unsorted parquet, this test fails in Red phase.
+    """
+
+    def test_idf_sorted_by_category(self, fsq_idf_parquet, tmp_path):
+        """idf.parquet must be sorted non-decreasingly on the 'category' column."""
+        output = str(tmp_path / "idf.parquet")
+        stage_idf("foursquare", str(fsq_idf_parquet), output, time.monotonic(), force=True)
+        con = duckdb.connect()
+        cats = [r[0] for r in con.execute(
+            f"SELECT category FROM read_parquet('{output}')"
+        ).fetchall()]
+        con.close()
+        assert cats == sorted(cats), (
+            f"idf.parquet must be sorted by category; "
+            f"out-of-order pairs: {[(a, b) for a, b in zip(cats, cats[1:]) if a > b][:3]}"
+        )

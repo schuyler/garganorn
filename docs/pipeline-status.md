@@ -7,6 +7,28 @@ things to watch, and fixes still wanted.
 The full audit was conducted 2026-04-14. All critical and important findings
 were fixed in commit 24d57b9. What remains is documented here.
 
+The pipeline was later restructured (2026-07, see `phase2-artifacts-design.md`)
+to pass data between stages as file-based parquet artifacts instead of a shared
+working DuckDB. Three operational changes worth knowing:
+
+- **Subcommands.** `python -m garganorn.quadtree` now takes a subcommand — `run`
+  for one source, `all --config` for everything, plus `density`, `idf`, and
+  `covering` for the shared artifacts. The old flag-only invocation is gone.
+- **Layout and caching.** Tiles moved to `<output>/<source>/tiles/<timestamp>/`
+  with a `<source>/tiles/current` symlink. Each stage writes a `.parquet`
+  artifact (`places`, `tile_assignments`, `containment/`) guarded by a
+  `.meta.json` sidecar and skips itself when that artifact is still fresh;
+  `--force` rebuilds.
+- **Crash recovery.** There is no sentinel table or resume state anymore. After
+  a `kill -9`, re-running finds any half-written stage stale (via its `.tmp` or
+  meta) and rebuilds it from the start. Serving is never affected mid-run —
+  `current` only swaps once a run's `manifest.json` lands.
+
+One follow-up left for the operator: the `tiles:` serving paths in `config.yaml`
+(`manifest`, `tiles_dir`, `base_url`) and the Ansible deploy still point at the
+old `<source>/current` layout and need updating for `<source>/tiles/current`
+(OQ-P2-5).
+
 ---
 
 ## Fixes Still Wanted

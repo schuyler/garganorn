@@ -27,6 +27,7 @@ CREATE OR REPLACE MACRO strip_json_nulls(js) AS
 CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
+    ta.place_id,
     to_json({
         "$type": 'org.atgeo.place',
         rkey: p.id,
@@ -53,4 +54,4 @@ SELECT
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.id
 LEFT JOIN place_containment pc ON pc.place_id = p.id
-ORDER BY ta.tile_qk;
+ORDER BY ta.tile_qk, ta.place_id;

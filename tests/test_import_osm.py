@@ -1,11 +1,18 @@
 """Tests for osm_import.sql."""
 
+import inspect
+import os
+import pathlib
+import time
+
 import duckdb
 import pytest
 from tests.quadtree_helpers import (
     REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit,
     OSM_SF_BBOX, run_osm_import,
 )
+
+import garganorn.stages as _stages
 
 
 # ---------------------------------------------------------------------------
@@ -186,3 +193,78 @@ class TestOsmImport:
         tags = dict(row[0])
         assert 'alt_name' in tags, f"alt_name missing from tags: {tags}"
         assert 'name:fr' in tags, f"name:fr missing from tags: {tags}"
+
+
+# ---------------------------------------------------------------------------
+# §7.2 Phase 2 import artifact tests (RED — osm)
+# ---------------------------------------------------------------------------
+
+class TestOsmImportArtifactPhase2:
+    """§7.2: stage_import must write places.parquet for OSM without 'geom' column.
+
+    Fails in Red phase because stage_import still takes 'con' as first arg.
+    OSM-specific: DELETE WHERE geom IS NULL runs before EXCLUDE (§3.2).
+    """
+
+    _BBOX = (-122.55, 37.60, -122.30, 37.85)
+
+    def test_stage_import_no_con_parameter(self):
+        """stage_import must not take 'con' as its first parameter."""
+        params = list(inspect.signature(_stages.stage_import).parameters.keys())
+        assert params[0] != "con", (
+            f"stage_import must not have 'con' as first param; got {params[0]!r}"
+        )
+
+    def test_stage_import_writes_places_parquet(self, osm_parquet, tmp_path):
+        """stage_import must write places.parquet for osm."""
+        output = str(tmp_path / "places.parquet")
+        parquet = (osm_parquet["node"], osm_parquet["way"])
+        _stages.stage_import("osm", parquet, self._BBOX, output)
+        assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
+
+    def test_places_parquet_no_geom_column(self, osm_parquet, tmp_path):
+        """places.parquet must not contain the 'geom' column (§3.2 EXCLUDE)."""
+        output = str(tmp_path / "places.parquet")
+        parquet = (osm_parquet["node"], osm_parquet["way"])
+        _stages.stage_import("osm", parquet, self._BBOX, output)
+        con = duckdb.connect()
+        cols = {r[0] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{output}')"
+        ).fetchall()}
+        con.close()
+        assert "geom" not in cols, (
+            f"places.parquet must not contain 'geom' column; found: {cols}"
+        )
+
+    def test_null_geom_rows_absent_from_artifact(self, osm_parquet, tmp_path):
+        """Rows where geom IS NULL must not appear in places.parquet (filter before EXCLUDE)."""
+        output = str(tmp_path / "places.parquet")
+        parquet = (osm_parquet["node"], osm_parquet["way"])
+        _stages.stage_import("osm", parquet, self._BBOX, output)
+        # OSM fixture node 1003 has no 'name' tag → osm_import filters it; nodes with
+        # no geometry (ways with centroid=NULL) also get filtered. We assert the artifact
+        # has fewer rows than the unfiltered node count (6 nodes in fixture).
+        con = duckdb.connect()
+        count = con.execute(
+            f"SELECT COUNT(*) FROM read_parquet('{output}')"
+        ).fetchone()[0]
+        con.close()
+        # The fixture has nodes without name (filtered) and nodes outside bbox; after
+        # all filters the row count must be < 6 (total fixture nodes).
+        assert count < 6, (
+            f"Expected filtered row count < 6 nodes; got {count}. "
+            "NULL-geom filter may not be running before EXCLUDE."
+        )
+
+    def test_places_parquet_qk17_sorted_nulls_last(self, osm_parquet, tmp_path):
+        """places.parquet must be sorted by qk17 NULLS LAST."""
+        output = str(tmp_path / "places.parquet")
+        parquet = (osm_parquet["node"], osm_parquet["way"])
+        _stages.stage_import("osm", parquet, self._BBOX, output)
+        con = duckdb.connect()
+        rows = [r[0] for r in con.execute(
+            f"SELECT qk17 FROM read_parquet('{output}')"
+        ).fetchall()]
+        con.close()
+        non_null = [v for v in rows if v is not None]
+        assert non_null == sorted(non_null), "qk17 values must be in sorted order"

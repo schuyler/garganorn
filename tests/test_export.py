@@ -1358,40 +1358,55 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
 
+        # Export to parquet for Phase 2 API
+        import os
+        places_pq = str(tmp_path / "places_produces.parquet")
+        ta_pq = str(tmp_path / "ta_produces.parquet")
+        conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+        conn.close()
+
         # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_produces")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        compute_containment(
-            conn, str(division_db_path), "fsq_place_id", "longitude", "latitude",
-            covering_dir=covering_dir,
+        from garganorn.stages import compute_containment as _stage_compute_containment
+        containment_dir = str(tmp_path / "containment_produces")
+        _stage_compute_containment(
+            places_pq, ta_pq, str(division_db_path),
+            "fsq_place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir, force=True,
         )
 
-        # Verify the table was created
-        tables = conn.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_name = 'place_containment'"
-        ).fetchall()
-        assert tables, "compute_containment must create a place_containment table"
+        # Read results from parquet output
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert parquet_files, "compute_containment must create parquet files in containment_dir"
 
+        check_con = duckdb.connect()
         # Verify schema
-        cols = {
-            row[0]: row[1]
-            for row in conn.execute(
-                "SELECT column_name, data_type FROM information_schema.columns "
-                "WHERE table_name = 'place_containment'"
+        col_names = {
+            row[0]
+            for row in check_con.execute(
+                f"DESCRIBE SELECT * FROM read_parquet({parquet_files!r})"
             ).fetchall()
         }
-        assert "place_id" in cols, (
-            f"place_containment must have 'place_id' column; got columns: {list(cols)}"
+        assert "place_id" in col_names, (
+            f"containment parquet must have 'place_id' column; got columns: {col_names}"
         )
-        assert "relations_json" in cols, (
-            f"place_containment must have 'relations_json' column; got columns: {list(cols)}"
+        assert "relations_json" in col_names, (
+            f"containment parquet must have 'relations_json' column; got columns: {col_names}"
         )
 
         # Verify rows exist for SF places (they fall inside division boundaries)
-        rows = conn.execute("SELECT place_id, relations_json FROM place_containment").fetchall()
-        conn.close()
+        rows = check_con.execute(
+            f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+        ).fetchall()
+        check_con.close()
 
         assert len(rows) >= 1, (
             "compute_containment must produce at least one row for SF test places "
@@ -1467,20 +1482,39 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
 
+        # Export to parquet for Phase 2 API
+        import os
+        places_pq = str(tmp_path / "places_bbox.parquet")
+        ta_pq = str(tmp_path / "ta_bbox.parquet")
+        conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+        conn.close()
+
         # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_bbox")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        compute_containment(
-            conn, str(division_db_path), "fsq_place_id", "longitude", "latitude",
-            covering_dir=covering_dir,
+        from garganorn.stages import compute_containment as _stage_compute_containment
+        containment_dir = str(tmp_path / "containment_bbox")
+        _stage_compute_containment(
+            places_pq, ta_pq, str(division_db_path),
+            "fsq_place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir, force=True,
         )
 
-        rows = conn.execute(
-            "SELECT place_id, relations_json FROM place_containment WHERE place_id = 'sf001'"
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert parquet_files, "compute_containment must produce parquet files with a valid boundaries_db"
+        check_con = duckdb.connect()
+        rows = check_con.execute(
+            f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r}) "
+            f"WHERE place_id = 'sf001'"
         ).fetchall()
-        conn.close()
+        check_con.close()
 
         assert len(rows) == 1, (
             f"Expected exactly 1 place_containment row for 'sf001', got {len(rows)}"
@@ -1539,6 +1573,7 @@ class TestContainmentInExport:
         # Parse a minimal valid invocation that includes --boundaries.
         # If --boundaries is not defined, argparse will raise SystemExit(2).
         test_args = [
+            "run",
             "--source", "foursquare",
             "--parquet", "/tmp/test.parquet",
             "--output", "/tmp/output",
@@ -1604,19 +1639,42 @@ class TestContainmentInExport:
             "ST_QuadKey(-122.4194, 37.7749, 17))"
         )
 
-        compute_containment(conn, None, "fsq_place_id", "longitude", "latitude")
-
-        tables = conn.execute(
-            "SELECT table_name FROM information_schema.tables "
-            "WHERE table_name = 'place_containment'"
-        ).fetchall()
-        assert tables, "place_containment table must exist even with None boundaries_db"
-
-        rows = conn.execute("SELECT * FROM place_containment").fetchall()
-        assert len(rows) == 0, (
-            f"place_containment must be empty when boundaries_db is None; got {len(rows)} rows"
+        import os
+        places_pq = str(tmp_path / "places_none.parquet")
+        ta_pq = str(tmp_path / "ta_none.parquet")
+        conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+        conn.execute(
+            f"COPY (SELECT fsq_place_id AS place_id, left(qk17, 6) AS tile_qk FROM places) "
+            f"TO '{ta_pq}' (FORMAT PARQUET)"
         )
         conn.close()
+
+        from garganorn.stages import compute_containment as _stage_compute_containment
+        containment_dir = str(tmp_path / "containment_none")
+        _stage_compute_containment(
+            places_pq, ta_pq, None, "fsq_place_id", "longitude", "latitude",
+            containment_dir, force=True,
+        )
+
+        meta_path = os.path.join(containment_dir, "_meta.json")
+        assert os.path.exists(meta_path), (
+            "containment _meta.json must exist even with None boundaries_db"
+        )
+        with open(meta_path) as f:
+            meta = json.load(f)
+        assert meta.get("empty") is True, (
+            f"_meta.json must have empty=True when boundaries_db is None; got {meta}"
+        )
+
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert len(parquet_files) == 0, (
+            f"place_containment must have no parquet files when boundaries_db is None; "
+            f"got {parquet_files}"
+        )
 
     # ------------------------------------------------------------------
     # Test 10: place outside all boundaries produces no containment row
@@ -1653,24 +1711,46 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
 
+        # Export to parquet for Phase 2 API
+        import os
+        places_pq = str(tmp_path / "places_ocean.parquet")
+        ta_pq = str(tmp_path / "ta_ocean.parquet")
+        conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+        conn.close()
+
         # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_ocean")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        compute_containment(
-            conn, str(division_db_path), "fsq_place_id", "longitude", "latitude",
-            covering_dir=covering_dir,
+        from garganorn.stages import compute_containment as _stage_compute_containment
+        containment_dir = str(tmp_path / "containment_ocean")
+        _stage_compute_containment(
+            places_pq, ta_pq, str(division_db_path),
+            "fsq_place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir, force=True,
         )
 
-        rows = conn.execute(
-            "SELECT place_id FROM place_containment WHERE place_id = 'ocean001'"
-        ).fetchall()
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        if parquet_files:
+            check_con = duckdb.connect()
+            rows = check_con.execute(
+                f"SELECT place_id FROM read_parquet({parquet_files!r}) "
+                f"WHERE place_id = 'ocean001'"
+            ).fetchall()
+            check_con.close()
+        else:
+            rows = []
+
         assert len(rows) == 0, (
             f"Place at (0, 0) should not be contained by any boundary; "
             f"got {len(rows)} containment rows"
         )
-        conn.close()
 
     # Tests 11, 13-17 deleted: asserted internals of the removed tile_boundaries/
     # two-phase recursive machinery (the design replaces that with the covering
@@ -1721,19 +1801,39 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
 
+        # Export to parquet for Phase 2 API
+        import os
+        places_pq = str(tmp_path / "places_edge.parquet")
+        ta_pq = str(tmp_path / "ta_edge.parquet")
+        conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+        conn.close()
+
         # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_edge")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        compute_containment(
-            conn, str(division_db_path), "fsq_place_id", "longitude", "latitude",
-            covering_dir=covering_dir,
+        from garganorn.stages import compute_containment as _stage_compute_containment
+        containment_dir = str(tmp_path / "containment_edge")
+        _stage_compute_containment(
+            places_pq, ta_pq, str(division_db_path),
+            "fsq_place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir, force=True,
         )
 
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert parquet_files, "compute_containment must produce parquet files for edge test"
+
+        check_con = duckdb.connect()
         # edge_in: should be in NA, US, CA, SF (4 boundaries)
-        in_rows = conn.execute(
-            "SELECT relations_json FROM place_containment WHERE place_id = 'edge_in'"
+        in_rows = check_con.execute(
+            f"SELECT relations_json FROM read_parquet({parquet_files!r}) "
+            f"WHERE place_id = 'edge_in'"
         ).fetchall()
         assert len(in_rows) == 1, f"Expected 1 row for edge_in; got {len(in_rows)}"
         in_within = json.loads(in_rows[0][0])["within"]
@@ -1749,9 +1849,11 @@ class TestContainmentInExport:
         )
 
         # edge_out: should be in NA, US, CA only (3 boundaries, not SF)
-        out_rows = conn.execute(
-            "SELECT relations_json FROM place_containment WHERE place_id = 'edge_out'"
+        out_rows = check_con.execute(
+            f"SELECT relations_json FROM read_parquet({parquet_files!r}) "
+            f"WHERE place_id = 'edge_out'"
         ).fetchall()
+        check_con.close()
         assert len(out_rows) == 1, f"Expected 1 row for edge_out; got {len(out_rows)}"
         out_within = json.loads(out_rows[0][0])["within"]
         out_rkeys = {e["rkey"] for e in out_within}
@@ -1762,4 +1864,474 @@ class TestContainmentInExport:
         }
         assert out_rkeys == expected_out_rkeys, (
             f"edge_out should be in 3 boundaries (not SF); got {sorted(out_rkeys)}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §7.5.1 — Record JSON byte-identical per source (Phase 2 export)
+# ---------------------------------------------------------------------------
+
+class TestExportRecordParityPhase2:
+    """§7.5.1: Stage 2 export from parquet artifacts must produce byte-identical
+    record JSON per source, compared to the Phase 1 view-based output.
+
+    §7.5.3: Two forced exports from the same artifacts must produce
+    gunzip-byte-identical tile files (pins the ORDER BY tile_qk, place_id invariant).
+
+    Both fail RED because stage_export does not yet accept parquet artifact paths.
+    """
+
+    def test_stage_export_has_parquet_signature(self):
+        """stage_export must accept (source, places_parquet, tile_assignments_parquet,
+        containment_dir, tiles_root, ...) — Phase 2 signature.
+
+        Fails RED because current stage_export takes 'con' as first argument.
+        """
+        import inspect
+        from garganorn.stages import stage_export
+        sig = inspect.signature(stage_export)
+        params = list(sig.parameters.keys())
+        assert params[0] != "con", (
+            f"stage_export must not take 'con' as first param (Phase 2 §3.6); "
+            f"got {params[0]!r} — fails RED because Phase 2 signature not yet implemented"
+        )
+        assert "places_parquet" in params, (
+            f"stage_export missing 'places_parquet' param; got {params} — "
+            "fails RED because Phase 2 signature not yet implemented"
+        )
+
+    def test_two_forced_fsq_exports_byte_identical(
+        self, fsq_parquet, density_parquet, tmp_path
+    ):
+        """Two forced exports from the same foursquare artifacts must produce
+        gunzip-byte-identical tile files (§7.5.3 determinism: ORDER BY tile_qk, place_id).
+
+        Fails RED because run_pipeline writes tiles to <src>/<timestamp>/ (Phase 1 layout),
+        not <src>/tiles/current/ (Phase 2 layout required by _find_tiles_current).
+        """
+        import gzip as _gzip
+        from garganorn.quadtree import run_pipeline as _run_pipeline
+
+        out = tmp_path / "det_out"
+        out.mkdir()
+
+        def _run():
+            _run_pipeline(
+                "foursquare", fsq_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                str(out), memory_limit="4GB", max_per_tile=100,
+                density_parquet=density_parquet, force=True,
+            )
+
+        _run()
+        tiles_current = out / "foursquare" / "tiles" / "current"
+        assert tiles_current.exists(), (
+            f"Phase 2 tiles must be at {tiles_current} — "
+            "fails RED because run_pipeline uses Phase 1 layout"
+        )
+        first_run = {}
+        for p in tiles_current.rglob("*.json.gz"):
+            with _gzip.open(p) as f:
+                first_run[str(p.relative_to(tiles_current))] = f.read()
+
+        _run()
+        for p in tiles_current.rglob("*.json.gz"):
+            rel = str(p.relative_to(tiles_current))
+            with _gzip.open(p) as f:
+                second_bytes = f.read()
+            assert second_bytes == first_run.get(rel, b""), (
+                f"Tile {rel}: second forced export differs from first — "
+                "ORDER BY tile_qk, place_id must make export deterministic"
+            )
+
+
+# ---------------------------------------------------------------------------
+# §7.5.5 — write_manifest_db from tile_assignments.parquet (Phase 2)
+# ---------------------------------------------------------------------------
+
+class TestWriteManifestDbPhase2:
+    """§7.5.5: write_manifest_db must read tile_assignments from parquet (Phase 2),
+    produce the same rkey/tile_qk rows as the current implementation, and
+    preserve the OSM rkey transform (n12345 → node:12345).
+
+    Fails RED because write_manifest_db still takes 'con' as first argument.
+    """
+
+    def test_write_manifest_db_accepts_parquet_path(self):
+        """write_manifest_db must accept tile_assignments_parquet as first arg (Phase 2).
+
+        Fails RED because current signature is write_manifest_db(con, output_dir, source).
+        """
+        import inspect
+        from garganorn.stages import write_manifest_db
+        sig = inspect.signature(write_manifest_db)
+        params = list(sig.parameters.keys())
+        assert params[0] != "con", (
+            f"write_manifest_db must not take 'con' first (Phase 2 §3.6.5); "
+            f"got {params[0]!r} — fails RED because Phase 2 signature not yet implemented"
+        )
+        assert "tile_assignments_parquet" in params or "parquet" in params[0].lower(), (
+            f"write_manifest_db must accept parquet path; got params: {params}"
+        )
+
+    def test_osm_rkey_transform_preserved_in_parquet_path(self, tmp_path):
+        """OSM rkey transform (n12345→node:12345, w12345→way:12345) must be preserved
+        when write_manifest_db reads from tile_assignments.parquet.
+
+        Fails RED because write_manifest_db still takes 'con' as first arg.
+        """
+        from garganorn.stages import write_manifest_db
+
+        # Write a minimal tile_assignments.parquet with OSM-style place_ids
+        ta_path = str(tmp_path / "osm_ta.parquet")
+        con = duckdb.connect()
+        con.execute(f"""
+            COPY (
+                SELECT place_id, tile_qk FROM (
+                    VALUES ('n123456', '023130'), ('w789', '023131')
+                ) t(place_id, tile_qk)
+            ) TO '{ta_path}' (FORMAT PARQUET)
+        """)
+        con.close()
+
+        run_dir = str(tmp_path / "run")
+        import os as _os
+        _os.makedirs(run_dir)
+
+        # Phase 2 signature: write_manifest_db(tile_assignments_parquet, output_dir, source)
+        # Fails RED with TypeError
+        write_manifest_db(ta_path, run_dir, "osm")
+
+        manifest_db = tmp_path / "run" / "manifest.duckdb"
+        assert manifest_db.exists(), "manifest.duckdb must be written"
+
+        # duckdb.connect() takes a file path, not SQL — attach separately.
+        check = duckdb.connect()
+        check.execute(f"ATTACH '{manifest_db}' AS m (READ_ONLY)")
+        rows = {
+            (r[0], r[1])
+            for r in check.execute(
+                "SELECT rkey, tile_qk FROM m.record_tiles ORDER BY rkey"
+            ).fetchall()
+        }
+        assert ("node:123456", "023130") in rows, (
+            f"OSM rkey 'n123456' must transform to 'node:123456'; got rows: {rows}"
+        )
+        assert ("way:789", "023131") in rows, (
+            f"OSM rkey 'w789' must transform to 'way:789'; got rows: {rows}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# §7.5 Gate #13 Finding #1 — stage_export Phase 2 body (tests 1a–1d)
+# ---------------------------------------------------------------------------
+
+class TestStageExportPhase2Body:
+    """§7.5 tests for the body of stage_export (Phase 2 export from parquet artifacts).
+
+    All tests fail RED because stage_export currently raises NotImplementedError
+    ('stage_export Phase 2 body not yet wired; call _transitional_export_phase1 …').
+
+    stage_export actual signature (garganorn/stages.py:1542):
+        stage_export(source, places_parquet, tile_assignments_parquet,
+                     containment_dir, tiles_root, t0, export_workers=None)
+
+    The `t0` positional parameter is intentional (matches how run_pipeline calls it);
+    it is not in the §3.6 prose but IS in the current function signature.
+    """
+
+    # ------------------------------------------------------------------
+    # Fixture helpers
+    # ------------------------------------------------------------------
+
+    def _build_fsq_fixtures(self, tmp_path):
+        """Build minimal foursquare places.parquet + tile_assignments.parquet.
+
+        Uses _make_fsq_export_db to populate tables matching foursquare_export_tiles.sql,
+        then COPYs them to parquet files for Phase 2 input.
+        """
+        import os
+        places_pq = str(tmp_path / "places.parquet")
+        ta_pq = str(tmp_path / "tile_assignments.parquet")
+        conn = duckdb.connect()
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        _make_fsq_export_db(conn)
+        conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+        conn.close()
+        return places_pq, ta_pq
+
+    def _build_containment_dir(self, tmp_path, name="containment"):
+        """Build a containment_dir with only _meta.json (no *.parquet files).
+
+        Represents the Q3-degradation / empty-containment case (spec §3.5).
+        When no *.parquet exists in containment_dir, stage_export must use:
+            (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
+        instead of read_parquet on an empty glob (which errors on DuckDB 1.2.1).
+        """
+        import os
+        cd = str(tmp_path / name)
+        os.makedirs(cd, exist_ok=True)
+        with open(os.path.join(cd, "_meta.json"), "w") as f:
+            json.dump({"empty": True, "params": {}, "inputs": []}, f)
+        return cd
+
+    # ------------------------------------------------------------------
+    # Test 1a: Record-JSON parity (§7.5.1)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Test 1b: Empty-containment substitution (§7.5.2)
+    # ------------------------------------------------------------------
+
+    def test_empty_containment_gives_empty_relations(self, tmp_path):
+        """§7.5.1b: containment_dir with only _meta.json (no *.parquet) → relations=={}.
+
+        The implementation must substitute the empty-containment subquery:
+            (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
+        NOT a read_parquet glob, which errors on DuckDB 1.2.1 when the glob matches nothing.
+
+        Fails RED because stage_export raises NotImplementedError.
+        """
+        import os, time
+        from pathlib import Path
+        from garganorn.stages import stage_export
+
+        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        containment_dir = self._build_containment_dir(tmp_path)
+
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+        t0 = time.monotonic()
+
+        # FAILS RED: NotImplementedError
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+
+        # After implementation: every record must have relations == {}
+        gz_files = list(Path(tiles_root).rglob("*.json.gz"))
+        assert gz_files, "stage_export must produce at least one .json.gz"
+        for gz_file in gz_files:
+            with gzip.open(gz_file) as f:
+                tile = json.loads(f.read())
+            for rec in tile["records"]:
+                parsed = rec if isinstance(rec, dict) else json.loads(rec)
+                assert parsed.get("relations") == {}, (
+                    f"Empty containment must produce relations=={{}}; "
+                    f"got {parsed.get('relations')!r} for rkey {parsed.get('rkey')!r}"
+                )
+
+    # ------------------------------------------------------------------
+    # Test 1c: Determinism (§7.5.3)
+    # ------------------------------------------------------------------
+
+    def test_determinism_two_exports_byte_identical(self, tmp_path):
+        """§7.5.1c: two exports from identical artifacts produce byte-identical .json.gz files.
+
+        Pins the ORDER BY tile_qk, place_id invariant (spec §3.4 + §3.6 step 3).
+        gzip mtime=0 is already set by the existing export_tiles implementation.
+
+        Fails RED because stage_export raises NotImplementedError.
+        """
+        import os, time
+        from pathlib import Path
+        from garganorn.stages import stage_export
+
+        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        containment_dir = self._build_containment_dir(tmp_path)
+        t0 = time.monotonic()
+
+        # Two INDEPENDENT tiles_root dirs from identical input artifacts. Using
+        # separate roots (rather than two runs into one root with force) avoids
+        # (a) the export freshness gate skipping the second run and (b) the
+        # key-collapse ambiguity of scanning two run dirs under one root — a
+        # non-deterministic run must not be masked by whichever file rglob
+        # visits last. Each root gets exactly one run dir.
+        tiles_root_a = str(tmp_path / "tiles_a")
+        tiles_root_b = str(tmp_path / "tiles_b")
+        os.makedirs(tiles_root_a)
+        os.makedirs(tiles_root_b)
+
+        # FAILS RED: NotImplementedError on the first call.
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_a, t0)
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_b, t0)
+
+        def _collect_tile_bytes(root):
+            """Return {rel_path: bytes} for all .json.gz files, relative to the run dir."""
+            result = {}
+            for gz_file in Path(root).rglob("*.json.gz"):
+                parts = gz_file.parts
+                ts_idx = next(
+                    (i for i, p in enumerate(parts) if re.match(r"^\d{8}T\d{6}$", p)),
+                    None,
+                )
+                if ts_idx is not None:
+                    rel = str(Path(*parts[ts_idx + 1:]))
+                    result[rel] = gz_file.read_bytes()
+            return result
+
+        first_bytes = _collect_tile_bytes(tiles_root_a)
+        second_bytes = _collect_tile_bytes(tiles_root_b)
+        assert first_bytes, "First export must produce at least one .json.gz"
+
+        assert set(second_bytes.keys()) == set(first_bytes.keys()), (
+            f"Tile key sets differ between run 1 and run 2:\n"
+            f"  only in run 2: {sorted(set(second_bytes) - set(first_bytes))}\n"
+            f"  only in run 1: {sorted(set(first_bytes) - set(second_bytes))}"
+        )
+        for rel, first_content in first_bytes.items():
+            assert second_bytes[rel] == first_content, (
+                f"Tile {rel!r}: not byte-identical between two exports; "
+                "ORDER BY tile_qk, place_id must produce deterministic output"
+            )
+
+    # ------------------------------------------------------------------
+    # Tests 1d: Run-dir lifecycle (§7.5.4 / spec §2.3 rule 3 / §3.6 step 2+5)
+    # ------------------------------------------------------------------
+
+    def test_run_dir_leftover_incomplete_deleted(self, tmp_path):
+        """§7.5.1d-i: a tiles/<ts>/ lacking manifest.json is deleted at next export.
+
+        Spec §2.3 rule 3: a run dir is complete iff manifest.json exists (written last).
+        Stage must scan tiles/ at step 2 and delete any incomplete dirs (no manifest.json,
+        not the current symlink target) before creating the new run.
+
+        Fails RED because stage_export raises NotImplementedError.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        containment_dir = self._build_containment_dir(tmp_path)
+
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+
+        # Plant a leftover incomplete run dir (tile files present, manifest.json absent)
+        leftover_ts = "20240101T000000"
+        leftover_tile_dir = os.path.join(tiles_root, leftover_ts, "023130")
+        os.makedirs(leftover_tile_dir)
+        with open(os.path.join(leftover_tile_dir, "0231300.json.gz"), "wb") as f:
+            f.write(gzip.compress(b'{"records":[]}', mtime=0))
+        # Deliberately do NOT write manifest.json — this simulates a crash mid-export
+
+        t0 = time.monotonic()
+
+        # FAILS RED: NotImplementedError
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+
+        # After implementation: the incomplete leftover run dir must be deleted
+        leftover_run_dir = os.path.join(tiles_root, leftover_ts)
+        assert not os.path.exists(leftover_run_dir), (
+            f"Incomplete run dir {leftover_run_dir!r} must be deleted by stage_export "
+            "(spec §2.3 rule 3 / §3.6 step 2)"
+        )
+
+    def test_manifest_json_written_after_manifest_duckdb(self, tmp_path):
+        """§7.5.1d-ii: manifest.json mtime must be >= manifest.duckdb mtime.
+
+        manifest.json is written LAST as the run-dir completeness marker (spec §3.6 step 5).
+        After implementation, manifest.duckdb is written first, then manifest.json.
+
+        Fails RED because stage_export raises NotImplementedError.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        containment_dir = self._build_containment_dir(tmp_path)
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+        t0 = time.monotonic()
+
+        # FAILS RED: NotImplementedError
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+
+        # After implementation: find run dir via tiles/current symlink
+        current = os.path.join(tiles_root, "current")
+        assert os.path.islink(current), "tiles/current symlink must exist after stage_export"
+        run_dir = os.path.realpath(current)
+
+        manifest_json = os.path.join(run_dir, "manifest.json")
+        manifest_duckdb = os.path.join(run_dir, "manifest.duckdb")
+        assert os.path.exists(manifest_json), f"manifest.json must be written to {run_dir}"
+        assert os.path.exists(manifest_duckdb), f"manifest.duckdb must be written to {run_dir}"
+        assert os.path.getmtime(manifest_json) >= os.path.getmtime(manifest_duckdb), (
+            "manifest.json mtime must be >= manifest.duckdb mtime "
+            "(manifest.json is the completeness marker; it must land last, spec §3.6 step 5)"
+        )
+
+    def test_tiles_current_symlink_points_at_new_run(self, tmp_path):
+        """§7.5.1d-iii: tiles/current symlink is updated to the new timestamp dir.
+
+        The symlink must target a valid, existing timestamp dir containing manifest.json.
+
+        Fails RED because stage_export raises NotImplementedError.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        containment_dir = self._build_containment_dir(tmp_path)
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+        t0 = time.monotonic()
+
+        # FAILS RED: NotImplementedError
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+
+        current = os.path.join(tiles_root, "current")
+        assert os.path.islink(current), "tiles/current must be a symlink after stage_export"
+
+        target = os.readlink(current)
+        assert re.match(r"^\d{8}T\d{6}$", target), (
+            f"tiles/current must point at a timestamp dir (YYYYMMDDTHHmmss); got {target!r}"
+        )
+        run_dir = os.path.join(tiles_root, target)
+        assert os.path.isdir(run_dir), (
+            f"Symlink target {target!r} must be an existing directory"
+        )
+        assert os.path.exists(os.path.join(run_dir, "manifest.json")), (
+            f"Run dir {target!r} must contain manifest.json (completeness marker, spec §3.6)"
+        )
+
+    def test_keep_2_sweep_retains_only_complete_dirs(self, tmp_path):
+        """§7.5.1d-iv: keep-2 sweep retains only the 2 newest COMPLETE run dirs.
+
+        Complete = has manifest.json. Incomplete dirs are already deleted at step 2.
+        Keep-2 sweep at step 5 removes complete run dirs older than the newest 2.
+
+        Fails RED because stage_export raises NotImplementedError.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        containment_dir = self._build_containment_dir(tmp_path)
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+
+        # Pre-create 3 complete run dirs with older timestamps
+        old_timestamps = ["20240101T000001", "20240101T000002", "20240101T000003"]
+        for ts in old_timestamps:
+            run_dir = os.path.join(tiles_root, ts)
+            os.makedirs(os.path.join(run_dir, "023130"))
+            with open(os.path.join(run_dir, "manifest.json"), "w") as f:
+                json.dump({"source": "foursquare", "quadkeys": []}, f)
+
+        t0 = time.monotonic()
+
+        # FAILS RED: NotImplementedError
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+
+        # After implementation: at most 2 complete run dirs should survive (keep-2)
+        complete_dirs = sorted([
+            d for d in os.listdir(tiles_root)
+            if re.match(r"^\d{8}T\d{6}$", d)
+            and os.path.isdir(os.path.join(tiles_root, d))
+            and not os.path.islink(os.path.join(tiles_root, d))
+            and os.path.exists(os.path.join(tiles_root, d, "manifest.json"))
+        ])
+        assert len(complete_dirs) <= 2, (
+            f"keep-2 sweep must retain at most 2 complete run dirs; "
+            f"found {len(complete_dirs)}: {complete_dirs}"
         )

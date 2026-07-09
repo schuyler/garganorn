@@ -113,7 +113,7 @@ def pipeline_output(fsq_parquet, density_parquet, tmp_path_factory):
     output_dir = tmp_path_factory.mktemp("integration")
     run_pipeline("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
                  str(output_dir), memory_limit="4GB", max_per_tile=100, density_parquet=density_parquet)
-    current = output_dir / "foursquare" / "current"
+    current = output_dir / "foursquare" / "tiles" / "current"
     assert current.exists()
     return current
 
@@ -131,7 +131,7 @@ def empty_pipeline_output(fsq_parquet, density_parquet, tmp_path):
                  str(output_dir), memory_limit="4GB", max_per_tile=100, density_parquet=density_parquet)
     # Empty pipeline may not create current symlink if no records are written.
     # Return the source dir so callers can handle either case.
-    current = output_dir / "foursquare" / "current"
+    current = output_dir / "foursquare" / "tiles" / "current"
     return current
 
 
@@ -143,7 +143,7 @@ def single_place_output(density_parquet, tmp_path):
     output_dir.mkdir()
     run_pipeline("foursquare", parquet_glob, (-122.55, 37.60, -122.30, 37.85),
                  str(output_dir), memory_limit="4GB", max_per_tile=100, density_parquet=density_parquet)
-    return output_dir / "foursquare" / "current"
+    return output_dir / "foursquare" / "tiles" / "current"
 
 
 @pytest.fixture
@@ -153,7 +153,7 @@ def dense_cluster_output(fsq_parquet, density_parquet, tmp_path):
     output_dir.mkdir()
     run_pipeline("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
                  str(output_dir), memory_limit="4GB", max_per_tile=1, density_parquet=density_parquet)
-    return output_dir / "foursquare" / "current"
+    return output_dir / "foursquare" / "tiles" / "current"
 
 
 # ---------------------------------------------------------------------------
@@ -421,14 +421,14 @@ class TestExportWorkersParity:
         out1.mkdir()
         run_pipeline("foursquare", fsq_parquet, bbox, str(out1),
                      memory_limit="4GB", max_per_tile=100, export_workers=1, density_parquet=density_parquet)
-        current1 = out1 / "foursquare" / "current"
+        current1 = out1 / "foursquare" / "tiles" / "current"
         assert current1.exists(), "current symlink must exist for export_workers=1 run"
 
         out4 = tmp_path / "workers4"
         out4.mkdir()
         run_pipeline("foursquare", fsq_parquet, bbox, str(out4),
                      memory_limit="4GB", max_per_tile=100, export_workers=4, density_parquet=density_parquet)
-        current4 = out4 / "foursquare" / "current"
+        current4 = out4 / "foursquare" / "tiles" / "current"
         assert current4.exists(), "current symlink must exist for export_workers=4 run"
 
         # Collect relative path → content for each run
@@ -461,4 +461,49 @@ class TestExportWorkersParity:
             assert records1 == records4, (
                 f"Records differ in tile {rel_path}"
             )
+
+
+# ---------------------------------------------------------------------------
+# §2.1 Gate #13 Finding #3 — backward-compat symlink must not exist
+# ---------------------------------------------------------------------------
+
+class TestPhase2SymlinkLayout:
+    """Finding #3 from Gate #13: run_pipeline must create ONLY tiles/current → <timestamp>.
+
+    Spec §2.1 'after' layout: the ONLY symlink is <source_dir>/tiles/current → <timestamp>.
+    The backward-compat symlink at <source_dir>/current → tiles/<timestamp>
+    (quadtree.py lines 336–344) must be removed.
+    """
+
+    def test_no_compat_symlink_at_source_root(self, fsq_parquet, density_parquet, tmp_path):
+        """§2.1: after run_pipeline, <output>/foursquare/tiles/current exists but
+        <output>/foursquare/current does NOT exist (not even as a dangling symlink).
+
+        Fails RED because run_pipeline currently creates the compat symlink
+        <source_dir>/current → tiles/<timestamp> (quadtree.py lines 336–344).
+        """
+        import os as _os
+        out = tmp_path / "p2_symlink_out"
+        out.mkdir()
+
+        run_pipeline(
+            "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            str(out), memory_limit="4GB", max_per_tile=100,
+            density_parquet=density_parquet,
+        )
+
+        tiles_current = out / "foursquare" / "tiles" / "current"
+        compat_link = out / "foursquare" / "current"
+
+        # The canonical Phase 2 symlink must exist
+        assert _os.path.exists(str(tiles_current)), (
+            f"Phase 2 canonical symlink tiles/current must exist at {tiles_current}"
+        )
+
+        # The backward-compat symlink must NOT exist (not even dangling)
+        assert not _os.path.lexists(str(compat_link)), (
+            f"Backward-compat symlink must NOT exist at {compat_link}; "
+            "spec §2.1 says the ONLY symlink is <source_dir>/tiles/current → <timestamp>. "
+            "Fails RED because run_pipeline still creates it (quadtree.py lines 336–344)."
+        )
 
