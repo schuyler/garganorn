@@ -135,9 +135,11 @@ regression to gate. It splits into a standalone garganorn code change (merged as
 ## Follow-ups
 
 **Next up (ordered):**
-1. **idf crash-safety** — the one open correctness bug (silent reuse of a
-   partial `idf.parquet` after `kill -9`). Small, self-contained, mirrors the
-   density fix already in Phase 2. Do this first.
+1. ~~**idf crash-safety**~~ — **implemented, pending merge.** `stage_idf` now
+   writes via `.tmp` + `finalize_artifact` + `artifact_fresh({})`, mirroring
+   `stage_density_extract`. Tests added: `TestStageIdfMetaSidecar` (5
+   crash-safety tests) + 3 of the 5 `TestStageIdfMtimeCaching` tests updated to
+   the meta-driven contract. Suite: 936 passed / 1 xfailed / 0 failed.
 2. **Phase 2b** — OQ-P2-1 envelope amendment + OQ-P2-2 level vocabulary. The next
    feature batch; unblocked now that Phase 2 is merged. OQ-P2-2 has an on-box
    `SELECT DISTINCT subtype` precondition to check first.
@@ -169,16 +171,15 @@ when infra lands.
 
 ### Correctness — schedule soon
 
-- **idf is not crash-safe (§3.1).** `stage_idf` still writes `idf.parquet`
-  in-place via `COPY` and gates freshness on `_is_output_fresh` (no `.meta.json`).
-  A `kill -9` mid-COPY leaves a partial `idf.parquet` whose mtime reads as fresh,
-  so the next run silently reuses corrupt IDF scores. Density was migrated to
-  `.tmp` + `finalize_artifact` in Phase 2; idf was missed. Fix: route idf through
-  `.tmp` + `finalize_artifact` + `artifact_fresh` (params `{}`), mirroring
-  `stage_density_extract`. Expect a small `test_idf_stage.py` freshness-test port
-  (the density mtime tests needed the same). Not caught by the §9.2 acceptance
-  because idf is a shared artifact built outside `run_pipeline` and the kill-9
-  path.
+- **idf crash-safety (§3.1) — fixed, implemented pending merge.** Bug: `stage_idf`
+  wrote `idf.parquet` in-place via `COPY` and gated freshness on `_is_output_fresh`
+  (no `.meta.json`). A `kill -9` mid-COPY left a partial `idf.parquet` whose mtime
+  read as fresh, so the next run silently reused corrupt IDF scores. Density was
+  migrated to `.tmp` + `finalize_artifact` in Phase 2; idf was missed.
+  Fix: `stage_idf` now writes via `.tmp` + `finalize_artifact` + `artifact_fresh({})`
+  mirroring `stage_density_extract`. Tests added: `TestStageIdfMetaSidecar` (5
+  crash-safety tests) + 3 of the 5 `TestStageIdfMtimeCaching` tests updated to the
+  meta-driven contract. Suite after fix: 936 passed / 1 xfailed / 0 failed.
 
 ### Phase 2b (follow immediately after Phase 2 merges; not gated on anything)
 

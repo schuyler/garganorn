@@ -1025,15 +1025,21 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
     if source not in ("foursquare", "overture_place", "osm"):
         raise ValueError(f"unsupported source for IDF: {source}")
 
-    if not force:
-        if source == "osm":
-            node_glob, way_glob = parquet_glob
-            input_files = _resolve_glob_paths(node_glob) + _resolve_glob_paths(way_glob)
-        else:
-            input_files = _resolve_glob_paths(parquet_glob)
-        if _is_output_fresh(output_path, input_files):
-            log.info("idf: skipping (output is fresh)")
-            return
+    # Remove any stale .tmp from a previous interrupted run before building.
+    _tmp = output_path + ".tmp"
+    if os.path.exists(_tmp):
+        os.remove(_tmp)
+
+    # Resolve input_files unconditionally so finalize_artifact can record them.
+    if source == "osm":
+        node_glob, way_glob = parquet_glob
+        input_files = _resolve_glob_paths(node_glob) + _resolve_glob_paths(way_glob)
+    else:
+        input_files = _resolve_glob_paths(parquet_glob)
+
+    if not force and artifact_fresh(output_path, input_files, {}):
+        log.info("idf: skipping (output is fresh)")
+        return
 
     log.info("idf: starting (ephemeral connection)")
     sql = (_SQL_DIR / f"{source}_idf.sql").read_text()
@@ -1049,6 +1055,7 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
         sql = sql.replace("${parquet_glob}", str(parquet_glob))
 
     con = duckdb.connect()
+    count = 0
     try:
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
@@ -1057,12 +1064,15 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
         con.execute("SET preserve_insertion_order = false")
         con.execute(sql)
         con.execute(
-            f"COPY (SELECT * FROM idf_scores ORDER BY category) TO '{output_path}' (FORMAT PARQUET)"
+            f"COPY (SELECT * FROM idf_scores ORDER BY category) TO '{_tmp}' (FORMAT PARQUET)"
         )
         count = con.execute("SELECT count(*) FROM idf_scores").fetchone()[0]
         log.info("idf: done (%.1fs, %d categories)", time.monotonic() - t0, count)
     finally:
         con.close()
+
+    # Atomic promotion: rename .tmp → artifact and write .meta.json sidecar
+    finalize_artifact(_tmp, output_path, params={}, stats={"categories": count}, inputs=input_files)
 
 
 def stage_tile_assignment(places_parquet, output_path, source, *,
