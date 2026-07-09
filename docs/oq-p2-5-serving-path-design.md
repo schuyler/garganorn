@@ -1,6 +1,6 @@
 # OQ-P2-5 — Serving-path migration: implementation plan
 
-Status: **implemented, pending merge/approval**. Tests green: 931 passed, 1
+Status: **merged** (`fd0ff8d`, 2026-07-09). Tests green: 931 passed, 1
 xfailed. Classification: **Standard**. Design gate: PASSED — round-2 review
 found no CRITICALs; three IMPORTANT items (manifest-gate consistency, drop
 `immutable`, traversal-test rigor) are resolved in the text above. Scope:
@@ -228,7 +228,7 @@ green.
 3. Green: Changes A + B → review → gate. PASSED.
 4. Docs: update this doc's status + any user-facing note if warranted → review. DONE.
 5. Full `pytest tests/` — 931 passed, 1 xfailed.
-6. Acceptance: pending merge to `main`.
+6. Acceptance: merged to `main` (`fd0ff8d`, 2026-07-09).
 
 ## Out of scope / deferred follow-ups
 

@@ -2,7 +2,7 @@
 
 Phase 2 (parquet artifacts + subcommand orchestrator) is implemented and the
 full test suite is green. Phase 2 baseline: 916 passed, 1 xfailed, 0 failed
-(`venv/bin/pytest`, DuckDB 1.2.1). With OQ-P2-5 (pending merge): 931 passed,
+(`venv/bin/pytest`, DuckDB 1.2.1). With OQ-P2-5 (merged, `fd0ff8d`): 931 passed,
 1 xfailed, 0 failed. Design reference: `phase2-artifacts-design.md` (§9
 acceptance, §7.8 parity harness, §10 open questions).
 
@@ -127,17 +127,27 @@ clean against its control. **Both conditions met** (see "Acceptance results" at
 the top). Phase 2 (`69767f6`) is already merged to `main`. OQ-P2-5 (serving-path
 migration) below was originally scoped as a deploy blocker; examination (2026-07-09)
 found it is **not** blocking — prod serves no tiles today, so there is no
-regression to gate. It splits into a standalone garganorn code change (implemented,
-pending merge) and a deferred infra follow-up.
+regression to gate. It splits into a standalone garganorn code change (merged as
+`fd0ff8d`) and a deferred infra follow-up.
 
 ---
 
 ## Follow-ups
 
-### OQ-P2-5 — serving-path migration — implemented, pending merge
+**Next up (ordered):**
+1. **idf crash-safety** — the one open correctness bug (silent reuse of a
+   partial `idf.parquet` after `kill -9`). Small, self-contained, mirrors the
+   density fix already in Phase 2. Do this first.
+2. **Phase 2b** — OQ-P2-1 envelope amendment + OQ-P2-2 level vocabulary. The next
+   feature batch; unblocked now that Phase 2 is merged. OQ-P2-2 has an on-box
+   `SELECT DISTINCT subtype` precondition to check first.
+3. **OQ-P2-5 infra follow-up** — Ansible `tiles:` wiring + the `config.yaml.j2`
+   `type: overture` bug. Deferred until prod actually serves tiles; not blocking.
+
+### OQ-P2-5 — serving-path migration — merged (`fd0ff8d`, 2026-07-09)
 
 Full plan: `docs/oq-p2-5-serving-path-design.md`. Tests green: 931 passed,
-1 xfailed.
+1 xfailed. Landed on `main` at `fd0ff8d` via the red/green/review pipeline.
 
 **What is implemented:** `garganorn/__main__.py` now serves tiles via
 `/tiles/<slug>/<path:tile_path>`. The slug→tiles_dir map is built from config at

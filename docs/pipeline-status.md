@@ -24,8 +24,8 @@ working DuckDB. Three operational changes worth knowing:
   meta) and rebuilds it from the start. Serving is never affected mid-run —
   `current` only swaps once a run's `manifest.json` lands.
 
-OQ-P2-5 (serving-path migration) is implemented, pending merge. The tile route
-will be `/tiles/<slug>/<path>` (`__main__.py`), and `config.yaml` uses the Phase 2
+OQ-P2-5 (serving-path migration) is merged (`fd0ff8d`). The tile route
+is `/tiles/<slug>/<path>` (`__main__.py`), and `config.yaml` uses the Phase 2
 `<source>/tiles/current` layout with per-collection `slug` and `cache_ttl`. The
 Ansible infra wiring (`atgeo-server-config`) is a separate deferred follow-up for
 when tiles go to production.
