@@ -210,3 +210,17 @@ when infra lands.
 - OQ-P2-8: FSQ source disposition (pin-or-drop, HD-3) — the importer is converted
   either way; whether it runs on real data awaits the decision.
 - `COVER_MAX_ZOOM` sizing, manifest sharding, static `getRecord`.
+
+### Later phases (canonical phasing in `pipeline-restructure-design.md` §8)
+
+Both remain pending after Phase 2b:
+- **Phase 3 — server removals** (§7.1/§7.2): remove `searchRecords` + `getCoverage`,
+  the trigram/JW/search machinery and `name_index`, `TileManifest`/`BboxTooLarge`;
+  update the atgeo.org API/Usage pages in the same change set.
+- **Phase 4 — global validation** (§10): the full validation plan on the production box.
+
+**Sequencing (2026-07-09, tentative):** Phase 4 likely precedes Phase 3 — server
+removals are zero-user cleanup with no urgency, while global validation is the
+payoff. §8 numbering left unchanged. Consequence: the `getCoverage` ↔ OQ-P2-5
+`base_url` URL-contract coupling (and the search-tied doc-cleanup ledger items)
+stay live through Phase 4.
