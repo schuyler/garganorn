@@ -2,8 +2,9 @@
 
 Phase 2 (parquet artifacts + subcommand orchestrator) is implemented and the
 full test suite is green. Phase 2 baseline: 916 passed, 1 xfailed, 0 failed
-(`venv/bin/pytest`, DuckDB 1.2.1). With OQ-P2-5 (merged, `fd0ff8d`): 931 passed,
-1 xfailed, 0 failed. Design reference: `phase2-artifacts-design.md` (§9
+(`venv/bin/pytest`, DuckDB 1.2.1). With OQ-P2-5 (`fd0ff8d`) + idf crash-safety
+(`b2aae95`) merged: 936 passed, 1 xfailed, 0 failed. Design reference:
+`phase2-artifacts-design.md` (§9
 acceptance, §7.8 parity harness, §10 open questions).
 
 This file is the checklist for taking Phase 2 from "tests pass" to "merged and
@@ -135,7 +136,7 @@ regression to gate. It splits into a standalone garganorn code change (merged as
 ## Follow-ups
 
 **Next up (ordered):**
-1. ~~**idf crash-safety**~~ — **implemented, pending merge.** `stage_idf` now
+1. ~~**idf crash-safety**~~ — **merged (`b2aae95`, 2026-07-09).** `stage_idf` now
    writes via `.tmp` + `finalize_artifact` + `artifact_fresh({})`, mirroring
    `stage_density_extract`. Tests added: `TestStageIdfMetaSidecar` (5
    crash-safety tests) + 3 of the 5 `TestStageIdfMtimeCaching` tests updated to
@@ -171,7 +172,7 @@ when infra lands.
 
 ### Correctness — schedule soon
 
-- **idf crash-safety (§3.1) — fixed, implemented pending merge.** Bug: `stage_idf`
+- **idf crash-safety (§3.1) — fixed, merged (`b2aae95`).** Bug: `stage_idf`
   wrote `idf.parquet` in-place via `COPY` and gated freshness on `_is_output_fresh`
   (no `.meta.json`). A `kill -9` mid-COPY left a partial `idf.parquet` whose mtime
   read as fresh, so the next run silently reused corrupt IDF scores. Density was

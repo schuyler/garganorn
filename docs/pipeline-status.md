@@ -23,7 +23,7 @@ working DuckDB. Three operational changes worth knowing:
   a `kill -9`, re-running finds any half-written stage stale (via its `.tmp` or
   meta) and rebuilds it from the start. Serving is never affected mid-run —
   `current` only swaps once a run's `manifest.json` lands. (`stage_idf` was
-  missing `.tmp`+`finalize_artifact` at Phase 2 merge; fixed, pending merge.)
+  missing `.tmp`+`finalize_artifact` at Phase 2 merge; fixed in `b2aae95`.)
 
 OQ-P2-5 (serving-path migration) is merged (`fd0ff8d`). The tile route
 is `/tiles/<slug>/<path>` (`__main__.py`), and `config.yaml` uses the Phase 2
