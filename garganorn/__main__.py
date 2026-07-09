@@ -19,11 +19,20 @@ def create_app():
     tile_manifests = {}
     tile_collections = {}
     max_coverage_tiles = 50
+    tile_dirs = {}  # slug -> (tiles_dir, cache_ttl)
     if tiles_config:
         from garganorn.quadtree import TileManifest
         from garganorn.tile_reader import TileBackedCollection
         for collection, coll_cfg in tiles_config.get("collections", {}).items():
             manifest_path = coll_cfg.get("manifest")
+            base_url = coll_cfg.get("base_url")
+            slug = coll_cfg.get("slug")
+            # Config sanity — fires regardless of manifest presence: a getCoverage URL
+            # that no route can serve is a config error, not a dev-checkout state.
+            if base_url and slug and not base_url.rstrip("/").endswith("/" + slug):
+                raise ValueError(
+                    f"{collection}: base_url must end with '/{slug}' to match its serving route"
+                )
             if manifest_path and not os.path.isfile(manifest_path):
                 app.logger.warning(
                     "Tile manifest configured for %s but not found: %s (tile serving disabled for this collection)",
@@ -38,6 +47,15 @@ def create_app():
                         tiles_dir=coll_cfg["tiles_dir"],
                         attribution=coll_cfg.get("attribution", ""),
                     )
+                    # Gate serving on the SAME manifest-exists condition: the route
+                    # must not serve a collection whose tiles are otherwise disabled.
+                    if slug:
+                        tile_dirs[slug] = (coll_cfg["tiles_dir"], coll_cfg.get("cache_ttl"))
+                    elif base_url:
+                        app.logger.warning(
+                            "Collection %s has base_url but no slug; getCoverage URLs will 404",
+                            collection,
+                        )
         max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
     gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries,
                        tile_manifests=tile_manifests, tile_collections=tile_collections,
@@ -80,20 +98,23 @@ def create_app():
             status = 404 if e.name in ("CollectionNotFound", "RecordNotFound") else 400
             return {"error": e.name, "message": str(e)}, status
 
-    serve_dir = None
-    if tiles_config:
-        serve_dir = tiles_config.get("serve_dir")
-
-    @app.route("/tiles/<path:tile_path>")
-    def serve_tile(tile_path):
+    @app.route("/tiles/<slug>/<path:tile_path>")
+    def serve_tile(slug, tile_path):
         """Serve a gzipped JSON tile file with correct headers."""
-        if serve_dir is None:
+        entry = tile_dirs.get(slug)
+        if entry is None:
             return ("Not found", 404)
-        full_path = safe_join(serve_dir, tile_path)
+        tiles_dir, cache_ttl = entry
+        full_path = safe_join(tiles_dir, tile_path)
         if full_path is None or not os.path.isfile(full_path):
             return ("Not found", 404)
         response = send_file(full_path, mimetype="application/json")
         response.headers["Content-Encoding"] = "gzip"
+        if cache_ttl:
+            # NOT `immutable`: `current` is a symlink repointed each pipeline run, so
+            # the same URL can return new bytes; immutable would let caches serve stale
+            # tiles for the full max-age.
+            response.headers["Cache-Control"] = f"public, max-age={cache_ttl}"
         return response
 
     return app

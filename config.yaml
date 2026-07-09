@@ -8,24 +8,26 @@ databases:
 tiles:
   max_per_tile: 1000
   memory_limit: 48GB
-  serve_dir: tiles
   collections:
     org.atgeo.places.foursquare:
-      manifest: tiles/fsq/current/manifest.duckdb
-      tiles_dir: tiles/fsq/current
-      base_url: https://places.atgeo.org/tiles/fsq/current
+      slug: foursquare
+      manifest: tiles/foursquare/tiles/current/manifest.duckdb
+      tiles_dir: tiles/foursquare/tiles/current
+      base_url: https://places.atgeo.org/tiles/foursquare
       attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
       cache_ttl: 86400
     org.atgeo.places.overture.place:
-      manifest: tiles/overture/current/manifest.duckdb
-      tiles_dir: tiles/overture/current
-      base_url: https://places.atgeo.org/tiles/overture/current
+      slug: overture-place
+      manifest: tiles/overture_place/tiles/current/manifest.duckdb
+      tiles_dir: tiles/overture_place/tiles/current
+      base_url: https://places.atgeo.org/tiles/overture-place
       attribution: https://docs.overturemaps.org/attribution/
       cache_ttl: 86400
     org.atgeo.places.osm:
-      manifest: tiles/osm/current/manifest.duckdb
-      tiles_dir: tiles/osm/current
-      base_url: https://places.atgeo.org/tiles/osm/current
+      slug: osm
+      manifest: tiles/osm/tiles/current/manifest.duckdb
+      tiles_dir: tiles/osm/tiles/current
+      base_url: https://places.atgeo.org/tiles/osm
       attribution: https://www.openstreetmap.org/copyright
       cache_ttl: 86400
   max_coverage_tiles: 50
