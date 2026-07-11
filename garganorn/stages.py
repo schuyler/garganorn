@@ -895,7 +895,17 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     else:
         input_files = _resolve_glob_paths(str(parquet_glob))
 
-    params = {"source": source, "bbox": [xmin, ymin, xmax, ymax]}
+    if density_parquet:
+        input_files += _resolve_glob_paths(str(density_parquet))
+    if idf_parquet:
+        input_files += _resolve_glob_paths(str(idf_parquet))
+
+    params = {
+        "source": source,
+        "bbox": [xmin, ymin, xmax, ymax],
+        "density_norm": density_norm,
+        "idf_norm": idf_norm,
+    }
 
     if not force and artifact_fresh(output_path, input_files, params):
         log.info("[%s] import: skipping (artifact fresh)", source)
