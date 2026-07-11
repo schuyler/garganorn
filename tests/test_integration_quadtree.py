@@ -57,13 +57,20 @@ def _build_server(pipeline_dir, max_coverage_tiles=50):
 
 
 def _collect_tile_records(pipeline_dir):
-    """Read all records from all tile .json.gz files. Returns list of record dicts."""
+    """Read all wrapped records ({uri, cid, value}) from all tile .json.gz
+    files. Returns list of wrapper dicts (§B.2b). Use _collect_tile_values()
+    for the unwrapped value dicts."""
     records = []
     for gz_path in pipeline_dir.rglob("*.json.gz"):
         with gzip.open(gz_path, "rt") as f:
             tile = json.load(f)
         records.extend(tile["records"])
     return records
+
+
+def _collect_tile_values(pipeline_dir):
+    """Read all record `value` dicts (unwrapped) from all tile .json.gz files."""
+    return [rec["value"] for rec in _collect_tile_records(pipeline_dir)]
 
 
 def _make_single_place_parquet(tmp_path):
@@ -189,7 +196,9 @@ class TestPipelineToCoverage:
             assert str(file_path).endswith(".json.gz"), f"Unexpected extension: {file_path}"
 
     def test_tile_files_are_valid_gzipped_json(self, pipeline_output):
-        """Each tile file is valid gzip-compressed JSON with 'attribution' and 'records' keys."""
+        """Each tile file is valid gzip-compressed JSON with the full atgeo v1
+        envelope: {atgeo, collection, attribution, generated_at, records}
+        (phase2b-design.md §B.2a, §6 item 6)."""
         server = _build_server(pipeline_output)
         result = server.get_coverage({}, collection=FSQ_COLLECTION, bbox=SF_BBOX_STR)
         prefix = BASE_URL + "/"
@@ -198,27 +207,41 @@ class TestPipelineToCoverage:
             file_path = pipeline_output / relative
             with gzip.open(file_path, "rt") as f:
                 tile = json.load(f)
-            assert "attribution" in tile, f"Missing 'attribution' in tile {relative}"
+            assert set(tile.keys()) == {"atgeo", "collection", "attribution", "generated_at", "records"}, (
+                f"Tile {relative} top-level must be exactly {{atgeo, collection, attribution, "
+                f"generated_at, records}}; got {list(tile)}"
+            )
+            assert tile["atgeo"] == 1
             assert isinstance(tile["attribution"], str)
-            assert "records" in tile, f"Missing 'records' in tile {relative}"
+            assert isinstance(tile["collection"], str)
+            assert isinstance(tile["generated_at"], str) and tile["generated_at"].endswith("Z")
             assert isinstance(tile["records"], list)
 
     def test_tile_records_match_expected_schema(self, pipeline_output):
-        """Every record in all tile files conforms to the org.atgeo.place schema."""
+        """Every record in all tile files is {uri, cid, value}-wrapped (§B.2b,
+        §6 item 6), and value conforms to the org.atgeo.place schema."""
         records = _collect_tile_records(pipeline_output)
         assert len(records) > 0, "No records found in any tile"
         for record in records:
-            assert "uri" not in record, \
-                f"Record should NOT have 'uri' key (flat structure): {record}"
-            assert "value" not in record, \
-                f"Record should NOT have 'value' key (flat structure): {record}"
-            assert record["$type"] == "org.atgeo.place", f"Unexpected $type: {record['$type']}"
-            assert isinstance(record["rkey"], str) and record["rkey"], "rkey must be non-empty string"
-            assert isinstance(record["name"], str), "name must be a string"
-            assert isinstance(record["importance"], int), "importance must be int"
-            assert isinstance(record["locations"], list) and len(record["locations"]) > 0, \
+            assert set(record.keys()) == {"uri", "cid", "value"}, (
+                f"Record must be exactly {{uri, cid, value}} (atgeo v1 envelope); "
+                f"got keys: {list(record)}"
+            )
+            assert record["cid"] is None, f"cid must be null (never computed, §B.3): {record}"
+            assert record["uri"].startswith("https://places.atgeo.org/"), \
+                f"uri must be https://{{repo}}/... : {record['uri']}"
+            assert record["uri"].rsplit("/", 1)[-1] == record["value"]["rkey"], (
+                f"uri's trailing rkey segment must equal value.rkey: {record}"
+            )
+
+            value = record["value"]
+            assert value["$type"] == "org.atgeo.place", f"Unexpected $type: {value['$type']}"
+            assert isinstance(value["rkey"], str) and value["rkey"], "rkey must be non-empty string"
+            assert isinstance(value["name"], str), "name must be a string"
+            assert isinstance(value["importance"], int), "importance must be int"
+            assert isinstance(value["locations"], list) and len(value["locations"]) > 0, \
                 "locations must be non-empty list"
-            first_loc = record["locations"][0]
+            first_loc = value["locations"][0]
             assert first_loc["$type"] == "community.lexicon.location.geo", \
                 f"First location $type: {first_loc['$type']}"
             assert isinstance(first_loc["latitude"], str), "latitude must be str"
@@ -227,15 +250,15 @@ class TestPipelineToCoverage:
             float(first_loc["longitude"])  # must be parseable as float
 
     def test_manifest_rkeys_match_tiles(self, pipeline_output):
-        """manifest.duckdb record_tiles rkeys match tile file rkeys and equal EXPECTED_RKEYS."""
+        """manifest.duckdb record_tiles rkeys match tile value.rkeys and equal EXPECTED_RKEYS."""
         manifest_path = str(pipeline_output / "manifest.duckdb")
         con = duckdb.connect(manifest_path, read_only=True)
         manifest_rkeys = {row[0] for row in con.execute("SELECT rkey FROM record_tiles").fetchall()}
         con.close()
 
         tile_rkeys = set()
-        for record in _collect_tile_records(pipeline_output):
-            tile_rkeys.add(record["rkey"])
+        for value in _collect_tile_values(pipeline_output):
+            tile_rkeys.add(value["rkey"])
 
         assert manifest_rkeys == tile_rkeys, \
             f"Manifest rkeys {manifest_rkeys} != tile rkeys {tile_rkeys}"
@@ -251,16 +274,67 @@ class TestPipelineToCoverage:
             f"Expected XrpcError name 'BboxTooLarge', got '{exc_info.value.name}'"
 
     def test_manifest_metadata(self, pipeline_output):
-        """manifest.duckdb metadata table contains source='fsq' and a non-empty generated_at."""
+        """manifest.duckdb metadata table contains atgeo=1, collection,
+        source='foursquare', and an RFC 3339 Z generated_at (§B.6, §6 items
+        8/9)."""
         manifest_path = str(pipeline_output / "manifest.duckdb")
         con = duckdb.connect(manifest_path, read_only=True)
-        row = con.execute("SELECT source, generated_at FROM metadata").fetchone()
+        cols = {row[1] for row in con.execute("PRAGMA table_info('metadata')").fetchall()}
+        row = con.execute("SELECT atgeo, collection, source, generated_at FROM metadata").fetchone()
         con.close()
+        assert {"atgeo", "collection"} <= cols, (
+            f"manifest.duckdb metadata must have atgeo/collection columns; got {cols}"
+        )
         assert row is not None, "metadata table is empty"
-        source, generated_at = row
+        atgeo, collection, source, generated_at = row
+        assert atgeo == 1
+        assert collection == FSQ_COLLECTION
         assert source == "foursquare", f"Expected source='foursquare', got '{source}'"
-        assert isinstance(generated_at, str) and generated_at, \
-            "generated_at must be a non-empty string"
+        assert isinstance(generated_at, str) and generated_at.endswith("Z"), (
+            f"generated_at must be an RFC 3339 Z string; got {generated_at!r}"
+        )
+
+    def test_manifest_json_and_tile_generated_at_agree(self, pipeline_output):
+        """§6 item 8 — every tile's generated_at == manifest.json's generated_at
+        == manifest.duckdb metadata.generated_at == the run-dir name (RFC 3339 Z)."""
+        with open(pipeline_output / "manifest.json") as f:
+            manifest_json = json.load(f)
+        manifest_generated_at = manifest_json["generated_at"]
+
+        manifest_path = str(pipeline_output / "manifest.duckdb")
+        con = duckdb.connect(manifest_path, read_only=True)
+        db_generated_at = con.execute("SELECT generated_at FROM metadata").fetchone()[0]
+        con.close()
+
+        assert db_generated_at == manifest_generated_at, (
+            f"manifest.duckdb generated_at {db_generated_at!r} must equal "
+            f"manifest.json generated_at {manifest_generated_at!r}"
+        )
+
+        # run-dir name: pipeline_output is a resolved 'current' symlink target,
+        # named %Y%m%dT%H%M%S; its RFC 3339 Z rendering must match generated_at.
+        import re as _re
+        from datetime import datetime as _dt, timezone as _tz
+        run_dir_name = pipeline_output.resolve().name
+        assert _re.match(r"^\d{8}T\d{6}$", run_dir_name), (
+            f"expected a %Y%m%dT%H%M%S run-dir name, got {run_dir_name!r}"
+        )
+        expected = _dt.strptime(run_dir_name, "%Y%m%dT%H%M%S").replace(tzinfo=_tz.utc) \
+                      .strftime("%Y-%m-%dT%H:%M:%SZ")
+        assert manifest_generated_at == expected, (
+            f"generated_at {manifest_generated_at!r} must derive from the run-dir name "
+            f"{run_dir_name!r} (expected {expected!r}), per §B.4 point 1"
+        )
+
+        gz_files = list(pipeline_output.rglob("*.json.gz"))
+        assert gz_files, "expected at least one tile"
+        for gz in gz_files:
+            with gzip.open(gz, "rt") as f:
+                tile = json.load(f)
+            assert tile["generated_at"] == manifest_generated_at, (
+                f"tile {gz} generated_at {tile['generated_at']!r} must equal "
+                f"manifest generated_at {manifest_generated_at!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -455,9 +529,10 @@ class TestExportWorkersParity:
             assert content1["attribution"] == content4["attribution"], (
                 f"Attribution differs in tile {rel_path}"
             )
-            # Sort records by rkey for deterministic comparison
-            records1 = sorted(content1["records"], key=lambda r: r["rkey"])
-            records4 = sorted(content4["records"], key=lambda r: r["rkey"])
+            # Sort wrapped records by value.rkey for deterministic comparison
+            # (records are {uri, cid, value}-wrapped; rkey lives at value.rkey, §B.2b).
+            records1 = sorted(content1["records"], key=lambda r: r["value"]["rkey"])
+            records4 = sorted(content4["records"], key=lambda r: r["value"]["rkey"])
             assert records1 == records4, (
                 f"Records differ in tile {rel_path}"
             )

@@ -5,9 +5,10 @@
 -- extents rather than a point. No geometry is included in the tile output — the
 -- full polygon is available in boundaries.duckdb for containment queries.
 --
--- Attributes include admin_level (OSM-style 1–11 hierarchy), subtype (e.g.
--- "country", "region", "county"), country/region ISO codes, wikidata QID, and
--- population where present in the source data.
+-- Attributes include level (the atgeo containment level vocabulary,
+-- garganorn.levels.LEVEL_VOCAB, derived from subtype -- not raw Overture
+-- admin_level), subtype (e.g. "country", "region", "county"), country/region
+-- ISO codes, wikidata QID, and population where present in the source data.
 --
 -- relations carries containment assignments populated by compute_containment
 -- (which divisions contain this one). Left join means records without
@@ -28,6 +29,7 @@ CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
     ta.place_id,
+    p.id AS rkey,
     to_json({
         "$type": 'org.atgeo.place',
         rkey: p.id,
@@ -45,7 +47,7 @@ SELECT
             subtype: p.subtype,
             country: p.country,
             region: p.region,
-            admin_level: p.admin_level,
+            level: p.level,
             wikidata: p.wikidata,
             population: p.population
         })),

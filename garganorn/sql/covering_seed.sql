@@ -18,7 +18,7 @@
 CREATE TEMP TABLE l_current AS
 SELECT * FROM (
     SELECT b.id AS boundary_id,
-           b.admin_level AS level,
+           b.level,
            t.qk AS tile_qk,
            ST_Intersection(b.geometry, qk_env(t.qk)) AS geom
     FROM bnd.places b

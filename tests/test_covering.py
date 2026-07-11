@@ -45,7 +45,11 @@ from garganorn.stages import quadkey_to_bbox
 # ---------------------------------------------------------------------------
 
 _COVERING_TEST_BOUNDARIES = [
-    # (id, admin_level, wkt, min_lat, min_lon, max_lat, max_lon)
+    # (id, level, wkt, min_lat, min_lon, max_lat, max_lon)
+    # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
+    # country=10, region=25, locality=50. cov_continent has no vocabulary entry
+    # (§A.3: continent has no producer entry); 0 is a synthetic sentinel kept only
+    # to preserve this pre-built boundaries.duckdb-shaped fixture's ascending order.
     (
         "cov_continent",
         0,
@@ -54,19 +58,19 @@ _COVERING_TEST_BOUNDARIES = [
     ),
     (
         "cov_country",
-        1,
+        10,
         "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
         24.0, -125.0, 50.0, -66.0,
     ),
     (
         "cov_region",
-        2,
+        25,
         "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
         34.0, -125.0, 42.0, -118.0,
     ),
     (
         "cov_locality",
-        3,
+        50,
         "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
         37.6, -122.55, 37.85, -122.3,
     ),
@@ -81,17 +85,17 @@ def _create_covering_test_db(db_path):
         CREATE TABLE places (
             id VARCHAR,
             geometry GEOMETRY,
-            admin_level INTEGER,
+            level INTEGER,
             min_latitude DOUBLE,
             max_latitude DOUBLE,
             min_longitude DOUBLE,
             max_longitude DOUBLE
         )
     """)
-    for bid, admin_level, wkt, min_lat, min_lon, max_lat, max_lon in _COVERING_TEST_BOUNDARIES:
+    for bid, level, wkt, min_lat, min_lon, max_lat, max_lon in _COVERING_TEST_BOUNDARIES:
         conn.execute(
             "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            [bid, wkt, admin_level, min_lat, max_lat, min_lon, max_lon],
+            [bid, wkt, level, min_lat, max_lat, min_lon, max_lon],
         )
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
@@ -364,22 +368,32 @@ class TestStageCoveringSchema:
                 f"{fname}: rows not sorted by (tile_qk, boundary_id)"
             )
 
-    def test_level_equals_boundary_admin_level(self, covering_dir, covering_test_db):
+    def test_level_equals_boundary_vocab_level(self, covering_dir, covering_test_db):
+        """covering.level must equal bnd.places.level (the atgeo vocabulary value).
+
+        phase2b-design.md §A.7(B): the OLD invariant (level == raw admin_level) is
+        replaced. covering_seed.sql:21 now selects b.level directly (the vocabulary
+        column already produced by the import CTAS from subtype), so this fixture's
+        bnd.places.level values (garganorn.levels.LEVEL_VOCAB-derived, set in
+        _COVERING_TEST_BOUNDARIES) are themselves the expected values -- the
+        covering-seed copy must reproduce them verbatim, with no admin_level
+        involved anywhere in the path.
+        """
         _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         con.execute(f"ATTACH '{covering_test_db}' AS bnd (READ_ONLY)")
         mismatches = con.execute(
             """
-            SELECT c.boundary_id, c.level, b.admin_level
+            SELECT c.boundary_id, c.level, b.level
             FROM read_parquet(?) c
             JOIN bnd.places b ON b.id = c.boundary_id
-            WHERE c.level IS DISTINCT FROM b.admin_level
+            WHERE c.level IS DISTINCT FROM b.level
             """,
             [parquets],
         ).fetchall()
         assert len(mismatches) == 0, (
-            f"level != admin_level for {len(mismatches)} covering rows: {mismatches[:3]}"
+            f"level != bnd.places.level for {len(mismatches)} covering rows: {mismatches[:3]}"
         )
 
     def test_meta_json_written_last_with_params(self, covering_dir):

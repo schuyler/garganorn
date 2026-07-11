@@ -20,16 +20,27 @@ import duckdb
 
 
 def canonical_tile(gz_path):
-    """Read a .json.gz tile, sort records by rkey, return canonical JSON string.
+    """Read a .json.gz tile, sort records by value.rkey, return canonical JSON string.
 
-    Records are sorted by their "rkey" (missing rkey sorts as empty string).
-    Keys are sorted and whitespace is stripped so the string is stable across
-    runs that differ only in ordering.
+    Records are atgeo v1 {uri, cid, value}-wrapped; sorted by their
+    value["rkey"] (missing rkey sorts as empty string). Tile-level
+    `generated_at` is stripped -- it is a run-scoped timestamp (§B.4), not a
+    value difference. Keys are sorted and whitespace is stripped so the
+    string is stable across runs that differ only in ordering.
     """
+    def _sort_key(r):
+        # New envelope: {uri, cid, value: {..., rkey, ...}}. Old (pre-§B)
+        # shape: flat record dict with a top-level rkey. Fall back to the
+        # top-level key so captures of either shape canonicalize correctly.
+        if "value" in r:
+            return r["value"].get("rkey", "")
+        return r.get("rkey", "")
+
     with gzip.open(gz_path) as f:
         obj = json.load(f)
+    obj.pop("generated_at", None)
     if "records" in obj:
-        obj["records"] = sorted(obj["records"], key=lambda r: r.get("rkey", ""))
+        obj["records"] = sorted(obj["records"], key=_sort_key)
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 

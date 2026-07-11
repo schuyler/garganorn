@@ -26,7 +26,9 @@ from pathlib import Path
 
 import duckdb
 
+from garganorn import envelope
 from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
+from garganorn.levels import LEVEL_VOCAB, level_case_sql
 
 log = logging.getLogger(__name__)
 
@@ -401,24 +403,28 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
     log.info("export: %d tiles to write", total_tiles)
     con.execute(sql)
     con.execute("SET enable_progress_bar = false")
-    cursor = con.execute("SELECT tile_qk, record_json FROM tile_export ORDER BY tile_qk")
+    cursor = con.execute("SELECT tile_qk, rkey, record_json FROM tile_export ORDER BY tile_qk")
+
+    source_cls = _SOURCES[source]
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def flush_tile(qk, records):
-        # records are DuckDB to_json()::VARCHAR strings — already valid JSON.
-        # String concatenation avoids json.loads/json.dumps overhead.
-        # EXPORT-14: Use json.dumps() for proper escaping of attribution string.
-        joined = ",".join(records)
-        source_cls = _SOURCES[source]
-        # Build payload dict and serialize with json.dumps() to handle special chars
-        payload_dict = {
-            "collection": source_cls.collection,
-            "attribution": source_cls.attribution,
-            "records": json.loads(f"[{joined}]")  # Parse joined JSON strings back to list
-        }
-        payload = json.dumps(payload_dict)
+        # records are (rkey, record_json) pairs; record_json is a DuckDB
+        # to_json()::VARCHAR string — already valid JSON. wrap_record composes
+        # the {uri, cid, value} envelope via string concatenation, avoiding a
+        # per-record json.loads/json.dumps round trip (§B.7.1).
+        wrapped = [
+            envelope.wrap_record(
+                envelope.record_uri(REPO, source_cls.collection, rkey), record_json
+            )
+            for rkey, record_json in records
+        ]
+        payload = envelope.build_tile_payload(
+            source_cls.collection, source_cls.attribution, generated_at, wrapped
+        )
         subdir = os.path.join(output_dir, qk[:6])
         os.makedirs(subdir, exist_ok=True)
-        compressed = gzip.compress(payload.encode("utf-8"), mtime=0)
+        compressed = gzip.compress(payload, mtime=0)
         with open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
             f.write(compressed)
         return (qk, len(records))
@@ -441,7 +447,7 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
             batch = cursor.fetchmany(1000)
             if not batch:
                 break
-            for tile_qk, record_json in batch:
+            for tile_qk, rkey, record_json in batch:
                 if tile_qk != current_qk:
                     if current_qk is not None:
                         if len(futures) >= max_inflight:
@@ -449,7 +455,7 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
                         futures.append(executor.submit(flush_tile, current_qk, accumulated))
                     current_qk = tile_qk
                     accumulated = []  # rebind, not .clear() — workers hold a ref to the old list
-                accumulated.append(record_json)
+                accumulated.append((rkey, record_json))
 
         if current_qk is not None:
             futures.append(executor.submit(flush_tile, current_qk, accumulated))
@@ -462,7 +468,8 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
     return manifest
 
 
-def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: str) -> None:
+def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: str,
+                      *, generated_at: str = None) -> None:
     """Phase 2: write manifest.duckdb from a tile_assignments parquet file.
 
     Reads tile_assignments from parquet (no open working connection required).
@@ -473,7 +480,13 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         tile_assignments_parquet: Path to tile_assignments.parquet artifact.
         output_dir: Directory where manifest.duckdb will be written.
         source: Source key (foursquare, overture_place, osm, overture_division).
+        generated_at: RFC 3339 Z run-scoped timestamp shared with the tiles and
+            manifest.json (§B.4, §B.6). Defaults to the current time if omitted
+            (legacy/test callers that don't thread a run timestamp).
     """
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    source_cls = _SOURCES[source]
     manifest_path = os.path.join(output_dir, "manifest.duckdb")
     tmp_path = manifest_path + ".tmp"
     if os.path.exists(tmp_path):
@@ -502,20 +515,27 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
             """)
         con.execute("""
             CREATE TABLE manifest.metadata AS
-            SELECT ? AS source, ? AS generated_at
-        """, [source, datetime.now(timezone.utc).isoformat()])
+            SELECT ? AS atgeo, ? AS source, ? AS collection, ? AS generated_at
+        """, [envelope.ATGEO_VERSION, source, source_cls.collection, generated_at])
         con.execute("DETACH manifest")
     finally:
         con.close()
     os.rename(tmp_path, manifest_path)
 
 
-def write_manifest(manifest, output_dir, source):
-    data = {
-        "source": source,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-        "quadkeys": sorted(manifest.keys()),
-    }
+def write_manifest(manifest, output_dir, source, *, generated_at):
+    """Write manifest.json in the atgeo v1 envelope shape (§B.2c, §B.6).
+
+    generated_at is required-keyword: callers must supply the single
+    run-scoped timestamp shared with every tile and manifest.duckdb (§B.4).
+    collection/attribution are resolved from _SOURCES[source] internally,
+    same as flush_tile.
+    """
+    source_cls = _SOURCES[source]
+    data = envelope.build_manifest(
+        source, source_cls.collection, source_cls.attribution,
+        generated_at, list(manifest.keys()),
+    )
     manifest_path = os.path.join(output_dir, "manifest.json")
     tmp_path = manifest_path + ".tmp"
     with open(tmp_path, "w") as f:
@@ -671,6 +691,12 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
             "NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
         )
 
+    # Render the subtype -> level CASE from garganorn.levels.LEVEL_VOCAB (the
+    # single source of truth, phase2b-design.md §A.3) so SQL and Python can't
+    # drift. NO ELSE branch: an unmapped subtype must yield NULL (§A.6
+    # belt-and-braces), caught by the fail-loud validator below.
+    level_case = level_case_sql()
+
     # Read and transform import SQL for Phase 2:
     #   - Remove "DROP TABLE IF EXISTS places;" (no places table on fresh connection)
     #   - Rename "CREATE TABLE places AS" → "CREATE TEMP TABLE division_all AS"
@@ -686,6 +712,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     sql = sql.replace("${ymax}", str(ymax))
     sql = sql.replace("${density_norm}", str(density_norm))
     sql = sql.replace("${pop_norm}", str(pop_norm))
+    sql = sql.replace("${level_case}", level_case)
     sql = sql.replace("DROP TABLE IF EXISTS places;\n", "")
     sql = sql.replace("CREATE TABLE places AS\n", "CREATE TEMP TABLE division_all AS\n")
 
@@ -712,6 +739,36 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         log.info("[overture_division] import: %d rows loaded (%.1fs)",
                  count, time.monotonic() - t0)
 
+        # Fail-loud enforcement (phase2b-design.md §A.6): every division subtype
+        # must be a known LEVEL_VOCAB key. Runs after the CTAS and before any
+        # artifact write (before the COPY and the boundaries.duckdb ATTACH) so
+        # a bad release never produces partial output. Never default or guess.
+        placeholders = ",".join("?" * len(LEVEL_VOCAB))
+        unmapped = con.execute(f"""
+            SELECT DISTINCT subtype FROM division_all
+            WHERE subtype IS NULL OR subtype NOT IN ({placeholders})
+        """, list(LEVEL_VOCAB)).fetchall()
+        if unmapped:
+            raise RuntimeError(
+                f"overture_division import: unmapped division subtype(s) "
+                f"{sorted(s for (s,) in unmapped)}; the atgeo level vocabulary "
+                f"(atgeo-appview-sdk-design.md §1.7) must be amended before import. "
+                f"Never default or guess."
+            )
+
+        # Belt-and-braces (§A.6): the ${level_case} CASE has no ELSE branch, so
+        # an unmapped subtype would already have raised above; this assertion
+        # confirms level is total regardless.
+        null_level_count = con.execute(
+            "SELECT count(*) FROM division_all WHERE level IS NULL"
+        ).fetchone()[0]
+        if null_level_count != 0:
+            raise RuntimeError(
+                f"overture_division import: {null_level_count} division_all rows "
+                f"have a NULL level after the level_case CASE; this should be "
+                f"unreachable once the fail-loud subtype check above passes."
+            )
+
         # Step 2: COPY places artifact (geometry excluded, qk17-sorted)
         con.execute(
             f"COPY ("
@@ -729,16 +786,19 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
 
         con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
         try:
+            # Filter threshold expressed via LEVEL_VOCAB['locality'] so it can't
+            # drift from the vocabulary (phase2b-design.md §A.5): country (10)
+            # through locality (50) inclusive; hoods (>= 55) excluded.
+            assert LEVEL_VOCAB['locality'] == 50
             con.execute(f"""
                 CREATE TABLE bnd.places AS
-                SELECT id, geometry, admin_level,
+                SELECT id, geometry, level,
                        names, subtype, country, region, wikidata, population,
                        min_latitude, max_latitude,
                        min_longitude, max_longitude,
                        importance, variants
                 FROM division_all
-                WHERE admin_level BETWEEN 0 AND 2
-                   OR subtype = 'locality'
+                WHERE level <= 50
                 ORDER BY ST_Hilbert(geometry,
                     {{'min_x': -180.0, 'min_y': -90.0,
                       'max_x': 180.0, 'max_y': 90.0}}::BOX_2D)
@@ -1222,7 +1282,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                  containment_dir: str, tiles_root: str, t0: float,
                  export_workers: int = None,
                  memory_limit: str = "48GB",
-                 force: bool = False) -> str:
+                 force: bool = False,
+                 now: datetime | None = None) -> str:
     """Phase 2: export tiles from parquet artifacts (§3.6).
 
     Reads places and tile_assignments from parquet artifacts. Builds a
@@ -1239,6 +1300,11 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         export_workers: Thread count for tile gzip compression.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         force: If True, bypass freshness gate. Default False.
+        now: Optional aware UTC datetime for deterministic-timestamp injection
+            (§B.4). When provided, it names the run dir AND derives the
+            shared generated_at RFC 3339 Z string stamped into every tile,
+            manifest.json, and manifest.duckdb metadata. Defaults to
+            datetime.now(timezone.utc) when omitted.
 
     Returns:
         str: Path to the run directory created (or existing if fresh and not forced).
@@ -1274,8 +1340,13 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                     log.info("[%s] export: removed incomplete run dir %s", source, entry)
 
     # Step 3: Create new timestamped run dir
+    # One timestamp, threaded to both the run-dir name and generated_at
+    # (§B.4 point 1) — fixes the double-now() drift where the run dir and
+    # manifest generated_at could straddle a clock tick under the old code.
     os.makedirs(tiles_root, exist_ok=True)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+    run_now = now if now is not None else datetime.now(timezone.utc)
+    timestamp = run_now.strftime("%Y%m%dT%H%M%S")
+    generated_at = run_now.strftime("%Y-%m-%dT%H:%M:%SZ")
     run_dir = os.path.join(tiles_root, timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -1323,27 +1394,37 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         ).fetchone()[0]
         log.info("[%s] export: %d tiles to write", source, tile_count)
 
-        # Step 6: Stream cursor with 3 columns for determinism (§9.1)
+        # Step 6: Stream cursor with 4 columns for determinism (§9.1)
         # ORDER BY (tile_qk, place_id) makes per-run output byte-identical.
+        # place_id is retained solely as the deterministic sort key; rkey is
+        # the record's post-transform key used for the {uri, cid, value} wrap.
         cursor = con.execute(
-            "SELECT tile_qk, place_id, record_json FROM tile_export "
+            "SELECT tile_qk, place_id, rkey, record_json FROM tile_export "
             "ORDER BY tile_qk, place_id"
         )
 
         source_cls = _SOURCES[source]
 
         def flush_tile(qk, records):
-            """Compress and write one tile's records to disk. Records are JSON strings."""
-            joined = ",".join(records)
-            payload_dict = {
-                "collection": source_cls.collection,
-                "attribution": source_cls.attribution,
-                "records": json.loads(f"[{joined}]"),
-            }
-            payload = json.dumps(payload_dict)
+            """Compress and write one tile's records to disk.
+
+            records are (rkey, record_json) pairs; record_json is a DuckDB
+            to_json()::VARCHAR string. wrap_record composes the {uri, cid,
+            value} envelope via string concatenation (§B.7.1) — no per-record
+            json.loads/json.dumps round trip.
+            """
+            wrapped = [
+                envelope.wrap_record(
+                    envelope.record_uri(REPO, source_cls.collection, rkey), record_json
+                )
+                for rkey, record_json in records
+            ]
+            payload = envelope.build_tile_payload(
+                source_cls.collection, source_cls.attribution, generated_at, wrapped
+            )
             subdir = os.path.join(run_dir, qk[:6])
             os.makedirs(subdir, exist_ok=True)
-            compressed = gzip.compress(payload.encode("utf-8"), mtime=0)
+            compressed = gzip.compress(payload, mtime=0)
             with open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
                 f.write(compressed)
             return (qk, len(records))
@@ -1364,7 +1445,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                 batch = cursor.fetchmany(1000)
                 if not batch:
                     break
-                for tile_qk, place_id, record_json in batch:
+                for tile_qk, place_id, rkey, record_json in batch:
                     if tile_qk != current_qk:
                         if current_qk is not None:
                             if len(futures) >= max_inflight:
@@ -1372,7 +1453,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                             futures.append(executor.submit(flush_tile, current_qk, accumulated))
                         current_qk = tile_qk
                         accumulated = []
-                    accumulated.append(record_json)
+                    accumulated.append((rkey, record_json))
 
             if current_qk is not None:
                 futures.append(executor.submit(flush_tile, current_qk, accumulated))
@@ -1389,8 +1470,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
              time.monotonic() - t0)
 
     # Step 7: Manifests in completion order — manifest.json lands LAST as completeness marker
-    write_manifest_db(tile_assignments_parquet, run_dir, source)
-    write_manifest(manifest, run_dir, source)
+    write_manifest_db(tile_assignments_parquet, run_dir, source, generated_at=generated_at)
+    write_manifest(manifest, run_dir, source, generated_at=generated_at)
 
     # Step 8: Symlink swap — atomic on POSIX via tmp-symlink + rename
     link_path = os.path.join(tiles_root, "current")

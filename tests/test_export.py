@@ -420,13 +420,13 @@ class TestExportTiles:
         from garganorn.quadtree import export_tiles
 
         # Build two synthetic tile rows that a real cursor would return.
+        # record_json is the FLAT record shape (as tile_export SQL views emit
+        # it, §B.7.2); export_tiles wraps each with envelope.wrap_record.
         tile_qk_a = "023130" + "0" * 11  # 17-char quadkey
         tile_qk_b = "023130" + "1" * 11
-        record_a = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001",
-                                "value": {"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"}})
-        record_b = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq002",
-                                "value": {"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"}})
-        all_rows = [(tile_qk_a, record_a), (tile_qk_b, record_b)]
+        record_a = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"})
+        record_b = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"})
+        all_rows = [(tile_qk_a, "fsq001", record_a), (tile_qk_b, "fsq002", record_b)]
 
         # Mock cursor: fetchmany returns rows in one batch, then [].
         # fetchall raises AssertionError so the test fails immediately if called.
@@ -444,7 +444,7 @@ class TestExportTiles:
         output_dir.mkdir()
 
         # Patch the SQL file read so we don't need the actual SQL file on disk.
-        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
             export_tiles(mock_con, str(output_dir), "foursquare")
 
@@ -471,8 +471,10 @@ class TestExportTiles:
         )
         assert isinstance(envelope["records"], list), "'records' must be a list"
         for item in envelope["records"]:
-            assert "uri" in item, f"Record item missing 'uri': {list(item)}"
-            assert "value" in item, f"Record item missing 'value': {list(item)}"
+            assert set(item.keys()) == {"uri", "cid", "value"}, (
+                f"Record item must be exactly {{uri, cid, value}}; got {list(item)}"
+            )
+            assert item["cid"] is None
 
     def test_progress_log_format_no_total(self, tmp_path):
         """Progress log at 1000-tile boundary must NOT include a total tile count.
@@ -489,11 +491,11 @@ class TestExportTiles:
         # Build 1000 synthetic tile rows to trigger a progress log.
         # Each row has a UNIQUE tile_qk so we get 1000 distinct tiles — the
         # tile_count % 1000 boundary fires when tile_count reaches 1000.
+        # record_json is the FLAT record shape (§B.7.2); export_tiles wraps it.
         def _make_row(i):
             qk = f"02313{i:012d}"  # unique quadkey per row
-            payload = json.dumps({"uri": f"https://example.com/{i}",
-                                   "value": {"$type": "org.atgeo.place", "rkey": str(i), "name": f"Place {i}"}})
-            return (qk, payload)
+            payload = json.dumps({"$type": "org.atgeo.place", "rkey": str(i), "name": f"Place {i}"})
+            return (qk, str(i), payload)
 
         all_rows = [_make_row(i) for i in range(1000)]
 
@@ -509,7 +511,7 @@ class TestExportTiles:
         output_dir = tmp_path / "output_log_format"
         output_dir.mkdir()
 
-        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
         captured_messages = []
 
         class _CapturingHandler(logging.Handler):
@@ -567,9 +569,8 @@ class TestExportTiles:
         from garganorn.quadtree import export_tiles
 
         tile_qk = "023130" + "0" * 11
-        payload = json.dumps({"uri": "https://example.com/fsq001",
-                               "value": {"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test"}})
-        all_rows = [(tile_qk, payload)]
+        payload = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test"})
+        all_rows = [(tile_qk, "fsq001", payload)]
 
         mock_cursor = MagicMock()
         mock_cursor.fetchmany.side_effect = [all_rows, []]
@@ -581,7 +582,7 @@ class TestExportTiles:
         output_dir = tmp_path / "output_postloop_log"
         output_dir.mkdir()
 
-        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
         captured_messages = []
 
         class _CapturingHandler(logging.Handler):
@@ -627,7 +628,15 @@ class TestExportTiles:
         )
 
     def test_python_groups_records_by_tile_qk(self, tmp_path):
-        """export_tiles groups per-record rows by tile_qk into separate .json.gz files."""
+        """export_tiles groups per-record rows by tile_qk into separate .json.gz files.
+
+        Retargeted onto the atgeo v1 envelope (phase2b-design.md §B.7.4: legacy
+        export_tiles() is retargeted onto the same envelope.py helpers as
+        stage_export in this change set, not deleted). The mock cursor now
+        yields a third `rkey` column (§B.7.2: all four export SQL views gain
+        an rkey output column), and each written record must be
+        {uri, cid, value}-wrapped, not flat.
+        """
         from unittest.mock import MagicMock, patch
         from garganorn.quadtree import export_tiles
 
@@ -636,7 +645,7 @@ class TestExportTiles:
         rec1 = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "A1"})
         rec2 = json.dumps({"$type": "org.atgeo.place", "rkey": "2", "name": "A2"})
         rec3 = json.dumps({"$type": "org.atgeo.place", "rkey": "3", "name": "B1"})
-        all_rows = [(qk_a, rec1), (qk_a, rec2), (qk_b, rec3)]
+        all_rows = [(qk_a, "1", rec1), (qk_a, "2", rec2), (qk_b, "3", rec3)]
 
         mock_cursor = MagicMock()
         mock_cursor.fetchmany.side_effect = [all_rows, []]
@@ -646,7 +655,8 @@ class TestExportTiles:
         output_dir = tmp_path / "output_group"
         output_dir.mkdir()
 
-        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+        with patch("pathlib.Path.read_text",
+                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
             result = export_tiles(mock_con, str(output_dir), "foursquare")
 
         assert len(result) == 2, f"Expected 2 tiles, got {len(result)}"
@@ -659,14 +669,18 @@ class TestExportTiles:
         for gz in gz_files:
             with gzip.open(gz, "rt") as f:
                 data = json.load(f)
+            assert data.get("atgeo") == 1, f"envelope must have atgeo == 1; got keys {list(data)}"
             assert "attribution" in data
             assert "collection" in data
+            assert "generated_at" in data
             assert "records" in data
             assert isinstance(data["records"], list)
             for rec in data["records"]:
-                assert "uri" not in rec
-                assert "value" not in rec
-                assert "$type" in rec
+                assert set(rec.keys()) == {"uri", "cid", "value"}, (
+                    f"record must be {{uri, cid, value}}-wrapped; got {list(rec)}"
+                )
+                assert rec["cid"] is None
+                assert "$type" in rec["value"]
 
     def test_attribution_in_envelope(self, tmp_path):
         """export_tiles writes attribution from SOURCES[source].attribution into the envelope."""
@@ -677,14 +691,15 @@ class TestExportTiles:
         rec = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "Test"})
 
         mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [[(qk, rec)], []]
+        mock_cursor.fetchmany.side_effect = [[(qk, "1", rec)], []]
         mock_con = MagicMock()
         mock_con.execute.return_value = mock_cursor
 
         output_dir = tmp_path / "output_attr"
         output_dir.mkdir()
 
-        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+        with patch("pathlib.Path.read_text",
+                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
             export_tiles(mock_con, str(output_dir), "foursquare")
 
         gz_files = list(output_dir.rglob("*.json.gz"))
@@ -704,7 +719,7 @@ class TestExportTiles:
         )
 
     def test_single_record_tile(self, tmp_path):
-        """A tile with exactly one record is correctly written."""
+        """A tile with exactly one {uri, cid, value}-wrapped record is correctly written."""
         from unittest.mock import MagicMock, patch
         from garganorn.quadtree import export_tiles
 
@@ -712,14 +727,15 @@ class TestExportTiles:
         rec = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "Solo"})
 
         mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [[(qk, rec)], []]
+        mock_cursor.fetchmany.side_effect = [[(qk, "1", rec)], []]
         mock_con = MagicMock()
         mock_con.execute.return_value = mock_cursor
 
         output_dir = tmp_path / "output_single"
         output_dir.mkdir()
 
-        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+        with patch("pathlib.Path.read_text",
+                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
             result = export_tiles(mock_con, str(output_dir), "foursquare")
 
         assert result == {qk: 1}, f"Expected {{qk: 1}}, got {result}"
@@ -729,8 +745,12 @@ class TestExportTiles:
         with gzip.open(gz_files[0], "rt") as f:
             data = json.load(f)
         assert len(data["records"]) == 1
-        assert data["records"][0]["rkey"] == "1"
-        assert data["records"][0]["name"] == "Solo"
+        wrapped = data["records"][0]
+        assert set(wrapped.keys()) == {"uri", "cid", "value"}
+        assert wrapped["cid"] is None
+        assert wrapped["value"]["rkey"] == "1"
+        assert wrapped["value"]["name"] == "Solo"
+        assert wrapped["uri"].endswith("/1")
 
     def test_tile_boundary_across_fetchmany_batches(self, tmp_path):
         """Tile spanning two fetchmany batches is written correctly."""
@@ -747,8 +767,8 @@ class TestExportTiles:
         # batch 2: second record of qk_a + first record of qk_b (forces boundary split)
         mock_cursor = MagicMock()
         mock_cursor.fetchmany.side_effect = [
-            [(qk_a, rec1)],
-            [(qk_a, rec2), (qk_b, rec3)],
+            [(qk_a, "1", rec1)],
+            [(qk_a, "2", rec2), (qk_b, "3", rec3)],
             [],
         ]
         mock_con = MagicMock()
@@ -757,7 +777,8 @@ class TestExportTiles:
         output_dir = tmp_path / "output_boundary"
         output_dir.mkdir()
 
-        with patch("pathlib.Path.read_text", return_value="SELECT tile_qk, record_json FROM tile_export"):
+        with patch("pathlib.Path.read_text",
+                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
             result = export_tiles(mock_con, str(output_dir), "foursquare")
 
         assert result[qk_a] == 2, f"qk_a must have 2 records (spanning batches); got {result[qk_a]}"
@@ -771,20 +792,28 @@ class TestExportTiles:
             assert len(data["records"]) == expected_count, (
                 f"{qk} tile: expected {expected_count} records, got {len(data['records'])}"
             )
+            for wrapped in data["records"]:
+                assert set(wrapped.keys()) == {"uri", "cid", "value"}
+                assert wrapped["cid"] is None
 
     def test_flush_tile_no_json_loads(self, tmp_path):
-        """flush_tile must not call json.loads — records are already valid JSON strings."""
+        """flush_tile must not call json.loads on the per-record JSON — records
+        are already valid JSON strings that envelope.wrap_record composes via
+        string concatenation (§B.7.1), not a parse/reserialize round trip.
+
+        record_json rows are the FLAT record shape (as tile_export SQL views
+        emit them, §B.7.2); export_tiles wraps each with envelope.wrap_record
+        before writing, producing {uri, cid, value} entries in the output.
+        """
         import gzip as _gzip
         from unittest.mock import MagicMock, patch
         from garganorn.quadtree import export_tiles
 
         qk_a = "023130" + "0" * 11
         qk_b = "023131" + "0" * 11
-        record_a = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001",
-                                "value": {"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"}})
-        record_b = json.dumps({"uri": "https://places.atgeo.org/org.atgeo.places.foursquare/fsq002",
-                                "value": {"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"}})
-        all_rows = [(qk_a, record_a), (qk_b, record_b)]
+        record_a = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"})
+        record_b = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"})
+        all_rows = [(qk_a, "fsq001", record_a), (qk_b, "fsq002", record_b)]
 
         mock_cursor = MagicMock()
         mock_cursor.fetchmany.side_effect = [all_rows, []]
@@ -798,7 +827,7 @@ class TestExportTiles:
         output_dir = tmp_path / "output_no_json_loads"
         output_dir.mkdir()
 
-        fake_sql = "SELECT tile_qk, record_json FROM tile_export"
+        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
             export_tiles(mock_con, str(output_dir), "foursquare")
 
@@ -817,8 +846,10 @@ class TestExportTiles:
             )
             assert isinstance(envelope["records"], list), "'records' must be a list"
             for item in envelope["records"]:
-                assert "uri" in item, f"Record item missing 'uri': {list(item)}"
-                assert "value" in item, f"Record item missing 'value': {list(item)}"
+                assert set(item.keys()) == {"uri", "cid", "value"}, (
+                    f"Record item must be exactly {{uri, cid, value}}; got {list(item)}"
+                )
+                assert item["cid"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1042,7 +1073,8 @@ class TestOvertureExportTiles:
 # ---------------------------------------------------------------------------
 
 # The four division boundaries that contain SF places (lat ~37.77, lon ~-122.42),
-# ordered by admin_level ascending (continent first — matches ORDER BY admin_level ASC).
+# ordered by level ascending (continent first — matches ORDER BY level ASC;
+# garganorn.levels.LEVEL_VOCAB, phase2b-design.md §A.7c).
 _SF_WITHIN_JSON = json.dumps({
     "within": [
         {"rkey": "org.atgeo.places.overture.division:div_continent_na"},
@@ -1442,12 +1474,12 @@ class TestContainmentInExport:
 
         The SF test point (37.7749, -122.4194) falls inside all four division boundaries
         defined in conftest.py::DIVISION_BOUNDARIES that cover North America:
-          - div_continent_na (admin_level 0): bbox [20,-130] to [55,-60]
-          - div_country_us   (admin_level 1): bbox [24,-125] to [50,-66]
-          - div_region_ca    (admin_level 2): bbox [34,-125] to [42,-118]
-          - div_locality_sf  (admin_level 3): bbox [37.6,-122.55] to [37.85,-122.3]
+          - div_continent_na (level 0): bbox [20,-130] to [55,-60]
+          - div_country_us   (level 10): bbox [24,-125] to [50,-66]
+          - div_region_ca    (level 25): bbox [34,-125] to [42,-118]
+          - div_locality_sf  (level 50): bbox [37.6,-122.55] to [37.85,-122.3]
 
-        div_borough_manhattan (admin_level 4) does NOT contain the SF point,
+        div_borough_manhattan (level 50) does NOT contain the SF point,
         so exactly 4 entries are expected and no more.
 
         This test passes NOW (current code uses ST_Contains with no bbox pre-filter)
@@ -2091,7 +2123,10 @@ class TestStageExportPhase2Body:
             (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
         NOT a read_parquet glob, which errors on DuckDB 1.2.1 when the glob matches nothing.
 
-        Fails RED because stage_export raises NotImplementedError.
+        Records are {uri, cid, value}-wrapped (§B.2b); relations lives on
+        value, not on the wrapper -- this FAILS against the current envelope
+        (records are still flat) because parsed.get("relations") reads the
+        wrapper (which has no 'relations' key) instead of value.
         """
         import os, time
         from pathlib import Path
@@ -2104,20 +2139,22 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        # FAILS RED: NotImplementedError
         stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
-        # After implementation: every record must have relations == {}
+        # Every record's value must have relations == {}
         gz_files = list(Path(tiles_root).rglob("*.json.gz"))
         assert gz_files, "stage_export must produce at least one .json.gz"
         for gz_file in gz_files:
             with gzip.open(gz_file) as f:
                 tile = json.loads(f.read())
             for rec in tile["records"]:
-                parsed = rec if isinstance(rec, dict) else json.loads(rec)
-                assert parsed.get("relations") == {}, (
+                assert set(rec.keys()) == {"uri", "cid", "value"}, (
+                    f"record must be {{uri, cid, value}}-wrapped; got {list(rec)}"
+                )
+                value = rec["value"]
+                assert value.get("relations") == {}, (
                     f"Empty containment must produce relations=={{}}; "
-                    f"got {parsed.get('relations')!r} for rkey {parsed.get('rkey')!r}"
+                    f"got {value.get('relations')!r} for rkey {value.get('rkey')!r}"
                 )
 
     # ------------------------------------------------------------------
@@ -2125,20 +2162,29 @@ class TestStageExportPhase2Body:
     # ------------------------------------------------------------------
 
     def test_determinism_two_exports_byte_identical(self, tmp_path):
-        """§7.5.1c: two exports from identical artifacts produce byte-identical .json.gz files.
+        """§7.5.1c / phase2b-design.md §6 item 7: two exports from identical
+        artifacts, with an injected fixed timestamp, produce byte-identical
+        .json.gz files.
 
         Pins the ORDER BY tile_qk, place_id invariant (spec §3.4 + §3.6 step 3).
         gzip mtime=0 is already set by the existing export_tiles implementation.
 
-        Fails RED because stage_export raises NotImplementedError.
+        Post-2b, tiles carry a run-scoped `generated_at` (§B.4); without
+        injecting the same `now` into both calls, two exports run at different
+        wall-clock seconds would legitimately differ in that one field, which
+        would make this test fail for a reason unrelated to the
+        ORDER BY/determinism property it exists to pin. Injecting `now` keeps
+        the test measuring the invariant it's named for.
         """
         import os, time
+        from datetime import datetime, timezone
         from pathlib import Path
         from garganorn.stages import stage_export
 
         places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
         t0 = time.monotonic()
+        fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
 
         # Two INDEPENDENT tiles_root dirs from identical input artifacts. Using
         # separate roots (rather than two runs into one root with force) avoids
@@ -2151,9 +2197,10 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root_a)
         os.makedirs(tiles_root_b)
 
-        # FAILS RED: NotImplementedError on the first call.
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_a, t0)
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_b, t0)
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
+                     now=fixed_now)
+        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_b, t0,
+                     now=fixed_now)
 
         def _collect_tile_bytes(root):
             """Return {rel_path: bytes} for all .json.gz files, relative to the run dir."""

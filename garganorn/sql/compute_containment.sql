@@ -56,7 +56,7 @@ matches AS (
 SELECT ta.tile_qk,
        m.place_id,
        to_json({within: list({rkey: '${collection_prefix}:' || m.boundary_id}
-                              ORDER BY m.level ASC)})::VARCHAR AS relations_json
+                              ORDER BY m.level ASC, m.boundary_id ASC)})::VARCHAR AS relations_json
 FROM matches m
 JOIN tile_assignments ta ON ta.place_id = m.place_id
 GROUP BY ta.tile_qk, m.place_id

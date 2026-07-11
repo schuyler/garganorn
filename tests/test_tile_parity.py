@@ -1,4 +1,14 @@
-"""Unit + integration tests for scripts/tile_parity.py."""
+"""Unit + integration tests for scripts/tile_parity.py.
+
+The "New envelope" section below (phase2b-design.md §6 item 7, §B.4 point 3)
+covers the canonicalizer update required for the atgeo v1 envelope: tiles now
+carry a top-level `generated_at` (not just manifest.json), and records are
+`{uri, cid, value}`-wrapped so the record sort/dedup key moves from top-level
+`rkey` to `value.rkey`. These tests FAIL against the current
+canonical_tile()/canonical_manifest(), which only strip manifest-level
+`generated_at` and sort/key records by top-level `rkey` — that is the RED
+signal for this feature; the fix belongs to scripts/tile_parity.py
+(production code, out of scope for this test-only change)."""
 import gzip
 import json
 import os
@@ -183,3 +193,111 @@ def test_cli_diff_difference_exits_nonzero(tmp_path):
     assert res.returncode == 1, f"stdout={res.stdout} stderr={res.stderr}"
     assert "023130" in res.stdout
     assert "r1" in res.stdout
+
+
+# ---------------------------------------------------------------------------
+# New envelope (phase2b-design.md §6 item 7, §B.4 point 3)
+#
+# atgeo v1 tiles carry {atgeo, collection, attribution, generated_at, records}
+# with records wrapped as {uri, cid, value}. canonical_tile() must (a) strip
+# the tile-level generated_at (not just the manifest's) and (b) sort/key
+# records by value.rkey rather than top-level rkey.
+# ---------------------------------------------------------------------------
+
+def _write_envelope_tile(tiles_dir, qk, wrapped_records, attribution="attr",
+                         collection="col", generated_at="2026-07-09T18:00:00Z"):
+    """Write a new-shape (atgeo v1) .json.gz tile.
+
+    wrapped_records: list of {"uri": ..., "cid": None, "value": {...}} dicts.
+    """
+    sub = os.path.join(tiles_dir, qk[:6])
+    os.makedirs(sub, exist_ok=True)
+    path = os.path.join(sub, qk + ".json.gz")
+    obj = {
+        "atgeo": 1, "collection": collection, "attribution": attribution,
+        "generated_at": generated_at, "records": wrapped_records,
+    }
+    with gzip.open(path, "wt") as f:
+        json.dump(obj, f)
+    return path
+
+
+def _wrapped(rkey, name, uri_prefix="https://places.atgeo.org/col"):
+    return {"uri": f"{uri_prefix}/{rkey}", "cid": None,
+            "value": {"rkey": rkey, "name": name}}
+
+
+class TestCanonicalTileNewEnvelope:
+    """canonical_tile() must strip tile-level generated_at and key records by value.rkey."""
+
+    def test_canonical_tile_strips_tile_level_generated_at(self, tmp_path):
+        """Two tiles identical except for tile-level generated_at canonicalize equal.
+
+        FAILS against current canonical_tile(): it has no knowledge of a
+        tile-level 'generated_at' key (only manifest.json's is stripped
+        elsewhere), so the differing timestamps make the canonical strings
+        differ.
+        """
+        a = _write_envelope_tile(str(tmp_path / "a"), "023130",
+                                 [_wrapped("r1", "one")], generated_at="2026-01-01T00:00:00Z")
+        b = _write_envelope_tile(str(tmp_path / "b"), "023130",
+                                 [_wrapped("r1", "one")], generated_at="2099-12-31T23:59:59Z")
+        assert tile_parity.canonical_tile(a) == tile_parity.canonical_tile(b), (
+            "canonical_tile must strip the tile-level 'generated_at' field so two "
+            "tiles differing only in run timestamp canonicalize identically (§B.4)"
+        )
+
+    def test_canonical_tile_sorts_by_value_rkey_when_reordered(self, tmp_path):
+        """Records reordered but keyed by value.rkey canonicalize equal.
+
+        FAILS against current canonical_tile(): it sorts by r.get("rkey", ""),
+        which is always "" for wrapped records (rkey lives at value.rkey), so
+        the sort is a no-op and reordering is not neutralized.
+        """
+        a = _write_envelope_tile(str(tmp_path / "a"), "023130",
+                                 [_wrapped("r1", "one"), _wrapped("r2", "two")])
+        b = _write_envelope_tile(str(tmp_path / "b"), "023130",
+                                 [_wrapped("r2", "two"), _wrapped("r1", "one")])
+        assert tile_parity.canonical_tile(a) == tile_parity.canonical_tile(b), (
+            "canonical_tile must sort wrapped records by value.rkey (§6 item 7)"
+        )
+
+    def test_canonical_tile_still_differs_on_value_change(self, tmp_path):
+        """A genuine value change is still detected after the value.rkey sort-key update."""
+        a = _write_envelope_tile(str(tmp_path / "a"), "023130", [_wrapped("r1", "one")])
+        b = _write_envelope_tile(str(tmp_path / "b"), "023130", [_wrapped("r1", "ONE")])
+        assert tile_parity.canonical_tile(a) != tile_parity.canonical_tile(b)
+
+
+class TestCliDiffNewEnvelope:
+    """End-to-end capture/diff round trip against new-envelope tiles."""
+
+    def test_cli_diff_identical_new_envelope_tiles_exits_zero(self, tmp_path):
+        """Two runs with identical new-envelope content but different
+        tile-level generated_at and record order must diff as identical.
+
+        FAILS against the current script for the same reasons as the unit
+        tests above: tile-level generated_at is not stripped and records
+        are not keyed by value.rkey.
+        """
+        src_a = str(tmp_path / "a_tiles")
+        src_b = str(tmp_path / "b_tiles")
+        _write_envelope_tile(src_a, "023130",
+                             [_wrapped("r1", "one"), _wrapped("r2", "two")],
+                             generated_at="2026-01-01T00:00:00Z")
+        _write_envelope_tile(src_b, "023130",
+                             [_wrapped("r2", "two"), _wrapped("r1", "one")],
+                             generated_at="2099-12-31T23:59:59Z")
+        _write_manifest(src_a, quadkeys=("023130",))
+        _write_manifest(src_b, quadkeys=("023130",))
+        _write_manifest_db(src_a, [("r1", "023130"), ("r2", "023130")])
+        _write_manifest_db(src_b, [("r1", "023130"), ("r2", "023130")])
+
+        cap_a = str(tmp_path / "a_cap")
+        cap_b = str(tmp_path / "b_cap")
+        assert _run_cli("capture", src_a, cap_a).returncode == 0
+        assert _run_cli("capture", src_b, cap_b).returncode == 0
+
+        res = _run_cli("diff", cap_a, cap_b)
+        assert res.returncode == 0, f"stdout={res.stdout} stderr={res.stderr}"
+        assert "OK: no differences" in res.stdout

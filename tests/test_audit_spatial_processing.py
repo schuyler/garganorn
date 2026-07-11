@@ -166,12 +166,14 @@ class TestSPATIAL5_InvalidGeometryFilter:
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
 
-        # Create a boundary table with geometries that produce degenerate intersections
+        # Create a boundary table with geometries that produce degenerate intersections.
+        # Column named `level` (not admin_level) to match the boundaries.duckdb
+        # `places` schema post phase2b-design.md §A.7b (atgeo level vocabulary).
         con.execute("""
             CREATE TABLE boundaries (
                 id VARCHAR,
                 geometry GEOMETRY,
-                admin_level INTEGER,
+                level INTEGER,
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
@@ -185,7 +187,7 @@ class TestSPATIAL5_InvalidGeometryFilter:
             INSERT INTO boundaries VALUES
             ('boundary_line',
              ST_GeomFromText('LINESTRING(-122.4194 37.7700, -122.4194 37.7800)'),
-             2, 37.77, 37.78, -122.42, -122.42)
+             25, 37.77, 37.78, -122.42, -122.42)
         """)
 
         # A valid polygon that properly overlaps the envelope with area > 0
@@ -193,7 +195,7 @@ class TestSPATIAL5_InvalidGeometryFilter:
             INSERT INTO boundaries VALUES
             ('boundary_valid',
              ST_GeomFromText('POLYGON((-122.43 37.76, -122.40 37.76, -122.40 37.79, -122.43 37.79, -122.43 37.76))'),
-             2, 37.76, 37.79, -122.43, -122.40)
+             25, 37.76, 37.79, -122.43, -122.40)
         """)
 
         # Define the tile envelope
@@ -204,7 +206,7 @@ class TestSPATIAL5_InvalidGeometryFilter:
         con.execute(f"""
             CREATE TEMP TABLE tile_boundaries AS
             SELECT * FROM (
-                SELECT id, admin_level,
+                SELECT id, level,
                        ST_Intersection(geometry, {envelope}) AS geometry
                 FROM boundaries
                 WHERE ST_Intersects(geometry, {envelope})

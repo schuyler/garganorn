@@ -2,6 +2,12 @@ CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
     ta.place_id,
+    CASE left(p.rkey, 1)
+        WHEN 'n' THEN 'node:' || substr(p.rkey, 2)
+        WHEN 'w' THEN 'way:' || substr(p.rkey, 2)
+        WHEN 'r' THEN 'relation:' || substr(p.rkey, 2)
+        ELSE p.rkey
+    END AS rkey,
     to_json({
         "$type": 'org.atgeo.place',
         rkey: CASE left(p.rkey, 1)

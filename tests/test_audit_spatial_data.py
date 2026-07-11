@@ -10,6 +10,8 @@ import tempfile
 import pytest
 import duckdb
 
+from garganorn.levels import level_case_sql
+
 
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 
@@ -234,6 +236,7 @@ class TestSpatial4BboxOverlapFilter:
                 "density_cte": density_cte,
                 "density_norm": 10.0,
                 "pop_norm": 15.0,
+                "level_case": level_case_sql(),
             }
             raw_sql = _load_sql("overture_division_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))

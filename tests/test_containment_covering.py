@@ -37,30 +37,37 @@ from garganorn.quadtree import run_pipeline
 _COLLECTION_PREFIX = "org.atgeo.places.overture.division"
 
 # Minimal boundaries DB schema (what bnd.places must look like for compute_containment)
+# level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
+# country=10, region=25, locality=50. div_continent_na and div_borough_manhattan
+# have no vocabulary entry among this fixture's modeled subtypes (continent has no
+# producer entry per §A.3; this fixture's "borough" is a locality-shaped boundary
+# used only to test partial containment, not vocabulary mapping) -- 0 and 50
+# respectively are chosen to preserve pre-existing ascending/partial-containment
+# behavior without asserting a specific subtype mapping for them.
 _SIMPLE_BOUNDARIES = [
-    # (id, admin_level, wkt, min_lat, min_lon, max_lat, max_lon)
+    # (id, level, wkt, min_lat, min_lon, max_lat, max_lon)
     (
         "div_continent_na", 0,
         "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
         20.0, -130.0, 55.0, -60.0,
     ),
     (
-        "div_country_us", 1,
+        "div_country_us", 10,
         "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
         24.0, -125.0, 50.0, -66.0,
     ),
     (
-        "div_region_ca", 2,
+        "div_region_ca", 25,
         "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
         34.0, -125.0, 42.0, -118.0,
     ),
     (
-        "div_locality_sf", 3,
+        "div_locality_sf", 50,
         "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
         37.6, -122.55, 37.85, -122.3,
     ),
     (
-        "div_borough_manhattan", 4,
+        "div_borough_manhattan", 50,
         "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
         40.68, -74.05, 40.88, -73.90,
     ),
@@ -74,17 +81,17 @@ def _create_simple_boundaries_db(db_path):
         CREATE TABLE places (
             id VARCHAR,
             geometry GEOMETRY,
-            admin_level INTEGER,
+            level INTEGER,
             min_latitude DOUBLE,
             max_latitude DOUBLE,
             min_longitude DOUBLE,
             max_longitude DOUBLE
         )
     """)
-    for bid, admin_level, wkt, min_lat, min_lon, max_lat, max_lon in _SIMPLE_BOUNDARIES:
+    for bid, level, wkt, min_lat, min_lon, max_lat, max_lon in _SIMPLE_BOUNDARIES:
         conn.execute(
             "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            [bid, wkt, admin_level, min_lat, max_lat, min_lon, max_lon],
+            [bid, wkt, level, min_lat, max_lat, min_lon, max_lon],
         )
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
@@ -254,11 +261,17 @@ class TestContainmentBehaviorPorts:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 2 — ordering: within by level ASC, NULL levels last (Phase 2 sig)
+# §7.2 item 2 — ordering: within by level ASC (Phase 2 sig).
+#
+# phase2b-design.md §A.7(B): the level vocabulary is total by construction
+# (garganorn.levels.LEVEL_VOCAB covers every subtype the fail-loud guard
+# admits), so "NULL levels sort last" is no longer a live case -- there are no
+# NULL levels to sort. See TestNoNullLevels below (§6 acceptance item 5),
+# which replaces the old NULL-levels-last test.
 # ---------------------------------------------------------------------------
 
 class TestContainmentOrdering:
-    """§7.2 item 2: within list ordered by level ASC; NULL admin_level rows last.
+    """§7.2 item 2: within list ordered by level ASC, ties broken by id.
 
     Ported to Phase 2 signature per §7.4.1.  Fails RED with TypeError.
     """
@@ -318,10 +331,17 @@ class TestContainmentOrdering:
                 f"continent (idx={continent_idx}) should come before locality (idx={locality_idx})"
             )
 
-    def test_null_admin_level_boundaries_last(self, tmp_path):
-        """Boundary with NULL admin_level appears after non-NULL levels in within.
+    def test_no_null_levels_in_boundaries_db(self, tmp_path):
+        """No boundary ever has a NULL level (repurposed from the old NULL-levels-last test).
 
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
+        phase2b-design.md §A.7(B): "NULL levels sort last" is void because level
+        is total by construction (§6 acceptance item 5, `count(*) WHERE level IS
+        NULL = 0` in `places`). A boundaries DB built directly (bypassing the
+        import CTAS + fail-loud guard) could still contain a NULL level if
+        hand-constructed, as this one deliberately does, to prove downstream
+        containment code must not special-case NULL levels: this boundary set
+        still resolves and orders correctly even though the level vocabulary
+        can never actually put a NULL there in production.
         """
         null_db_path = tmp_path / "null_level.duckdb"
         conn = duckdb.connect(str(null_db_path))
@@ -330,7 +350,7 @@ class TestContainmentOrdering:
             CREATE TABLE places (
                 id VARCHAR,
                 geometry GEOMETRY,
-                admin_level INTEGER,
+                level INTEGER,
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
@@ -340,7 +360,7 @@ class TestContainmentOrdering:
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_named', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
-                2, -10.0, 10.0, -10.0, 10.0
+                25, -10.0, 10.0, -10.0, 10.0
             )
         """)
         conn.execute("""
@@ -395,6 +415,36 @@ class TestContainmentOrdering:
                 assert named_idx < null_idx, (
                     "Non-NULL level boundary should appear before NULL level boundary in within"
                 )
+
+
+class TestNoNullLevels:
+    """§6 acceptance item 5 (combined checklist): count(*) WHERE level IS NULL = 0 in places.
+
+    Exercises the real overture_division import pipeline (division_parquet fixture,
+    tests/conftest.py) end to end: LEVEL_VOCAB maps every observed subtype
+    (country, region, locality in this fixture), so the resulting boundaries.duckdb
+    `places.level` column must be total -- zero NULLs -- once garganorn/levels.py
+    exists and the import CTAS derives level from subtype instead of carrying
+    raw (96%-NULL) admin_level through.
+    """
+
+    def test_places_level_has_no_nulls(self, division_parquet, tmp_path):
+        from garganorn import stages
+
+        output = str(tmp_path / "places.parquet")
+        bbox = (-122.55, 37.60, -122.30, 37.85)
+        stages.stage_import("overture_division", division_parquet, bbox, output)
+
+        boundaries = str(tmp_path / "boundaries.duckdb")
+        con = duckdb.connect()
+        con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
+        null_count = con.execute(
+            "SELECT count(*) FROM bnd.places WHERE level IS NULL"
+        ).fetchone()[0]
+        con.close()
+        assert null_count == 0, (
+            f"boundaries.duckdb places.level must never be NULL; found {null_count} NULL rows"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1014,7 +1064,7 @@ class TestAntimeridianEdgeArm:
             CREATE TABLE places (
                 id VARCHAR,
                 geometry GEOMETRY,
-                admin_level INTEGER,
+                level INTEGER,
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
@@ -1030,7 +1080,7 @@ class TestAntimeridianEdgeArm:
         )
         conn.execute(
             "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            ["ami_boundary", ami_wkt, 1, -15.0, 15.0, 170.0, -170.0],
+            ["ami_boundary", ami_wkt, 10, -15.0, 15.0, 170.0, -170.0],
         )
         # Non-antimeridian boundary covering the gap area around lon=0.
         # Ensures the gap place has a valid containment result (gap_boundary's rkey)
@@ -1039,7 +1089,7 @@ class TestAntimeridianEdgeArm:
         gap_wkt = "POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))"
         conn.execute(
             "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            ["gap_boundary", gap_wkt, 2, -10.0, 10.0, -10.0, 10.0],
+            ["gap_boundary", gap_wkt, 25, -10.0, 10.0, -10.0, 10.0],
         )
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
         conn.close()

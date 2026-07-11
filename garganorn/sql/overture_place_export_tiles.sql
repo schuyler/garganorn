@@ -21,6 +21,7 @@ CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
     ta.place_id,
+    p.id AS rkey,
     to_json({
         "$type": 'org.atgeo.place',
         rkey: p.id,

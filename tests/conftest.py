@@ -526,8 +526,15 @@ from garganorn.boundaries import BoundaryLookup
 # Division boundary test data (Overture divisions schema)
 # ---------------------------------------------------------------------------
 
-# id, admin_level, wkt_geom, min_lat, min_lon, max_lat, max_lon,
+# id, level, wkt_geom, min_lat, min_lon, max_lat, max_lon,
 #   names (dict or None), subtype, country, region, wikidata, population, importance, variants
+#
+# level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB),
+# not raw Overture admin_level. div_continent_na has subtype=None (continent has
+# no producer entry per phase2b-design.md \u00a7A.3 -- level 0 is a synthetic sentinel
+# above country=10, chosen only to keep this pre-built boundaries.duckdb-shaped
+# fixture's ascending order; the real import pipeline never emits it since
+# admin_level's continent row (subtype NULL) would trip the fail-loud guard).
 DIVISION_BOUNDARIES = [
     (
         "div_continent_na", 0,
@@ -538,7 +545,7 @@ DIVISION_BOUNDARIES = [
         0, [],
     ),
     (
-        "div_country_us", 1,
+        "div_country_us", 10,
         "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
         24.0, -125.0, 50.0, -66.0,
         {"primary": "United States", "common": {}, "rules": []},
@@ -546,7 +553,7 @@ DIVISION_BOUNDARIES = [
         0, [],
     ),
     (
-        "div_region_ca", 2,
+        "div_region_ca", 25,
         "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
         34.0, -125.0, 42.0, -118.0,
         {"primary": "California", "common": {"fr": "Californie"}, "rules": []},
@@ -554,7 +561,7 @@ DIVISION_BOUNDARIES = [
         0, [],
     ),
     (
-        "div_locality_sf", 3,
+        "div_locality_sf", 50,
         "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
         37.6, -122.55, 37.85, -122.3,
         {"primary": "San Francisco", "common": {"es": "San Francisco", "zh": "\u65e7\u91d1\u5c71"}, "rules": []},
@@ -562,7 +569,7 @@ DIVISION_BOUNDARIES = [
         0, [],
     ),
     (
-        "div_borough_manhattan", 4,
+        "div_borough_manhattan", 50,
         "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
         40.68, -74.05, 40.88, -73.90,
         {"primary": "Manhattan", "common": {}, "rules": []},
@@ -580,7 +587,7 @@ def _create_division_db(db_path):
         CREATE TABLE places (
             id VARCHAR,
             geometry GEOMETRY,
-            admin_level INTEGER,
+            level INTEGER,
             names STRUCT(
                 "primary" VARCHAR,
                 common MAP(VARCHAR, VARCHAR),
@@ -600,7 +607,7 @@ def _create_division_db(db_path):
         )
     """)
     for row in DIVISION_BOUNDARIES:
-        (bid, admin_level, wkt, min_lat, min_lon, max_lat, max_lon,
+        (bid, level, wkt, min_lat, min_lon, max_lat, max_lon,
          names, subtype, country, region, wikidata, population,
          importance, variants) = row
 
@@ -626,7 +633,7 @@ def _create_division_db(db_path):
 
         if not names_params:
             conn.execute(f"""
-                INSERT INTO places (id, geometry, admin_level, names, subtype, country, region,
+                INSERT INTO places (id, geometry, level, names, subtype, country, region,
                     wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
                     importance, variants)
                 VALUES (
@@ -637,13 +644,13 @@ def _create_division_db(db_path):
                     ?,
                     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
                 )
-            """, [bid, wkt, admin_level,
+            """, [bid, wkt, level,
                   subtype, country, region, wikidata, population,
                   min_lat, max_lat, min_lon, max_lon,
                   importance])
         else:
             conn.execute(f"""
-                INSERT INTO places (id, geometry, admin_level, names, subtype, country, region,
+                INSERT INTO places (id, geometry, level, names, subtype, country, region,
                     wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
                     importance, variants)
                 VALUES (
@@ -654,7 +661,7 @@ def _create_division_db(db_path):
                     ?,
                     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
                 )
-            """, [bid, wkt, admin_level] + names_params + [
+            """, [bid, wkt, level] + names_params + [
                   subtype, country, region, wikidata, population,
                   min_lat, max_lat, min_lon, max_lon,
                   importance])
@@ -1150,7 +1157,12 @@ def division_parquet(tmp_path_factory):
 
     conn.execute(f"COPY tmp_division TO '{division_path}' (FORMAT PARQUET)")
 
-    # Division area parquet (geometries)
+    # Division area parquet (geometries). admin_level here mirrors the genuine
+    # upstream Overture division_area schema (source input, not touched by the
+    # atgeo level vocabulary) -- phase2b-design.md §A.7a drops the admin_level
+    # plumbing from overture_division_import.sql, so this column becomes dead
+    # input once level is derived from division.subtype instead; kept here only
+    # because it is a faithful copy of Overture's real column set.
     conn.execute("""
         CREATE TABLE tmp_division_area (
             division_id VARCHAR,

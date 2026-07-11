@@ -276,8 +276,18 @@ class TestRunPipeline:
 class TestWriteManifest:
     """Tests for garganorn.quadtree.write_manifest().
 
-    All tests fail at Red phase: garganorn.quadtree does not exist yet.
+    Migrated to the Phase 2b envelope (phase2b-design.md §B.6, §B.2c):
+    write_manifest(manifest, output_dir, source, *, generated_at) -- generated_at
+    is a required keyword-only arg (no default) -- and manifest.json's field set
+    is exactly {atgeo, source, collection, attribution, generated_at,
+    tile_url_template, cache, quadkeys}. These tests currently fail because the
+    production write_manifest() (garganorn/stages.py:513) still has the old
+    3-positional-arg signature and old {source, generated_at, quadkeys} shape;
+    that IS the RED signal for this feature. Fixed generated_at value matches
+    the convention used by tests/test_envelope.py::TestBuildManifest.
     """
+
+    _GENERATED_AT = "2026-07-09T18:00:00Z"
 
     def test_import(self):
         """Importing write_manifest must raise ImportError in Red phase."""
@@ -290,11 +300,14 @@ class TestWriteManifest:
         except (ImportError, ModuleNotFoundError):
             pytest.skip("garganorn.quadtree not available")
 
-        write_manifest({"023130": 42, "023131": 7}, str(tmp_path), "foursquare")
+        write_manifest(
+            {"023130": 42, "023131": 7}, str(tmp_path), "foursquare",
+            generated_at=self._GENERATED_AT,
+        )
         assert (tmp_path / "manifest.json").exists(), "manifest.json not found"
 
     def test_manifest_structure(self, tmp_path):
-        """manifest.json must have 'source', 'generated_at', and 'quadkeys' fields."""
+        """manifest.json must match §B.2c's field set exactly."""
         try:
             from garganorn.quadtree import write_manifest
         except (ImportError, ModuleNotFoundError):
@@ -302,19 +315,36 @@ class TestWriteManifest:
 
         out_dir = tmp_path / "manifest_struct"
         out_dir.mkdir()
-        write_manifest({"023130": 42}, str(out_dir), "foursquare")
+        write_manifest(
+            {"023130": 42}, str(out_dir), "foursquare",
+            generated_at=self._GENERATED_AT,
+        )
         with open(out_dir / "manifest.json") as fh:
             manifest = json.load(fh)
-        assert "source" in manifest, f"manifest missing 'source'; keys={list(manifest)}"
-        assert "generated_at" in manifest, (
-            f"manifest missing 'generated_at'; keys={list(manifest)}"
-        )
-        assert "quadkeys" in manifest, (
-            f"manifest missing 'quadkeys'; keys={list(manifest)}"
+        expected_keys = {
+            "atgeo", "source", "collection", "attribution", "generated_at",
+            "tile_url_template", "cache", "quadkeys",
+        }
+        assert set(manifest.keys()) == expected_keys, (
+            f"manifest.json must match §B.2c field set exactly; "
+            f"got {sorted(manifest.keys())}, expected {sorted(expected_keys)}"
         )
         assert isinstance(manifest["quadkeys"], list), "quadkeys must be a list"
         assert manifest["source"] == "foursquare", (
-            f"source must be 'fsq'; got {manifest['source']!r}"
+            f"source must be 'foursquare'; got {manifest['source']!r}"
+        )
+        assert manifest["atgeo"] == 1, f"atgeo must be 1; got {manifest['atgeo']!r}"
+        assert manifest["generated_at"] == self._GENERATED_AT, (
+            f"generated_at must be the passed-in run timestamp; "
+            f"got {manifest['generated_at']!r}"
+        )
+        assert manifest["tile_url_template"] == "{base}/{qk6}/{qk}.json.gz", (
+            f"tile_url_template must be the §B.2c literal; "
+            f"got {manifest.get('tile_url_template')!r}"
+        )
+        assert manifest["cache"] == {"max_age": 86400, "immutable": False}, (
+            f"cache must be {{max_age: 86400, immutable: false}} (§B.6, protocol "
+            f"change P2); got {manifest.get('cache')!r}"
         )
 
     def test_quadkeys_sorted(self, tmp_path):
@@ -331,6 +361,7 @@ class TestWriteManifest:
             {"023133": 5, "023130": 42, "023132": 17, "023131": 7},
             str(out_dir),
             "foursquare",
+            generated_at=self._GENERATED_AT,
         )
         with open(out_dir / "manifest.json") as fh:
             manifest = json.load(fh)

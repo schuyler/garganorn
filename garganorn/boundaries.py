@@ -9,7 +9,9 @@ class BoundaryLookup:
 
     Queries a boundaries.duckdb file produced by the overture_division pipeline
     stage. The database schema uses a `places` table with columns `id`,
-    `geometry`, and `admin_level` — matching the division export schema.
+    `geometry`, and `level` — the atgeo containment level vocabulary
+    (garganorn.levels.LEVEL_VOCAB), not raw Overture admin_level — matching
+    the division export schema.
     """
 
     # Collection used to qualify rkeys in containment output.
@@ -33,8 +35,9 @@ class BoundaryLookup:
     def containment(self, lat, lon):
         """Return all admin regions containing the given point.
 
-        Returns a list of dicts ordered by admin_level ascending (continent
-        first, most specific last), each containing:
+        Returns a list of dicts ordered by level ascending (most general
+        first, most specific last), ties broken by id ascending for
+        determinism, each containing:
             rkey: collection-qualified rkey (org.atgeo.places.overture.division:<id>)
 
         Only rkey is returned. Name, level, and other division metadata are
@@ -46,7 +49,7 @@ class BoundaryLookup:
         rows = conn.execute("""
             SELECT id FROM places
             WHERE ST_Contains(geometry, ST_Point($lon, $lat))
-            ORDER BY admin_level ASC
+            ORDER BY level ASC, id ASC
         """, {"lat": lat, "lon": lon}).fetchall()
         return [{"rkey": f"{self.COLLECTION}:{r[0]}"} for r in rows]
 

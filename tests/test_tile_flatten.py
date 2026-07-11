@@ -220,16 +220,18 @@ _EXPORT_CONFIGS = {
     },
     "overture_division": {
         "sql_file": "overture_division_export_tiles.sql",
+        # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB),
+        # re-derived from subtype: locality=50, region=25.
         "places_rows": [
-            ("div001", "San Francisco", 37.7749, -122.4194, 3, "locality", "US", "US-CA"),
-            ("div002", "California", 37.5, -119.5, 2, "region", "US", "US-CA"),
+            ("div001", "San Francisco", 37.7749, -122.4194, 50, "locality", "US", "US-CA"),
+            ("div002", "California", 37.5, -119.5, 25, "region", "US", "US-CA"),
         ],
         "pk_col": "id",
         "create_table": """
             CREATE TABLE places (
                 id             VARCHAR,
                 geometry       GEOMETRY,
-                admin_level    INTEGER,
+                level          INTEGER,
                 names          STRUCT("primary" VARCHAR),
                 subtype        VARCHAR,
                 country        VARCHAR,
@@ -249,7 +251,7 @@ _EXPORT_CONFIGS = {
             INSERT INTO places VALUES (
                 '{pk}',
                 ST_Point({lon}, {lat}),
-                {admin_level},
+                {level},
                 {{'primary': '{name}'}},
                 '{subtype}',
                 '{country}',
@@ -311,9 +313,9 @@ def _make_export_db(conn, source, places_rows=None):
                 pk=pk, name=name, lat=lat, lon=lon, imp=imp
             ))
     elif source == "overture_division":
-        for pk, name, lat, lon, admin_level, subtype, country, region in places_rows:
+        for pk, name, lat, lon, level, subtype, country, region in places_rows:
             conn.execute(config["insert_template"].format(
-                pk=pk, name=name, lat=lat, lon=lon, admin_level=admin_level,
+                pk=pk, name=name, lat=lat, lon=lon, level=level,
                 subtype=subtype, country=country, region=region
             ))
 

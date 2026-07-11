@@ -111,7 +111,7 @@ def _make_division_db(path):
         CREATE TABLE places (
             id            VARCHAR,
             geometry      GEOMETRY,
-            admin_level   INTEGER,
+            level         INTEGER,
             min_latitude  DOUBLE,
             max_latitude  DOUBLE,
             min_longitude DOUBLE,
@@ -122,7 +122,7 @@ def _make_division_db(path):
         INSERT INTO places VALUES (
             '85922583',
             ST_GeomFromText('POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))'),
-            3,
+            50,
             37.6, 37.85, -122.55, -122.3
         )
     """)

@@ -207,11 +207,13 @@ class TestPipelineSkipsImportanceVariants:
 # ---------------------------------------------------------------------------
 
 _DIV_EXPORT_PLACES = [
-    # (id, name, subtype, country, region, admin_level, wikidata, population)
-    ("div001", "Testland", "country", "US", None, 2, None, 1000000),
-    ("div002", "Testregion", "region", "US", "CA", 4, "Q123", None),
+    # (id, name, subtype, country, region, level, wikidata, population)
+    # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB),
+    # re-derived from subtype: country=10, region=25, county=35.
+    ("div001", "Testland", "country", "US", None, 10, None, 1000000),
+    ("div002", "Testregion", "region", "US", "CA", 25, "Q123", None),
     # all optional fields null
-    ("div003", "Nowhere", "county", None, None, 6, None, None),
+    ("div003", "Nowhere", "county", None, None, 35, None, None),
 ]
 
 
@@ -231,7 +233,7 @@ def _make_division_export_db(conn, places_rows=None):
             subtype VARCHAR,
             country VARCHAR,
             region VARCHAR,
-            admin_level INTEGER,
+            level INTEGER,
             wikidata VARCHAR,
             population BIGINT,
             min_latitude DOUBLE,
@@ -245,7 +247,7 @@ def _make_division_export_db(conn, places_rows=None):
         )
     """)
 
-    for (div_id, name, subtype, country, region, admin_level,
+    for (div_id, name, subtype, country, region, level,
          wikidata, population) in places_rows:
         # NOTE: f-string interpolation is safe here — all values are
         # hardcoded test data from _DIV_EXPORT_PLACES above.
@@ -258,7 +260,7 @@ def _make_division_export_db(conn, places_rows=None):
                 {f"'{subtype}'" if subtype else "NULL"},
                 {f"'{country}'" if country else "NULL"},
                 {f"'{region}'" if region else "NULL"},
-                {admin_level},
+                {level},
                 {f"'{wikidata}'" if wikidata else "NULL"},
                 {population if population else "NULL"},
                 37.7, 37.8, -122.5, -122.4,
@@ -324,8 +326,8 @@ class TestExportStripJsonNulls:
                 assert "population" not in attrs
             elif rkey == "div003":
                 assert attrs["subtype"] == "county"
-                assert attrs["admin_level"] == 6
-                assert set(attrs.keys()) == {"subtype", "admin_level"}
+                assert attrs["level"] == 35  # LEVEL_VOCAB["county"]
+                assert set(attrs.keys()) == {"subtype", "level"}
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +363,13 @@ class TestDivisionImportArtifactPhase2:
         boundaries = tmp_path / "boundaries.duckdb"
         assert boundaries.exists(), f"boundaries.duckdb not written alongside places.parquet"
 
-    def test_boundaries_duckdb_schema_unchanged(self, division_parquet, tmp_path):
-        """boundaries.duckdb must have admin_level column (schema unchanged in Phase 2)."""
+    def test_boundaries_duckdb_schema_replaces_admin_level_with_level(self, division_parquet, tmp_path):
+        """boundaries.duckdb must have a level column, not admin_level (phase2b-design.md §A.7b).
+
+        OLD invariant (schema unchanged, admin_level present) is inverted: Part A
+        replaces the raw Overture admin_level integer with the atgeo level
+        vocabulary throughout the boundaries.duckdb export.
+        """
         output = str(tmp_path / "places.parquet")
         _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
         boundaries = str(tmp_path / "boundaries.duckdb")
@@ -370,8 +377,11 @@ class TestDivisionImportArtifactPhase2:
         con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
         cols = {r[0] for r in con.execute("DESCRIBE bnd.places").fetchall()}
         con.close()
-        assert "admin_level" in cols, (
-            f"boundaries.duckdb must have admin_level column; found: {cols}"
+        assert "level" in cols, (
+            f"boundaries.duckdb must have level column; found: {cols}"
+        )
+        assert "admin_level" not in cols, (
+            f"boundaries.duckdb must not have admin_level column; found: {cols}"
         )
 
     def test_boundaries_duckdb_has_rtree_index(self, division_parquet, tmp_path):

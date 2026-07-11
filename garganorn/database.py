@@ -1371,7 +1371,7 @@ class OvertureDivisions(Database):
             subtype,
             country,
             region,
-            admin_level,
+            level,
             wikidata,
             population,
             min_latitude::decimal(10,6)::varchar AS min_latitude,
@@ -1435,7 +1435,7 @@ class OvertureDivisions(Database):
         subtype = result.pop("subtype", None)
         country = result.pop("country", None)
         region = result.pop("region", None)
-        admin_level = result.pop("admin_level", None)
+        level = result.pop("level", None)
         wikidata = result.pop("wikidata", None)
         population = result.pop("population", None)
 
@@ -1446,8 +1446,10 @@ class OvertureDivisions(Database):
             attributes["country"] = country
         if region:
             attributes["region"] = region
-        if admin_level is not None:
-            attributes["admin_level"] = admin_level
+        # level is never NULL (the atgeo containment vocabulary is total by
+        # construction, garganorn.levels.LEVEL_VOCAB / phase2b-design.md §A.6),
+        # so this is unconditional rather than an `is not None` guard.
+        attributes["level"] = level
         if wikidata:
             attributes["wikidata"] = wikidata
         if population is not None and population > 0:

@@ -1,12 +1,20 @@
 -- Import Overture Maps division and division_area parquet files into a places table.
 --
 -- Overture splits administrative boundary data across two parquet themes:
---   division       -- metadata (names, subtype, country, admin_level, wikidata, population)
+--   division       -- metadata (names, subtype, country, wikidata, population)
 --   division_area  -- geometries, one or more rows per division (filtered to is_land=true)
 --
 -- A single division can have multiple division_area rows (e.g. non-contiguous territories).
--- ST_Union_Agg merges them into one geometry per division. min(admin_level) handles the
--- rare case where a division's areas carry different admin_level values.
+-- ST_Union_Agg merges them into one geometry per division.
+--
+-- The atgeo containment `level` is derived from `subtype` alone via a
+-- generated CASE expression, substituted below as a dollar-brace placeholder
+-- (not repeated literally in this comment because substitution is plain
+-- string replacement and would corrupt the comment text). It is rendered by
+-- stage_division_import() in stages.py from garganorn.levels.LEVEL_VOCAB,
+-- the single source of truth (phase2b-design.md §A.3). Overture's raw
+-- admin_level is 96% NULL and ambiguous within a subtype, so it is not
+-- carried into places.
 --
 -- The bbox filter applies to division_area (which has bbox columns), not division.
 -- Divisions with no matching land area after filtering are dropped via INNER JOIN.
@@ -29,7 +37,7 @@ WITH division AS (
     FROM '${division_parquet}'
 ),
 division_area AS (
-    SELECT division_id, admin_level,
+    SELECT division_id,
            geometry::GEOMETRY AS geometry
     FROM '${division_area_parquet}'
     WHERE is_land = true
@@ -39,10 +47,8 @@ division_area AS (
 ),
 merged_areas AS (
     -- Merge multiple land-area geometries per division into one.
-    -- admin_level is taken from the minimum value across areas (should be uniform in practice).
     SELECT division_id,
-           ST_Union_Agg(geometry) AS geometry,
-           min(admin_level) AS admin_level
+           ST_Union_Agg(geometry) AS geometry
     FROM division_area
     GROUP BY division_id
 ),
@@ -54,7 +60,11 @@ division_base AS (
         d.subtype,
         d.country,
         d.region,
-        ma.admin_level,
+        -- atgeo containment level, derived from subtype alone (no ELSE branch:
+        -- an unmapped subtype must produce NULL here so the fail-loud validator
+        -- and the post-CTAS NULL-level assertion in stage_division_import()
+        -- catch it; phase2b-design.md §A.6).
+        ${level_case} AS level,
         d.wikidata,
         greatest(coalesce(d.population, 0), 0) AS population,
         d.parent_division_id,

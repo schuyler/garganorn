@@ -13,34 +13,40 @@ from garganorn.boundaries import BoundaryLookup
 # ---------------------------------------------------------------------------
 
 DIVISION_BOUNDARIES = [
-    # id, admin_level, lat, lon, wkt_geom, min_lat, min_lon, max_lat, max_lon
+    # id, level, lat, lon, wkt_geom, min_lat, min_lon, max_lat, max_lon
+    # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
+    # country=10, region=25, locality=50. div_continent_na has no vocabulary entry
+    # (§A.3: continent has no producer entry); 0 is a synthetic sentinel kept only
+    # to preserve this pre-built boundaries.duckdb-shaped fixture's ascending order.
+    # div_borough_manhattan's subtype is "locality" in the real pipeline data too
+    # (Overture has no borough subtype in current data, §A.3), so it also maps to 50.
     ("div_continent_na", 0, 40.0, -100.0,
      "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
      20.0, -130.0, 55.0, -60.0),
-    ("div_country_us", 1, 39.0, -98.0,
+    ("div_country_us", 10, 39.0, -98.0,
      "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
      24.0, -125.0, 50.0, -66.0),
-    ("div_region_ca", 2, 37.0, -120.0,
+    ("div_region_ca", 25, 37.0, -120.0,
      "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
      34.0, -125.0, 42.0, -118.0),
-    ("div_locality_sf", 3, 37.7749, -122.4194,
+    ("div_locality_sf", 50, 37.7749, -122.4194,
      "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
      37.6, -122.55, 37.85, -122.3),
-    ("div_borough_manhattan", 4, 40.7831, -73.9712,
+    ("div_borough_manhattan", 50, 40.7831, -73.9712,
      "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
      40.68, -74.05, 40.88, -73.90),
 ]
 
 
 def _create_division_db(db_path):
-    """Create a division-schema boundary DB (table 'places' with id, geometry, admin_level)."""
+    """Create a division-schema boundary DB (table 'places' with id, geometry, level)."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
     conn.execute("""
         CREATE TABLE places (
             id VARCHAR,
             geometry GEOMETRY,
-            admin_level INTEGER,
+            level INTEGER,
             min_latitude DOUBLE,
             max_latitude DOUBLE,
             min_longitude DOUBLE,
@@ -48,12 +54,12 @@ def _create_division_db(db_path):
         )
     """)
     for row in DIVISION_BOUNDARIES:
-        bid, admin_level, lat, lon, wkt, min_lat, min_lon, max_lat, max_lon = row
+        bid, level, lat, lon, wkt, min_lat, min_lon, max_lat, max_lon = row
         conn.execute("""
             INSERT INTO places VALUES (
                 ?, ST_GeomFromText(?), ?, ?, ?, ?, ?
             )
-        """, [bid, wkt, admin_level, min_lat, max_lat, min_lon, max_lon])
+        """, [bid, wkt, level, min_lat, max_lat, min_lon, max_lon])
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
 
@@ -155,15 +161,19 @@ class TestComputeContainmentSignature:
 
 class TestBoundaryExportFilter:
     def test_run_pipeline_has_boundary_filter(self):
-        """export_boundaries_db CTAS should include a subtype/admin_level filter.
+        """export_boundaries_db CTAS should include a level-vocabulary filter.
 
-        After Phase 3 refactoring, the boundary export logic is in export_boundaries_db()
-        instead of stage_boundary_export(). The filter should still be present.
+        phase2b-design.md §A.7(B): the OLD invariant (admin_level BETWEEN 0 AND 2
+        OR subtype = 'locality') is replaced by the level-vocabulary threshold
+        `level <= 50` (country..locality; §A.5). The filter is expressed via the
+        LEVEL_VOCAB constant so it can't drift from the vocabulary, but the
+        source text still contains the literal comparison against 50
+        (LEVEL_VOCAB['locality']) since that's what the CASE/threshold compiles
+        to in the CTAS.
         """
         from garganorn import stages
         source = inspect.getsource(stages.stage_division_import)
-        # The boundary export CTAS should filter by admin_level and subtype
-        assert "admin_level BETWEEN 0 AND 2" in source or "admin_level between 0 and 2" in source.lower(), \
-            "stage_division_import should filter by admin_level"
-        assert "subtype = 'locality'" in source or "subtype='locality'" in source, \
-            "stage_division_import should filter by subtype='locality'"
+        assert "level <= 50" in source or "level<=50" in source.lower(), \
+            "stage_division_import should filter by level <= 50 (country..locality)"
+        assert "admin_level BETWEEN 0 AND 2" not in source, \
+            "stage_division_import must no longer filter by raw admin_level"

@@ -22,15 +22,15 @@ class TestBoundaryLookupContainment:
         assert any("div_locality_sf" in rk for rk in rkeys)
         assert not any("div_borough_manhattan" in rk for rk in rkeys)
 
-    def test_ordered_by_admin_level_ascending(self, boundary_lookup):
+    def test_ordered_by_level_ascending(self, boundary_lookup):
         """Results are ordered continent-first, most-specific-last.
 
-        Verified by checking rkey sequence matches known admin_level order
-        from the division test data.
+        Verified by checking rkey sequence matches known level order
+        (garganorn.levels.LEVEL_VOCAB) from the division test data.
         """
         result = boundary_lookup.containment(37.7749, -122.4194)
         rkeys = [r["rkey"] for r in result]
-        # Division test data admin_level order: continent(0), country(1), region(2), locality(3)
+        # Division test data level order: continent(0), country(10), region(25), locality(50)
         expected_order = ["div_continent_na", "div_country_us", "div_region_ca", "div_locality_sf"]
         actual_ids = [rk.split(":")[-1] for rk in rkeys]
         assert actual_ids == expected_order
@@ -125,7 +125,7 @@ class TestOvertureDivisionsGetRecord:
         record = division_db.get_record("places.atgeo.org", "org.atgeo.places.overture.division", "div_locality_sf")
         assert record is not None
         attrs = record["attributes"]
-        assert attrs["admin_level"] == 3
+        assert attrs["level"] == 50  # locality, garganorn.levels.LEVEL_VOCAB["locality"]
         assert attrs["country"] == "US"
         assert attrs["subtype"] == "locality"
         assert "region" in attrs

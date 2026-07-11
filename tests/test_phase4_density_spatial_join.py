@@ -17,6 +17,7 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from garganorn.levels import level_case_sql
 from garganorn.stages import (
     stage_density_extract,
     quadkey_to_bbox,
@@ -153,6 +154,7 @@ class TestDivisionDensityJoin:
             "density_cte": "-- density_tiles already created as temp table",
             "density_norm": 10.0,
             "pop_norm": 20.0,
+            "level_case": level_case_sql(),
         }
 
         for k, v in substitutions.items():

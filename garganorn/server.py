@@ -4,6 +4,7 @@ from importlib.resources import files
 
 import lexrpc
 from lexrpc.base import XrpcError
+from garganorn import envelope
 from garganorn.quadtree import BboxTooLarge
 
 _log = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class Server:
         self.server.register("org.atgeo.getCoverage", self.get_coverage)
 
     def record_uri(self, collection, rkey):
-        return f"https://{self.repo}/{collection}/{rkey}"
+        return envelope.record_uri(self.repo, collection, rkey)
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
         # Lexicon schema collection: serve from in-memory lexicon_map

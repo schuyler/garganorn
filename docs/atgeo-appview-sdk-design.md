@@ -85,7 +85,7 @@ Tile payload (one JSON object per tile file):
 {
   "atgeo": 1,
   "collection": "org.atgeo.places.overture.place",
-  "attribution": "© Overture Maps Foundation, CDLA-Permissive-2.0",
+  "attribution": "https://docs.overturemaps.org/attribution/",
   "generated_at": "2026-07-02T00:00:00Z",
   "records": [
     { "uri": "https://places.atgeo.org/org.atgeo.places.overture.place/<rkey>",
@@ -119,7 +119,23 @@ export SQL (small diff, do it before SDKs freeze on the format):
   repo rewriting monthly is a crawl-load citizenship problem, not a
   compliance one. Revisit if the ecosystem grows bulk-repo conventions.
 - `generated_at` moves into the tile (already in the manifest; duplicating
-  it per tile lets caches be reasoned about per-file).
+  it per tile lets caches be reasoned about per-file). **`generated_at` is
+  run-scoped** (`docs/phase2b-design.md` §5 `P1`, §B.4): identical across
+  every tile of a run and equal to the manifest's `generated_at`; RFC 3339
+  UTC, `Z`-suffixed, seconds precision. It is not a per-flush or per-record
+  timestamp — a second producer (e.g. the AppView, §2.5) stamping per-flush
+  times would let consumers wrongly infer per-tile freshness ordering.
+- `cid` is required and nullable, but never omitted (§1.2 record shape:
+  every record is exactly `{uri, cid, value}`). For gazetteer records
+  `cid` is always `null` and is explicitly **never computed**
+  (`docs/phase2b-design.md` §5 `P4`, §B.3) — there is no signed commit to
+  verify it against, so hashing the value would record a number that
+  verifies nothing. Only AppView records carry a genuine commit-verified
+  CID.
+- Record order within a tile is producer-defined; consumers must not rely
+  on it (`docs/phase2b-design.md` §5 `P5`, §B.2a). §2.5 has the AppView
+  flush tiles ordered by `rkey`; the pipeline orders by its own internal
+  sort key. Both are valid producers of this envelope.
 
 `value` schemas are the existing lexicons (`org.atgeo.place`,
 `community.lexicon.location.*`); this document does not change them.
@@ -133,6 +149,7 @@ export SQL (small diff, do it before SDKs freeze on the format):
   "atgeo": 1,
   "source": "overture_place",
   "collection": "org.atgeo.places.overture.place",
+  "attribution": "https://docs.overturemaps.org/attribution/",
   "generated_at": "2026-07-02T00:00:00Z",
   "tile_url_template": "{base}/{qk6}/{qk}.json.gz",
   "cache": { "max_age": 86400, "immutable": true },
@@ -140,10 +157,23 @@ export SQL (small diff, do it before SDKs freeze on the format):
 }
 ```
 
+- `attribution` (optional) — **[protocol amendment, `docs/phase2b-design.md`
+  §5 `P3`]** lets a client render attribution without fetching a tile.
+  Unknown-field tolerance (§1.6) makes it safe to add; a manifest lacking
+  it is still conformant.
 - `cache.immutable: true` for timestamped pipeline outputs (URL changes
   when content changes, via the `current` symlink); `false` with a short
   `max_age` for AppView-served live tiles. This resolves the CDN-vs-
-  freshness tension per collection instead of globally.
+  freshness tension per collection instead of globally. **`immutable:
+  true` is permitted only when `tile_url_template` embeds a run-unique
+  path segment** (`docs/phase2b-design.md` §5 `P2`, §B.6) — otherwise the
+  same tile URL can return different bytes after a later run, and a CDN
+  honoring `immutable` would serve stale tiles for the full `max_age`. The
+  current pipeline's `tile_url_template` has no run-unique segment (tiles
+  are served through a `current` symlink), so it ships `cache.immutable:
+  false`; a future run-stamped template (e.g.
+  `{base}/<run-timestamp>/{qk6}/{qk}.json.gz`) could legitimately flip it
+  to `true`.
 - `quadkeys` is the complete sorted coverage list. Size budget: measure in
   pipeline validation; if gzipped manifests exceed ~5 MB the fallback is
   z4-prefix manifest shards (`manifest/{qk4}.json`, same shape). The SDK
@@ -240,7 +270,18 @@ semantically inconsistent across countries.
 | 45    | localadmin     | `localadmin`               |
 | 50    | locality       | `locality`                 |
 | 55    | borough        | `borough`                  |
-| 60    | neighborhood   | `neighborhood`             |
+| 60    | macrohood      | `macrohood`                |
+| 65    | neighborhood   | `neighborhood`             |
+| 70    | microhood      | `microhood`                |
+
+**Phase 2b amendment (`docs/phase2b-design.md` §A.3, §5 `§1.7-renumber`):**
+the hoods are renumbered on a uniform stride-5. `macrohood`=60 and
+`microhood`=70 are new entries (absent from the prior table); `neighborhood`
+moves from its prior value of 60 to 65. This is a protocol change, not a
+clarification: any consumer holding the old `neighborhood`=60 value must
+update. Placement follows the WoF descent locality → borough → macrohood →
+neighborhood → microhood, so a macrohood sorts above (contains) its
+neighborhoods and a microhood sorts below (nests inside) its neighborhood.
 
 Rules: consumers sort `within` ascending by level; gaps in the numbering
 are deliberate insertion room and additions are a minor protocol bump; a
@@ -249,10 +290,11 @@ loudly at import, never guess. Implementation note for the pipeline
 agent: verify the actual Overture subtype set (`SELECT DISTINCT subtype`
 against a current division parquet) before trusting this table — the
 mapping above is drawn from documented subtypes and must be confirmed,
-and any extras (e.g. macrohood/microhood-like values) brought back as a
-table amendment, not silently mapped. WoF placetypes, if that source
-returns, map into the same scale. The atgeo.org Lexicon page should be
-updated to reference this section as normative (site punch list).
+and any further extras brought back as a table amendment, not silently
+mapped. WoF placetypes, if that source returns, map into the same scale.
+The atgeo.org Lexicon page should be updated to reference this section as
+normative (site punch list) — including the neighborhood 60→65 move, not
+just the macrohood/microhood additions.
 
 ## 2. Spatial AppView (the sidecar)
 

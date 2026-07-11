@@ -235,15 +235,20 @@ covering/<qk4>.parquet     one file per z4 prefix present
 covering/_meta.json        written last; parameters + stats + generated_at
 ```
 
-**`level` in Phase 1 = `admin_level` values.** §3.5 says `level` is the
-atgeo containment level per §3.4's subtype mapping, but §3.4 (division
-import rework) is Phase 2, and `boundaries.duckdb` today carries
-`admin_level` (also still read by `boundaries.py` for the server path, so
-its schema must not change now). The covering stage copies `admin_level`
-into the column named `level`. Relation ordering parity is preserved (old
-code ordered by `admin_level ASC`; DuckDB default NULLS LAST applies to
-both — localities can carry NULL admin_level). When §3.4 lands, only the
-copied source column changes. Flagged as OQ-2.
+**`level` in Phase 1 = `admin_level` values (superseded, Phase 2b).** §3.5
+says `level` is the atgeo containment level per §3.4's subtype mapping, but
+§3.4 (division import rework) was Phase 2, and at the time this design was
+written `boundaries.duckdb` still carried `admin_level` (also still read by
+`boundaries.py` for the server path, so its schema could not change then).
+The covering stage copied `admin_level` into the column named `level`.
+Relation ordering parity was preserved (old code ordered by `admin_level
+ASC`; DuckDB default NULLS LAST applies to both — localities could carry
+NULL admin_level). **This is now false as of Phase 2b**
+(`docs/phase2b-design.md` Part A): `level` is the atgeo containment
+vocabulary keyed on Overture `subtype`, not `admin_level` — see
+`docs/atgeo-appview-sdk-design.md` §1.7. `admin_level` no longer exists in
+the exported schema; ordering is `ORDER BY level ASC` (total by
+construction, no NULLS-last handling needed). See OQ-2.
 
 ### 2.5 Freshness and atomicity
 
@@ -683,10 +688,15 @@ there (see OQ-6, now resolved).
   parameters paragraph on interior emission at z12. This design runs the
   interior test at z12 (interior at any zoom in [4,12]; edge only at 12).
   Either reading is correct; ours is cheaper at containment time. Confirm.
-- **OQ-2**: covering `level` carries `admin_level` values until §3.4
-  (Phase 2) introduces the atgeo level vocabulary; `boundaries.duckdb`
-  schema is unchanged in Phase 1 because `boundaries.py` (server) still
-  reads `admin_level`. Confirm.
+- **OQ-2 (RESOLVED, Phase 2b)**: covering `level` carried `admin_level`
+  values until §3.4 (Phase 2) introduced the atgeo level vocabulary;
+  `boundaries.duckdb` schema was unchanged in Phase 1 because
+  `boundaries.py` (server) still read `admin_level`. Phase 2b
+  (`docs/phase2b-design.md` Part A) completes this: `admin_level` is
+  dropped from the exported schema entirely, `level` is derived from
+  Overture `subtype` via the atgeo vocabulary (`docs/atgeo-appview-sdk-design.md`
+  §1.7, stride-5 renumbered), and `boundaries.py` orders `ORDER BY level
+  ASC, id ASC`.
 - **OQ-3**: Phase-1 containment artifact lives under the timestamped run
   dir, moving to `<src>/containment/` in Phase 2. Confirm.
 - **OQ-4**: covering is built inside `run_pipeline` (division branch) and

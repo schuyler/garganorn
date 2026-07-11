@@ -38,10 +38,14 @@ class TileBackedCollection:
         except FileNotFoundError:
             return None
         for record in tile_data["records"]:
-            if record["rkey"] == rkey:
+            # Deployment-window tolerance (§B.8): old-shape tiles (no "value"
+            # wrapper) fall back to the record itself. TEMPORARY — remove
+            # after the first production re-export following this deploy.
+            value = record.get("value", record)
+            if value["rkey"] == rkey:
                 # Shallow copy prevents mutations by the server layer (e.g., popping
                 # "importance") from corrupting the lru_cache-held tile dict.
-                return copy.copy(record)
+                return copy.copy(value)
         return None
 
     def _read_tile(self, tile_qk: str) -> dict:
