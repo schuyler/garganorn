@@ -7,12 +7,12 @@ name = "garganorn"
 version = "0.1.0"
 description = "An ATProtocol XRPC server for org.atgeo"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.9"
 authors = [
     {name = "Schuyler Erle"}
 ]
 dependencies = [
-    "duckdb",
+    "duckdb==1.4.4",
     "gunicorn",
     "lexrpc[flask]",
     "pyyaml",
