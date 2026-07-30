@@ -31,3 +31,20 @@ tiles:
       attribution: https://www.openstreetmap.org/copyright
       cache_ttl: 86400
   max_coverage_tiles: 50
+
+pipeline:
+  output: tiles
+  memory_limit: 48GB
+  temp_directory: /tmp/duckdb
+  max_per_tile: 1000
+  bbox: null
+  sources:
+    overture_division:
+      division_parquet: db/cache/overture/*/division/*.parquet
+      division_area_parquet: db/cache/overture/*/division_area/*.parquet
+    overture_place:
+      parquet: db/cache/overture/*/part-*.parquet
+    osm:
+      parquet_dir: db/cache/osm/parquet
+    foursquare:
+      parquet: db/cache/fsq/*/places-*.parquet

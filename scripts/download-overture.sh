@@ -4,6 +4,7 @@
 release=""
 cache_dir=""
 log_file=""
+divisions_only=""
 remaining_args=()
 
 while [ $# -gt 0 ]; do
@@ -11,8 +12,9 @@ while [ $# -gt 0 ]; do
         --release) release="$2"; shift 2 ;;
         --cache-dir) cache_dir="$2"; shift 2 ;;
         --log) log_file="$2"; shift 2 ;;
+        --divisions-only) divisions_only="1"; shift ;;
         --help)
-            echo "Usage: $0 [--release YYYY-MM-DD.N] [--cache-dir <dir>] [--log <path>]"
+            echo "Usage: $0 [--release YYYY-MM-DD.N] [--cache-dir <dir>] [--log <path>] [--divisions-only]"
             echo
             echo "Downloads Overture Maps places and divisions parquet files to the local cache."
             echo
@@ -20,6 +22,7 @@ while [ $# -gt 0 ]; do
             echo "  --release YYYY-MM-DD.N  Specific Overture release (default: auto-discover latest)"
             echo "  --cache-dir <dir>       Override default cache directory"
             echo "  --log <path>            Path to log file"
+            echo "  --divisions-only        Skip the places download; fetch only division/division_area"
             echo "  --help                  Show this help message"
             exit 0
             ;;
@@ -70,47 +73,51 @@ fi
 
 mkdir -p "$cache_dir"
 
-# Download places parquet files
-echo "Finding available place parquet files..."
-places_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=places/type=place/" |
-  grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
-  sed 's/>\(.*\)</\1/g' |
-  sort)
+if [ -z "$divisions_only" ]; then
+    # Download places parquet files
+    echo "Finding available place parquet files..."
+    places_files=$(curl -s "${source_base}/?list-type=2&prefix=release/${latest_release}/theme=places/type=place/" |
+      grep -o ">[^<]*part-[0-9]*-[^<]*.parquet<" |
+      sed 's/>\(.*\)</\1/g' |
+      sort)
 
-if [ -z "$places_files" ]; then
-    echo "No parquet files found for places. Please check the release date and URL format."
-    exit 1
-fi
-
-# Count already-cached places files
-places_file_count=$(echo "$places_files" | wc -l | tr -d ' ')
-places_cached_count=0
-while IFS= read -r file; do
-    filename=$(basename "$file")
-    if [ -f "${cache_dir}/places/${filename}" ]; then
-        places_cached_count=$((places_cached_count + 1))
-    fi
-done <<< "$places_files"
-
-# Download missing places files
-places_dl_count=0
-echo "Downloading places parquet files..."
-mkdir -p "${cache_dir}/places"
-while IFS= read -r file; do
-    filename=$(basename "$file")
-    dest="${cache_dir}/places/${filename}"
-    if [ -f "$dest" ]; then
-        continue
-    fi
-    places_dl_count=$((places_dl_count + 1))
-    echo "Downloading ${places_dl_count} / $((places_file_count - places_cached_count)) (cached: ${places_cached_count}): ${filename}"
-    if ! curl -sf -o "${dest}.tmp" "${source_base}/${file}"; then
-        echo "Failed to download ${source_base}/${file}"
-        rm -f "${dest}.tmp"
+    if [ -z "$places_files" ]; then
+        echo "No parquet files found for places. Please check the release date and URL format."
         exit 1
     fi
-    mv "${dest}.tmp" "$dest"
-done <<< "$places_files"
+
+    # Count already-cached places files
+    places_file_count=$(echo "$places_files" | wc -l | tr -d ' ')
+    places_cached_count=0
+    while IFS= read -r file; do
+        filename=$(basename "$file")
+        if [ -f "${cache_dir}/places/${filename}" ]; then
+            places_cached_count=$((places_cached_count + 1))
+        fi
+    done <<< "$places_files"
+
+    # Download missing places files
+    places_dl_count=0
+    echo "Downloading places parquet files..."
+    mkdir -p "${cache_dir}/places"
+    while IFS= read -r file; do
+        filename=$(basename "$file")
+        dest="${cache_dir}/places/${filename}"
+        if [ -f "$dest" ]; then
+            continue
+        fi
+        places_dl_count=$((places_dl_count + 1))
+        echo "Downloading ${places_dl_count} / $((places_file_count - places_cached_count)) (cached: ${places_cached_count}): ${filename}"
+        if ! curl -sf -o "${dest}.tmp" "${source_base}/${file}"; then
+            echo "Failed to download ${source_base}/${file}"
+            rm -f "${dest}.tmp"
+            exit 1
+        fi
+        mv "${dest}.tmp" "$dest"
+    done <<< "$places_files"
+else
+    echo "Skipping places download (--divisions-only)."
+fi
 
 # Download division and division_area parquet files
 for type_name in division division_area; do

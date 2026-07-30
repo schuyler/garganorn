@@ -157,6 +157,22 @@ def _make_manifest_db(path):
         con.close()
 
 
+def _make_manifest_json(manifest_db_path):
+    """Write a sibling manifest.json completeness marker next to manifest.duckdb.
+
+    A2 (A1 in oq-p2-5-deploy-execution.md): the build writes manifest.duckdb
+    first, then manifest.json LAST as the completeness marker. Content is
+    irrelevant to the guard -- only presence matters -- but keep it minimal
+    and valid JSON.
+    """
+    manifest_json_path = os.path.join(
+        os.path.dirname(str(manifest_db_path)), "manifest.json"
+    )
+    with open(manifest_json_path, "w") as f:
+        json.dump({"complete": True}, f)
+    return manifest_json_path
+
+
 def _make_tile_config(tiles_dir, manifest_path, slug="foursquare",
                       base_url="https://places.atgeo.org/tiles/foursquare",
                       cache_ttl=None):
@@ -191,6 +207,7 @@ def tile_client(tmp_path):
 
     manifest_path = tiles_current / "manifest.duckdb"
     _make_manifest_db(manifest_path)
+    _make_manifest_json(manifest_path)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
@@ -216,6 +233,7 @@ def tile_client_empty(tmp_path):
 
     manifest_path = tiles_current / "manifest.duckdb"
     _make_manifest_db(manifest_path)
+    _make_manifest_json(manifest_path)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
@@ -276,6 +294,7 @@ def test_tile_cache_control_absent_when_no_ttl(tmp_path):
         f.write(b'{"attribution": "https://example.com", "records": []}')
     manifest_path = tiles_current / "manifest.duckdb"
     _make_manifest_db(manifest_path)
+    _make_manifest_json(manifest_path)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
@@ -313,6 +332,7 @@ def test_tile_path_traversal_rejected(tmp_path):
 
     manifest_path = tiles_current / "manifest.duckdb"
     _make_manifest_db(manifest_path)
+    _make_manifest_json(manifest_path)
 
     # Physically create the escape target so 404 proves blocking, not absence.
     places_parquet = source_dir / "places.parquet"
@@ -360,6 +380,140 @@ def test_tile_path_traversal_rejected(tmp_path):
             assert resp.status_code == 404, (
                 f"Expected 404 for cross-source traversal {path!r}, got {resp.status_code}"
             )
+
+
+# ---------------------------------------------------------------------------
+# A1: completeness guard -- manifest.duckdb alone must not be enough to serve
+# ---------------------------------------------------------------------------
+
+def test_incomplete_run_not_served(tmp_path):
+    """A run that crashed after writing manifest.duckdb but before writing the
+    manifest.json completeness marker must NOT be served: the /tiles/<slug>/...
+    route returns 404, AND the collection must not be exposed through
+    org.atgeo.getCoverage.
+
+    getCoverage keys off Server.tile_manifests independently of the
+    /tiles/<slug>/... route (garganorn/server.py:213,221-223), so a fix that
+    only special-cases serve_tile() would pass a route-only check yet still
+    leak coverage URLs for an incomplete collection. The design requires a
+    single `ready` gate that withholds tile_manifests, tile_collections, AND
+    tile_dirs[slug] together.
+
+    Today's code (garganorn/__main__.py) gates tile_manifests registration
+    (and thus getCoverage) as well as the /tiles/ route on manifest.duckdb
+    existence alone, so this currently serves the tile AND leaks it via
+    getCoverage -- this test must FAIL until the fix requires the sibling
+    manifest.json for all three (tile_manifests, tile_collections, tile_dirs).
+    """
+    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+    tile_subdir = tiles_current / "012301"
+    tile_subdir.mkdir(parents=True)
+    tile_file = tile_subdir / "012301.json.gz"
+    with gzip.open(tile_file, "wb") as f:
+        f.write(b'{"attribution": "https://example.com", "records": []}')
+
+    manifest_path = tiles_current / "manifest.duckdb"
+    _make_manifest_db(manifest_path)
+    # Deliberately NOT calling _make_manifest_json -- simulates a crash
+    # between writing manifest.duckdb and the manifest.json marker.
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current,
+        manifest_path=manifest_path,
+        slug="foursquare",
+        base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+    with patch("garganorn.__main__.load_config") as mock_load:
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
+        app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        resp = client.get("/tiles/foursquare/012301/012301.json.gz")
+        assert resp.status_code == 404, (
+            "incomplete run (manifest.duckdb without manifest.json) must not "
+            f"be served; got {resp.status_code}"
+        )
+
+        # Same incompleteness must withhold the collection from getCoverage
+        # too, not just the tile-serving route -- see docstring above.
+        cov_resp = client.get(
+            "/xrpc/org.atgeo.getCoverage",
+            query_string={
+                "collection": FSQ_COLLECTION,
+                "bbox": "-180,-85,180,85",
+            },
+        )
+        assert cov_resp.status_code != 200, (
+            "incomplete run must not be exposed via getCoverage; got "
+            f"{cov_resp.status_code} body={cov_resp.get_json()!r}"
+        )
+        cov_data = cov_resp.get_json()
+        assert cov_data is not None
+        assert cov_data.get("error") == "CollectionNotFound", (
+            "incomplete collection must appear as CollectionNotFound to "
+            f"getCoverage (i.e. not registered), got {cov_data!r}"
+        )
+
+
+def test_complete_run_served(tmp_path):
+    """Positive control: a run with BOTH manifest.duckdb and manifest.json
+    present is served normally. May already pass today -- it locks in the
+    behavior the A1 fix must preserve.
+    """
+    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+    tile_subdir = tiles_current / "012301"
+    tile_subdir.mkdir(parents=True)
+    tile_file = tile_subdir / "012301.json.gz"
+    with gzip.open(tile_file, "wb") as f:
+        f.write(b'{"attribution": "https://example.com", "records": []}')
+
+    manifest_path = tiles_current / "manifest.duckdb"
+    _make_manifest_db(manifest_path)
+    _make_manifest_json(manifest_path)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current,
+        manifest_path=manifest_path,
+        slug="foursquare",
+        base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+    with patch("garganorn.__main__.load_config") as mock_load:
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
+        app = create_app()
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        resp = client.get("/tiles/foursquare/012301/012301.json.gz")
+        assert resp.status_code == 200, (
+            "complete run (manifest.duckdb + manifest.json) must be served; "
+            f"got {resp.status_code}"
+        )
+
+
+def test_no_manifest_key_still_boots(tmp_path):
+    """F4 regression guard: a collection whose config has no 'manifest' key
+    at all must not crash create_app() (today's graceful "no manifest
+    configured" path, which A1's short-circuited `and` must preserve).
+    """
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = {
+        "collections": {
+            FSQ_COLLECTION: {
+                "slug": "foursquare",
+                "base_url": "https://places.atgeo.org/tiles/foursquare",
+                # No "manifest" key, no "tiles_dir" key.
+                "attribution": "https://example.com",
+            },
+        }
+    }
+    with patch("garganorn.__main__.load_config") as mock_load:
+        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
+        app = create_app()  # must not raise
+    app.config["TESTING"] = True
+    with app.test_client() as client:
+        resp = client.get("/health")
+        assert resp.status_code == 200
 
 
 def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):

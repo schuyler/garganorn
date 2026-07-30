@@ -33,12 +33,21 @@ def create_app():
                 raise ValueError(
                     f"{collection}: base_url must end with '/{slug}' to match its serving route"
                 )
-            if manifest_path and not os.path.isfile(manifest_path):
+            # Completeness guard: a run is only ready to serve when BOTH
+            # manifest.duckdb AND its sibling manifest.json (the completeness
+            # marker, written last) exist. `and` short-circuits so
+            # os.path.dirname never sees manifest_path=None (F4).
+            ready = (
+                bool(manifest_path)
+                and os.path.isfile(manifest_path)
+                and os.path.isfile(os.path.join(os.path.dirname(manifest_path), "manifest.json"))
+            )
+            if manifest_path and not ready:
                 app.logger.warning(
-                    "Tile manifest configured for %s but not found: %s (tile serving disabled for this collection)",
-                    collection, manifest_path,
+                    "Tile run for %s is incomplete or missing (no manifest.json completeness "
+                    "marker); tile serving disabled for this collection", collection,
                 )
-            if manifest_path and os.path.isfile(manifest_path):
+            if ready:
                 tile_manifests[collection] = TileManifest(manifest_path, coll_cfg["base_url"])
                 if "tiles_dir" in coll_cfg:
                     tile_collections[collection] = TileBackedCollection(
@@ -47,7 +56,7 @@ def create_app():
                         tiles_dir=coll_cfg["tiles_dir"],
                         attribution=coll_cfg.get("attribution", ""),
                     )
-                    # Gate serving on the SAME manifest-exists condition: the route
+                    # Gate serving on the SAME readiness condition: the route
                     # must not serve a collection whose tiles are otherwise disabled.
                     if slug:
                         tile_dirs[slug] = (coll_cfg["tiles_dir"], coll_cfg.get("cache_ttl"))
