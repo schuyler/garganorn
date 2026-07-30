@@ -1210,13 +1210,13 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
         # Build per-zoom tile counts (same algorithm as compute_tile_assignments.sql)
         con.execute(f"""
             CREATE TEMP TABLE tile_counts AS
-            SELECT level, left(qk17, level) AS qk, count(*) AS cnt
+            SELECT t.level, left(qk17, t.level) AS qk, count(*) AS cnt
             FROM read_parquet('{pq_sql}'),
                  generate_series({min_zoom}, {max_zoom}) AS t(level)
             WHERE qk17 IS NOT NULL
               AND length(qk17) = 17
               AND qk17 ~ '^[0-3]{{17}}$'
-            GROUP BY level, left(qk17, level)
+            GROUP BY t.level, left(qk17, t.level)
         """)
 
         # Assign each place to its coarsest valid tile; fall back to max_zoom

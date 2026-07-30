@@ -124,12 +124,22 @@ def stage_covering(
     start, any pre-existing .tmp, .old, and .spill dirs are removed (crash
     leftovers).
 
-    temp_directory=None (default) resolves to covering_dir+'.spill', a sibling
-    of the output dir on the same volume.  SET temp_directory is always issued
-    so the in-memory connection can spill.
+    temp_directory: optional caller-supplied spill directory.  stage_covering
+    never rmtree's or otherwise owns this directory itself -- it only ever
+    creates and destroys a private subdirectory under it that it exclusively
+    owns.  When temp_directory is None (default), the owned spill dir is
+    covering_dir+'.spill', a sibling of the output dir on the same volume.
+    When the caller supplies temp_directory, the owned spill dir is
+    os.path.join(temp_directory, 'covering.spill') -- a private subdir on the
+    caller's chosen volume that stage_covering creates and destroys, leaving
+    the rest of the caller's directory untouched.  SET temp_directory is
+    always issued (pointing at the owned spill dir) so the in-memory
+    connection can spill.
     """
     if temp_directory is None:
-        temp_directory = covering_dir + ".spill"
+        owned_spill_dir = covering_dir + ".spill"
+    else:
+        owned_spill_dir = os.path.join(temp_directory, "covering.spill")
 
     meta_path = os.path.join(covering_dir, "_meta.json")
 
@@ -152,12 +162,12 @@ def stage_covering(
     old_dir = covering_dir + ".old"
 
     # Build start: unconditionally remove crash leftovers (§2.5 step 1)
-    for d in [tmp_dir, old_dir, temp_directory]:
+    for d in [tmp_dir, old_dir, owned_spill_dir]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
 
     os.makedirs(tmp_dir)
-    os.makedirs(temp_directory)
+    os.makedirs(owned_spill_dir, exist_ok=True)
 
     t0 = time.monotonic()
     log.info(
@@ -167,7 +177,7 @@ def stage_covering(
 
     con = duckdb.connect(":memory:")
     try:
-        con.execute(f"SET temp_directory = '{temp_directory}'")
+        con.execute(f"SET temp_directory = '{owned_spill_dir}'")
         con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
         con.execute("INSTALL spatial; LOAD spatial")
@@ -308,8 +318,8 @@ def stage_covering(
     os.rename(tmp_dir, covering_dir)
     if os.path.exists(old_dir):
         shutil.rmtree(old_dir, ignore_errors=True)
-    if os.path.exists(temp_directory):
-        shutil.rmtree(temp_directory, ignore_errors=True)
+    if os.path.exists(owned_spill_dir):
+        shutil.rmtree(owned_spill_dir, ignore_errors=True)
 
     return stats
 

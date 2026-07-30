@@ -782,3 +782,42 @@ class TestFreshnessAtomicity:
         assert not os.path.exists(old_dir), (
             "Recovery failed: .old dir should have been cleaned up at build start"
         )
+
+    def test_explicit_temp_directory_not_destroyed(self, covering_test_db, tmp_path):
+        """A caller-supplied --temp-directory must not be deleted or crash on reuse.
+
+        BUG: stage_covering shutil.rmtree's the caller's temp_directory at build
+        start (leftover-cleanup loop), then os.makedirs(temp_directory) (which
+        silently recreates it as an empty directory, discarding any pre-existing
+        contents), and shutil.rmtree's it again at the end of the build. This
+        destroys any pre-existing, caller-owned directory pointed to by
+        --temp-directory -- including its unrelated contents -- rather than
+        treating it as pipeline-owned scratch space (which is only true of the
+        default `covering_dir + ".spill"` path).
+
+        This test creates a pre-existing temp_directory containing a sentinel
+        file, calls stage_covering with that directory as temp_directory, and
+        asserts: (1) no exception is raised, and (2) the sentinel file still
+        exists afterward. It MUST FAIL at Red (currently deletes the sentinel).
+        """
+        _check_covering()
+        out_dir = str(tmp_path / "explicit_temp_out")
+        explicit_temp_dir = str(tmp_path / "caller_owned_temp")
+        os.makedirs(explicit_temp_dir)
+        sentinel = os.path.join(explicit_temp_dir, "DO_NOT_DELETE.txt")
+        with open(sentinel, "w") as f:
+            f.write("caller-owned data, must survive stage_covering\n")
+
+        stage_covering(
+            str(covering_test_db),
+            out_dir,
+            cover_min_zoom=4,
+            cover_max_zoom=6,
+            temp_directory=explicit_temp_dir,
+        )
+
+        assert os.path.exists(sentinel), (
+            "Caller-supplied temp_directory's pre-existing sentinel file was "
+            "deleted by stage_covering; explicit temp_directory must not be "
+            "treated as pipeline-owned scratch space"
+        )

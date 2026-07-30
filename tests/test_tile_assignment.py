@@ -414,3 +414,101 @@ class TestTileAssignmentDiagnostics:
         # Test merely verifies stage_tile_assignment runs the diagnostic query;
         # the exact message content is checked in GREEN when the implementation exists.
         assert output  # Stage must produce the output artifact
+
+
+# ---------------------------------------------------------------------------
+# BUG: ambiguous `level` column crash in stage_tile_assignment
+#
+# The tile_counts query in stage_tile_assignment (garganorn/stages.py, around
+# lines 1211-1220) does:
+#
+#     SELECT level, left(qk17, level) AS qk, count(*) AS cnt
+#     FROM read_parquet('{pq_sql}'),
+#          generate_series({min_zoom}, {max_zoom}) AS t(level)
+#     ...
+#     GROUP BY level, left(qk17, level)
+#
+# The bare `level` is meant to reference the generate_series alias t(level),
+# but overture_division (and other boundary-shaped) records also carry a
+# `level` column (Phase 2b). When the input parquet has its own `level`
+# column, DuckDB cannot resolve the bare identifier and raises:
+#
+#     duckdb.BinderException: Binder Error: Ambiguous reference to column
+#     name "level" (use: "read_parquet.level" or "t.level")
+#
+# This test builds a places.parquet WITH a `level` column (as
+# overture_division records have) and calls stage_tile_assignment for the
+# "overture_division" source. It must complete without raising
+# BinderException and must produce the expected tile_assignments artifact.
+# ---------------------------------------------------------------------------
+
+def _make_places_parquet_with_level(tmp_path, places, pk_col="id"):
+    """Write a places.parquet with an extra `level` column (like overture_division).
+
+    `places` is a list of (pk, lat, lon, level) tuples.
+    """
+    parquet_path = str(tmp_path / "places_with_level.parquet")
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    rows_sql = ", ".join(
+        f"('{pid}', ST_QuadKey({lon}, {lat}, 17), {level})"
+        for pid, lat, lon, level in places
+    )
+    con.execute(f"""
+        COPY (
+            SELECT {pk_col}, qk17, level
+            FROM (VALUES {rows_sql}) t({pk_col}, qk17, level)
+        ) TO '{parquet_path}' (FORMAT PARQUET)
+    """)
+    con.close()
+    return parquet_path
+
+
+class TestTileAssignmentAmbiguousLevelColumn:
+    """Reproduces the ambiguous-`level`-column BinderException crash.
+
+    overture_division records carry a `level` column (the atgeo containment
+    vocabulary value, Phase 2b). stage_tile_assignment's tile_counts query
+    uses a bare `level` identifier that collides with this input column,
+    causing DuckDB to raise BinderException instead of completing.
+
+    This test MUST FAIL at Red with duckdb.BinderException until the query
+    is fixed to qualify `level` as `t.level`.
+    """
+
+    _PLACES_WITH_LEVEL = [
+        # (id, lat, lon, level) -- level values from LEVEL_VOCAB (e.g. locality=50)
+        ("div001", 37.7749, -122.4194, 50),
+        ("div002", 37.7750, -122.4195, 50),
+        ("div003", 40.7128, -74.0060, 10),
+    ]
+
+    def test_stage_tile_assignment_with_level_column_input(self, tmp_path):
+        """stage_tile_assignment must not crash when the input parquet has a `level` column."""
+        places_parquet = _make_places_parquet_with_level(
+            tmp_path, self._PLACES_WITH_LEVEL, pk_col="id"
+        )
+        output = str(tmp_path / "tile_assignments_div.parquet")
+
+        # Currently raises duckdb.BinderException: Ambiguous reference to
+        # column name "level" (use: "read_parquet.level" or "t.level").
+        _stages.stage_tile_assignment(
+            places_parquet, output, "overture_division", max_per_tile=100
+        )
+
+        assert pathlib.Path(output).exists(), (
+            f"tile_assignments.parquet not written to {output}"
+        )
+        con = duckdb.connect()
+        assigned_ids = {
+            row[0] for row in con.execute(
+                f"SELECT place_id FROM read_parquet('{output}')"
+            ).fetchall()
+        }
+        con.close()
+        expected_ids = {p[0] for p in self._PLACES_WITH_LEVEL}
+        assert assigned_ids == expected_ids, (
+            f"Assigned IDs differ from expected.\n"
+            f"  Missing: {expected_ids - assigned_ids}\n"
+            f"  Extra:   {assigned_ids - expected_ids}"
+        )

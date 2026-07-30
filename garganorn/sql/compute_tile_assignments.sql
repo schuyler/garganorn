@@ -3,12 +3,12 @@ DROP TABLE IF EXISTS tile_assignments;
 -- Count places per tile at each zoom level
 DROP TABLE IF EXISTS tile_counts;
 CREATE TEMP TABLE tile_counts AS
-SELECT level, left(qk17, level) AS qk, count(*) AS cnt
+SELECT t.level, left(qk17, t.level) AS qk, count(*) AS cnt
 FROM places, generate_series(${min_zoom}, ${max_zoom}) AS t(level)
 WHERE qk17 IS NOT NULL
   AND length(qk17) = 17
   AND qk17 ~ '^[0-3]{17}$'
-GROUP BY level, left(qk17, level);
+GROUP BY t.level, left(qk17, t.level);
 
 -- Find coarsest zoom where tile count <= max_per_tile, then assign each place to a tile
 CREATE TABLE tile_assignments AS
