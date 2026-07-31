@@ -153,6 +153,13 @@ class TestSpatial1CoordinateRangeValidation:
             db_path = pathlib.Path(tmpdir) / "test.duckdb"
             con = duckdb.connect(str(db_path))
             con.execute("INSTALL spatial; LOAD spatial;")
+            # density_extract.sql computes tile bounds via the qk_env() scalar
+            # macro (garganorn/sql/qk_env_macro.sql); load it into this
+            # standalone connection, mirroring stages._load_qk_env_macros.
+            for stmt in (REPO_ROOT / "garganorn" / "sql" / "qk_env_macro.sql").read_text().split(";"):
+                stmt = stmt.strip()
+                if stmt:
+                    con.execute(stmt)
 
             # Create a test parquet with some out-of-range coordinates
             con.execute("""

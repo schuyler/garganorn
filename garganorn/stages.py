@@ -979,6 +979,21 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     log.info("[%s] import artifact: done (%.1fs)", source, time.monotonic() - t0)
 
 
+def _load_qk_env_macros(con):
+    """Execute qk_env_macro.sql into an open DuckDB connection.
+
+    Defines qk_tile_x/qk_tile_y/qk_env scalar macros used to compute z15
+    tile envelopes in SQL. Mirrors garganorn.covering._load_qk_env_macros
+    (duplicated here rather than imported, since covering.py imports from
+    this module and importing back would create a cycle).
+    """
+    sql = (_SQL_DIR / "qk_env_macro.sql").read_text()
+    for stmt in sql.split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            con.execute(stmt)
+
+
 def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
                           force: bool = False,
                           memory_limit: str = "48GB",
@@ -994,8 +1009,9 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     gate uses artifact_fresh() (meta-aware). Output sorted by tile_qk15 (§3.1).
 
     Phase 4: Tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax) are
-    computed via Python post-processing using quadkey_to_bbox(). This ensures
-    bbox-overlap joins work correctly for small localities.
+    computed in SQL using the qk_env() macro (garganorn/sql/qk_env_macro.sql),
+    which matches quadkey_to_bbox() to within 1e-9. This ensures bbox-overlap
+    joins work correctly for small localities.
 
     Args:
         parquet_glob: Glob pattern for Overture place parquet files.
@@ -1028,43 +1044,19 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
         if memory_limit:
             con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
+        con.execute("INSTALL spatial; LOAD spatial")
+        _load_qk_env_macros(con)
         con.execute(sql)
-        # Read results and add tile bounds via Python post-processing
-        rows = con.execute("SELECT tile_qk15, density_score FROM density_tiles ORDER BY tile_qk15").fetchall()
-
-        # Build output rows with tile bounds computed from quadkey
-        output_rows = []
-        for tile_qk15, density_score in rows:
-            tile_xmin, tile_ymin, tile_xmax, tile_ymax = quadkey_to_bbox(tile_qk15)
-            output_rows.append((
-                tile_qk15,
-                density_score,
-                tile_xmin,
-                tile_ymin,
-                tile_xmax,
-                tile_ymax
-            ))
-
-        # Create table with expanded schema using proper SQL
-        con.execute("""
-            CREATE TABLE density_export (
-                tile_qk15 VARCHAR,
-                density_score DOUBLE,
-                tile_xmin DOUBLE,
-                tile_ymin DOUBLE,
-                tile_xmax DOUBLE,
-                tile_ymax DOUBLE
-            )
-        """)
-
-        # Insert rows using executemany for batch insert
-        con.executemany("INSERT INTO density_export VALUES (?, ?, ?, ?, ?, ?)", output_rows)
 
         # Write to .tmp first; finalize_artifact will atomically rename it (§2.3 rule 1)
         con.execute(
-            f"COPY (SELECT * FROM density_export ORDER BY tile_qk15) TO '{_tmp}' (FORMAT PARQUET)"
+            f"COPY ("
+            f"  SELECT tile_qk15, density_score, tile_xmin, tile_ymin, tile_xmax, tile_ymax"
+            f"  FROM density_tiles"
+            f"  ORDER BY tile_qk15"
+            f") TO '{_tmp}' (FORMAT PARQUET)"
         )
-        count = len(output_rows)
+        count = con.execute("SELECT count(*) FROM density_tiles").fetchone()[0]
         log.info("density_extract: done (%.1fs, %d z15 tiles)",
                  time.monotonic() - t0, count)
     finally:

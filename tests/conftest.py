@@ -950,7 +950,8 @@ def density_parquet(overture_parquet, tmp_path_factory):
     to produce a shared density parquet file that all importance tests can use.
     The fixture is session-scoped so the density extraction runs once per test run.
 
-    The density parquet has schema (tile_qk15 VARCHAR, density_score DOUBLE).
+    The density parquet has schema (tile_qk15 VARCHAR, density_score DOUBLE,
+    tile_xmin DOUBLE, tile_ymin DOUBLE, tile_xmax DOUBLE, tile_ymax DOUBLE).
     """
     import time
     from garganorn.stages import stage_density_extract

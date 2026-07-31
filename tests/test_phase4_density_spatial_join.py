@@ -106,10 +106,15 @@ class TestDensityTileBounds:
         # Compute expected bounds using quadkey_to_bbox
         expected = quadkey_to_bbox(qk)
 
-        assert xmin == expected[0], f"tile_xmin mismatch for {qk}: got {xmin}, expected {expected[0]}"
-        assert ymin == expected[1], f"tile_ymin mismatch for {qk}: got {ymin}, expected {expected[1]}"
-        assert xmax == expected[2], f"tile_xmax mismatch for {qk}: got {xmax}, expected {expected[2]}"
-        assert ymax == expected[3], f"tile_ymax mismatch for {qk}: got {ymax}, expected {expected[3]}"
+        # Bounds are computed in SQL (qk_env macro, sinh via (exp-exp)/2) and
+        # compared against Python's math.sinh; the two differ at the ULP
+        # level, so exact equality is not guaranteed. 1e-9 is the codebase's
+        # established numerical contract for this computation (see
+        # tests/test_covering.py, which pins the same tolerance).
+        assert abs(xmin - expected[0]) <= 1e-9, f"tile_xmin mismatch for {qk}: got {xmin}, expected {expected[0]}"
+        assert abs(ymin - expected[1]) <= 1e-9, f"tile_ymin mismatch for {qk}: got {ymin}, expected {expected[1]}"
+        assert abs(xmax - expected[2]) <= 1e-9, f"tile_xmax mismatch for {qk}: got {xmax}, expected {expected[2]}"
+        assert abs(ymax - expected[3]) <= 1e-9, f"tile_ymax mismatch for {qk}: got {ymax}, expected {expected[3]}"
 
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ import time
 
 import duckdb
 import pytest
-from garganorn.stages import stage_density_extract
+from garganorn.stages import stage_density_extract, quadkey_to_bbox
 
 
 # ---------------------------------------------------------------------------
@@ -78,6 +78,52 @@ class TestDensityExtract:
         # All should contribute to density since there's no bbox filter.
         # We expect at least 1 density tile (probably 1-5 given the small fixture).
         assert count > 0, f"Expected at least 1 density tile, got {count}"
+
+
+# ---------------------------------------------------------------------------
+# Tile bounds computed in SQL (qk_env macro) must match quadkey_to_bbox()
+# ---------------------------------------------------------------------------
+
+class TestDensityTileBoundsSQL:
+    """Guard test for the SQL-computed tile bounds columns.
+
+    stage_density_extract computes tile_xmin/tile_ymin/tile_xmax/tile_ymax
+    in SQL via the qk_env() macro (garganorn/sql/qk_env_macro.sql) rather
+    than in a Python post-processing loop over quadkey_to_bbox(). This test
+    asserts the SQL path still produces all 6 output columns, in the
+    documented order, and that the SQL-computed bounds agree with
+    quadkey_to_bbox() (the reference implementation) to within 1e-9 for
+    every row in the output.
+    """
+
+    def test_sql_bounds_match_quadkey_to_bbox(self, overture_parquet, tmp_path):
+        """All 6 columns present; SQL bounds agree with quadkey_to_bbox() to 1e-9."""
+        output = tmp_path / "density.parquet"
+        stage_density_extract(overture_parquet, str(output), time.monotonic())
+
+        conn = duckdb.connect(":memory:")
+        cols = [row[0] for row in conn.execute(
+            f"DESCRIBE SELECT * FROM read_parquet('{output}')"
+        ).fetchall()]
+        assert cols == [
+            "tile_qk15", "density_score",
+            "tile_xmin", "tile_ymin", "tile_xmax", "tile_ymax",
+        ], f"unexpected column set/order: {cols}"
+
+        rows = conn.execute(
+            f"SELECT tile_qk15, tile_xmin, tile_ymin, tile_xmax, tile_ymax "
+            f"FROM read_parquet('{output}')"
+        ).fetchall()
+        conn.close()
+
+        assert rows, "expected at least one density tile from the overture_parquet fixture"
+
+        for qk, xmin, ymin, xmax, ymax in rows:
+            expected = quadkey_to_bbox(qk)
+            assert abs(xmin - expected[0]) <= 1e-9, f"tile_xmin mismatch for {qk}: got {xmin}, expected {expected[0]}"
+            assert abs(ymin - expected[1]) <= 1e-9, f"tile_ymin mismatch for {qk}: got {ymin}, expected {expected[1]}"
+            assert abs(xmax - expected[2]) <= 1e-9, f"tile_xmax mismatch for {qk}: got {xmax}, expected {expected[2]}"
+            assert abs(ymax - expected[3]) <= 1e-9, f"tile_ymax mismatch for {qk}: got {ymax}, expected {expected[3]}"
 
 
 # ---------------------------------------------------------------------------
