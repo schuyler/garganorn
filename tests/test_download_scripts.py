@@ -224,28 +224,28 @@ class TestDownloadOsmUsage:
 # ---------------------------------------------------------------------------
 # Tests 8-11: Overture cache directory layout restructure
 #
-# These fail because the current code stores parquet files at the cache root
-# and uses S3-style partitioning (type=division, etc.) locally. After the
-# restructure, places should be in a places/ subdir and divisions should use
-# flat naming (division/, division_area/, division_boundary/) without type=
-# prefixes.
+# These originally verified a places/ subdirectory + flat division naming
+# restructure. 2026-08-03: the places/ subdirectory was reverted — it never
+# matched the quadtree pipeline's config glob (db/cache/overture/*/part-*.parquet),
+# which expects places parquet directly at cache_dir root, same as
+# division/division_area. Only the places-layout tests changed below; the
+# divisions flat-naming tests (no type= nesting) are unaffected.
 # ---------------------------------------------------------------------------
 
 
 class TestOvertureCacheLayout:
-    """Overture cache should use places/ subdirectory and flat division naming."""
+    """Overture cache should use a flat layout for places (matching the
+    quadtree pipeline's config glob) and flat division naming."""
 
-    def test_import_finds_parquets_in_places_subdir(self, tmp_path):
-        """import-overture-extract.sh finds parquet files in cache_dir/places/.
+    def test_import_finds_parquets_at_cache_root(self, tmp_path):
+        """import-overture-extract.sh finds parquet files directly under cache_dir.
 
-        Red: Current script looks at cache root (${cache_dir}/*.parquet).
-        After restructure, it should look in ${cache_dir}/places/*.parquet.
+        Places parquet files live at cache_dir root, matching
+        download-overture.sh's output and the quadtree pipeline's
+        db/cache/overture/<release>/*.parquet glob — not nested under places/.
         """
-        # Create fake parquet files in places/ subdirectory
-        places_dir = tmp_path / "places"
-        places_dir.mkdir()
         for i in range(5):
-            (places_dir / f"part-{i:05d}-00000.parquet").touch()
+            (tmp_path / f"part-{i:05d}-00000.parquet").touch()
 
         # Run import with --cache-dir pointing to tmp_path
         result = _run(
@@ -254,9 +254,9 @@ class TestOvertureCacheLayout:
         )
 
         combined = result.stdout + result.stderr
-        # Should NOT say "Cache missing" because files exist in places/
+        # Should NOT say "Cache missing" because files exist at cache_dir root
         assert "Cache missing" not in combined, (
-            f"Script should find parquet files in places/ subdirectory, but it reported 'Cache missing'.\n"
+            f"Script should find parquet files directly under cache_dir, but it reported 'Cache missing'.\n"
             f"stdout: {result.stdout[:1000]}\nstderr: {result.stderr[:1000]}"
         )
 
@@ -321,11 +321,11 @@ class TestOvertureCacheLayout:
             f"Problematic lines:\n" + "\n".join(f"  Line {n}: {line}" for n, line in problematic_lines)
         )
 
-    def test_import_cache_check_uses_places_subdir(self):
-        """import-overture-extract.sh cache glob should use places/ subdirectory.
+    def test_import_cache_check_uses_cache_root(self):
+        """import-overture-extract.sh parquet glob should check cache_dir root, not places/.
 
-        Red: Current script checks ${cache_dir}/*.parquet at root level.
-        After restructure, it should check ${cache_dir}/places/*.parquet.
+        Places files live flat under cache_dir, matching download-overture.sh's
+        output and the quadtree pipeline's config glob.
         """
         script_path = SCRIPTS_DIR / "import-overture-extract.sh"
         script_content = script_path.read_text()
@@ -336,12 +336,32 @@ class TestOvertureCacheLayout:
             if "*.parquet" in line:
                 parquet_lines.append((line_num, line.strip()))
 
-        # At least one *.parquet line should reference places/
+        # No *.parquet line should reference a places/ subdirectory
         places_references = [line for n, line in parquet_lines if "places/" in line]
 
-        assert places_references, (
-            "No *.parquet glob pattern references places/ subdirectory.\n"
-            f"Found {len(parquet_lines)} lines with *.parquet:\n" +
-            "\n".join(f"  Line {n}: {line}" for n, line in parquet_lines) +
-            "\n\nAt least one should include places/ path."
+        assert not places_references, (
+            "Found *.parquet glob pattern(s) referencing a places/ subdirectory; "
+            "places files should be read directly from cache_dir root.\n"
+            "Problematic lines:\n" + "\n".join(f"  {line}" for line in places_references)
+        )
+
+    def test_download_script_no_places_nesting(self):
+        """download-overture.sh should not nest places under a places/ directory.
+
+        Places parquet files should land at cache_dir root, matching
+        division/division_area and the quadtree pipeline's config glob
+        (db/cache/overture/<release>/*.parquet).
+        """
+        script_path = SCRIPTS_DIR / "download-overture.sh"
+        script_content = script_path.read_text()
+
+        problematic_lines = []
+        for line_num, line in enumerate(script_content.splitlines(), 1):
+            if "cache_dir}/places" in line or 'cache_dir"/places' in line:
+                problematic_lines.append((line_num, line.strip()))
+
+        assert not problematic_lines, (
+            "Found places/ subdirectory nesting in local path construction. "
+            "Places files should be written to cache_dir root, not cache_dir/places/.\n"
+            "Problematic lines:\n" + "\n".join(f"  Line {n}: {line}" for n, line in problematic_lines)
         )

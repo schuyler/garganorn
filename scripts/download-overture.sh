@@ -91,7 +91,7 @@ if [ -z "$divisions_only" ]; then
     places_cached_count=0
     while IFS= read -r file; do
         filename=$(basename "$file")
-        if [ -f "${cache_dir}/places/${filename}" ]; then
+        if [ -f "${cache_dir}/${filename}" ]; then
             places_cached_count=$((places_cached_count + 1))
         fi
     done <<< "$places_files"
@@ -99,10 +99,9 @@ if [ -z "$divisions_only" ]; then
     # Download missing places files
     places_dl_count=0
     echo "Downloading places parquet files..."
-    mkdir -p "${cache_dir}/places"
     while IFS= read -r file; do
         filename=$(basename "$file")
-        dest="${cache_dir}/places/${filename}"
+        dest="${cache_dir}/${filename}"
         if [ -f "$dest" ]; then
             continue
         fi
