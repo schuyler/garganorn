@@ -1940,45 +1940,69 @@ class TestExportRecordParityPhase2:
         )
 
     def test_two_forced_fsq_exports_byte_identical(
-        self, fsq_parquet, density_parquet, tmp_path
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """Two forced exports from the same foursquare artifacts must produce
         gunzip-byte-identical tile files (§3.8 determinism: ORDER BY tile_qk, place_id).
 
-        Fails RED because run_pipeline writes tiles to <src>/<timestamp>/ (Phase 1 layout),
-        not <src>/tiles/current/ (Phase 2 layout required by _find_tiles_current).
+        Two details make this assertion mean what it says:
+
+        The clock is pinned. stage_export stamps a wall-clock generated_at at
+        second granularity into every tile envelope (stages.py:1469-1471), so
+        two runs straddling a clock tick differ by one digit inside the
+        timestamp -- a difference that has nothing to do with export
+        determinism. Unpinned, this test passes only when both pipeline runs
+        happen to land in the same second, which is a coin flip on a loaded
+        machine, not an assertion.
+
+        The runs write to separate roots. The run-dir name derives from that
+        same pinned instant, so sharing one root would make the second run
+        overwrite the first in place and the comparison would compare each
+        file to itself -- passing no matter what export did.
         """
         import gzip as _gzip
+        from datetime import datetime as _datetime, timezone as _timezone
+        import garganorn.stages as _stages
         from garganorn.quadtree import run_pipeline as _run_pipeline
 
-        out = tmp_path / "det_out"
-        out.mkdir()
+        fixed = _datetime(2026, 1, 2, 3, 4, 5, tzinfo=_timezone.utc)
 
-        def _run():
+        class _FixedClock(_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed
+
+        monkeypatch.setattr(_stages, "datetime", _FixedClock)
+
+        def _run(root):
+            root.mkdir()
             _run_pipeline(
                 "foursquare", fsq_parquet,
                 (-122.55, 37.60, -122.30, 37.85),
-                str(out), memory_limit="4GB", max_per_tile=100,
+                str(root), memory_limit="4GB", max_per_tile=100,
                 density_parquet=density_parquet, force=True,
             )
+            tiles_current = root / "foursquare" / "tiles" / "current"
+            assert tiles_current.exists(), (
+                f"Phase 2 tiles must be at {tiles_current}"
+            )
+            tiles = {}
+            for p in tiles_current.rglob("*.json.gz"):
+                with _gzip.open(p) as f:
+                    tiles[str(p.relative_to(tiles_current))] = f.read()
+            return tiles
 
-        _run()
-        tiles_current = out / "foursquare" / "tiles" / "current"
-        assert tiles_current.exists(), (
-            f"Phase 2 tiles must be at {tiles_current} — "
-            "fails RED because run_pipeline uses Phase 1 layout"
+        first_run = _run(tmp_path / "det_out_a")
+        second_run = _run(tmp_path / "det_out_b")
+
+        assert first_run, "first export produced no tiles; nothing was compared"
+        assert first_run.keys() == second_run.keys(), (
+            f"the two exports produced different tile sets: "
+            f"only in first={sorted(first_run.keys() - second_run.keys())}, "
+            f"only in second={sorted(second_run.keys() - first_run.keys())}"
         )
-        first_run = {}
-        for p in tiles_current.rglob("*.json.gz"):
-            with _gzip.open(p) as f:
-                first_run[str(p.relative_to(tiles_current))] = f.read()
-
-        _run()
-        for p in tiles_current.rglob("*.json.gz"):
-            rel = str(p.relative_to(tiles_current))
-            with _gzip.open(p) as f:
-                second_bytes = f.read()
-            assert second_bytes == first_run.get(rel, b""), (
+        for rel, first_bytes in first_run.items():
+            assert second_run[rel] == first_bytes, (
                 f"Tile {rel}: second forced export differs from first — "
                 "ORDER BY tile_qk, place_id must make export deterministic"
             )
