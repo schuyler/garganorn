@@ -14,7 +14,7 @@ R-tree spatial indexes are not used in JOIN ON conditions or subqueries.
 Workaround: materialize filtered results to a temp table via a top-level
 WHERE clause, then join against the temp table.
 
-**Applies to**: `stages.py:116-128` (containment pre-filter), `boundaries.py:48`
+**Applies to**: `sql/covering_seed.sql:31` (containment pre-filter), `boundaries.py:48`
 (point-in-polygon query)
 
 **Why it matters**: Without this workaround, spatial queries degrade to
@@ -60,7 +60,7 @@ When unnesting a NULL or empty array, the row disappears from the result
 set entirely — no error, no NULL output row. This is correct SQL semantics
 but can cause unexpected row count changes.
 
-**Applies to**: `foursquare_import.sql:34-35` (category unnesting),
+**Applies to**: `foursquare_import.sql:38` (category unnesting),
 `foursquare_idf.sql:12` (same), `overture_place_import.sql:38-55`
 (name variant unnesting)
 
@@ -91,7 +91,7 @@ spatial keys from lon/lat coordinates.
 - **Non-locality divisions**: `40% population` only
   - Formula: `round(40 * least(ln(1+population)/pop_norm, 1.0))`
 
-**Applies to**: `foursquare_import.sql:41-44`, `overture_place_import.sql:71-74`,
+**Applies to**: `foursquare_import.sql:46`, `overture_place_import.sql:78`,
 `osm_import.sql:139-142`, `overture_division_import.sql:94-100`
 
 ### P3: Density tiles use bbox-overlap join
@@ -103,18 +103,22 @@ score if the tile bbox intersects the locality bbox.
 **Applies to**: `overture_division_import.sql:84-88`
 
 **Why it matters**: Centroid-based joins systematically under-scored small
-localities and edge tiles. Fixed in Phase 4 of pipeline restructuring.
+localities and edge tiles. This is a known, open limitation (`SPATIAL-3` in
+`pipeline-status.md`), not fixed — Phase 4 (global validation), where it
+would be revisited, has not started.
 
-### P4: STAGE_ORDER is uniform across all sources
+### P4: Five independent, freshness-gated CLI subcommands (no fixed stage order)
 
-```
-STAGE_ORDER = ['import', 'tile_assignment', 'containment', 'export', 'manifest']
-```
+There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes five
+subcommands (`quadtree.py:355-475`): `density`, `idf`, `covering`, `run`
+(one source), `all` (every source). Each stage is independently gated by
+artifact freshness (mtime + params, see `pipeline-implementation-decisions.md`
+"One caching mechanism"), so there's no shared ordered pipeline object —
+`all` sequences density → idf per source → division → remaining sources,
+but `run`/individual subcommands can be invoked in any order and simply
+no-op if their inputs aren't ready.
 
-Boundary export is a special case outside this loop — called directly for
-`overture_division` only, between import and tile_assignment.
-
-**Applies to**: `quadtree.py:42`, `quadtree.py:242-247`
+**Applies to**: `quadtree.py:355-475`
 
 ### P5: IDF is computed from source parquet, not imported places table
 
@@ -122,27 +126,33 @@ IDF computation reads raw parquet directly (ephemeral DuckDB connection),
 not the imported `places` table. This avoids an ephemeral import step and
 makes IDF cacheable per-dataset.
 
-**Applies to**: `stages.py:601-649`, `*_idf.sql`
+**Applies to**: `stages.py:1070` (`stage_idf`), `*_idf.sql`
 
-### P6: Containment uses adaptive quadtree with two-phase optimization
+### P6: Containment is a precomputed covering joined by quadkey prefix
 
-Phase 1: ST_Contains(geometry, tile_envelope) identifies boundaries that
-fully contain a tile. All places in that tile get assigned via CROSS JOIN
-(no per-point geometry test).
+Replaced the old per-tile recursive containment (adaptive quadtree,
+CROSS JOIN per contained tile, z6 seeds subdividing past a 200-boundary
+threshold to z14) with a two-artifact approach in the Phase 1 pipeline
+restructure. Full reasoning and decisions: `pipeline-implementation-decisions.md`
+("Phase 1 — covering + containment rewrite").
 
-Phase 2: ST_Contains(geometry, point) runs per-point only for "edge"
-boundaries that overlap but don't fully contain the tile. Bbox pre-filter
-on lat/lon columns reduces ST_Contains calls.
+1. **Covering** (`covering.py:106` `stage_covering`, `COVER_MIN_ZOOM=4`,
+   `COVER_MAX_ZOOM=12`): level-by-level descent z4→z12 precomputes which
+   tiles each boundary fully contains (`interior`, emitted at every level)
+   vs. merely overlaps (`edge`, only at z12), clipping geometry to each
+   tile's own envelope as it descends.
+2. **Containment join** (`stages.py:180` `compute_containment`): two arms,
+   `UNION ALL`. *Interior arm* — an equi-join of a place's qk17 prefix
+   against interior covering tiles, no geometry test. *Edge arm* — for z12
+   edge tiles only, a bbox-prefiltered full-geometry `ST_Contains`.
 
-Tiles are subdivided from z6 seeds when boundary count exceeds 200, up to
-z14 maximum.
+**Applies to**: `covering.py:106`, `stages.py:180`
 
-**Applies to**: `stages.py:89-186` (`_run_containment`, `_process_tile`,
-`compute_containment`)
-
-**Correctness invariant**: Each place belongs to exactly one leaf tile
-(determined by the appropriate prefix of its qk17). The CROSS JOIN in
-phase 1 assigns all phase-1 boundaries to every place in that tile.
+**Correctness invariant**: interior and edge tile sets are disjoint by
+construction, so a place matches each boundary at most once (no `DISTINCT`
+needed). Verified against an in-suite brute-force `ST_Contains` oracle, not
+a captured baseline (the old per-tile code never worked correctly in
+production, so no valid baseline existed to compare against).
 
 ---
 
@@ -154,7 +164,7 @@ phase 1 assigns all phase-1 boundaries to every place in that tile.
 token-level JW score. Token matching splits query and name on spaces,
 matches tokens greedily by highest JW score, and averages match scores.
 
-**Applies to**: `database.py:42-44`, JW scoring functions in Database subclasses
+**Applies to**: `database.py:45-46`, JW scoring functions in Database subclasses
 
 ### Q2: Importance floor scales with search area
 
@@ -162,7 +172,7 @@ matches tokens greedily by highest JW score, and averages match scores.
 where `K=1000`. This prevents low-importance results from dominating
 large-area searches. Applied only when a text query is present.
 
-**Applies to**: `database.py:14-22`, `database.py:243-244`
+**Applies to**: `database.py:14-22`, `database.py:262`
 
 ### Q3: Containment gracefully degrades
 
@@ -183,8 +193,8 @@ If boundary lookup fails for any reason, the place is served without
 | `IMPORTANCE_FLOOR_K` | 1000 | Importance floor scaling for search area |
 | `JW_THRESHOLD` | 0.6 | Minimum JW score for name matching |
 | `JW_TOKEN_ALPHA` | 0.5 | Field/token blending weight |
-| `max_boundaries` | 200 | Containment subdivision threshold |
-| `max_zoom` | 14 | Maximum containment subdivision depth |
+| `COVER_MIN_ZOOM` | 4 | Covering descent start level (P6) |
+| `COVER_MAX_ZOOM` | 12 | Covering descent end level; edge tiles emitted here (P6) |
 | `max_per_tile` | 1000 | Maximum records per export tile |
 
 ## Coordinate System

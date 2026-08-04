@@ -38,7 +38,8 @@ class TileBackedCollection:
         except FileNotFoundError:
             return None
         for record in tile_data["records"]:
-            # Deployment-window tolerance (§B.8): old-shape tiles (no "value"
+            # Deployment-window tolerance (docs/pipeline-implementation-decisions.md,
+            # "OQ-P2-1 — record envelope adoption"): old-shape tiles (no "value"
             # wrapper) fall back to the record itself. TEMPORARY — remove
             # after the first production re-export following this deploy.
             value = record.get("value", record)

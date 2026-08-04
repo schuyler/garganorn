@@ -194,7 +194,8 @@ def compute_containment(
 ) -> None:
     """Write <src>/containment/ with per-prefix parquet files and _meta.json (Phase 2).
 
-    Implements §3.5 of docs/phase2-artifacts-design.md:
+    Implements the containment-artifact design (see
+    docs/pipeline-implementation-decisions.md, "Phase 2"):
     - Reads places and tile_assignments from parquet artifacts.
     - Builds per-qk4-prefix containment parquet files under containment_dir.
     - Uses dir-swap atomicity (covering.py pattern): builds under .tmp/, writes
@@ -412,7 +413,8 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
         # records are (rkey, record_json) pairs; record_json is a DuckDB
         # to_json()::VARCHAR string — already valid JSON. wrap_record composes
         # the {uri, cid, value} envelope via string concatenation, avoiding a
-        # per-record json.loads/json.dumps round trip (§B.7.1).
+        # per-record json.loads/json.dumps round trip (pipeline-implementation-
+        # decisions.md "OQ-P2-1 — record envelope adoption").
         wrapped = [
             envelope.wrap_record(
                 envelope.record_uri(REPO, source_cls.collection, rkey), record_json
@@ -481,7 +483,8 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         output_dir: Directory where manifest.duckdb will be written.
         source: Source key (foursquare, overture_place, osm, overture_division).
         generated_at: RFC 3339 Z run-scoped timestamp shared with the tiles and
-            manifest.json (§B.4, §B.6). Defaults to the current time if omitted
+            manifest.json (pipeline-implementation-decisions.md
+            "OQ-P2-1 — record envelope adoption"). Defaults to the current time if omitted
             (legacy/test callers that don't thread a run timestamp).
     """
     if generated_at is None:
@@ -524,10 +527,12 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
 
 
 def write_manifest(manifest, output_dir, source, *, generated_at):
-    """Write manifest.json in the atgeo v1 envelope shape (§B.2c, §B.6).
+    """Write manifest.json in the atgeo v1 envelope shape
+    (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope adoption").
 
     generated_at is required-keyword: callers must supply the single
-    run-scoped timestamp shared with every tile and manifest.duckdb (§B.4).
+    run-scoped timestamp shared with every tile and manifest.duckdb (per the
+    envelope decision above).
     collection/attribution are resolved from _SOURCES[source] internally,
     same as flush_tile.
     """
@@ -692,9 +697,11 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         )
 
     # Render the subtype -> level CASE from garganorn.levels.LEVEL_VOCAB (the
-    # single source of truth, phase2b-design.md §A.3) so SQL and Python can't
-    # drift. NO ELSE branch: an unmapped subtype must yield NULL (§A.6
-    # belt-and-braces), caught by the fail-loud validator below.
+    # single source of truth, pipeline-implementation-decisions.md
+    # "OQ-P2-2 — containment level vocabulary") so SQL and Python can't
+    # drift. NO ELSE branch: an unmapped subtype must yield NULL
+    # (belt-and-braces, per the level-vocabulary decision above), caught by
+    # the fail-loud validator below.
     level_case = level_case_sql()
 
     # Read and transform import SQL for Phase 2:
@@ -739,7 +746,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         log.info("[overture_division] import: %d rows loaded (%.1fs)",
                  count, time.monotonic() - t0)
 
-        # Fail-loud enforcement (phase2b-design.md §A.6): every division subtype
+        # Fail-loud enforcement (pipeline-implementation-decisions.md
+        # "OQ-P2-2 — containment level vocabulary"): every division subtype
         # must be a known LEVEL_VOCAB key. Runs after the CTAS and before any
         # artifact write (before the COPY and the boundaries.duckdb ATTACH) so
         # a bad release never produces partial output. Never default or guess.
@@ -752,11 +760,12 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
             raise RuntimeError(
                 f"overture_division import: unmapped division subtype(s) "
                 f"{sorted(s for (s,) in unmapped)}; the atgeo level vocabulary "
-                f"(atgeo-appview-sdk-design.md §1.7) must be amended before import. "
+                f"(atgeo-spec.md §7) must be amended before import. "
                 f"Never default or guess."
             )
 
-        # Belt-and-braces (§A.6): the ${level_case} CASE has no ELSE branch, so
+        # Belt-and-braces (per the level-vocabulary decision above): the
+        # ${level_case} CASE has no ELSE branch, so
         # an unmapped subtype would already have raised above; this assertion
         # confirms level is total regardless.
         null_level_count = con.execute(
@@ -787,7 +796,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
         try:
             # Filter threshold expressed via LEVEL_VOCAB['locality'] so it can't
-            # drift from the vocabulary (phase2b-design.md §A.5): country (10)
+            # drift from the vocabulary (pipeline-implementation-decisions.md
+            # "OQ-P2-2 — containment level vocabulary"): country (10)
             # through locality (50) inclusive; hoods (>= 55) excluded.
             assert LEVEL_VOCAB['locality'] == 50
             con.execute(f"""
@@ -1303,7 +1313,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         memory_limit: DuckDB memory_limit string. Default "48GB".
         force: If True, bypass freshness gate. Default False.
         now: Optional aware UTC datetime for deterministic-timestamp injection
-            (§B.4). When provided, it names the run dir AND derives the
+            (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
+            adoption"). When provided, it names the run dir AND derives the
             shared generated_at RFC 3339 Z string stamped into every tile,
             manifest.json, and manifest.duckdb metadata. Defaults to
             datetime.now(timezone.utc) when omitted.
@@ -1343,7 +1354,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
 
     # Step 3: Create new timestamped run dir
     # One timestamp, threaded to both the run-dir name and generated_at
-    # (§B.4 point 1) — fixes the double-now() drift where the run dir and
+    # (per the envelope decision above) — fixes the double-now() drift where
+    # the run dir and
     # manifest generated_at could straddle a clock tick under the old code.
     os.makedirs(tiles_root, exist_ok=True)
     run_now = now if now is not None else datetime.now(timezone.utc)
@@ -1412,7 +1424,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
 
             records are (rkey, record_json) pairs; record_json is a DuckDB
             to_json()::VARCHAR string. wrap_record composes the {uri, cid,
-            value} envelope via string concatenation (§B.7.1) — no per-record
+            value} envelope via string concatenation (per the envelope decision
+            above) — no per-record
             json.loads/json.dumps round trip.
             """
             wrapped = [

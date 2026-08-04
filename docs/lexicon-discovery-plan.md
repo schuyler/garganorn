@@ -1,5 +1,10 @@
 # Lexicon Discovery Plan
 
+**Status:** Evaluation complete, not adopted (see `explored-and-discarded.md`
+— standard discovery mechanism is not widely used by tooling). Retained as a
+ready-to-implement plan in case AT Protocol tooling adoption changes the
+calculus.
+
 Make garganorn's `org.atgeo.*` lexicons discoverable via AT Protocol's standard lexicon resolution mechanism.
 
 ## Background

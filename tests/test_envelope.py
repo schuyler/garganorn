@@ -1,23 +1,25 @@
 """RED tests: garganorn.envelope — the atgeo v1 tile/record envelope module.
 
-phase2b-design.md Part B (OQ-P2-1). garganorn/envelope.py does not exist yet
-(§B.7.1), so every test in this module that imports from it fails at
+pipeline-implementation-decisions.md ("OQ-P2-1 — record envelope adoption").
+garganorn/envelope.py does not exist yet
+(per those decisions), so every test in this module that imports from it fails at
 collection/setup with ImportError until it is implemented -- that failure IS
 the RED signal for this feature. Mirrors the import-guard pattern used by
 tests/test_levels.py for garganorn.levels.
 
-Covers phase2b-design.md §6 (combined acceptance checklist) items 6 and 9,
-plus the module-level contract from §B.5/§B.7.1:
-  - ATGEO_VERSION == 1 (§B.5)
-  - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}" (§B.3)
+Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.md
+"OQ-P2-1 — record envelope adoption") items 6 and 9,
+plus the module-level contract from those same decisions:
+  - ATGEO_VERSION == 1
+  - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}"
   - wrap_record(uri, record_json) -> '{"uri":...,"cid":null,"value":...}' string,
-    cid is literally null, never computed (§B.3)
+    cid is literally null, never computed
   - build_tile_payload(collection, attribution, generated_at, wrapped_records)
     -> bytes; top-level == exactly {atgeo, collection, attribution,
-    generated_at, records} (§B.2a, §B.5)
+    generated_at, records}
   - build_manifest(source, collection, attribution, generated_at, quadkeys)
-    -> dict matching §B.2c's field set exactly, including cache.immutable=false
-    (§B.6, protocol change P2)
+    -> dict matching the manifest field set exactly, including cache.immutable=false
+    (protocol change P2)
 
 Item 7 (determinism), item 8 (timestamp coherence), and item 10 (server
 round-trip) are covered end-to-end against the real stage_export/tile_reader
@@ -48,25 +50,25 @@ def _check_envelope():
 
 
 # ---------------------------------------------------------------------------
-# §B.5 — ATGEO_VERSION
+# ATGEO_VERSION (envelope decisions, see module docstring)
 # ---------------------------------------------------------------------------
 
 class TestAtgeoVersion:
     def test_atgeo_version_is_1(self):
         """ATGEO_VERSION is the integer 1, the single source of truth for both
-        the tile payload and the manifest (§B.5)."""
+        the tile payload and the manifest (per the envelope decisions)."""
         _check_envelope()
         assert envelope.ATGEO_VERSION == 1
         assert isinstance(envelope.ATGEO_VERSION, int)
 
 
 # ---------------------------------------------------------------------------
-# §B.3 — record_uri()
+# record_uri() (envelope decisions, see module docstring)
 # ---------------------------------------------------------------------------
 
 class TestRecordUri:
     def test_record_uri_form(self):
-        """record_uri(repo, collection, rkey) == https://{repo}/{collection}/{rkey} (§B.3)."""
+        """record_uri(repo, collection, rkey) == https://{repo}/{collection}/{rkey} (per the envelope decisions)."""
         _check_envelope()
         uri = envelope.record_uri(
             "places.atgeo.org", "org.atgeo.places.foursquare", "fsq001"
@@ -75,7 +77,7 @@ class TestRecordUri:
 
     def test_record_uri_osm_node_rkey(self):
         """OSM rkey is the node:/way:/relation: transformed form, not the raw
-        place_id -- §B.3: 'for OSM that is the node:|way:|relation: form
+        place_id -- per the envelope decisions: 'for OSM that is the node:|way:|relation: form
         ... not the raw place_id'. Colons are legal in a URI path segment
         (RFC 3986); no encoding needed."""
         _check_envelope()
@@ -83,7 +85,7 @@ class TestRecordUri:
             "places.atgeo.org", "org.atgeo.places.osm", "node:12345"
         )
         assert uri == "https://places.atgeo.org/org.atgeo.places.osm/node:12345"
-        assert "%3A" not in uri, "colon must not be percent-encoded (§B.3)"
+        assert "%3A" not in uri, "colon must not be percent-encoded (per the envelope decisions)"
 
     def test_record_uri_osm_way_and_relation(self):
         """way: and relation: rkeys form URIs analogously to node:."""
@@ -98,7 +100,7 @@ class TestRecordUri:
         assert rel_uri == "https://places.atgeo.org/org.atgeo.places.osm/relation:11111"
 
     def test_record_uri_not_at_protocol(self):
-        """URIs are https://, never at:// -- §B.3 is emphatic that gazetteer
+        """URIs are https://, never at:// -- the envelope decisions are emphatic that gazetteer
         records are not repository data and must not mint at:// URIs."""
         _check_envelope()
         uri = envelope.record_uri("places.atgeo.org", "org.atgeo.places.foursquare", "fsq001")
@@ -107,13 +109,13 @@ class TestRecordUri:
 
 
 # ---------------------------------------------------------------------------
-# §B.3 — wrap_record(): {uri, cid, value} exactly, cid is literally null
+# wrap_record(): {uri, cid, value} exactly, cid is literally null
 # ---------------------------------------------------------------------------
 
 class TestWrapRecord:
     def test_wrap_record_produces_exactly_three_keys(self):
         """wrap_record(uri, record_json) -> a JSON string whose parsed object
-        has exactly {uri, cid, value} -- three keys, always present (§B.3)."""
+        has exactly {uri, cid, value} -- three keys, always present (per the envelope decisions)."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
         record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test"})
@@ -124,7 +126,7 @@ class TestWrapRecord:
         )
 
     def test_wrap_record_cid_is_none(self):
-        """cid is literally null -- never computed, per the APPROVED §B.3 decision."""
+        """cid is literally null -- never computed, per the APPROVED envelope decision."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
         record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001"})
@@ -140,7 +142,7 @@ class TestWrapRecord:
         assert parsed["uri"] == uri
 
     def test_wrap_record_value_is_the_record(self):
-        """value is byte-for-byte today's record JSON, parsed back losslessly (§B.2a)."""
+        """value is byte-for-byte today's record JSON, parsed back losslessly (per the envelope decisions)."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
         record = {
@@ -154,13 +156,13 @@ class TestWrapRecord:
         assert parsed["value"] == record
 
     def test_wrap_record_no_json_loads_per_record(self):
-        """§B.7.1: wrap_record is string composition, not json.loads + json.dumps,
+        """Per the envelope decisions: wrap_record is string composition, not json.loads + json.dumps,
         to avoid a per-record parse/reserialize round trip. Verify by checking
         that malformed-but-well-formed-looking JSON text is passed through
         verbatim rather than being re-serialized (e.g. key order / spacing
         would change under a round trip through json.loads->json.dumps with
         default separators). This is a white-box characterization of the
-        §B.7.1 design: wrap_record must not alter the byte content of
+        envelope decisions: wrap_record must not alter the byte content of
         record_json, only wrap it.
         """
         _check_envelope()
@@ -171,11 +173,11 @@ class TestWrapRecord:
         wrapped = envelope.wrap_record(uri, record_json)
         assert record_json in wrapped, (
             "wrap_record must embed record_json verbatim (string composition, "
-            "not a json.loads/json.dumps round trip) -- §B.7.1"
+            "not a json.loads/json.dumps round trip) -- per the envelope decisions"
         )
 
     def test_wrap_record_utf8_not_ascii_escaped(self):
-        """§B.7.1 review note: DuckDB's UTF-8 output is preserved verbatim
+        """Per the envelope decisions (review note): DuckDB's UTF-8 output is preserved verbatim
         instead of being ensure_ascii-escaped."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
@@ -188,7 +190,7 @@ class TestWrapRecord:
 
 
 # ---------------------------------------------------------------------------
-# §B.2a / §B.5 — build_tile_payload()
+# build_tile_payload() (envelope decisions, see module docstring)
 # ---------------------------------------------------------------------------
 
 class TestBuildTilePayload:
@@ -203,7 +205,7 @@ class TestBuildTilePayload:
 
     def test_build_tile_payload_top_level_keys_exact(self):
         """Tile top-level == exactly {atgeo, collection, attribution,
-        generated_at, records} (§6 item 6, §B.2a)."""
+        generated_at, records} (§6 item 6; per the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT,
@@ -287,7 +289,7 @@ class TestBuildTilePayload:
 
     def test_build_tile_payload_gzip_roundtrip(self):
         """Payload bytes gzip-compress and decompress back to the same JSON
-        (sanity check for the flush_tile integration point, §B.7.3)."""
+        (sanity check for the flush_tile integration point, per the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, [self._wrapped()],
@@ -298,7 +300,7 @@ class TestBuildTilePayload:
 
 
 # ---------------------------------------------------------------------------
-# §B.2c / §B.6 — build_manifest()
+# build_manifest() (envelope decisions, see module docstring)
 # ---------------------------------------------------------------------------
 
 class TestBuildManifest:
@@ -309,7 +311,7 @@ class TestBuildManifest:
     _QUADKEYS = ["023130", "023131"]
 
     def test_build_manifest_field_set_exact(self):
-        """manifest.json matches §B.2c's field set exactly (§6 item 9)."""
+        """manifest.json matches the manifest field set exactly (§6 item 9)."""
         _check_envelope()
         manifest = envelope.build_manifest(
             self._SOURCE, self._COLLECTION, self._ATTRIBUTION,
@@ -320,7 +322,7 @@ class TestBuildManifest:
             "tile_url_template", "cache", "quadkeys",
         }
         assert set(manifest.keys()) == expected_keys, (
-            f"manifest must match §B.2c field set exactly; got {sorted(manifest.keys())}, "
+            f"manifest must match the manifest field set exactly; got {sorted(manifest.keys())}, "
             f"expected {sorted(expected_keys)}"
         )
 
@@ -342,7 +344,7 @@ class TestBuildManifest:
         assert manifest["generated_at"] == self._GENERATED_AT
 
     def test_build_manifest_quadkeys_sorted(self):
-        """quadkeys remain sorted (pre-existing invariant, §B.1)."""
+        """quadkeys remain sorted (pre-existing invariant, per the envelope decisions)."""
         _check_envelope()
         manifest = envelope.build_manifest(
             self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT,
@@ -351,7 +353,7 @@ class TestBuildManifest:
         assert manifest["quadkeys"] == ["023130", "023132", "023133"]
 
     def test_build_manifest_tile_url_template(self):
-        """tile_url_template ships in 2b, per §B.9.3 (protocol change, approved)."""
+        """tile_url_template ships in 2b, per the envelope decisions (protocol change, approved)."""
         _check_envelope()
         manifest = envelope.build_manifest(
             self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, self._QUADKEYS,
@@ -360,7 +362,7 @@ class TestBuildManifest:
 
     def test_build_manifest_cache_immutable_false(self):
         """cache == {max_age: 86400, immutable: false} -- [protocol change P2],
-        APPROVED this session (§B.6, §B.9.2). Deliberately contradicts §1.3's
+        APPROVED this session (per the envelope decisions). Deliberately contradicts §1.3's
         example because the deployed slug route serves via `current`."""
         _check_envelope()
         manifest = envelope.build_manifest(
@@ -369,11 +371,11 @@ class TestBuildManifest:
         assert manifest["cache"] == {"max_age": 86400, "immutable": False}
 
     def test_build_manifest_generated_at_rfc3339_z_form(self):
-        """generated_at is RFC 3339 UTC, seconds precision, Z suffix (§B.4).
+        """generated_at is RFC 3339 UTC, seconds precision, Z suffix (per the envelope decisions).
 
         build_manifest() does not reformat generated_at -- it is captured once
         per run by the caller (stage_export) and passed through verbatim
-        (§B.4 item 1) -- so this asserts the passed-through value is preserved
+        (per the envelope decisions) -- so this asserts the passed-through value is preserved
         exactly, not merely that a pre-formatted string round-trips.
         """
         _check_envelope()

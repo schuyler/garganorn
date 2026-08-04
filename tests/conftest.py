@@ -531,7 +531,8 @@ from garganorn.boundaries import BoundaryLookup
 #
 # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB),
 # not raw Overture admin_level. div_continent_na has subtype=None (continent has
-# no producer entry per phase2b-design.md \u00a7A.3 -- level 0 is a synthetic sentinel
+# no producer entry per pipeline-implementation-decisions.md
+# ("OQ-P2-2 \u2014 containment level vocabulary") -- level 0 is a synthetic sentinel
 # above country=10, chosen only to keep this pre-built boundaries.duckdb-shaped
 # fixture's ascending order; the real import pipeline never emits it since
 # admin_level's continent row (subtype NULL) would trip the fail-loud guard).
@@ -1160,7 +1161,8 @@ def division_parquet(tmp_path_factory):
 
     # Division area parquet (geometries). admin_level here mirrors the genuine
     # upstream Overture division_area schema (source input, not touched by the
-    # atgeo level vocabulary) -- phase2b-design.md §A.7a drops the admin_level
+    # atgeo level vocabulary) -- pipeline-implementation-decisions.md
+    # ("OQ-P2-2 — containment level vocabulary") drops the admin_level
     # plumbing from overture_division_import.sql, so this column becomes dead
     # input once level is derived from division.subtype instead; kept here only
     # because it is a faithful copy of Overture's real column set.

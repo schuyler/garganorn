@@ -37,14 +37,16 @@ def _canonical_tile(gz_path):
     """Read a .json.gz tile, sort records, strip the run-scoped generated_at,
     return canonical JSON string.
 
-    Post-2b (phase2b-design.md §B.4), tiles carry a top-level `generated_at`
+    Post-2b (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
+    adoption"), tiles carry a top-level `generated_at`
     that is run-scoped (derived from the export run's timestamp) and legitimately
     differs between the control run and a recovery run executed at a different
     wall-clock time -- it is not a crash-recovery correctness signal, so it must
     be stripped here the same way scripts/tile_parity.py's canonicalizer does,
     or every crash-recovery comparison in this module would spuriously fail on
-    timestamp drift alone. Records are {uri, cid, value}-wrapped (§B.2b); the
-    sort/dedup key is value.rkey, not a top-level rkey (which no longer exists
+    timestamp drift alone. Records are {uri, cid, value}-wrapped (per the
+    envelope decisions above); the sort/dedup key is value.rkey, not a
+    top-level rkey (which no longer exists
     on wrapped records).
     """
     with gzip.open(gz_path) as f:

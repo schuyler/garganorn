@@ -7,10 +7,12 @@ Tests are organized by stage function:
 - TestStageManifest: tests for write_manifest() and write_manifest_db()
 - TestStageDensityExtractMtime: mtime-based caching tests for stage_density_extract()
 - TestEnvelopeShape: §6 item 6 -- new atgeo v1 envelope shape on the real
-  stage_export production path (phase2b-design.md Part B, OQ-P2-1).
+  stage_export production path (pipeline-implementation-decisions.md
+  "OQ-P2-1 — record envelope adoption").
 - TestGeneratedAtCoherence: §6 items 7/8 -- fixed-timestamp injection seam,
   determinism, and run-dir/tile/manifest/manifest.duckdb generated_at
-  agreement (phase2b-design.md §B.4).
+  agreement (pipeline-implementation-decisions.md
+  "OQ-P2-1 — record envelope adoption").
 """
 import time
 import json
@@ -167,13 +169,13 @@ class TestStageManifest:
 
 
 # ---------------------------------------------------------------------------
-# phase2b-design.md Part B (OQ-P2-1) — §6 items 6, 7, 8, 9
+# pipeline-implementation-decisions.md ("OQ-P2-1 — record envelope adoption") — §6 items 6, 7, 8, 9
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the REAL stage_export production path (via
 # run_pipeline, and directly for the fixed-timestamp seam) rather than
 # hand-built fixtures, so they exercise the full Python wrapping integration
-# (§B.7.3), not just envelope.py's pure functions (covered in isolation by
+# (per the envelope decisions above), not just envelope.py's pure functions (covered in isolation by
 # tests/test_envelope.py).
 
 def _read_one_tile(tiles_current: Path) -> dict:
@@ -189,7 +191,7 @@ class TestEnvelopeShape:
 
     def test_tile_top_level_keys_exact(self, fsq_parquet, density_parquet, tmp_path):
         """Tile top-level == exactly {atgeo, collection, attribution,
-        generated_at, records} with atgeo == 1 (§B.2a)."""
+        generated_at, records} with atgeo == 1 (per the envelope decisions above)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -203,7 +205,7 @@ class TestEnvelopeShape:
         assert tile["atgeo"] == 1
 
     def test_tile_records_are_uri_cid_value_wrapped(self, fsq_parquet, density_parquet, tmp_path):
-        """Each record == exactly {uri, cid, value} with cid is None (§B.2b, §B.3)."""
+        """Each record == exactly {uri, cid, value} with cid is None (per the envelope decisions above)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -219,7 +221,7 @@ class TestEnvelopeShape:
 
     def test_tile_record_uri_form_and_rkey_agreement(self, fsq_parquet, density_parquet, tmp_path):
         """uri == https://{repo}/{collection}/{rkey}; uri's rkey segment ==
-        value.rkey == record_tiles.rkey for sampled records (§B.3, §6 item 6)."""
+        value.rkey == record_tiles.rkey for sampled records (per the envelope decisions above, §6 item 6)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -243,7 +245,7 @@ class TestEnvelopeShape:
             )
 
     def test_manifest_json_field_set(self, fsq_parquet, density_parquet, tmp_path):
-        """manifest.json matches §B.2c's field set (§6 item 9)."""
+        """manifest.json matches the manifest-shape field set (per the envelope decisions above, §6 item 9)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -256,14 +258,14 @@ class TestEnvelopeShape:
             "tile_url_template", "cache", "quadkeys",
         }
         assert set(manifest.keys()) == expected, (
-            f"manifest.json must match §B.2c field set; got {sorted(manifest.keys())}"
+            f"manifest.json must match the manifest-shape field set; got {sorted(manifest.keys())}"
         )
         assert manifest["atgeo"] == 1
         assert manifest["collection"] == "org.atgeo.places.foursquare"
         assert manifest["cache"] == {"max_age": 86400, "immutable": False}
 
     def test_manifest_duckdb_metadata_has_atgeo_and_collection(self, fsq_parquet, density_parquet, tmp_path):
-        """manifest.duckdb metadata gains atgeo/collection columns (§B.6, §6 item 9)."""
+        """manifest.duckdb metadata gains atgeo/collection columns (per the envelope decisions above, §6 item 9)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -289,11 +291,11 @@ class TestGeneratedAtDeterminismAndCoherence:
     directory (`now.strftime("%Y%m%dT%H%M%S")`, replacing the internal
     `datetime.now(timezone.utc)` call at stages.py:1278) AND to derive the
     shared `generated_at` RFC 3339 Z string stamped into every tile,
-    manifest.json, and manifest.duckdb metadata (§B.4 point 1). When omitted,
+    manifest.json, and manifest.duckdb metadata (per the envelope decisions above). When omitted,
     stage_export defaults to the current wall-clock time as it does today.
     This is the minimal seam consistent with the design's own description:
     "one timestamp per export run, derived from the run-dir name ... already
-    produces %Y%m%dT%H%M%S UTC" (§B.4) — injecting `now` and deriving both
+    produces %Y%m%dT%H%M%S UTC" (per the envelope decisions above) — injecting `now` and deriving both
     the dir name and generated_at from the SAME value is what makes two runs
     with an identical injected `now` byte-identical tile-for-tile.
     """
@@ -324,7 +326,7 @@ class TestGeneratedAtDeterminismAndCoherence:
         sig = inspect.signature(stage_export)
         assert "now" in sig.parameters, (
             f"stage_export must accept a 'now' keyword for fixed-timestamp injection "
-            f"(§B.4 determinism seam); got params: {list(sig.parameters)}"
+            f"(per the envelope determinism seam above); got params: {list(sig.parameters)}"
         )
 
     def test_run_dir_name_matches_injected_now(self, fsq_parquet, density_parquet, tmp_path):
@@ -345,7 +347,7 @@ class TestGeneratedAtDeterminismAndCoherence:
 
     def test_generated_at_derived_from_injected_now(self, fsq_parquet, density_parquet, tmp_path):
         """generated_at (tile + manifest.json + manifest.duckdb metadata) ==
-        RFC 3339 Z rendering of the injected now (§B.4 point 1)."""
+        RFC 3339 Z rendering of the injected now (per the envelope decisions above)."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
             fsq_parquet, density_parquet, tmp_path, "inputs_b"
         )
@@ -374,8 +376,8 @@ class TestGeneratedAtDeterminismAndCoherence:
         assert os.path.basename(str(run_dir)) == "20260709T180000"
 
     def test_every_tile_shares_the_same_generated_at(self, fsq_parquet, density_parquet, tmp_path):
-        """Every tile in a multi-tile run carries the identical generated_at (§B.4:
-        'identical across all tiles of a run')."""
+        """Every tile in a multi-tile run carries the identical generated_at (per
+        the envelope decisions above: 'identical across all tiles of a run')."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
             fsq_parquet, density_parquet, tmp_path, "inputs_c"
         )

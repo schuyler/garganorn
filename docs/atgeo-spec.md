@@ -12,11 +12,14 @@ in Editor's notes (§12) rather than resolved. This document does not invent
 or settle open protocol questions; where the sources disagree or are silent,
 that is stated, not adjudicated.
 
-Normative source precedence, where this document summarizes rather than
-quotes: `docs/atgeo-appview-sdk-design.md` (as amended by
-`docs/phase2b-design.md` §5) is the primary protocol source;
-`docs/oq-p2-5-serving-path-design.md` governs the deployed serving-path
-details; `docs/org.atgeo.tiles.service.json` is the discovery lexicon.
+This document's numbered requirements are normative in their own right — they
+do not derive their force from any other document, and are not overridden by
+it. Where a requirement summarizes rather than quotes, `docs/atgeo-appview-sdk-design.md`
+and `docs/pipeline-implementation-decisions.md` (the latter covering the
+shipped Phase 2b envelope/level-vocabulary work and the OQ-P2-5 serving-path
+migration) hold the background rationale, for a reader who wants the reasoning
+behind a requirement — not a source this document depends on for its own
+authority. `docs/org.atgeo.tiles.service.json` is the discovery lexicon.
 Shipped code (`garganorn/envelope.py`, `garganorn/levels.py`, the lexicon
 JSON under `garganorn/lexicon/`) is cross-checked in §12 as a conforming
 producer, not as an independent source of protocol decisions.
@@ -44,7 +47,7 @@ renumber or reuse them.
 Material outside numbered requirements — rationale, JSON examples, the
 SQLite schema, the five-line adoption bar — is **informative** and marked
 as such. Rationale notes are kept short; the full rationale record is
-`docs/atgeo-appview-sdk-design.md` and `docs/phase2b-design.md`.
+`docs/atgeo-appview-sdk-design.md` and `docs/pipeline-implementation-decisions.md`.
 
 ---
 
@@ -104,7 +107,7 @@ MUST gunzip them itself). A consumer MUST handle both delivery modes.
 
 > Informative: the deployed pipeline serves gzip bytes with an explicit
 > `Content-Encoding: gzip` header and does not rely on the HTTP layer to
-> transcode (`oq-p2-5-serving-path-design.md`, Change A). A consumer that
+> transcode (`garganorn/__main__.py`, tile route handler). A consumer that
 > only trusts `Content-Encoding` and never falls back to sniffing/gunzipping
 > the body itself may fail against a producer that serves the second mode.
 
@@ -150,7 +153,8 @@ at seconds precision (no sub-second digits, no `+00:00` form). *(producer)*
 producer run MUST carry the identical `generated_at` value, and that value
 MUST equal the manifest's `generated_at` for the same run. `generated_at`
 MUST NOT be a per-flush or per-record timestamp. *(producer)* [Amendment
-`phase2b-design.md` §5 `P1`.]
+`pipeline-implementation-decisions.md` ("OQ-P2-1 — record envelope
+adoption").]
 
 > Rationale: without ENV-7, a second producer (e.g. the AppView, which
 > flushes on an interval, §9.5) could legitimately stamp per-flush times,
@@ -166,7 +170,8 @@ MUST NOT be a per-flush or per-record timestamp. *(producer)* [Amendment
 **ENV-8.** `records` MUST be a JSON array of record objects (§3.2). Its
 order is producer-defined; a consumer MUST NOT rely on record order within
 a tile for any purpose (correctness, freshness, or ranking). *(producer,
-consumer)* [Amendment `phase2b-design.md` §5 `P5`.]
+consumer)* [Amendment `pipeline-implementation-decisions.md` ("OQ-P2-1 —
+record envelope adoption").]
 
 > Informative: the AppView flushes tiles ordered by `rkey` (§9.5); the batch
 > pipeline orders by its own internal sort key (`tile_qk, place_id`
@@ -220,10 +225,12 @@ computed by any means (not a content hash of `value`, not any other
 derivation) — there is no signed commit to verify such a hash against, so
 computing one would record a number that verifies nothing. Only AppView
 records, which carry a genuine commit-verified CID from the repo, MAY carry
-a non-null `cid`. *(producer)* [Amendment/clarification `phase2b-design.md`
-§5 `P4`.]
+a non-null `cid`. *(producer)* [Amendment/clarification
+`pipeline-implementation-decisions.md` ("OQ-P2-1 — record envelope
+adoption").]
 
-> Rationale (`phase2b-design.md` §B.3): a "real" atproto-style CID requires
+> Rationale (`pipeline-implementation-decisions.md`, "OQ-P2-1 — record
+> envelope adoption"): a "real" atproto-style CID requires
 > canonical DAG-CBOR encoding, which bans floats — a constraint today's
 > gazetteer records only meet by accident (raw Overture `attributes`
 > structs can contain floats). Computing a hash nobody can verify against a
@@ -285,7 +292,8 @@ producer, §9.5) with these fields: `atgeo`, `source`, `collection`,
 is still conformant (ENV-2 unknown/absent-field tolerance applies
 symmetrically here — its absence MUST NOT break a consumer). When present,
 it lets a consumer render attribution without fetching any tile. *(producer,
-consumer)* [Amendment `phase2b-design.md` §5 `P3`.]
+consumer)* [Amendment `pipeline-implementation-decisions.md` ("OQ-P2-1 —
+record envelope adoption").]
 
 **MAN-3.** `source` MUST be a producer-internal string identifying the data
 source (e.g. `overture_place`). This document does not constrain its
@@ -323,11 +331,13 @@ seconds) and `immutable` (boolean). *(producer)*
 **MAN-10.** A producer MUST NOT set `cache.immutable: true` unless
 `tile_url_template` embeds a run-unique path segment (i.e. the URL for a
 given tile changes whenever that tile's content could change across runs).
-*(producer)* [Amendment `phase2b-design.md` §5 `P2`.]
+*(producer)* [Amendment `pipeline-implementation-decisions.md` ("OQ-P2-1 —
+record envelope adoption").]
 
 > Rationale: if the same tile URL can return different bytes after a later
 > producer run (as it does under the deployed `current`-symlink serving
-> path, `oq-p2-5-serving-path-design.md` Change A), a CDN or client honoring
+> path, `pipeline-implementation-decisions.md`, "OQ-P2-5 — serving-path
+> migration"), a CDN or client honoring
 > `immutable: true` would serve stale bytes for the full `max_age` window.
 > `immutable` is a promise about a specific URL's bytes never changing, not
 > about the collection's freshness cadence.
@@ -478,7 +488,8 @@ OSM-inherited and semantically inconsistent across countries).
 | 70 | microhood | `microhood` |
 
 This table reflects the stride-5 renumbering amendment
-(`phase2b-design.md` §5 `§1.7-renumber`, §A.3): `macrohood` (60) and
+(`pipeline-implementation-decisions.md`, "OQ-P2-2 — containment level
+vocabulary"): `macrohood` (60) and
 `microhood` (70) are additions over the prior table, and `neighborhood`
 moved from a prior value of 60 to 65. **This was a protocol change, not a
 clarification** — any consumer holding the old `neighborhood = 60` value
@@ -997,7 +1008,7 @@ each value with what would need to happen to settle it.
 | H3 write-precision default | resolution 8 (~0.7 km² cells) | PREC-3 | Sanity-check against what existing `community.lexicon.location.hthree` producers/consumers actually emit in the wild (source design flags this explicitly as unverified) |
 | `TooManyTiles` politeness limit | 50 tiles | ERR-2 | No blocking dependency identified in sources; could be settled by measuring real query patterns against deployed manifests |
 | AppView per-DID record cap | 100 records per (collection, tile) | AV-21 | Real-world abuse observation once an AppView is deployed; currently a judgment-call default |
-| `max_per_tile` (operator-configured per-tile record threshold, batch pipeline and AppView) | 1000 | AV-11 | Deployed value observed in `oq-p2-5-serving-path-design.md`'s `config.yaml`; not independently justified in sources as a protocol-level default |
+| `max_per_tile` (operator-configured per-tile record threshold, batch pipeline and AppView) | 1000 | AV-11 | Deployed value observed in the deployed pipeline's `config.yaml`, per `pipeline-implementation-decisions.md`'s "OQ-P2-5 — serving-path migration" section; not independently justified in sources as a protocol-level default |
 | AppView flush interval | 15 s | AV-14, AV-16 | Trade-off between write amplification and freshness; no measurement cited in sources |
 | Manifest sharding size threshold | ~5 MB gzipped | MAN-8 | "Measure in pipeline validation" per source — not yet measured as of this document's date |
 | SDK tile-cache budget | 50 MB | CACHE-4 | No blocking dependency; a policy default pending real device/browser usage data |
@@ -1093,8 +1104,9 @@ task's instruction not to invent or settle protocol decisions.
    explicitly.
 
 5. **Level 0 (continent) and `borough` (55) have zero producer
-   instances currently.** `phase2b-design.md` treats `borough: 55` as
-   "normative; absent from current Overture" and explains it is included
+   instances currently.** `pipeline-implementation-decisions.md`'s
+   "OQ-P2-2 — containment level vocabulary" section treats `borough: 55` as
+   normative though absent from current Overture data, and explains it is included
    so a future release emitting it maps cleanly. Level 0 (continent) is
    stated as having no producer entry "not present in divisions" with no
    further comment on whether any producer is ever expected to emit it, or
@@ -1131,7 +1143,8 @@ task's instruction not to invent or settle protocol decisions.
 8. **AV-20's byte-identity claim only covers the replay/CAR-rebuild CI
    check, and a path-(b) history-dependence gap is unresolved.** Design
    §2.6 states "a CI test rebuilds from a fixture CAR set and byte-compares
-   tiles," and `phase2b-design.md` §6.7 describes byte-comparisons performed
+   tiles," and `pipeline-implementation-decisions.md`'s "OQ-P2-1 — record
+   envelope adoption" section describes byte-comparisons performed
    under an injected fixed timestamp for the batch pipeline's determinism
    check. Neither source states that byte-identity holds for AV-19's path
    (b) (enumerate-repos-and-fetch-CARs, then tail from the *then-current*
@@ -1153,8 +1166,9 @@ task's instruction not to invent or settle protocol decisions.
    with the deployed OQ-P2-5 serving path.** `atgeo-appview-sdk-design.md`
    §1.3 and the `org.atgeo.tiles.service` lexicon's `manifestPath` default
    both specify the manifest at `{base}/current/manifest.json`. But
-   `oq-p2-5-serving-path-design.md` (Change A/B, the deployed slug-aware
-   route) resolves a collection's `base_url` to already point *inside*
+   `pipeline-implementation-decisions.md`'s "OQ-P2-5 — serving-path
+   migration" section (the deployed slug-aware route) resolves a
+   collection's `base_url` to already point *inside*
    `<source>/tiles/current` (e.g.
    `https://places.atgeo.org/tiles/overture-place`), so the real manifest
    under that deployment is at `{base}/manifest.json` — appending
@@ -1183,7 +1197,7 @@ task's instruction not to invent or settle protocol decisions.
     cited sources.** `coverage.json`'s row in VEC-2 names the test surface
     ("bbox→tile set against sample manifests, incl. antimeridian bboxes,
     empty coverage, over-limit") but neither `atgeo-appview-sdk-design.md`
-    nor `phase2b-design.md` states the actual intersection algorithm: how a
+    nor `pipeline-implementation-decisions.md` states the actual intersection algorithm: how a
     bbox spanning the antimeridian (crossing ±180°) is split or wrapped
     before intersection, or how intersection is computed against a
     `quadkeys` list containing tiles at mixed zoom levels (a manifest is not
@@ -1201,7 +1215,8 @@ task's instruction not to invent or settle protocol decisions.
 
 12. **What counts as one "run" is undefined for a continuously-flushing
     streaming producer, and ENV-7 is in unresolved tension with AV-14/AV-10
-    for the AppView.** ENV-7 (`phase2b-design.md` §5 `P1`) requires every
+    for the AppView.** ENV-7 (`pipeline-implementation-decisions.md`,
+    "OQ-P2-1 — record envelope adoption") requires every
     tile of one producer run to carry an identical `generated_at`, equal to
     the manifest's `generated_at` for that same run, and bans per-flush or
     per-record stamping. MAN-5 restates the same run-scoped identity
@@ -1213,8 +1228,9 @@ task's instruction not to invent or settle protocol decisions.
     requires the AppView to persist its cursor and resume from it
     transparently across a restart, with a full rebuild only triggered when
     a cursor gap exceeds the upstream's replay window. Neither
-    `atgeo-appview-sdk-design.md` §2.5 (flush loop) nor `phase2b-design.md`
-    §B.4/`P1` (the ENV-7 amendment itself) states what "run" means for this
+    `atgeo-appview-sdk-design.md` §2.5 (flush loop) nor
+    `pipeline-implementation-decisions.md`'s "OQ-P2-1 — record envelope
+    adoption" section (the ENV-7 amendment itself) states what "run" means for this
     producer shape. At least two readings are each independently consistent
     with the literal requirement text, and would produce diverging
     conforming implementations:
@@ -1254,9 +1270,11 @@ task's instruction not to invent or settle protocol decisions.
     unspecified/implementation-defined. Both are recorded here as open
     rather than specified.
 
-No conflicts were found between `docs/phase2b-design.md` and the shipped
+No conflicts were found between `docs/pipeline-implementation-decisions.md`'s
+Phase 2b section (both the "OQ-P2-2 — containment level vocabulary" and
+"OQ-P2-1 — record envelope adoption" subsections) and the shipped
 `garganorn/envelope.py` / `garganorn/levels.py` — both shipped modules
-implement their respective design documents' decisions exactly as
+implement their respective design decisions exactly as
 specified (envelope field set, `cid: null` non-computation, run-scoped
 `generated_at` handling delegated to the caller, the stride-5 level
 vocabulary with no-ELSE CASE and fail-loud validation). See item 3 above
@@ -1268,8 +1286,9 @@ for the one shipped-lexicon-vs-design-doc conflict found
 ## 13. Change log
 
 - **1.0-draft** (2026-07-11): Initial normative specification, transcribed
-  from `docs/atgeo-appview-sdk-design.md` (as amended by
-  `docs/phase2b-design.md` §5), `docs/oq-p2-5-serving-path-design.md`, and
+  from `docs/atgeo-appview-sdk-design.md` (as amended per
+  `docs/pipeline-implementation-decisions.md`, covering both the Phase 2b
+  amendments and the "OQ-P2-5 — serving-path migration" section), and
   `docs/org.atgeo.tiles.service.json`. No new protocol decisions made in
   producing this document; see §12 for points left unresolved rather than
   decided here.

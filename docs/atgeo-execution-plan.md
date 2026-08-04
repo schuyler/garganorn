@@ -1,8 +1,13 @@
 ---
 category: Design
 tags: [atgeo, garganorn, execution, agents, coordination]
-last_updated: 2026-07-02
+last_updated: 2026-08-03
 confidence: plan; workstream estimates are judgment, not measurement
+status: garganorn-side workstreams (pipeline restructure Phases 1/2/2b,
+  OQ-P2-5 serving-path) are merged and deployed as of 2026-08-03. The atgeo
+  protocol spec workstream produced docs/atgeo-spec.md (committed
+  `f788f6c`, 2026-07-11, 1.0-draft, Schuyler review pending). AppView/SDK
+  workstreams (docs/atgeo-appview-sdk-design.md) remain largely unbuilt.
 ---
 
 # atgeo Ensemble Execution Plan
@@ -59,7 +64,7 @@ spec file review sign-off (HD-4). Size: small — days, one agent.
 Executes `pipeline-restructure-design.md` as written, Phases 0–4, on the
 production box. The envelope adoption (§3.8 amendment) lands in Phase 2
 and consumes WS-1's frozen envelope. The level-vocabulary mapping (§3.4)
-consumes atgeo §1.7 and must verify the Overture subtype set against
+consumes atgeo-spec.md §7 and must verify the Overture subtype set against
 current parquet, amending the table upward rather than guessing.
 
 Acceptance: as specified per phase in that document. The Phase 4 global
@@ -144,7 +149,7 @@ each item:
 3. API page: remove `searchRecords`/`getCoverage`; document the manifest
    + tile fetch pattern and point at the SDK. (Same change set as WS-2
    Phase 3 — the design doc requires this coupling.)
-4. Lexicon page: reference atgeo spec §1.7 as normative for `within`
+4. Lexicon page: reference atgeo-spec.md §7 as normative for `within`
    levels. (With WS-1.)
 5. Usage page: replace API-first integration guidance with the five-line
    SDK integration. (With WS-3 release.)

@@ -1,7 +1,7 @@
 """Red tests: compute_containment covering rewrite + Phase 2 relocation.
 
-Contains existing Phase-1 red tests (§7.2 of covering-containment-design.md)
-and Phase-2 containment relocation tests (§7.4 of phase2-artifacts-design.md).
+Contains existing Phase-1 red tests and Phase-2 containment relocation tests
+(see docs/pipeline-implementation-decisions.md, "Phase 1" and "Phase 2").
 
 Tests call compute_containment with the new Phase-1 signature (covering_dir,
 containment_dir instead of max_boundaries, max_zoom).  Against the current
@@ -40,8 +40,9 @@ _COLLECTION_PREFIX = "org.atgeo.places.overture.division"
 # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
 # country=10, region=25, locality=50. div_continent_na and div_borough_manhattan
 # have no vocabulary entry among this fixture's modeled subtypes (continent has no
-# producer entry per §A.3; this fixture's "borough" is a locality-shaped boundary
-# used only to test partial containment, not vocabulary mapping) -- 0 and 50
+# producer entry per docs/pipeline-implementation-decisions.md, "OQ-P2-2 —
+# containment level vocabulary"; this fixture's "borough" is a locality-shaped
+# boundary used only to test partial containment, not vocabulary mapping) -- 0 and 50
 # respectively are chosen to preserve pre-existing ascending/partial-containment
 # behavior without asserting a specific subtype mapping for them.
 _SIMPLE_BOUNDARIES = [
@@ -263,7 +264,8 @@ class TestContainmentBehaviorPorts:
 # ---------------------------------------------------------------------------
 # §7.2 item 2 — ordering: within by level ASC (Phase 2 sig).
 #
-# phase2b-design.md §A.7(B): the level vocabulary is total by construction
+# pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+# vocabulary"): the level vocabulary is total by construction
 # (garganorn.levels.LEVEL_VOCAB covers every subtype the fail-loud guard
 # admits), so "NULL levels sort last" is no longer a live case -- there are no
 # NULL levels to sort. See TestNoNullLevels below (§6 acceptance item 5),
@@ -334,7 +336,8 @@ class TestContainmentOrdering:
     def test_no_null_levels_in_boundaries_db(self, tmp_path):
         """No boundary ever has a NULL level (repurposed from the old NULL-levels-last test).
 
-        phase2b-design.md §A.7(B): "NULL levels sort last" is void because level
+        pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+        vocabulary"): "NULL levels sort last" is void because level
         is total by construction (§6 acceptance item 5, `count(*) WHERE level IS
         NULL = 0` in `places`). A boundaries DB built directly (bypassing the
         import CTAS + fail-loud guard) could still contain a NULL level if

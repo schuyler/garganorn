@@ -1,6 +1,7 @@
 """RED tests: garganorn.levels.LEVEL_VOCAB and the atgeo containment level vocabulary.
 
-phase2b-design.md Part A (OQ-P2-2). garganorn/levels.py does not exist yet, so
+pipeline-implementation-decisions.md ("OQ-P2-2 — containment level vocabulary").
+garganorn/levels.py does not exist yet, so
 every test in this module that imports LEVEL_VOCAB fails at collection/setup
 with ImportError until it is implemented -- that failure IS the RED signal for
 this feature (§6 acceptance item 1). Tests are structured so the ImportError
@@ -8,7 +9,8 @@ is legible: a module-level try/except records it and _check_levels() surfaces
 it as a clear pytest.fail rather than an opaque collection error, mirroring
 the pattern tests/test_covering.py uses for garganorn.covering.
 
-Covers phase2b-design.md §6 (combined acceptance checklist) items 1, 2, 3, 5:
+Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.md
+"OQ-P2-2 — containment level vocabulary") items 1, 2, 3, 5:
   1. Vocabulary correctness -- LEVEL_VOCAB covers exactly the 9 observed
      subtypes + borough; fail-loud raises on an injected unknown subtype.
   2. Ordering -- containment query returning multiple levels is ordered
@@ -17,9 +19,9 @@ Covers phase2b-design.md §6 (combined acceptance checklist) items 1, 2, 3, 5:
      admin_level=3 counties; hoods excluded.
   5. No NULL levels -- count(*) WHERE level IS NULL = 0 in places.
 
-(Item 4, cross-artifact tile/boundaries.duckdb agreement, belongs to Part B's
-combined fixture per §6 preamble and is out of scope for this Part-A-only
-test module.)
+(Item 4, cross-artifact tile/boundaries.duckdb agreement, belongs to the
+record-envelope ("OQ-P2-1") combined fixture per §6 preamble and is out of
+scope for this level-vocabulary ("OQ-P2-2")-only test module.)
 """
 import inspect
 
@@ -48,7 +50,7 @@ def _check_levels():
 # ---------------------------------------------------------------------------
 
 class TestLevelVocabCorrectness:
-    """LEVEL_VOCAB covers exactly the 9 observed subtypes + borough (phase2b-design.md §A.3)."""
+    """LEVEL_VOCAB covers exactly the 9 observed subtypes + borough (pipeline-implementation-decisions.md "OQ-P2-2 — containment level vocabulary")."""
 
     _EXPECTED_SUBTYPES = {
         "country", "dependency", "region", "county", "localadmin",
@@ -76,10 +78,12 @@ class TestLevelVocabCorrectness:
     def test_level_vocab_keys_are_exactly_the_ten_subtypes(self):
         """LEVEL_VOCAB's key set is exactly the 9 observed subtypes plus borough.
 
-        9 subtypes empirically observed in the division theme (phase2b-design.md
-        §A.2, global, zero NULLs): locality, neighborhood, microhood, macrohood,
+        9 subtypes empirically observed in the division theme
+        (pipeline-implementation-decisions.md "OQ-P2-2 — containment level
+        vocabulary", global, zero NULLs): locality, neighborhood, microhood, macrohood,
         county, localadmin, region, country, dependency. Plus borough (normative
-        in §1.7 though absent from current Overture data, §A.3).
+        in atgeo-spec.md §7 though absent from current Overture data; per the
+        level-vocabulary decisions above).
         """
         _check_levels()
         assert set(LEVEL_VOCAB.keys()) == self._EXPECTED_SUBTYPES, (
@@ -88,7 +92,8 @@ class TestLevelVocabCorrectness:
         )
 
     def test_level_vocab_values_match_stride_five_table(self):
-        """Each subtype maps to its §A.3 stride-5 value; no admin_level involved."""
+        """Each subtype maps to its stride-5 value (per the level-vocabulary
+        decisions above); no admin_level involved."""
         _check_levels()
         assert LEVEL_VOCAB == self._EXPECTED_VALUES, (
             f"LEVEL_VOCAB {LEVEL_VOCAB} != expected {self._EXPECTED_VALUES}"
@@ -117,13 +122,15 @@ class TestLevelVocabCorrectness:
 
 
 # ---------------------------------------------------------------------------
-# §6 item 1 (continued) — fail-loud enforcement (phase2b-design.md §A.6)
+# §6 item 1 (continued) — fail-loud enforcement (pipeline-implementation-decisions.md
+# "OQ-P2-2 — containment level vocabulary")
 # ---------------------------------------------------------------------------
 
 class TestFailLoudUnmappedSubtype:
     """stage_division_import must raise RuntimeError on an unmapped/NULL subtype.
 
-    phase2b-design.md §A.6: the guard runs in stage_division_import() after the
+    pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+    vocabulary"): the guard runs in stage_division_import() after the
     division_all CTAS and before any artifact write, using
     `SELECT DISTINCT subtype FROM division_all WHERE subtype IS NULL OR
     subtype NOT IN (...)`. This test injects a division row with a subtype
@@ -226,7 +233,8 @@ class TestFailLoudUnmappedSubtype:
 class TestBoundaryLookupOrderingByLevel:
     """BoundaryLookup.containment() orders ascending by level, ties broken by id.
 
-    phase2b-design.md §A.7c: boundaries.py line 49 `ORDER BY admin_level ASC`
+    pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+    vocabulary"): boundaries.py line 49 `ORDER BY admin_level ASC`
     becomes `ORDER BY level ASC, id ASC`. Uses a hand-built boundaries.duckdb
     (not the conftest fixture) with two same-level boundaries at different ids
     to exercise the tie-break specifically.
@@ -293,13 +301,15 @@ class TestBoundaryLookupOrderingByLevel:
 class TestBoundaryFilterDelta:
     """boundaries.duckdb export filter (level <= 50) delta vs the old admin_level filter.
 
-    phase2b-design.md §A.5: proposed filter `level <= 50` (country..locality)
+    pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+    vocabulary"): filter `level <= 50` (country..locality)
     includes localadmin (+21,380 landed) and previously-excluded counties, and
     still excludes all hoods (borough/macrohood/neighborhood/microhood, level
     >= 55). Uses a synthetic division_parquet fixture covering one subtype per
     level tier to exercise the row-inclusion boundary directly, rather than
-    the row-count reconciliation numbers themselves (those are a §A.5
-    empirical measurement, not a unit-testable invariant).
+    the row-count reconciliation numbers themselves (those are an empirical
+    measurement from the level-vocabulary decisions above, not a
+    unit-testable invariant).
     """
 
     _BBOX = (-180, -90, 180, 90)
@@ -424,7 +434,8 @@ class TestBoundaryFilterDelta:
 
 
 # ---------------------------------------------------------------------------
-# §6 item 5 — no NULL levels in places (import-time, covers Part A directly)
+# §6 item 5 — no NULL levels in places (import-time, covers the
+# level-vocabulary decisions directly)
 #
 # Note: tests/test_containment_covering.py::TestNoNullLevels covers the same
 # acceptance item against boundaries.duckdb via the division_parquet conftest
@@ -462,13 +473,15 @@ class TestNoNullLevelsAllSubtypes:
 
 
 # ---------------------------------------------------------------------------
-# County collapse (§A.4): all counties get level=35 regardless of raw admin_level
+# County collapse (per the level-vocabulary decisions below): all counties
+# get level=35 regardless of raw admin_level
 # ---------------------------------------------------------------------------
 
 class TestCountyCollapse:
     """All county-subtype divisions get level=35; admin_level is not a secondary discriminator.
 
-    phase2b-design.md §A.4: county collapses to a single level value. This test
+    pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+    vocabulary"): county collapses to a single level value. This test
     feeds two county divisions with different (now-vestigial) division_area
     admin_level values and confirms both land on level=35.
     """
@@ -503,8 +516,9 @@ class TestCountyCollapse:
                 bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
             )
         """)
-        # county_al2 mimics the common case (admin_level=2, 38,674 of 38,903 per §A.2);
-        # county_al3 mimics the arbitrarily-excluded-today case (admin_level=3, §A.5 delta).
+        # county_al2 mimics the common case (admin_level=2, 38,674 of 38,903 per
+        # the level-vocabulary decisions above); county_al3 mimics the
+        # arbitrarily-excluded-today case (admin_level=3, same decisions' delta).
         counties = [("county_al2", 2, -170.0), ("county_al3", 3, -150.0)]
         for div_id, admin_level, x0 in counties:
             conn.execute(

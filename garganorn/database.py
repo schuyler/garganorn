@@ -1447,7 +1447,8 @@ class OvertureDivisions(Database):
         if region:
             attributes["region"] = region
         # level is never NULL (the atgeo containment vocabulary is total by
-        # construction, garganorn.levels.LEVEL_VOCAB / phase2b-design.md §A.6),
+        # construction, garganorn.levels.LEVEL_VOCAB / pipeline-implementation-decisions.md
+        # "OQ-P2-2 — containment level vocabulary"),
         # so this is unconditional rather than an `is not None` guard.
         attributes["level"] = level
         if wikidata:

@@ -1,8 +1,14 @@
 ---
 category: Design
 tags: [garganorn, duckdb, pipeline, quadtree, privacy]
-last_updated: 2026-07-02
-confidence: design-complete, unvalidated against global data
+last_updated: 2026-08-03
+confidence: design-complete, validated at CONUS scale (not yet global)
+status: Phases 1, 2, and 2b merged and deployed as of 2026-08-03. Decisions
+  condensed in pipeline-implementation-decisions.md. Phase 3
+  (searchRecords/getCoverage removal) and Phase 4 (global validation) are
+  not started; current tentative order is Phase 4 before Phase 3 (see
+  pipeline-restructure memory notes, 2026-07-09). Current operational
+  state: pipeline-status.md.
 ---
 
 # Garganorn Pipeline Restructure: Pure-Parquet Stages and Boundary-Centric Containment
@@ -161,7 +167,7 @@ import (order is established by the explicit `ORDER BY`).
 `overture_division_import.sql` and `export_boundaries_db()` merge into one
 stage with two artifacts. `boundaries.duckdb` keeps its current schema
 except that `admin_level` is replaced by `level INTEGER` — the atgeo
-containment level vocabulary (atgeo design §1.7), mapped from Overture's
+containment level vocabulary (atgeo-spec.md §7), mapped from Overture's
 `subtype` via a CASE expression at import. This is the single place the
 mapping is applied; covering and containment copy `level` downstream. The
 import must `SELECT DISTINCT subtype` first and fail loudly on any subtype
@@ -260,7 +266,7 @@ no R-tree dependency in the join path (SPATIAL-6 becomes moot).
 ```
 tile_qk        VARCHAR   -- the place's export tile (from tile_assignments)
 place_id       VARCHAR
-relations_json VARCHAR   -- {"within":[{"rkey":...}, ...]} ordered by level (atgeo vocabulary, §1.7 of the atgeo design)
+relations_json VARCHAR   -- {"within":[{"rkey":...}, ...]} ordered by level (atgeo vocabulary, atgeo-spec.md §7)
 ```
 
 One parquet file per qk4 prefix (`containment/<qk4>.parquet`), sorted by

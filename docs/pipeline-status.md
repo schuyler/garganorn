@@ -7,9 +7,10 @@ things to watch, and fixes still wanted.
 The full audit was conducted 2026-04-14. All critical and important findings
 were fixed in commit 24d57b9. What remains is documented here.
 
-The pipeline was later restructured (2026-07, see `phase2-artifacts-design.md`)
-to pass data between stages as file-based parquet artifacts instead of a shared
-working DuckDB. Three operational changes worth knowing:
+The pipeline was later restructured (2026-07, see
+`pipeline-implementation-decisions.md`) to pass data between stages as
+file-based parquet artifacts instead of a shared working DuckDB. Three
+operational changes worth knowing:
 
 - **Subcommands.** `python -m garganorn.quadtree` now takes a subcommand — `run`
   for one source, `all --config` for everything, plus `density`, `idf`, and
@@ -27,9 +28,18 @@ working DuckDB. Three operational changes worth knowing:
 
 OQ-P2-5 (serving-path migration) is merged (`fd0ff8d`). The tile route
 is `/tiles/<slug>/<path>` (`__main__.py`), and `config.yaml` uses the Phase 2
-`<source>/tiles/current` layout with per-collection `slug` and `cache_ttl`. The
-Ansible infra wiring (`atgeo-server-config`) is a separate deferred follow-up for
-when tiles go to production.
+`<source>/tiles/current` layout with per-collection `slug` and `cache_ttl`.
+
+Phase 2b (record envelope + level vocabulary) is merged (`af3c9dd`,
+2026-07-10). Tiles are served in the atgeo v1 envelope
+(`{atgeo:1, collection, attribution, generated_at, records:[{uri, cid, value}]}`).
+
+**Tiles are in production.** The Ansible infra wiring (`atgeo-server-config`)
+is deployed, and the first real CONUS tile build (foursquare, overture-place,
+osm; overture_division is pipeline-only, not served) went live on
+`places.atgeo.org` on 2026-08-03. `getCoverage` (nsid `org.atgeo.getCoverage`)
+and the `/tiles/<slug>/<path>` route are both serving verified traffic for all
+three collections.
 
 ---
 
@@ -50,6 +60,16 @@ filters. Not architecturally hard, just needs doing.
 remove.
 
 **Impact**: Noise in server logs. Quick fix.
+
+### `stage_export` doesn't honor `temp_directory` (EXPORT-14)
+
+`stage_export` (`garganorn/stages.py`) hardcodes its DuckDB spill directory as
+`<run_dir>.spill` instead of accepting a `temp_directory` param like every
+other stage (covering/idf/density all do). Minor connection-discipline
+inconsistency, not a correctness bug.
+
+**Impact**: Can't redirect export's spill I/O to a different disk without
+redirecting the whole run directory.
 
 ---
 
@@ -150,6 +170,25 @@ These don't affect functionality. Fix opportunistically or not at all.
 - **EXPORT-9**: Variant deduplication allows same name with different metadata
 - **EXPORT-10**: Linear scan for record lookup within tiles (tiles are small)
 - **EXPORT-13**: Coordinate range validation in tile assignment (overlaps SPATIAL-1)
+- **SPATIAL-9**: No test asserts the division-import Hilbert sort order (`ST_Hilbert` in `stages.py`) is actually applied; the admin-level/level-vocab filter itself is tested (`test_phase3_containment.py`), the sort isn't.
+
+---
+
+## Remaining Restructure Work
+
+Phases 1, 2, and 2b of the pipeline restructure are merged and deployed (see
+`pipeline-restructure-design.md` for the phase plan). What's left:
+
+- **Phase 3 — server removals**: `searchRecords`/`getCoverage` removal, the
+  trigram/JW/search machinery, `name_index`. Zero-user cleanup, no urgency.
+- **Phase 4 — global validation**: the full validation plan against
+  worldwide data. The 2026-08-03 production deploy is a CONUS-bbox build,
+  not global — Phase 4 is still open. Tentative sequencing (2026-07-09):
+  Phase 4 before Phase 3.
+- **OQ-P2-8**: FSQ source disposition (pin release or drop) — undecided;
+  the importer works either way.
+- **Deferred, no urgency**: `COVER_MAX_ZOOM` sizing, manifest sharding,
+  static `getRecord`.
 
 ---
 
@@ -179,7 +218,7 @@ pipeline invariants, and normalization constants. Key points:
 - CTAS is fast, UPDATE/ALTER TABLE is slow (D3)
 - `unnest()` on NULL arrays silently drops the row (D5)
 - All spatial indexing uses quadkeys at z17 (P1)
-- Containment uses adaptive quadtree with two-phase optimization (P6)
+- Containment is a precomputed covering joined by quadkey prefix, not per-tile recursion (P6)
 
 ## Approaches Explored and Discarded
 

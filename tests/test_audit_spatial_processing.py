@@ -168,7 +168,8 @@ class TestSPATIAL5_InvalidGeometryFilter:
 
         # Create a boundary table with geometries that produce degenerate intersections.
         # Column named `level` (not admin_level) to match the boundaries.duckdb
-        # `places` schema post phase2b-design.md §A.7b (atgeo level vocabulary).
+        # `places` schema post pipeline-implementation-decisions.md
+        # ("OQ-P2-2 — containment level vocabulary").
         con.execute("""
             CREATE TABLE boundaries (
                 id VARCHAR,

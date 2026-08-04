@@ -421,7 +421,8 @@ class TestExportTiles:
 
         # Build two synthetic tile rows that a real cursor would return.
         # record_json is the FLAT record shape (as tile_export SQL views emit
-        # it, §B.7.2); export_tiles wraps each with envelope.wrap_record.
+        # it, per docs/pipeline-implementation-decisions.md, "OQ-P2-1 — record
+        # envelope adoption"); export_tiles wraps each with envelope.wrap_record.
         tile_qk_a = "023130" + "0" * 11  # 17-char quadkey
         tile_qk_b = "023130" + "1" * 11
         record_a = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"})
@@ -491,7 +492,8 @@ class TestExportTiles:
         # Build 1000 synthetic tile rows to trigger a progress log.
         # Each row has a UNIQUE tile_qk so we get 1000 distinct tiles — the
         # tile_count % 1000 boundary fires when tile_count reaches 1000.
-        # record_json is the FLAT record shape (§B.7.2); export_tiles wraps it.
+        # record_json is the FLAT record shape (per the envelope decisions
+        # above); export_tiles wraps it.
         def _make_row(i):
             qk = f"02313{i:012d}"  # unique quadkey per row
             payload = json.dumps({"$type": "org.atgeo.place", "rkey": str(i), "name": f"Place {i}"})
@@ -630,11 +632,13 @@ class TestExportTiles:
     def test_python_groups_records_by_tile_qk(self, tmp_path):
         """export_tiles groups per-record rows by tile_qk into separate .json.gz files.
 
-        Retargeted onto the atgeo v1 envelope (phase2b-design.md §B.7.4: legacy
+        Retargeted onto the atgeo v1 envelope (pipeline-implementation-decisions.md
+        "OQ-P2-1 — record envelope adoption": legacy
         export_tiles() is retargeted onto the same envelope.py helpers as
         stage_export in this change set, not deleted). The mock cursor now
-        yields a third `rkey` column (§B.7.2: all four export SQL views gain
-        an rkey output column), and each written record must be
+        yields a third `rkey` column (per the envelope decisions above: all
+        four export SQL views gain an rkey output column), and each written
+        record must be
         {uri, cid, value}-wrapped, not flat.
         """
         from unittest.mock import MagicMock, patch
@@ -799,10 +803,12 @@ class TestExportTiles:
     def test_flush_tile_no_json_loads(self, tmp_path):
         """flush_tile must not call json.loads on the per-record JSON — records
         are already valid JSON strings that envelope.wrap_record composes via
-        string concatenation (§B.7.1), not a parse/reserialize round trip.
+        string concatenation (per the envelope decisions above), not a
+        parse/reserialize round trip.
 
         record_json rows are the FLAT record shape (as tile_export SQL views
-        emit them, §B.7.2); export_tiles wraps each with envelope.wrap_record
+        emit them, per the envelope decisions above); export_tiles wraps each
+        with envelope.wrap_record
         before writing, producing {uri, cid, value} entries in the output.
         """
         import gzip as _gzip
@@ -1074,7 +1080,8 @@ class TestOvertureExportTiles:
 
 # The four division boundaries that contain SF places (lat ~37.77, lon ~-122.42),
 # ordered by level ascending (continent first — matches ORDER BY level ASC;
-# garganorn.levels.LEVEL_VOCAB, phase2b-design.md §A.7c).
+# garganorn.levels.LEVEL_VOCAB, pipeline-implementation-decisions.md
+# "OQ-P2-2 — containment level vocabulary").
 _SF_WITHIN_JSON = json.dumps({
     "within": [
         {"rkey": "org.atgeo.places.overture.division:div_continent_na"},
@@ -2123,7 +2130,8 @@ class TestStageExportPhase2Body:
             (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
         NOT a read_parquet glob, which errors on DuckDB 1.2.1 when the glob matches nothing.
 
-        Records are {uri, cid, value}-wrapped (§B.2b); relations lives on
+        Records are {uri, cid, value}-wrapped (docs/pipeline-implementation-decisions.md,
+        "OQ-P2-1 — record envelope adoption"); relations lives on
         value, not on the wrapper -- this FAILS against the current envelope
         (records are still flat) because parsed.get("relations") reads the
         wrapper (which has no 'relations' key) instead of value.
@@ -2162,14 +2170,16 @@ class TestStageExportPhase2Body:
     # ------------------------------------------------------------------
 
     def test_determinism_two_exports_byte_identical(self, tmp_path):
-        """§7.5.1c / phase2b-design.md §6 item 7: two exports from identical
+        """§7.5.1c / §6 item 7 (pipeline-implementation-decisions.md
+        "OQ-P2-1 — record envelope adoption"): two exports from identical
         artifacts, with an injected fixed timestamp, produce byte-identical
         .json.gz files.
 
         Pins the ORDER BY tile_qk, place_id invariant (spec §3.4 + §3.6 step 3).
         gzip mtime=0 is already set by the existing export_tiles implementation.
 
-        Post-2b, tiles carry a run-scoped `generated_at` (§B.4); without
+        Post-2b, tiles carry a run-scoped `generated_at` (per the envelope
+        decisions above); without
         injecting the same `now` into both calls, two exports run at different
         wall-clock seconds would legitimately differ in that one field, which
         would make this test fail for a reason unrelated to the

@@ -1,12 +1,14 @@
 """Tests for garganorn.tile_reader.TileBackedCollection.
 
-New-envelope coverage (phase2b-design.md §6 item 10, Part B / OQ-P2-1):
+New-envelope coverage (§6 item 10; pipeline-implementation-decisions.md
+"OQ-P2-1 — record envelope adoption"):
 TestTileBackedCollectionNewEnvelope below asserts get_record() works against
 atgeo v1 {uri, cid, value}-wrapped tiles, returning the `value` sub-object
 (not the wrapper) with rkey/importance handling intact. TestTileBackedCollection
 (pre-existing, below) exercises the OLD flat-record shape and doubles as the
-§B.8 deployment-window tolerance-path fixture (`record.get("value", record)`)
-while old-shape tiles may still exist on disk during the deploy window.
+deployment-window tolerance-path fixture (per the envelope decisions above;
+`record.get("value", record)`) while old-shape tiles may still exist on disk
+during the deploy window.
 """
 import gzip
 import json
@@ -158,7 +160,8 @@ class TestTileBackedCollectionNewEnvelope:
     get_record() must match `record["value"]["rkey"]` (not top-level
     `record["rkey"]`, which does not exist in wrapped records) and return
     `copy.copy(record["value"])` — the value sub-object, not the wrapper
-    (§B.7.5). These FAIL against the current implementation, which does
+    (per the envelope decisions above). These FAIL against the current
+    implementation, which does
     `record["rkey"]` directly and would KeyError/never-match against
     {uri, cid, value}-wrapped records.
     """
@@ -239,7 +242,8 @@ class TestTileBackedCollectionNewEnvelope:
     def test_get_record_mutation_does_not_corrupt_cache(self, tmp_path):
         """Popping a key from the returned value (as the server layer does with
         'importance') must not corrupt the lru_cache-held tile dict — the
-        shallow-copy contract (§B.7.5) must hold for the value sub-object too."""
+        shallow-copy contract (per the envelope decisions above) must hold for the
+        value sub-object too."""
         tile_qk = "023010"
         rkey = "place001"
         manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])

@@ -16,10 +16,13 @@ DIVISION_BOUNDARIES = [
     # id, level, lat, lon, wkt_geom, min_lat, min_lon, max_lat, max_lon
     # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
     # country=10, region=25, locality=50. div_continent_na has no vocabulary entry
-    # (§A.3: continent has no producer entry); 0 is a synthetic sentinel kept only
-    # to preserve this pre-built boundaries.duckdb-shaped fixture's ascending order.
+    # (docs/pipeline-implementation-decisions.md, "OQ-P2-2 — containment level
+    # vocabulary": continent has no producer entry); 0 is a synthetic sentinel
+    # kept only to preserve this pre-built boundaries.duckdb-shaped fixture's
+    # ascending order.
     # div_borough_manhattan's subtype is "locality" in the real pipeline data too
-    # (Overture has no borough subtype in current data, §A.3), so it also maps to 50.
+    # (Overture has no borough subtype in current data, per the same
+    # level-vocabulary decisions), so it also maps to 50.
     ("div_continent_na", 0, 40.0, -100.0,
      "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
      20.0, -130.0, 55.0, -60.0),
@@ -163,9 +166,10 @@ class TestBoundaryExportFilter:
     def test_run_pipeline_has_boundary_filter(self):
         """export_boundaries_db CTAS should include a level-vocabulary filter.
 
-        phase2b-design.md §A.7(B): the OLD invariant (admin_level BETWEEN 0 AND 2
+        pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+        vocabulary"): the OLD invariant (admin_level BETWEEN 0 AND 2
         OR subtype = 'locality') is replaced by the level-vocabulary threshold
-        `level <= 50` (country..locality; §A.5). The filter is expressed via the
+        `level <= 50` (country..locality; per the decisions above). The filter is expressed via the
         LEVEL_VOCAB constant so it can't drift from the vocabulary, but the
         source text still contains the literal comparison against 50
         (LEVEL_VOCAB['locality']) since that's what the CASE/threshold compiles

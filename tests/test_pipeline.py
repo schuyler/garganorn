@@ -276,7 +276,8 @@ class TestRunPipeline:
 class TestWriteManifest:
     """Tests for garganorn.quadtree.write_manifest().
 
-    Migrated to the Phase 2b envelope (phase2b-design.md §B.6, §B.2c):
+    Migrated to the Phase 2b envelope (pipeline-implementation-decisions.md
+    "OQ-P2-1 — record envelope adoption"):
     write_manifest(manifest, output_dir, source, *, generated_at) -- generated_at
     is a required keyword-only arg (no default) -- and manifest.json's field set
     is exactly {atgeo, source, collection, attribution, generated_at,
@@ -307,7 +308,7 @@ class TestWriteManifest:
         assert (tmp_path / "manifest.json").exists(), "manifest.json not found"
 
     def test_manifest_structure(self, tmp_path):
-        """manifest.json must match §B.2c's field set exactly."""
+        """manifest.json must match the manifest field set exactly (per the envelope decisions above)."""
         try:
             from garganorn.quadtree import write_manifest
         except (ImportError, ModuleNotFoundError):
@@ -326,7 +327,7 @@ class TestWriteManifest:
             "tile_url_template", "cache", "quadkeys",
         }
         assert set(manifest.keys()) == expected_keys, (
-            f"manifest.json must match §B.2c field set exactly; "
+            f"manifest.json must match the manifest field set exactly; "
             f"got {sorted(manifest.keys())}, expected {sorted(expected_keys)}"
         )
         assert isinstance(manifest["quadkeys"], list), "quadkeys must be a list"
@@ -339,11 +340,11 @@ class TestWriteManifest:
             f"got {manifest['generated_at']!r}"
         )
         assert manifest["tile_url_template"] == "{base}/{qk6}/{qk}.json.gz", (
-            f"tile_url_template must be the §B.2c literal; "
+            f"tile_url_template must be the manifest literal (per the envelope decisions above); "
             f"got {manifest.get('tile_url_template')!r}"
         )
         assert manifest["cache"] == {"max_age": 86400, "immutable": False}, (
-            f"cache must be {{max_age: 86400, immutable: false}} (§B.6, protocol "
+            f"cache must be {{max_age: 86400, immutable: false}} (per the envelope decisions above, protocol "
             f"change P2); got {manifest.get('cache')!r}"
         )
 

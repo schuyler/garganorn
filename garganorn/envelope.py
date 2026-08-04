@@ -1,8 +1,10 @@
-"""The atgeo v1 tile/record envelope (OQ-P2-1, phase2b-design.md §B).
+"""The atgeo v1 tile/record envelope (pipeline-implementation-decisions.md
+"OQ-P2-1 — record envelope adoption").
 
 Shared by the pipeline export path (garganorn.stages) and the legacy
 export_tiles() module function, so there is exactly one implementation of
-the envelope shape (phase2b-design.md §B.7.1, §B.7.4).
+the envelope shape (pipeline-implementation-decisions.md
+"OQ-P2-1 — record envelope adoption").
 
 Imports nothing from garganorn — no import cycle with server.py or stages.py.
 """
@@ -12,7 +14,8 @@ ATGEO_VERSION = 1
 
 
 def record_uri(repo: str, collection: str, rkey: str) -> str:
-    """Build the canonical dereferenceable record URI (phase2b-design.md §B.3).
+    """Build the canonical dereferenceable record URI (pipeline-implementation-decisions.md
+    "OQ-P2-1 — record envelope adoption").
 
     https://{repo}/{collection}/{rkey} -- not at://; gazetteer records are not
     repository data. rkey is the record's rkey *after* source transforms (for
@@ -25,20 +28,20 @@ def record_uri(repo: str, collection: str, rkey: str) -> str:
 def wrap_record(uri: str, record_json: str) -> str:
     """Wrap a record's flat JSON string into the {uri, cid, value} envelope.
 
-    String composition, not json.loads + json.dumps (§B.7.1): record_json is
+    String composition, not json.loads + json.dumps (per the envelope decisions above): record_json is
     already valid JSON text (from DuckDB's to_json()), so it is embedded
     verbatim rather than being parsed and reserialized. This avoids a
     per-record round trip and preserves DuckDB's UTF-8 output exactly
     (no ensure_ascii escaping).
 
-    cid is literally null -- never computed (§B.3, APPROVED).
+    cid is literally null -- never computed (per the envelope decisions above, APPROVED).
     """
     return '{"uri":%s,"cid":null,"value":%s}' % (json.dumps(uri), record_json)
 
 
 def build_tile_payload(collection: str, attribution: str, generated_at: str,
                         wrapped_records: list) -> bytes:
-    """Build the top-level tile payload (§B.2a, §B.5).
+    """Build the top-level tile payload (per the envelope decisions above).
 
     Top-level keys are exactly {atgeo, collection, attribution, generated_at,
     records}. wrapped_records is a list of already-wrap_record()-wrapped JSON
@@ -60,12 +63,12 @@ def build_tile_payload(collection: str, attribution: str, generated_at: str,
 
 def build_manifest(source: str, collection: str, attribution: str,
                     generated_at: str, quadkeys: list) -> dict:
-    """Build the manifest.json dict (§B.2c, §B.6).
+    """Build the manifest.json dict (per the envelope decisions above).
 
     Field set is exactly {atgeo, source, collection, attribution,
     generated_at, tile_url_template, cache, quadkeys}. generated_at is
     passed through verbatim -- callers capture one run-scoped timestamp
-    (§B.4) and this function does not reformat it. quadkeys is sorted.
+    (per the envelope decisions above) and this function does not reformat it. quadkeys is sorted.
     """
     return {
         "atgeo": ATGEO_VERSION,

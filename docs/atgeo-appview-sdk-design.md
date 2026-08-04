@@ -120,7 +120,8 @@ export SQL (small diff, do it before SDKs freeze on the format):
   compliance one. Revisit if the ecosystem grows bulk-repo conventions.
 - `generated_at` moves into the tile (already in the manifest; duplicating
   it per tile lets caches be reasoned about per-file). **`generated_at` is
-  run-scoped** (`docs/phase2b-design.md` §5 `P1`, §B.4): identical across
+  run-scoped** (`docs/pipeline-implementation-decisions.md`, "OQ-P2-1 —
+  record envelope adoption"): identical across
   every tile of a run and equal to the manifest's `generated_at`; RFC 3339
   UTC, `Z`-suffixed, seconds precision. It is not a per-flush or per-record
   timestamp — a second producer (e.g. the AppView, §2.5) stamping per-flush
@@ -128,12 +129,14 @@ export SQL (small diff, do it before SDKs freeze on the format):
 - `cid` is required and nullable, but never omitted (§1.2 record shape:
   every record is exactly `{uri, cid, value}`). For gazetteer records
   `cid` is always `null` and is explicitly **never computed**
-  (`docs/phase2b-design.md` §5 `P4`, §B.3) — there is no signed commit to
+  (`docs/pipeline-implementation-decisions.md`, "OQ-P2-1 — record envelope
+  adoption") — there is no signed commit to
   verify it against, so hashing the value would record a number that
   verifies nothing. Only AppView records carry a genuine commit-verified
   CID.
 - Record order within a tile is producer-defined; consumers must not rely
-  on it (`docs/phase2b-design.md` §5 `P5`, §B.2a). §2.5 has the AppView
+  on it (`docs/pipeline-implementation-decisions.md`, "OQ-P2-1 — record
+  envelope adoption"). §2.5 has the AppView
   flush tiles ordered by `rkey`; the pipeline orders by its own internal
   sort key. Both are valid producers of this envelope.
 
@@ -157,8 +160,9 @@ export SQL (small diff, do it before SDKs freeze on the format):
 }
 ```
 
-- `attribution` (optional) — **[protocol amendment, `docs/phase2b-design.md`
-  §5 `P3`]** lets a client render attribution without fetching a tile.
+- `attribution` (optional) — **[protocol amendment,
+  `docs/pipeline-implementation-decisions.md`, "OQ-P2-1 — record envelope
+  adoption"]** lets a client render attribution without fetching a tile.
   Unknown-field tolerance (§1.6) makes it safe to add; a manifest lacking
   it is still conformant.
 - `cache.immutable: true` for timestamped pipeline outputs (URL changes
@@ -166,7 +170,8 @@ export SQL (small diff, do it before SDKs freeze on the format):
   `max_age` for AppView-served live tiles. This resolves the CDN-vs-
   freshness tension per collection instead of globally. **`immutable:
   true` is permitted only when `tile_url_template` embeds a run-unique
-  path segment** (`docs/phase2b-design.md` §5 `P2`, §B.6) — otherwise the
+  path segment** (`docs/pipeline-implementation-decisions.md`, "OQ-P2-1 —
+  record envelope adoption") — otherwise the
   same tile URL can return different bytes after a later run, and a CDN
   honoring `immutable` would serve stale tiles for the full `max_age`. The
   current pipeline's `tile_url_template` has no run-unique segment (tiles
@@ -274,7 +279,8 @@ semantically inconsistent across countries.
 | 65    | neighborhood   | `neighborhood`             |
 | 70    | microhood      | `microhood`                |
 
-**Phase 2b amendment (`docs/phase2b-design.md` §A.3, §5 `§1.7-renumber`):**
+**Phase 2b amendment (`docs/pipeline-implementation-decisions.md`,
+"OQ-P2-2 — containment level vocabulary"):**
 the hoods are renumbered on a uniform stride-5. `macrohood`=60 and
 `microhood`=70 are new entries (absent from the prior table); `neighborhood`
 moves from its prior value of 60 to 65. This is a protocol change, not a

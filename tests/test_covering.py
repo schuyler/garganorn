@@ -1,4 +1,4 @@
-"""Red tests: garganorn/covering.py (§7.1 of covering-containment-design.md).
+"""Red tests: garganorn/covering.py (see docs/pipeline-implementation-decisions.md, "Phase 1").
 
 Until garganorn/covering.py exists and exports the required symbols, tests surface
 as either FAILED (tests that call _check_covering() directly in the test body) or
@@ -48,8 +48,10 @@ _COVERING_TEST_BOUNDARIES = [
     # (id, level, wkt, min_lat, min_lon, max_lat, max_lon)
     # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
     # country=10, region=25, locality=50. cov_continent has no vocabulary entry
-    # (§A.3: continent has no producer entry); 0 is a synthetic sentinel kept only
-    # to preserve this pre-built boundaries.duckdb-shaped fixture's ascending order.
+    # (docs/pipeline-implementation-decisions.md, "OQ-P2-2 — containment level
+    # vocabulary": continent has no producer entry); 0 is a synthetic sentinel
+    # kept only to preserve this pre-built boundaries.duckdb-shaped fixture's
+    # ascending order.
     (
         "cov_continent",
         0,
@@ -371,7 +373,8 @@ class TestStageCoveringSchema:
     def test_level_equals_boundary_vocab_level(self, covering_dir, covering_test_db):
         """covering.level must equal bnd.places.level (the atgeo vocabulary value).
 
-        phase2b-design.md §A.7(B): the OLD invariant (level == raw admin_level) is
+        pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
+        vocabulary"): the OLD invariant (level == raw admin_level) is
         replaced. covering_seed.sql:21 now selects b.level directly (the vocabulary
         column already produced by the import CTAS from subtype), so this fixture's
         bnd.places.level values (garganorn.levels.LEVEL_VOCAB-derived, set in

@@ -58,7 +58,8 @@ def _build_server(pipeline_dir, max_coverage_tiles=50):
 
 def _collect_tile_records(pipeline_dir):
     """Read all wrapped records ({uri, cid, value}) from all tile .json.gz
-    files. Returns list of wrapper dicts (§B.2b). Use _collect_tile_values()
+    files. Returns list of wrapper dicts (docs/pipeline-implementation-decisions.md,
+    "OQ-P2-1 — record envelope adoption"). Use _collect_tile_values()
     for the unwrapped value dicts."""
     records = []
     for gz_path in pipeline_dir.rglob("*.json.gz"):
@@ -198,7 +199,8 @@ class TestPipelineToCoverage:
     def test_tile_files_are_valid_gzipped_json(self, pipeline_output):
         """Each tile file is valid gzip-compressed JSON with the full atgeo v1
         envelope: {atgeo, collection, attribution, generated_at, records}
-        (phase2b-design.md §B.2a, §6 item 6)."""
+        (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
+        adoption", §6 item 6)."""
         server = _build_server(pipeline_output)
         result = server.get_coverage({}, collection=FSQ_COLLECTION, bbox=SF_BBOX_STR)
         prefix = BASE_URL + "/"
@@ -218,8 +220,9 @@ class TestPipelineToCoverage:
             assert isinstance(tile["records"], list)
 
     def test_tile_records_match_expected_schema(self, pipeline_output):
-        """Every record in all tile files is {uri, cid, value}-wrapped (§B.2b,
-        §6 item 6), and value conforms to the org.atgeo.place schema."""
+        """Every record in all tile files is {uri, cid, value}-wrapped (per the
+        envelope decisions above, §6 item 6), and value conforms to the
+        org.atgeo.place schema."""
         records = _collect_tile_records(pipeline_output)
         assert len(records) > 0, "No records found in any tile"
         for record in records:
@@ -227,7 +230,7 @@ class TestPipelineToCoverage:
                 f"Record must be exactly {{uri, cid, value}} (atgeo v1 envelope); "
                 f"got keys: {list(record)}"
             )
-            assert record["cid"] is None, f"cid must be null (never computed, §B.3): {record}"
+            assert record["cid"] is None, f"cid must be null (never computed, per the envelope decisions above): {record}"
             assert record["uri"].startswith("https://places.atgeo.org/"), \
                 f"uri must be https://{{repo}}/... : {record['uri']}"
             assert record["uri"].rsplit("/", 1)[-1] == record["value"]["rkey"], (
@@ -275,8 +278,8 @@ class TestPipelineToCoverage:
 
     def test_manifest_metadata(self, pipeline_output):
         """manifest.duckdb metadata table contains atgeo=1, collection,
-        source='foursquare', and an RFC 3339 Z generated_at (§B.6, §6 items
-        8/9)."""
+        source='foursquare', and an RFC 3339 Z generated_at (per the envelope
+        decisions above, §6 items 8/9)."""
         manifest_path = str(pipeline_output / "manifest.duckdb")
         con = duckdb.connect(manifest_path, read_only=True)
         cols = {row[1] for row in con.execute("PRAGMA table_info('metadata')").fetchall()}
@@ -323,7 +326,7 @@ class TestPipelineToCoverage:
                       .strftime("%Y-%m-%dT%H:%M:%SZ")
         assert manifest_generated_at == expected, (
             f"generated_at {manifest_generated_at!r} must derive from the run-dir name "
-            f"{run_dir_name!r} (expected {expected!r}), per §B.4 point 1"
+            f"{run_dir_name!r} (expected {expected!r}), per the envelope decisions above"
         )
 
         gz_files = list(pipeline_output.rglob("*.json.gz"))
@@ -530,7 +533,8 @@ class TestExportWorkersParity:
                 f"Attribution differs in tile {rel_path}"
             )
             # Sort wrapped records by value.rkey for deterministic comparison
-            # (records are {uri, cid, value}-wrapped; rkey lives at value.rkey, §B.2b).
+            # (records are {uri, cid, value}-wrapped; rkey lives at value.rkey,
+            # per the envelope decisions above).
             records1 = sorted(content1["records"], key=lambda r: r["value"]["rkey"])
             records4 = sorted(content4["records"], key=lambda r: r["value"]["rkey"])
             assert records1 == records4, (
