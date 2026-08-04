@@ -8,7 +8,7 @@ in garganorn/stages.py.
   1. artifact_fresh truth table        → TestArtifactFresh
   2. finalize_artifact behavior        → TestFinalizeArtifact
   3. Stale-.tmp clobber                → TestStaleTmpClobber
-  4. Directory-artifact recovery       → covered by existing covering tests; §7.4 adds containment
+  4. Directory-artifact recovery       → covered by existing covering tests; §3.7 adds containment
   5. DuckDB construct pinning          → TestDuckDBConstructPinning (passes immediately)
   6. Sort pins                         → TestDensitySortPin, TestIdfSortPin
 """

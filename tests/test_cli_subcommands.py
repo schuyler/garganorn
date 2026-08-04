@@ -1,4 +1,4 @@
-"""RED tests for §7.6 — CLI subcommand grammar (Phase 2).
+"""RED tests for §4 — CLI subcommand grammar (Phase 2).
 
 The current CLI uses a flat flag model (--source, --output, etc.).
 Phase 2 restructures it into subcommands: density, idf, covering, run, all.
@@ -9,7 +9,7 @@ exist. Failures manifest as:
     argparse (treated as an unrecognized positional).
   - AssertionError when checking that the subcommand was dispatched.
 
-§7.6 item mapping:
+§4 item mapping:
   1. Each subcommand parses              → TestSubcommandParsing
   2. 'all' stage-call order             → TestAllSubcommandOrder
   3. --force deletion sets              → TestForceSemantics
@@ -25,11 +25,11 @@ from garganorn import quadtree as _qt
 
 
 # ---------------------------------------------------------------------------
-# §7.6.1 Each subcommand parses its grammar
+# §4 Each subcommand parses its grammar
 # ---------------------------------------------------------------------------
 
 class TestSubcommandParsing:
-    """§7.6.1: Each subcommand must be accepted by the CLI parser."""
+    """§4: Each subcommand must be accepted by the CLI parser."""
 
     def _run_main(self, argv, *, monkeypatch):
         """Run main() with the given argv, capturing SystemExit."""
@@ -138,11 +138,11 @@ class TestSubcommandParsing:
 
 
 # ---------------------------------------------------------------------------
-# §7.6.2 'all' stage-call order and derived paths
+# §4 'all' stage-call order and derived paths
 # ---------------------------------------------------------------------------
 
 class TestAllSubcommandOrder:
-    """§7.6.2: 'all' subcommand must call stages in: density → idf → division → others."""
+    """§4: 'all' subcommand must call stages in: density → idf → division → others."""
 
     def test_all_calls_density_before_idf(self, tmp_path, monkeypatch):
         """'all' must call stage_density_extract before any stage_idf calls."""
@@ -262,13 +262,13 @@ pipeline:
 
 
 # ---------------------------------------------------------------------------
-# §7.6.3 / §4.4  --force deletion sets
+# §4  --force deletion sets
 # ---------------------------------------------------------------------------
 
 class TestForceSemantics:
-    """§7.6.3/§4.4: run --force must delete the correct artifact set and preserve tiles/.
+    """§4: run --force must delete the correct artifact set and preserve tiles/.
 
-    §4.4 deletion sets:
+    §4 deletion sets:
       run --force (place source):
         places.parquet + .meta.json
         tile_assignments.parquet + .meta.json
@@ -364,7 +364,7 @@ class TestForceSemantics:
         self, tmp_path, division_parquet
     ):
         """For overture_division, force=True must explicitly delete boundaries.duckdb
-        before rebuilding it (§4.4 PRE-deletion requirement).
+        before rebuilding it (§4 PRE-deletion requirement).
 
         Strengthened from vacuous: Phase 1 already overwrites boundaries.duckdb via
         ATTACH (content changes), so a content-only check passes with no pressure.
@@ -391,7 +391,7 @@ class TestForceSemantics:
 
         # Spy on os.remove to verify boundaries.duckdb is explicitly deleted
         # before the pipeline rebuilds it.  Phase 1 never calls os.remove on it;
-        # Phase 2 must (§4.4 deletion-before-rebuild requirement).
+        # Phase 2 must (§4 deletion-before-rebuild requirement).
         removed_paths = []
         _orig_remove = os.remove
 
@@ -412,7 +412,7 @@ class TestForceSemantics:
             except Exception:
                 pass
 
-        # Phase 2 requirement (§4.4): boundaries.duckdb must be explicitly deleted
+        # Phase 2 requirement (§4): boundaries.duckdb must be explicitly deleted
         # (via os.remove) BEFORE the pipeline rebuilds it.  Phase 1 only calls
         # os.remove on the working DB — it overwrites boundaries.duckdb in place
         # via ATTACH without ever removing the file first.

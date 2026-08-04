@@ -153,11 +153,11 @@ class TestDensitySortPin:
 
 
 # ---------------------------------------------------------------------------
-# §3.1/§2.2/§2.3 Gate #13 Finding #2 — density finalize via .meta.json sidecar
+# §3.1/§2 Gate #13 Finding #2 — density finalize via .meta.json sidecar
 # ---------------------------------------------------------------------------
 
 class TestDensityMetaSidecar:
-    """§3.1/§2.2 tests for stage_density_extract producing a .meta.json sidecar.
+    """§3.1/§2 tests for stage_density_extract producing a .meta.json sidecar.
 
     All tests fail RED because the current stage_density_extract writes output
     directly via `COPY density_export TO '{output_path}'` without calling
@@ -171,7 +171,7 @@ class TestDensityMetaSidecar:
     """
 
     def test_meta_json_written_after_stage(self, overture_parquet, tmp_path):
-        """§2.2: after stage_density_extract, <output_path>.meta.json must exist.
+        """§2: after stage_density_extract, <output_path>.meta.json must exist.
 
         meta.json must contain:
           - 'params': {} (density stage has no named parameters)
@@ -207,7 +207,7 @@ class TestDensityMetaSidecar:
         )
 
     def test_stale_tmp_clobbered(self, overture_parquet, tmp_path):
-        """§2.3 rule 1: a stale <output_path>.tmp is removed before building.
+        """§2: a stale <output_path>.tmp is removed before building.
 
         After the call: output is correct AND meta.json exists.
         Current code already removes .tmp at stage start; this test adds the
@@ -236,7 +236,7 @@ class TestDensityMetaSidecar:
         )
 
     def test_freshness_meta_driven(self, overture_parquet, tmp_path):
-        """§2.2: freshness must be driven by artifact_fresh(), not _is_output_fresh().
+        """§2: freshness must be driven by artifact_fresh(), not _is_output_fresh().
 
         artifact_fresh(output, resolved_inputs, {}) must return True after a successful
         stage_density_extract, enabling the second call to be a no-op.

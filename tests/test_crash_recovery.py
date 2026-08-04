@@ -1,10 +1,11 @@
-"""RED tests for §7.7 — crash recovery (Phase 2).
+"""RED tests for §6 — crash recovery (Phase 2).
 
-State-based matrix: construct each §5 disk state directly, run run_pipeline,
+State-based matrix: construct each disk state directly, run run_pipeline,
 assert the final output equals a clean-run control. No subprocess sleeps;
 SIGKILL test uses a harness script.
 
-§7.7 item mapping:
+§6 item mapping (kill-9 acceptance also covered by §8's Phase 2 acceptance
+paragraph):
   State matrix (deterministic, no subprocess) → TestCrashStateMatrix
   Subprocess kill-9 (miniature acceptance)     → TestKillNineAcceptance
 
@@ -30,7 +31,7 @@ import garganorn.stages as _stages
 
 
 # ---------------------------------------------------------------------------
-# Helper: canonical tile comparison (§9.1 miniature)
+# Helper: canonical tile comparison (§8 Phase 2 acceptance, miniature)
 # ---------------------------------------------------------------------------
 
 def _canonical_tile(gz_path):
@@ -100,11 +101,11 @@ def control_run(fsq_parquet, density_parquet, tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------
-# §7.7 State-based crash matrix
+# §6 State-based crash matrix
 # ---------------------------------------------------------------------------
 
 class TestCrashStateMatrix:
-    """State-based matrix: construct §5 disk states, run pipeline, verify output.
+    """State-based matrix: construct disk states, run pipeline, verify output.
 
     Each test:
     1. Runs a clean pipeline to build artifacts.
@@ -247,11 +248,13 @@ class TestCrashStateMatrix:
     ):
         """Stale boundaries.duckdb.tmp + genuine .wal must be explicitly deleted before ATTACH.
 
-        §2.3 rule 1 / §3.3: phase 2 deletes both .tmp and .wal at stage start so DuckDB
+        §2 (general artifact rules) / pipeline-implementation-decisions.md
+        "Phase 2 — parquet artifacts + orchestrator" (crash recovery patterns):
+        phase 2 deletes both .tmp and .wal at stage start so DuckDB
         does not replay a stale WAL against a fresh empty DB (which would fail with
         "table already exists" because the WAL records the old CREATE TABLE).
 
-        Planted state (per §7.7): a genuine stale WAL produced by opening
+        Planted state (per §6): a genuine stale WAL produced by opening
         boundaries.duckdb.tmp, writing a 'places' table, then kill-9ing the writer.
 
         Test fails RED because:
@@ -305,14 +308,14 @@ class TestCrashStateMatrix:
         # This assertion fails RED because Phase 1 does not explicitly delete the WAL.
         assert str(wal_path) in removed_paths, (
             f"Phase 2 must explicitly call os.remove on the stale WAL "
-            f"({wal_path.name}) before ATTACH (§2.3 rule 1). "
+            f"({wal_path.name}) before ATTACH (§2). "
             f"Fails RED: phase 1 calls os.remove only on .tmp, not .wal. "
             f"(Paths removed: {[os.path.basename(p) for p in removed_paths]})"
         )
 
 
 # ---------------------------------------------------------------------------
-# §7.7 Subprocess kill-9 test
+# §8 Subprocess kill-9 test (Phase 2 acceptance)
 # ---------------------------------------------------------------------------
 
 class TestKillNineAcceptance:
@@ -351,7 +354,7 @@ class TestKillNineAcceptance:
         # Phase 2 pre-check: control_run must produce tiles at tiles/current layout.
         # Fails RED because run_pipeline still uses Phase 1 layout (no tiles/current).
         assert control_tiles, (
-            "Control run must produce tiles at <src>/tiles/current (Phase 2 §7.4 layout). "
+            "Control run must produce tiles at <src>/tiles/current (Phase 2 §2 layout). "
             "Fails RED: run_pipeline uses Phase 1 layout and does not write to tiles/current."
         )
         # Rerun in-process — must recover and produce correct output

@@ -275,7 +275,7 @@ class TestContainmentBehaviorPorts:
 class TestContainmentOrdering:
     """§7.2 item 2: within list ordered by level ASC, ties broken by id.
 
-    Ported to Phase 2 signature per §7.4.1.  Fails RED with TypeError.
+    Ported to Phase 2 signature per §3.7.  Fails RED with TypeError.
     """
 
     def test_within_ordered_by_level_asc(self, simple_boundaries_db, tmp_path):
@@ -458,7 +458,7 @@ class TestBruteForceOracle:
     """§7.2 item 3: compute_containment pair set == brute-force ST_Contains.
 
     Ported to Phase 2 signature: compute_containment(places_parquet,
-    tile_assignments_parquet, ...) per §7.4.1.  Fails RED because the current
+    tile_assignments_parquet, ...) per §3.7.  Fails RED because the current
     implementation still takes 'con' as its first argument.
     """
 
@@ -612,7 +612,7 @@ class TestBruteForceOracle:
 class TestContainmentArtifacts:
     """§7.2 item 4: containment/<qk4>.parquet written, schema and sort correct.
 
-    Ported to Phase 2 signature per §7.4.1.  Fails RED with TypeError.
+    Ported to Phase 2 signature per §3.7.  Fails RED with TypeError.
     """
 
     def test_containment_parquets_written(self, simple_boundaries_db, tmp_path):
@@ -1037,7 +1037,7 @@ class TestAntimeridianEdgeArm:
         assertions in test_all_three_places_via_compute_containment): these are
         end-to-end sanity checks.  The gap place (lon=0) must NOT appear under
         ami_boundary's rkey — this is guaranteed structurally, not by the D7 CASE
-        branch.  The covering seed SQL (§2.3) uses the same D7 OR-condition on the
+        branch.  The covering seed SQL (§2, constraint D7) uses the same D7 OR-condition on the
         boundary's bbox; gap tiles (xmax < 170 AND xmin > -170) never pass it, so
         ami_boundary contributes no covering tiles in the gap region and no
         (gap_place, ami_boundary) row can enter the edge arm join.  Even if such a
@@ -1336,7 +1336,7 @@ class TestAntimeridianEdgeArm:
 
 
 # ---------------------------------------------------------------------------
-# §7.4 Phase 2 containment relocation tests (RED)
+# §3.7 Phase 2 containment relocation tests (RED)
 # ---------------------------------------------------------------------------
 
 def _make_parquet_places(tmp_path, places, filename="places.parquet"):
@@ -1374,7 +1374,7 @@ def _make_parquet_tile_assignments(tmp_path, assignments, filename="tile_assignm
 
 
 class TestContainmentRelocationPhase2:
-    """§7.4: compute_containment must use parquet inputs and write to <src>/containment/.
+    """§3.7: compute_containment must use parquet inputs and write to <src>/containment/.
 
     All tests fail in Red phase because compute_containment still takes 'con'
     as its first parameter.
@@ -1480,13 +1480,13 @@ class TestContainmentRelocationPhase2:
 
 
 # ---------------------------------------------------------------------------
-# §7.4.3 Dir-swap atomicity matrix (mirrors §7.1.7 covering tests)
+# §3.7 Dir-swap atomicity matrix (mirrors §3.5 covering tests)
 # ---------------------------------------------------------------------------
 
 class TestContainmentDirSwapAtomicity:
-    """§7.4.3: dir-swap atomicity matrix for containment.
+    """§3.7: dir-swap atomicity matrix for containment.
 
-    Mirrors the covering §7.1.7 atomicity tests:
+    Mirrors the covering §3.5 atomicity tests:
       1. Leftover .tmp before build → clobbered, correct output
       2. Leftover .old with dir missing → cleared, correct output
       3. Partial .tmp (no _meta.json) from crash → next build correct
@@ -1597,13 +1597,13 @@ class TestContainmentDirSwapAtomicity:
 
 
 # ---------------------------------------------------------------------------
-# §7.4.4 Q3 export relations: {} + idempotency (ported from test_checkpoint.py)
+# §3.7 Q3 export relations: {} + idempotency (ported from test_checkpoint.py)
 # ---------------------------------------------------------------------------
 
 class TestContainmentQ3ExportAndIdempotency:
-    """§7.4.4: Q3 empty containment → relations:{} in export; idempotency.
+    """§3.7: Q3 empty containment → relations:{} in export; idempotency.
 
-    Ported from TestComputeContainmentIdempotency in test_checkpoint.py (§6/§7.9).
+    Ported from TestComputeContainmentIdempotency in test_checkpoint.py (§6/§3.7).
     Uses Phase 2 signature.  All tests fail RED with TypeError.
     """
 

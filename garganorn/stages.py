@@ -276,7 +276,7 @@ def compute_containment(
         if not covering_parquets:
             empty = True
 
-    # Dir-swap atomicity setup (covering.py pattern, §2.3 rule 2)
+    # Dir-swap atomicity setup (covering.py pattern, §2)
     tmp_dir = containment_dir + ".tmp"
     old_dir = containment_dir + ".old"
 
@@ -611,11 +611,11 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
                           force=False) -> None:
     """Write places.parquet + boundaries.duckdb for overture_division (Phase 2).
 
-    One ephemeral in-memory DuckDB connection. Sequence (§3.3):
+    One ephemeral in-memory DuckDB connection. Sequence (§3.4):
       1. Run overture_division_import.sql transformed to CREATE TEMP TABLE division_all.
       2. COPY (SELECT * EXCLUDE (geometry) FROM division_all ORDER BY qk17 NULLS LAST)
          to places.parquet.tmp (FORMAT PARQUET, COMPRESSION ZSTD).
-      3. Delete stale boundaries.duckdb.tmp + .wal (crash recovery, §2.3 rule 1).
+      3. Delete stale boundaries.duckdb.tmp + .wal (crash recovery, §2).
          ATTACH boundaries.duckdb.tmp AS bnd; CREATE bnd.places + RTREE index; DETACH.
       4. fsync + os.replace boundaries.duckdb.tmp → boundaries.duckdb.
       5. finalize_artifact(places.parquet.tmp → places.parquet) — meta written LAST,
@@ -676,7 +676,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     boundaries_path = str(Path(output_path).parent / "boundaries.duckdb")
 
     # Freshness: standard artifact_fresh + boundaries.duckdb must exist
-    # (the places meta gates both artifacts — §3.3 step 5)
+    # (the places meta gates both artifacts — §3.4 step 5)
     if not force:
         if artifact_fresh(output_path, input_files, params) and os.path.exists(boundaries_path):
             log.info("[overture_division] import: skipping (artifact fresh)")
@@ -728,7 +728,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     boundaries_tmp = boundaries_path + ".tmp"
     boundaries_wal = boundaries_tmp + ".wal"
 
-    # Stage-start cleanup: remove stale .tmp/.wal from prior crashes (§2.3 rule 1)
+    # Stage-start cleanup: remove stale .tmp/.wal from prior crashes (§2)
     for stale in [tmp_output, boundaries_tmp, boundaries_wal]:
         if os.path.exists(stale):
             os.remove(stale)
@@ -788,7 +788,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         )
 
         # Step 3: Build boundaries.duckdb
-        # WAL cleanup before ATTACH (§2.3 rule 1 — stale .wal from prior kill -9)
+        # WAL cleanup before ATTACH (§2 — stale .wal from prior kill -9)
         for stale in [boundaries_tmp, boundaries_wal]:
             if os.path.exists(stale):
                 os.remove(stale)
@@ -862,7 +862,7 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     """
     t0 = time.monotonic()
 
-    # overture_division has its own two-artifact stage (§3.3); dispatch immediately.
+    # overture_division has its own two-artifact stage (§3.4); dispatch immediately.
     if source == "overture_division":
         return stage_division_import(
             parquet_glob, bbox, output_path,
@@ -1058,7 +1058,7 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
         _load_qk_env_macros(con)
         con.execute(sql)
 
-        # Write to .tmp first; finalize_artifact will atomically rename it (§2.3 rule 1)
+        # Write to .tmp first; finalize_artifact will atomically rename it (§2)
         con.execute(
             f"COPY ("
             f"  SELECT tile_qk15, density_score, tile_xmin, tile_ymin, tile_xmax, tile_ymax"
@@ -1186,7 +1186,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
         log.info("[%s] tile_assignment: skipping (artifact fresh)", source)
         return {}
 
-    # Stage-start cleanup: remove stale .tmp from prior crashes (§2.3 rule 1)
+    # Stage-start cleanup: remove stale .tmp from prior crashes (§2)
     tmp_output = output_path + ".tmp"
     if os.path.exists(tmp_output):
         os.remove(tmp_output)
@@ -1296,7 +1296,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                  memory_limit: str = "48GB",
                  force: bool = False,
                  now: datetime | None = None) -> str:
-    """Phase 2: export tiles from parquet artifacts (§3.6).
+    """Phase 2: export tiles from parquet artifacts (§3.8).
 
     Reads places and tile_assignments from parquet artifacts. Builds a
     timestamped run dir under tiles_root with per-tile .json.gz files,
@@ -1408,7 +1408,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         ).fetchone()[0]
         log.info("[%s] export: %d tiles to write", source, tile_count)
 
-        # Step 6: Stream cursor with 4 columns for determinism (§9.1)
+        # Step 6: Stream cursor with 4 columns for determinism (§8 Phase 2 acceptance)
         # ORDER BY (tile_qk, place_id) makes per-run output byte-identical.
         # place_id is retained solely as the deterministic sort key; rkey is
         # the record's post-transform key used for the {uri, cid, value} wrap.

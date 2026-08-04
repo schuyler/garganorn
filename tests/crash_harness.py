@@ -1,4 +1,4 @@
-"""Crash harness for §7.7 kill-9 acceptance tests.
+"""Crash harness for §8 (Phase 2 acceptance) kill-9 tests.
 
 This script is invoked via subprocess by test_crash_recovery.py.
 It reads GARGANORN_CRASH_POINT from the environment and either:

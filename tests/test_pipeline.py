@@ -1454,13 +1454,13 @@ class TestRunPipelineMtime:
 
 
 # ---------------------------------------------------------------------------
-# §7.5 Phase 2 export/pipeline tests (RED)
+# §3.8 Phase 2 export/pipeline tests (RED)
 # ---------------------------------------------------------------------------
 
 class TestExportPhase2:
-    """§7.5: Phase 2 export layout — tiles under <src>/tiles/current/, manifests written last.
+    """§3.8: Phase 2 export layout — tiles under <src>/tiles/current/, manifests written last.
 
-    Tests §7.5.4 (run-dir lifecycle: tiles relocate to <src>/tiles/,
+    Tests §3.8 (run-dir lifecycle: tiles relocate to <src>/tiles/,
     manifest.json written last, symlink swap, keep-2).
 
     Fails in Red phase because run_pipeline still writes tiles under
@@ -1492,7 +1492,7 @@ class TestExportPhase2:
         )
 
     def test_manifest_json_written_last(self, fsq_parquet, density_parquet, tmp_path):
-        """manifest.json must have a later mtime than manifest.duckdb (written last §3.6.5)."""
+        """manifest.json must have a later mtime than manifest.duckdb (written last §3.8)."""
         from garganorn.quadtree import run_pipeline
         output_dir = tmp_path / "pipeline_out2"
         output_dir.mkdir()
