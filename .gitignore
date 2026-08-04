@@ -35,6 +35,7 @@ env/
 # Local development settings
 .env
 .envrc
+config.yaml
 
 # Database
 *.db

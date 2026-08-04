@@ -12,7 +12,7 @@ The project is named after the earliest recorded [mammoth goose](https://en.wiki
 
 ## Configuration
 
-Garganorn loads its data sources from a YAML config file. By default it looks for `config.yaml` in the current directory, or you can set the `GARGANORN_CONFIG` environment variable to point elsewhere.
+Garganorn loads its data sources from a YAML config file. By default it looks for `config.yaml` in the current directory, or you can set the `GARGANORN_CONFIG` environment variable to point elsewhere. Copy [`config.yaml.example`](config.yaml.example) to `config.yaml` and edit it for your environment — `config.yaml` is gitignored since it's deployment-specific.
 
 ```yaml
 repo: places.atgeo.org

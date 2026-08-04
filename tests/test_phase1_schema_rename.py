@@ -25,7 +25,7 @@ import yaml
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PLACE_JSON_PATH = os.path.join(REPO_ROOT, "garganorn", "lexicon", "place.json")
-CONFIG_YAML_PATH = os.path.join(REPO_ROOT, "config.yaml")
+CONFIG_YAML_PATH = os.path.join(REPO_ROOT, "config.yaml.example")
 
 
 def _load_place_json():
