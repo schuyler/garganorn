@@ -596,10 +596,13 @@ def bboxes_intersect(a, b):
     return True
 
 
-# Geometry column name per source (excluded from Phase 2 Parquet output)
+# Geometry column name per source, excluded from Phase 2 Parquet output.
+# overture_place is None: overture_place_import.sql drops geometry inside
+# ov_base (before any join/materialization), so `places` never carries it —
+# unlike foursquare/osm, there is no column left to EXCLUDE at COPY time.
 _GEOM_COL = {
     "foursquare": "geom",
-    "overture_place": "geometry",
+    "overture_place": None,
     "osm": "geom",
 }
 
@@ -889,13 +892,14 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     if invalid_norms:
         raise ValueError(f"{', '.join(invalid_norms)} must be positive")
 
-    # Determine geometry column to exclude from Parquet output
-    exclude_col = _GEOM_COL.get(source)
-    if exclude_col is None:
+    # Determine geometry column to exclude from Parquet output (None means
+    # the source's import SQL never carries a geometry column into `places`)
+    if source not in _GEOM_COL:
         raise ValueError(
             f"stage_import: unsupported source '{source}'. "
             f"Supported: {list(_GEOM_COL)} plus overture_division (dispatched internally)."
         )
+    exclude_col = _GEOM_COL[source]
 
     # Compute input file list for freshness tracking
     if source == "osm":
@@ -975,9 +979,10 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
 
         # Write to a temp file first; finalize_artifact does the atomic rename
         tmp_output = output_path + ".tmp"
+        select_clause = "SELECT *" if exclude_col is None else f"SELECT * EXCLUDE ({exclude_col})"
         con.execute(
             f"COPY ("
-            f"  SELECT * EXCLUDE ({exclude_col})"
+            f"  {select_clause}"
             f"  FROM places"
             f"  ORDER BY qk17 NULLS LAST"
             f") TO '{tmp_output}' (FORMAT PARQUET)"

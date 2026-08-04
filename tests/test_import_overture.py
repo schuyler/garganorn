@@ -130,17 +130,39 @@ class TestOvertureImport:
         conn.close()
         assert not bad, f"qk17 values with unexpected characters: {bad}"
 
-    def test_geometry_column_is_geometry_type(self, overture_parquet, tmp_path):
-        """The geometry column must be of GEOMETRY type after import."""
-        db_path = tmp_path / "test_ov_geom_type.duckdb"
+    def test_geometry_not_carried_into_places(self, overture_parquet, tmp_path):
+        """The `places` table must NOT carry a geometry column at all.
+
+        geometry is only needed for the existence filter (WHERE geometry IS
+        NOT NULL) and the bbox-derived qk17 computation, both resolved before
+        `places` is materialized. Nothing downstream (density/idf/variants
+        joins, tile assignment, export) reads geometry — export builds points
+        from bbox midpoints instead — so carrying it through those joins and
+        the final CTAS only inflates sort/join spill for no benefit.
+        """
+        db_path = tmp_path / "test_ov_no_geom.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_overture_import(conn, overture_parquet)
-        describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
+        cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
-        assert "geometry" in describe, "geometry column missing from places"
-        assert describe["geometry"] == "GEOMETRY", (
-            f"Expected geometry to be GEOMETRY, got {describe['geometry']}"
+        assert "geometry" not in cols, (
+            f"places must not carry a geometry column; found columns: {cols}"
+        )
+
+    def test_import_sql_does_not_recast_geometry(self):
+        """overture_place_import.sql must not recast/carry geometry into ov_base.
+
+        geometry should be dropped via EXCLUDE in ov_base's own SELECT, not
+        recast to GEOMETRY and carried through downstream CTEs only to be
+        excluded at the final COPY.
+        """
+        sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
+        sql_text = sql_path.read_text()
+        assert "geometry::GEOMETRY AS geometry" not in sql_text, (
+            "overture_place_import.sql recasts and carries geometry through "
+            "ov_base again. geometry should be dropped via EXCLUDE in "
+            "ov_base's own SELECT instead."
         )
 
 

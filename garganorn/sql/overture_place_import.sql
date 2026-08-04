@@ -11,7 +11,12 @@ ${idf_cte}
 -- Import Overture places and compute importance + variants in one pass (Phase 2: density+IDF+importance+variants unified in import CTAS)
 CREATE TABLE places AS
 WITH ov_base AS (
-    SELECT * EXCLUDE (geometry), geometry::GEOMETRY AS geometry,
+    -- geometry is dropped here, not carried downstream: it is only needed
+    -- for the existence filter below, and qk17 comes from bbox, not geometry.
+    -- Carrying a recast GEOMETRY column through the joins/CTAS below instead
+    -- costs nothing at small scale but inflates sort/join spill enormously
+    -- at full Overture places scale, for zero downstream benefit.
+    SELECT * EXCLUDE (geometry),
            -- SPATIAL-1: Validate coordinate range before calling ST_QuadKey
            CASE WHEN (LEAST(bbox.xmin, bbox.xmax) + GREATEST(bbox.xmin, bbox.xmax)) / 2.0 BETWEEN -180 AND 180
                   AND (LEAST(bbox.ymin, bbox.ymax) + GREATEST(bbox.ymin, bbox.ymax)) / 2.0 BETWEEN -90 AND 90
