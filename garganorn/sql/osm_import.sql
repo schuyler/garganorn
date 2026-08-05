@@ -25,6 +25,23 @@ CREATE TABLE places (
     variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
 );
 
+-- Spill discipline: DuckDB re-materializes a CTE at FULL width once per
+-- reference beyond its own definition, which is what exhausted the temp
+-- volume on the global Overture import. filtered and way_base below are each
+-- scanned exactly once beyond their definition -- density and idf are joined
+-- directly against pre-deduplicated lookup tables in each final SELECT,
+-- rather than via a helper CTE that re-scans them and is joined back on a
+-- computed key.
+--
+-- Two CTEs in the way pipeline below do NOT hold to that, and are known debt:
+-- qualifying_ways (:159) is the raw-parquet way base carrying the full nds
+-- node-ref array and the tags MAP -- the widest rows in this file -- and is
+-- scanned twice beyond its definition, by way_node_refs and way_base.
+-- way_node_refs (:221) is an UNNEST(nds) explosion carrying one row per node
+-- reference in a way, and is likewise scanned twice, by needed_node_ids and
+-- way_centroids. Measured on 10.7M OSM rows at a 32GB memory limit: zero
+-- bytes of temp disk, so neither spills at present scale. Nothing structural
+-- holds that. Re-run the spill probe before and after changing either.
 INSERT INTO places
 WITH filtered AS (
     SELECT
@@ -90,21 +107,6 @@ WITH filtered AS (
                 'neighbourhood', 'quarter', 'island', 'square')
             AND tags['name'] IS NOT NULL)
       )
-),
-node_density AS (
-    SELECT
-        osm_type || osm_id::VARCHAR AS rkey,
-        coalesce(d.density_score, 0) AS density_score
-    FROM filtered f
-    LEFT JOIN density_tiles d ON d.tile_qk15 = left(ST_QuadKey(f.longitude, f.latitude, 17), 15)
-    WHERE f.longitude IS NOT NULL AND f.latitude IS NOT NULL
-),
-node_idf AS (
-    SELECT
-        osm_type || osm_id::VARCHAR AS rkey,
-        coalesce(i.idf_score, 0) AS idf_score
-    FROM filtered f
-    LEFT JOIN idf_scores i ON i.category = f.primary_category
 )
 SELECT
     f.osm_type,
@@ -146,8 +148,19 @@ SELECT
          ELSE NULL END AS qk17,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM filtered f
-LEFT JOIN node_density nd ON nd.rkey = f.osm_type || f.osm_id::VARCHAR
-LEFT JOIN node_idf ni ON ni.rkey = f.osm_type || f.osm_id::VARCHAR
+LEFT JOIN (
+    -- Pre-dedupe density_tiles on the join key: without this, a duplicate
+    -- tile_qk15 key fans the LEFT JOIN below out into duplicate places rows.
+    SELECT tile_qk15, any_value(density_score) AS density_score
+    FROM density_tiles
+    GROUP BY tile_qk15
+) nd ON nd.tile_qk15 = left(ST_QuadKey(f.longitude, f.latitude, 17), 15)
+LEFT JOIN (
+    -- Pre-dedupe idf_scores on the join key for the same reason.
+    SELECT category, any_value(idf_score) AS idf_score
+    FROM idf_scores
+    GROUP BY category
+) ni ON ni.category = f.primary_category
 WHERE f.primary_category IS NOT NULL
   AND f.name IS NOT NULL
   AND f.longitude >= ${xmin} AND f.longitude <= ${xmax}
@@ -256,20 +269,6 @@ way_base AS (
       AND qw.name IS NOT NULL
       AND wc.longitude >= ${xmin} AND wc.longitude <= ${xmax}
       AND wc.latitude >= ${ymin} AND wc.latitude <= ${ymax}
-),
-way_density AS (
-    SELECT
-        'w' || osm_id::VARCHAR AS rkey,
-        coalesce(d.density_score, 0) AS density_score
-    FROM way_base wb
-    LEFT JOIN density_tiles d ON d.tile_qk15 = left(ST_QuadKey(wb.longitude, wb.latitude, 17), 15)
-),
-way_idf AS (
-    SELECT
-        'w' || osm_id::VARCHAR AS rkey,
-        coalesce(i.idf_score, 0) AS idf_score
-    FROM way_base wb
-    LEFT JOIN idf_scores i ON i.category = wb.primary_category
 )
 SELECT
     'w' AS osm_type,
@@ -311,8 +310,19 @@ SELECT
          ELSE NULL END AS qk17,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM way_base wb
-LEFT JOIN way_density wd ON wd.rkey = 'w' || wb.osm_id::VARCHAR
-LEFT JOIN way_idf wi ON wi.rkey = 'w' || wb.osm_id::VARCHAR;
+LEFT JOIN (
+    -- Pre-dedupe density_tiles on the join key for the same reason as the
+    -- node import above.
+    SELECT tile_qk15, any_value(density_score) AS density_score
+    FROM density_tiles
+    GROUP BY tile_qk15
+) wd ON wd.tile_qk15 = left(ST_QuadKey(wb.longitude, wb.latitude, 17), 15)
+LEFT JOIN (
+    -- Pre-dedupe idf_scores on the join key for the same reason.
+    SELECT category, any_value(idf_score) AS idf_score
+    FROM idf_scores
+    GROUP BY category
+) wi ON wi.category = wb.primary_category;
 
 DELETE FROM places WHERE geom IS NULL;
 

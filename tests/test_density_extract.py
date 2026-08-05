@@ -74,7 +74,9 @@ class TestDensityExtract:
         count = conn.execute("SELECT COUNT(*) FROM density").fetchone()[0]
         conn.close()
 
-        # The overture_parquet fixture has 7 rows total (including ov006 outside bbox).
+        # The overture_parquet fixture has 16 rows total (including ov006
+        # outside bbox); this count drifts as rows are added, so this test
+        # deliberately doesn't pin an exact number.
         # All should contribute to density since there's no bbox filter.
         # We expect at least 1 density tile (probably 1-5 given the small fixture).
         assert count > 0, f"Expected at least 1 density tile, got {count}"

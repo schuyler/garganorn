@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions]}
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB"):
     """Phase 2 orchestrator: import → covering → tile-assign → containment → export."""
     source_dir = os.path.join(output_dir, source)
     tiles_root = os.path.join(source_dir, "tiles")
@@ -62,6 +62,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
     # Import (self-gating; dispatches to stage_division_import for overture_division)
     stage_import(source, parquet_glob, bbox, places_parquet,
                  memory_limit=memory_limit, temp_directory=temp_directory,
+                 max_temp_directory_size=max_temp_directory_size,
                  density_parquet=density_parquet, idf_parquet=idf_parquet,
                  force=force)
 
@@ -70,18 +71,23 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         bnd_path = os.path.join(source_dir, "boundaries.duckdb")
         stage_covering(bnd_path, os.path.join(source_dir, "covering"),
                        memory_limit=memory_limit, temp_directory=temp_directory,
+                       max_temp_directory_size=max_temp_directory_size,
                        force=force)
 
     # Self-heal covering for non-division sources with boundaries
     covering_dir = None
     if boundaries_db is not None:
         covering_dir = ensure_covering(boundaries_db, memory_limit=memory_limit,
-                                       temp_directory=temp_directory, force=force)
+                                       temp_directory=temp_directory,
+                                       max_temp_directory_size=max_temp_directory_size,
+                                       force=force)
 
     # Tile assignment (self-gating)
     stage_tile_assignment(places_parquet, ta_parquet, source,
                           max_per_tile=max_per_tile, memory_limit=memory_limit,
-                          temp_directory=temp_directory, force=force)
+                          temp_directory=temp_directory,
+                          max_temp_directory_size=max_temp_directory_size,
+                          force=force)
 
     # Containment (self-gating, parquet-based)
     pk_expr = SOURCES[source].source_pk
@@ -89,11 +95,15 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
     compute_containment(places_parquet, ta_parquet, boundaries_db,
                         pk_expr, lon_expr, lat_expr, containment_dir,
                         covering_dir=covering_dir, memory_limit=memory_limit,
-                        temp_directory=temp_directory, force=force)
+                        temp_directory=temp_directory,
+                        max_temp_directory_size=max_temp_directory_size,
+                        force=force)
 
     # Export (self-gating, manages manifests + symlink + keep-2)
     stage_export(source, places_parquet, ta_parquet, containment_dir, tiles_root,
                  t0, export_workers=export_workers, memory_limit=memory_limit,
+                 temp_directory=temp_directory,
+                 max_temp_directory_size=max_temp_directory_size,
                  force=force)
 
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
@@ -142,6 +152,8 @@ def _cmd_density(args):
         kwargs["memory_limit"] = args.memory_limit
     if args.temp_directory is not None:
         kwargs["temp_directory"] = args.temp_directory
+    if args.max_temp_directory_size is not None:
+        kwargs["max_temp_directory_size"] = args.max_temp_directory_size
     stage_density_extract(args.parquet, args.output, t0, **kwargs)
 
 
@@ -161,8 +173,11 @@ def _cmd_idf(args, idf_parser):
         parquet_glob = args.parquet
 
     t0 = time.monotonic()
-    stage_idf(args.source, parquet_glob, args.output, t0, force=args.force,
-              memory_limit=args.memory_limit, temp_directory=args.temp_directory)
+    idf_kwargs = dict(force=args.force,
+                       memory_limit=args.memory_limit, temp_directory=args.temp_directory)
+    if args.max_temp_directory_size is not None:
+        idf_kwargs["max_temp_directory_size"] = args.max_temp_directory_size
+    stage_idf(args.source, parquet_glob, args.output, t0, **idf_kwargs)
 
 
 def _cmd_covering(args):
@@ -174,6 +189,8 @@ def _cmd_covering(args):
         kwargs["memory_limit"] = args.memory_limit
     if args.temp_directory is not None:
         kwargs["temp_directory"] = args.temp_directory
+    if args.max_temp_directory_size is not None:
+        kwargs["max_temp_directory_size"] = args.max_temp_directory_size
     if args.min_zoom is not None:
         kwargs["cover_min_zoom"] = args.min_zoom
     if args.max_zoom is not None:
@@ -214,6 +231,12 @@ def _cmd_run(args, run_parser):
     max_per_tile = args.max_per_tile if args.max_per_tile is not None else (
         config.get("max_per_tile") if config.get("max_per_tile") is not None else 1000
     )
+    temp_directory = args.temp_directory if args.temp_directory is not None else (
+        config.get("temp_directory")
+    )
+    max_temp_directory_size = args.max_temp_directory_size if args.max_temp_directory_size is not None else (
+        config.get("max_temp_directory_size") if config.get("max_temp_directory_size") is not None else "250GB"
+    )
     boundaries_db = args.boundaries
 
     bbox = tuple(args.bbox) if args.bbox is not None else None
@@ -239,7 +262,8 @@ def _cmd_run(args, run_parser):
         export_workers=args.export_workers,
         density_parquet=args.density_parquet,
         idf_parquet=args.idf_parquet,
-        temp_directory=getattr(args, "temp_directory", None),
+        temp_directory=temp_directory,
+        max_temp_directory_size=max_temp_directory_size,
         force=args.force,
     )
 
@@ -250,6 +274,7 @@ def _cmd_all(args):
     output_dir = config["output"]
     memory_limit = config.get("memory_limit", "48GB")
     temp_directory = config.get("temp_directory")
+    max_temp_directory_size = config.get("max_temp_directory_size", "250GB")
     max_per_tile = config.get("max_per_tile", 1000)
     bbox_list = config.get("bbox")
     bbox = tuple(bbox_list) if bbox_list else None
@@ -277,6 +302,7 @@ def _cmd_all(args):
             force=args.force,
             memory_limit=memory_limit,
             temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size,
         )
 
     # Step 2: idf per configured place source (fixed order)
@@ -297,7 +323,8 @@ def _cmd_all(args):
         else:
             parquet_glob = src_cfg.get("parquet")
         stage_idf(src_name, parquet_glob, idf_out, time.monotonic(), force=args.force,
-                  memory_limit=memory_limit, temp_directory=temp_directory)
+                  memory_limit=memory_limit, temp_directory=temp_directory,
+                  max_temp_directory_size=max_temp_directory_size)
 
     # Step 3: run overture_division first (produces boundaries.duckdb for other sources)
     if division_cfg:
@@ -310,6 +337,7 @@ def _cmd_all(args):
             max_per_tile=max_per_tile,
             density_parquet=density_parquet_path if overture_cfg else None,
             temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size,
             force=args.force,
         )
 
@@ -339,6 +367,7 @@ def _cmd_all(args):
             density_parquet=density_parquet_path if overture_cfg else None,
             idf_parquet=idf_parquet_path,
             temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size,
             force=args.force,
         )
 
@@ -366,6 +395,10 @@ def main():
                            help="DuckDB memory limit (e.g. 48GB)")
     density_p.add_argument("--temp-directory", default=None, dest="temp_directory",
                            help="DuckDB temp directory for spill")
+    density_p.add_argument("--max-temp-directory-size", default=None,
+                           dest="max_temp_directory_size",
+                           help="DuckDB max_temp_directory_size (e.g. 250GB); "
+                                "bounds spill under --temp-directory")
     density_p.add_argument("--force", action="store_true", default=False,
                            help="Force rebuild even if output is fresh")
 
@@ -385,6 +418,10 @@ def main():
                        help="DuckDB memory limit")
     idf_p.add_argument("--temp-directory", default=None, dest="temp_directory",
                        help="DuckDB temp directory")
+    idf_p.add_argument("--max-temp-directory-size", default=None,
+                       dest="max_temp_directory_size",
+                       help="DuckDB max_temp_directory_size (e.g. 250GB); "
+                            "bounds spill under --temp-directory")
     idf_p.add_argument("--force", action="store_true", default=False,
                        help="Force rebuild even if output is fresh")
 
@@ -404,6 +441,10 @@ def main():
                             help="DuckDB memory limit")
     covering_p.add_argument("--temp-directory", default=None, dest="temp_directory",
                             help="DuckDB temp directory")
+    covering_p.add_argument("--max-temp-directory-size", default=None,
+                            dest="max_temp_directory_size",
+                            help="DuckDB max_temp_directory_size (e.g. 250GB); "
+                                 "bounds spill under --temp-directory")
     covering_p.add_argument("--force", action="store_true", default=False,
                             help="Force rebuild even if output is fresh")
 
@@ -443,6 +484,10 @@ def main():
                        help="Path to idf.parquet (input)")
     run_p.add_argument("--temp-directory", default=None, dest="temp_directory",
                        help="DuckDB temp directory for spill")
+    run_p.add_argument("--max-temp-directory-size", default=None,
+                       dest="max_temp_directory_size",
+                       help="DuckDB max_temp_directory_size (e.g. 250GB); "
+                            "bounds spill under --temp-directory")
     run_p.add_argument("--force", action="store_true", default=False,
                        help="Delete and rebuild all stage outputs before running")
 

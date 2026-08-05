@@ -164,6 +164,95 @@ def _run_sql(con, source, stage, filename, t0, **params):
     log.info("[%s] %s: done (%.1fs, %d places)", source, stage, time.monotonic() - t0, count)
 
 
+def _assert_unique_key(con, table, key_col, source_path):
+    """Raise if `table`.`key_col` has a duplicate non-NULL value.
+
+    stage_import LEFT JOINs density_tiles on tile_qk15 and idf_scores on
+    category; a duplicate key multiplies the matching place's row through
+    the join at every join site (foursquare/overture_place/osm import SQL).
+    Production data is clean today (uniqueness is guaranteed by the
+    producing stage's GROUP BY -- e.g. density_extract.sql), but
+    --density-parquet/--idf-parquet accept arbitrary files, so the guarantee
+    is convention, not contract. Fail fast, before the import SQL runs any
+    join: a silent wrong answer (one arbitrary score picked per duplicate
+    key) is far worse than an early loud error.
+
+    NULL keys are ignored: NULL = NULL is never true in SQL, so a NULL key
+    can never fan out a LEFT JOIN, and count(key_col)/count(DISTINCT
+    key_col) both exclude NULLs automatically. A single NULL-key row (e.g.
+    density_extract.sql grouping a NULL-geometry/NULL-bbox row into a NULL
+    tile_qk15 group) must not trip this guard.
+    """
+    non_null_total, non_null_distinct = con.execute(
+        f"SELECT count({key_col}), count(DISTINCT {key_col}) FROM {table}"
+    ).fetchone()
+    if non_null_total != non_null_distinct:
+        raise ValueError(
+            f"{source_path!r} has a non-unique {key_col} "
+            f"key: {non_null_total} rows but only {non_null_distinct} distinct "
+            f"{key_col} value(s) (NULL {key_col} values are ignored). A "
+            f"duplicate join key would silently multiply place rows through "
+            f"the import SQL's LEFT JOIN; refusing to import."
+        )
+
+
+def _assert_density_parquet_unique(density_parquet, *, temp_directory=None,
+                                   max_temp_directory_size="250GB",
+                                   memory_limit=None):
+    """Check density_parquet's tile_qk15 key is unique, once, ahead of ANY
+    stage_import dispatch.
+
+    stage_import has four destinations for density_parquet: foursquare,
+    overture_place, and osm build their own density_tiles TEMP TABLE
+    directly (and used to assert uniqueness there); overture_division
+    dispatches to stage_division_import and RETURNS before that point is
+    ever reached, so it was invisible to the guard even though it is on the
+    global run path and does receive density_parquet (quadtree.py
+    _cmd_all). A duplicate tile_qk15 there does not fan out any join row
+    count (division_density's avg(density_score) just double-counts the
+    duplicate), so it produces a silently wrong importance value rather
+    than an error -- exactly the failure mode _assert_unique_key exists to
+    turn loud.
+
+    Calling this once, here, ahead of the dispatch branch, is what keeps
+    all four consumers on one guard instead of two independently
+    maintained copies of it.
+
+    The uniqueness count runs directly against read_parquet(density_parquet)
+    rather than materializing it into a TEMP TABLE first, so DuckDB streams
+    just the tile_qk15 column via projection pushdown instead of loading the
+    whole file into memory.
+
+    Args:
+        temp_directory: DuckDB temp_directory for spill (optional). Threaded
+            from stage_import's own temp_directory so this connection spills
+            the same place every other connection in the import pipeline
+            does, rather than to DuckDB's unbounded default.
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
+        memory_limit: DuckDB memory_limit string (optional). Threaded from
+            stage_import's own memory_limit and set before any query runs on
+            this connection, so the uniqueness count is bounded the same
+            way the surrounding import connection is rather than running at
+            DuckDB's default (~80% of RAM).
+    """
+    if not density_parquet:
+        return
+    con = duckdb.connect(":memory:")
+    try:
+        if memory_limit:
+            con.execute(f"SET memory_limit = '{memory_limit}'")
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        source_sql = density_parquet.replace("'", "''")
+        _assert_unique_key(con, f"read_parquet('{source_sql}')", "tile_qk15", density_parquet)
+    finally:
+        con.close()
+
+
 def _coord_exprs(source, alias=""):
     """Return (lon_expr, lat_expr) SQL expressions for the given source.
 
@@ -190,6 +279,7 @@ def compute_containment(
     covering_dir=None,
     memory_limit="48GB",
     temp_directory=None,
+    max_temp_directory_size="250GB",
     force=False,
 ) -> None:
     """Write <src>/containment/ with per-prefix parquet files and _meta.json (Phase 2).
@@ -217,6 +307,10 @@ def compute_containment(
         covering_dir: Directory containing covering parquet files (from stage_covering).
         memory_limit: DuckDB memory_limit string.
         temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB", per
+            docs/pipeline-restructure-design.md "5. Memory and disk budget"),
+            independently of whether temp_directory is also supplied.
         force: Re-build even when the artifact is fresh.
     """
     # Resolve covering zoom range from covering _meta.json (fallback to defaults)
@@ -307,6 +401,8 @@ def compute_containment(
         try:
             if temp_directory:
                 con.execute(f"SET temp_directory = '{temp_directory}'")
+            if max_temp_directory_size:
+                con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
             if memory_limit:
                 con.execute(f"SET memory_limit = '{memory_limit}'")
             con.execute("SET preserve_insertion_order = false")
@@ -471,11 +567,16 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
 
 
 def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: str,
-                      *, generated_at: str = None) -> None:
+                      *, generated_at: str = None,
+                      temp_directory: str | None = None,
+                      max_temp_directory_size: str | None = "250GB") -> None:
     """Phase 2: write manifest.duckdb from a tile_assignments parquet file.
 
     Reads tile_assignments from parquet (no open working connection required).
-    Atomic: builds in .tmp, renames into place.
+    Atomic: builds in .tmp, renames into place. The CREATE TABLE ... ORDER BY
+    below runs over the full tile_assignments parquet (millions of rows for
+    Overture), so it can spill like any other stage; temp_directory/
+    max_temp_directory_size bound that the same way stage_import does.
     Must be called BEFORE write_manifest() so manifest.json lands last.
 
     Args:
@@ -486,6 +587,12 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
             manifest.json (pipeline-implementation-decisions.md
             "OQ-P2-1 — record envelope adoption"). Defaults to the current time if omitted
             (legacy/test callers that don't thread a run timestamp).
+        temp_directory: DuckDB temp_directory for spill (optional). Callers
+            reached via stage_export should pass its own temp_directory so
+            the manifest step spills where the export did.
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
     """
     if generated_at is None:
         generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -496,6 +603,10 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         os.remove(tmp_path)
     con = duckdb.connect()
     try:
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(f"ATTACH '{tmp_path}' AS manifest")
         if source == "osm":
             con.execute(f"""
@@ -609,6 +720,7 @@ _GEOM_COL = {
 
 def stage_division_import(parquet_glob, bbox, output_path, *,
                           memory_limit="48GB", temp_directory=None,
+                          max_temp_directory_size="250GB",
                           density_parquet=None,
                           density_norm=10.0, pop_norm=20.0,
                           force=False) -> None:
@@ -634,6 +746,9 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         output_path: Destination path for places.parquet.
         memory_limit: DuckDB memory_limit string.
         temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
         density_parquet: Path to density_tiles.parquet (optional).
         density_norm: Density normalization constant (must be > 0).
         pop_norm: Population normalization constant (must be > 0).
@@ -740,6 +855,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     try:
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET preserve_insertion_order = false")
 
         # Step 1: Create division_all TEMP TABLE (geometry included for boundaries export)
@@ -836,6 +953,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
 
 def stage_import(source, parquet_glob, bbox, output_path, *,
                  memory_limit="48GB", temp_directory=None,
+                 max_temp_directory_size="250GB",
                  density_parquet=None, idf_parquet=None,
                  density_norm=10.0, idf_norm=18.0, pop_norm=20.0,
                  force=False) -> None:
@@ -856,6 +974,9 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
         output_path: Destination path for places.parquet.
         memory_limit: DuckDB memory_limit setting.
         temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
         density_parquet: Path to density_tiles.parquet (optional).
         idf_parquet: Path to idf_scores.parquet (optional).
         density_norm: Density normalization constant (must be > 0).
@@ -865,11 +986,19 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     """
     t0 = time.monotonic()
 
+    # Check density_parquet's join-key uniqueness once, ahead of ANY
+    # dispatch below -- see _assert_density_parquet_unique for why this
+    # must happen here rather than inside each destination separately.
+    _assert_density_parquet_unique(density_parquet, temp_directory=temp_directory,
+                                   max_temp_directory_size=max_temp_directory_size,
+                                   memory_limit=memory_limit)
+
     # overture_division has its own two-artifact stage (§3.4); dispatch immediately.
     if source == "overture_division":
         return stage_division_import(
             parquet_glob, bbox, output_path,
             memory_limit=memory_limit, temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size,
             density_parquet=density_parquet,
             density_norm=density_norm, pop_norm=pop_norm,
             force=force,
@@ -953,6 +1082,28 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     # Run import SQL on ephemeral in-memory connection (no .duckdb files)
     con = duckdb.connect()
     try:
+        if memory_limit:
+            con.execute(f"SET memory_limit = '{memory_limit}'")
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+
+        # Load the lookup tables as a standalone step, ahead of the import
+        # SQL, so their join key uniqueness can be asserted before any join
+        # runs (see _assert_unique_key). density_tiles' own uniqueness was
+        # already checked once above (_assert_density_parquet_unique, ahead
+        # of the overture_division dispatch); idf_scores has no
+        # overture_division counterpart, so it is checked here as before.
+        # The import SQL's ${density_cte}/${idf_cte} placeholders are then
+        # substituted with no-ops below, since the tables already exist on
+        # this connection.
+        con.execute(density_cte)
+        con.execute(idf_cte)
+        _assert_unique_key(con, "idf_scores", "category", idf_parquet)
+        no_op_density_cte = "-- density_tiles loaded above (uniqueness-checked ahead of dispatch)"
+        no_op_idf_cte = "-- idf_scores loaded and uniqueness-checked above"
+
         if source == "osm":
             node_parquet_path, way_parquet_path = parquet_glob
             osm_category_case = (_SQL_DIR / "_osm_category_case.sql").read_text().strip()
@@ -962,19 +1113,19 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
                      way_parquet=way_parquet_path,
                      xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
                      osm_category_case=osm_category_case,
-                     density_cte=density_cte, idf_cte=idf_cte,
+                     density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
                      density_norm=density_norm, idf_norm=idf_norm)
         elif source == "overture_place":
             _run_sql(con, source, "import", "overture_place_import.sql", t0,
                      memory_limit=memory_limit, parquet_glob=parquet_glob,
                      xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
-                     density_cte=density_cte, idf_cte=idf_cte,
+                     density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
                      density_norm=density_norm, idf_norm=idf_norm)
         else:  # foursquare
             _run_sql(con, source, "import", "foursquare_import.sql", t0,
                      memory_limit=memory_limit, parquet_glob=parquet_glob,
                      xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
-                     density_cte=density_cte, idf_cte=idf_cte,
+                     density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
                      density_norm=density_norm, idf_norm=idf_norm)
 
         # Write to a temp file first; finalize_artifact does the atomic rename
@@ -1012,7 +1163,8 @@ def _load_qk_env_macros(con):
 def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
                           force: bool = False,
                           memory_limit: str = "48GB",
-                          temp_directory: str = None) -> None:
+                          temp_directory: str = None,
+                          max_temp_directory_size: str = "250GB") -> None:
     """Extract z15 density tiles from Overture place parquet.
 
     Runs a global density extract (no bbox filter) against the source
@@ -1035,6 +1187,9 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
         force: If True, re-run even if output is fresh. Default False.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
     """
     # Remove any stale .tmp from a previous interrupted run before building.
     _tmp = output_path + ".tmp"
@@ -1056,6 +1211,8 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     try:
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         if memory_limit:
             con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
@@ -1082,7 +1239,8 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
 
 
 def stage_idf(source, parquet_glob, output_path, t0, force=False,
-              memory_limit="48GB", temp_directory=None):
+              memory_limit="48GB", temp_directory=None,
+              max_temp_directory_size="250GB"):
     """Compute IDF scores per category from raw parquet.
 
     Reads source parquet directly (ephemeral DuckDB connection), computes
@@ -1098,6 +1256,9 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
         force: If True, re-run even if output is fresh. Default False.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
     """
     if source not in ("foursquare", "overture_place", "osm"):
         raise ValueError(f"unsupported source for IDF: {source}")
@@ -1136,6 +1297,8 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
     try:
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         if memory_limit:
             con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
@@ -1155,6 +1318,7 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
 def stage_tile_assignment(places_parquet, output_path, source, *,
                           max_per_tile=1000, min_zoom=6, max_zoom=17,
                           memory_limit="48GB", temp_directory=None,
+                          max_temp_directory_size="250GB",
                           force=False) -> dict:
     """Assign places to quadtree tiles and write tile_assignments.parquet (Phase 2).
 
@@ -1177,6 +1341,9 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
         max_zoom: Maximum zoom level for tile assignment. Default 17.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
         force: Re-build even when the artifact is fresh.
 
     Returns:
@@ -1207,6 +1374,8 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     try:
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET preserve_insertion_order = false")
 
         # Total places count for EXPORT-6 dropped-place diagnostic
@@ -1299,6 +1468,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                  containment_dir: str, tiles_root: str, t0: float,
                  export_workers: int = None,
                  memory_limit: str = "48GB",
+                 temp_directory: str | None = None,
+                 max_temp_directory_size: str | None = "250GB",
                  force: bool = False,
                  now: datetime | None = None) -> str:
     """Phase 2: export tiles from parquet artifacts (§3.8).
@@ -1316,6 +1487,22 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         t0: Start time for logging (monotonic time).
         export_workers: Thread count for tile gzip compression.
         memory_limit: DuckDB memory_limit string. Default "48GB".
+        temp_directory: optional caller-supplied spill directory, same contract
+            as stage_covering's temp_directory (garganorn/covering.py):
+            stage_export never rmtree's or otherwise owns this directory
+            itself -- it only ever creates and destroys a private subdirectory
+            under it that it exclusively owns. When temp_directory is None
+            (default), the owned spill dir is run_dir + '.spill', a sibling of
+            the run dir on the tiles volume (existing behavior, preserved for
+            callers that don't supply temp_directory). When the caller
+            supplies temp_directory, the owned spill dir is
+            os.path.join(temp_directory, 'export.spill') -- a private subdir
+            on the caller's chosen volume that stage_export creates and
+            destroys, leaving the rest of the caller's directory untouched.
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill under the owned spill dir (default "250GB").
+            Applied unconditionally, since SET temp_directory is always
+            issued for this stage.
         force: If True, bypass freshness gate. Default False.
         now: Optional aware UTC datetime for deterministic-timestamp injection
             (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
@@ -1396,11 +1583,25 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     sql = sql.replace("LEFT JOIN place_containment pc", f"LEFT JOIN {containment_expr} pc")
 
     # Step 5: Open ephemeral in-memory connection and execute the substituted SQL
-    spill_dir = run_dir + ".spill"
+    if temp_directory is None:
+        spill_dir = run_dir + ".spill"
+    else:
+        spill_dir = os.path.join(temp_directory, "export.spill")
     con = duckdb.connect()
     manifest = {}
     try:
+        # Clear crash leftovers from a prior SIGKILL'd run before creating
+        # the spill dir fresh (covering.py:165-167's pattern). The old
+        # per-run spill dir name (run_dir + '.spill') was always unique, so
+        # this never mattered; the caller-supplied 'export.spill' subdir is
+        # fixed, so residue from a killed run would otherwise persist and
+        # accumulate on the very volume this stage exists to bound.
+        if os.path.exists(spill_dir):
+            shutil.rmtree(spill_dir, ignore_errors=True)
+        os.makedirs(spill_dir, exist_ok=True)
         con.execute(f"SET temp_directory = '{spill_dir}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
         # No LOAD spatial needed: none of the export SQLs use ST_* functions
@@ -1490,7 +1691,9 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
              time.monotonic() - t0)
 
     # Step 7: Manifests in completion order — manifest.json lands LAST as completeness marker
-    write_manifest_db(tile_assignments_parquet, run_dir, source, generated_at=generated_at)
+    write_manifest_db(tile_assignments_parquet, run_dir, source, generated_at=generated_at,
+                      temp_directory=temp_directory,
+                      max_temp_directory_size=max_temp_directory_size)
     write_manifest(manifest, run_dir, source, generated_at=generated_at)
 
     # Step 8: Symlink swap — atomic on POSIX via tmp-symlink + rename

@@ -109,6 +109,7 @@ def stage_covering(
     *,
     memory_limit: str = "48GB",
     temp_directory: str | None = None,
+    max_temp_directory_size: str | None = "250GB",
     cover_min_zoom: int = COVER_MIN_ZOOM,
     cover_max_zoom: int = COVER_MAX_ZOOM,
     force: bool = False,
@@ -135,6 +136,11 @@ def stage_covering(
     the rest of the caller's directory untouched.  SET temp_directory is
     always issued (pointing at the owned spill dir) so the in-memory
     connection can spill.
+
+    max_temp_directory_size: DuckDB max_temp_directory_size string, bounding
+    spill under the owned spill dir (default "250GB"). Applied
+    unconditionally, since SET temp_directory is always issued for this
+    stage.
     """
     if temp_directory is None:
         owned_spill_dir = covering_dir + ".spill"
@@ -178,6 +184,8 @@ def stage_covering(
     con = duckdb.connect(":memory:")
     try:
         con.execute(f"SET temp_directory = '{owned_spill_dir}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
         con.execute("INSTALL spatial; LOAD spatial")

@@ -196,6 +196,7 @@ If boundary lookup fails for any reason, the place is served without
 | `COVER_MIN_ZOOM` | 4 | Covering descent start level (P6) |
 | `COVER_MAX_ZOOM` | 12 | Covering descent end level; edge tiles emitted here (P6) |
 | `max_per_tile` | 1000 | Maximum records per export tile |
+| `max_temp_directory_size` | 250GB | Ceiling on DuckDB spill, applied independently of `temp_directory` |
 
 ## Coordinate System
 

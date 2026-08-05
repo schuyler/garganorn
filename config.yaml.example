@@ -36,6 +36,7 @@ pipeline:
   output: tiles
   memory_limit: 48GB
   temp_directory: /tmp/duckdb
+  max_temp_directory_size: 250GB
   max_per_tile: 1000
   bbox: null
   sources:

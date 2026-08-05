@@ -94,9 +94,16 @@ Optional arguments (`run`, all sources):
 | `--bbox XMIN YMIN XMAX YMAX` | none | Restrict import to a bounding box |
 | `--memory-limit` | `48GB` | DuckDB memory limit |
 | `--max-per-tile` | `1000` | Maximum records per tile |
+| `--temp-directory` | DuckDB default | Volume DuckDB spills to when a stage exceeds `--memory-limit` |
+| `--max-temp-directory-size` | `250GB` | Ceiling on that spill; a runaway query fails with "temp directory full" instead of filling the volume |
 | `--export-workers` | CPU count | Threads for tile gzip compression |
 | `--force` | off | Rebuild every stage, ignoring artifact freshness |
-| `--config` | none | YAML config file; `run` reads `memory_limit` and `max_per_tile` from the `pipeline:` section (`all` reads the rest) |
+| `--config` | none | YAML config file; `run` reads `memory_limit`, `max_per_tile`, `temp_directory`, and `max_temp_directory_size` from the `pipeline:` section (`all` reads the rest) |
+
+Point `--temp-directory` at a volume with room to spare: a global import spills
+tens of gigabytes, and left unset DuckDB spills wherever its default lands —
+which may be the root filesystem. `--max-temp-directory-size` bounds the damage
+when a query spills more than expected.
 
 To build every configured source in one shot:
 
@@ -104,7 +111,7 @@ To build every configured source in one shot:
 python -m garganorn.quadtree all --config config.yaml
 ```
 
-`all` runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
+`all` runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
 
 ## Running the server
 

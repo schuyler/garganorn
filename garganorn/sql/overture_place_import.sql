@@ -9,6 +9,13 @@ ${density_cte}
 ${idf_cte}
 
 -- Import Overture places and compute importance + variants in one pass (Phase 2: density+IDF+importance+variants unified in import CTAS)
+-- D6 (docs/pipeline-restructure-design.md:109): ov_base is scanned exactly
+-- once beyond its own definition (the final SELECT below). Density/idf are
+-- joined directly against pre-deduplicated lookup tables instead of via a
+-- helper CTE that re-scans ov_base, and variants is computed per-row with
+-- list_transform/list_concat/list_filter/list_sort -- no unnest, no
+-- GROUP BY -- so there is no full-width re-materialization or shuffle of
+-- ov_base to spill temp disk.
 CREATE TABLE places AS
 WITH ov_base AS (
     -- geometry is dropped here, not carried downstream: it is only needed
@@ -28,66 +35,49 @@ WITH ov_base AS (
     WHERE bbox.xmax >= ${xmin} AND bbox.xmin <= ${xmax}
       AND bbox.ymax >= ${ymin} AND bbox.ymin <= ${ymax}
       AND geometry IS NOT NULL
-),
-ov_density AS (
-    SELECT b.id,
-           coalesce(d.density_score, 0) AS density_score
-    FROM ov_base b
-    LEFT JOIN density_tiles d ON d.tile_qk15 = left(b.qk17, 15)
-),
-ov_idf AS (
-    SELECT b.id,
-           coalesce(i.idf_score, 0) AS idf_score
-    FROM ov_base b
-    LEFT JOIN idf_scores i ON i.category = b.categories.primary
-),
--- Compute variants from names.common and names.rules (absorbed from overture_place_variants.sql)
-common_entries AS (
-    SELECT id,
-        unnest.key AS language,
-        unnest."value" AS name
-    FROM ov_base,
-         unnest(map_entries(names.common))
-    WHERE names.common IS NOT NULL
-),
-rule_entries AS (
-    SELECT id,
-        unnest.language,
-        unnest."value" AS name,
-        CASE unnest.variant
-            WHEN 'common'     THEN 'alternate'
-            WHEN 'official'   THEN 'official'
-            WHEN 'alternate'  THEN 'alternate'
-            WHEN 'short'      THEN 'short'
-            ELSE 'alternate'
-        END AS type
-    FROM ov_base,
-         unnest(names.rules)
-    WHERE names.rules IS NOT NULL
-),
-all_variants AS (
-    SELECT id, name, 'alternate' AS type, language FROM common_entries
-    UNION ALL
-    SELECT id, name, type, language FROM rule_entries
-),
-ov_variants AS (
-    SELECT id,
-           list({'name': name, 'type': type, 'language': language}
-                ORDER BY name) AS variants
-    FROM all_variants
-    WHERE name IS NOT NULL AND name != ''
-    GROUP BY id
 )
 SELECT b.*,
        round(
            60 * least(coalesce(od.density_score, 0) / ${density_norm}, 1.0)
          + 40 * least(coalesce(oi.idf_score, 0) / ${idf_norm}, 1.0)
        )::INTEGER AS importance,
-       coalesce(v.variants, []) AS variants
+       -- Compute variants from names.common and names.rules per-row
+       -- (absorbed from overture_place_variants.sql). names.common entries
+       -- are always typed 'alternate'; names.rules entries are mapped by
+       -- their `variant` string. Concatenating the two lists and filtering
+       -- out NULL/empty names replaces the old unnest -> UNION ALL ->
+       -- GROUP BY id pipeline with a single per-row expression -- no
+       -- explosion, no re-aggregation. Duplicates are NOT deduped, matching
+       -- prior behavior (list_concat with no DISTINCT).
+       list_sort(list_filter(
+           list_concat(
+               coalesce(list_transform(map_entries(b.names.common),
+                   e -> {'name': e.value, 'type': 'alternate', 'language': e.key}), []),
+               coalesce(list_transform(b.names.rules,
+                   r -> {'name': r.value,
+                         'type': CASE r.variant
+                                   WHEN 'common'     THEN 'alternate'
+                                   WHEN 'official'   THEN 'official'
+                                   WHEN 'alternate'  THEN 'alternate'
+                                   WHEN 'short'      THEN 'short'
+                                   ELSE 'alternate'
+                                 END,
+                         'language': r.language}), [])),
+           v -> v.name IS NOT NULL AND v.name != '')) AS variants
 FROM ov_base b
-LEFT JOIN ov_density od USING (id)
-LEFT JOIN ov_idf oi USING (id)
-LEFT JOIN ov_variants v USING (id);
+LEFT JOIN (
+    -- Pre-dedupe density_tiles on the join key: without this, a duplicate
+    -- tile_qk15 key fans the LEFT JOIN below out into duplicate places rows.
+    SELECT tile_qk15, any_value(density_score) AS density_score
+    FROM density_tiles
+    GROUP BY tile_qk15
+) od ON od.tile_qk15 = left(b.qk17, 15)
+LEFT JOIN (
+    -- Pre-dedupe idf_scores on the join key for the same reason.
+    SELECT category, any_value(idf_score) AS idf_score
+    FROM idf_scores
+    GROUP BY category
+) oi ON oi.category = b.categories.primary;
 
 -- Drop temp tables
 DROP TABLE density_tiles;

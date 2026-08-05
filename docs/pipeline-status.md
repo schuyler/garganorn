@@ -61,16 +61,6 @@ remove.
 
 **Impact**: Noise in server logs. Quick fix.
 
-### `stage_export` doesn't honor `temp_directory` (EXPORT-14)
-
-`stage_export` (`garganorn/stages.py`) hardcodes its DuckDB spill directory as
-`<run_dir>.spill` instead of accepting a `temp_directory` param like every
-other stage (covering/idf/density all do). Minor connection-discipline
-inconsistency, not a correctness bug.
-
-**Impact**: Can't redirect export's spill I/O to a different disk without
-redirecting the whole run directory.
-
 ---
 
 ## Known Limitations

@@ -14,6 +14,8 @@ Tests are organized by stage function:
   agreement (pipeline-implementation-decisions.md
   "OQ-P2-1 — record envelope adoption").
 """
+import argparse
+import ast
 import time
 import json
 import gzip
@@ -561,4 +563,1616 @@ class TestStageDensityExtractMtime:
 
         assert any("starting" in record.message.lower() for record in caplog.records), (
             "Should log starting message when force=True"
+        )
+
+
+# ---------------------------------------------------------------------------
+# stage_export accepts and honors temp_directory, consistently with every
+# sibling stage (stage_import, stage_tile_assignment, compute_containment,
+# stage_covering): SET temp_directory is issued against the caller-supplied
+# scratch volume instead of always spilling to run_dir + ".spill" -- a
+# sibling of the tiles output dir, i.e. the tiles volume rather than the
+# configured scratch volume. This matters because export runs a global
+# ORDER BY tile_qk, place_id over fully-rendered record_json, roughly
+# dataset-JSON-sized spill and the pipeline's next scaling cliff.
+# ---------------------------------------------------------------------------
+
+def _write_duplicate_density_parquet(path):
+    """Write a density_tiles-shaped parquet with a duplicated tile_qk15 key.
+
+    Schema matches stage_density_extract's output (tile_qk15, density_score,
+    tile_xmin, tile_ymin, tile_xmax, tile_ymax). 3 rows total, 2 sharing one
+    tile_qk15 value: total=3, distinct=2.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE t (
+            tile_qk15 VARCHAR, density_score DOUBLE,
+            tile_xmin DOUBLE, tile_ymin DOUBLE, tile_xmax DOUBLE, tile_ymax DOUBLE
+        )
+    """)
+    conn.execute("""
+        INSERT INTO t VALUES
+            ('123030123030123', 5.0, -122.5, 37.7, -122.4, 37.8),
+            ('123030123030123', 9.0, -122.5, 37.7, -122.4, 37.8),
+            ('300000000000000', 1.0, -180.0, -90.0, 180.0, 90.0)
+    """)
+    conn.execute(f"COPY t TO '{path}' (FORMAT PARQUET)")
+    conn.close()
+
+
+def _write_duplicate_idf_parquet(path):
+    """Write an idf_scores-shaped parquet with a duplicated category key.
+
+    Schema matches stage_idf's output (category, n_places, idf_score). 3 rows
+    total, 2 sharing one category value: total=3, distinct=2.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE t (category VARCHAR, n_places BIGINT, idf_score DOUBLE)
+    """)
+    conn.execute("""
+        INSERT INTO t VALUES
+            ('coffee_shop', 10, 5.0),
+            ('coffee_shop', 20, 9.0),
+            ('park', 5, 1.0)
+    """)
+    conn.execute(f"COPY t TO '{path}' (FORMAT PARQUET)")
+    conn.close()
+
+
+class TestStageExportTempDirectory:
+    """stage_export must accept a temp_directory kwarg and honor it for
+    DuckDB spill, the same contract as stage_covering (garganorn/covering.py):
+    None preserves existing behavior (spill under run_dir + '.spill');
+    supplied, spill happens under the caller's chosen volume instead of the
+    tiles volume."""
+
+    def _build_export_inputs(self, fsq_parquet, tmp_path, subdir):
+        return _build_export_inputs(fsq_parquet, tmp_path, subdir)
+
+    def test_accepts_temp_directory_kwarg(self, fsq_parquet, tmp_path):
+        """stage_export(..., temp_directory=<dir>) must be accepted, mirroring
+        every sibling stage's temp_directory parameter."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_td1"
+        )
+        tiles_root = str(tmp_path / "tiles_td1")
+        scratch = tmp_path / "scratch_td1"
+        scratch.mkdir()
+
+        # Must not raise TypeError for an unexpected keyword argument.
+        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+                     tiles_root, time.monotonic(), memory_limit="4GB",
+                     force=True, temp_directory=str(scratch))
+
+    def test_honors_temp_directory_for_spill_location(
+        self, fsq_parquet, tmp_path, monkeypatch
+    ):
+        """When temp_directory is supplied, stage_export's DuckDB connection
+        must SET temp_directory under the caller's chosen volume, not under
+        run_dir + '.spill' on the tiles volume."""
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_td2"
+        )
+        tiles_root = str(tmp_path / "tiles_td2")
+        scratch = tmp_path / "scratch_td2"
+        scratch.mkdir()
+
+        real_connect = stages_mod.duckdb.connect
+        recorded = {"statements": []}
+
+        class _RecordingConn:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *a, **kw):
+                recorded["statements"].append(sql)
+                return self._real.execute(sql, *a, **kw)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        def spy_connect(*a, **kw):
+            return _RecordingConn(real_connect(*a, **kw))
+
+        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+
+        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+                     tiles_root, time.monotonic(), memory_limit="4GB",
+                     force=True, temp_directory=str(scratch))
+
+        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
+        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {recorded['statements']}"
+        stmt = temp_dir_stmts[0]
+        assert str(scratch) in stmt, (
+            f"stage_export must SET temp_directory under the caller-supplied "
+            f"temp_directory ({scratch}); got: {stmt!r}"
+        )
+        assert "tiles_td2" not in stmt, (
+            f"stage_export must not spill under tiles_root when temp_directory "
+            f"is supplied; got: {stmt!r}"
+        )
+        # stage_export owns and cleans up only its private subdirectory --
+        # the caller-supplied temp_directory itself must survive the call.
+        assert scratch.exists(), "caller-supplied temp_directory must not be removed"
+
+    def test_default_spill_location_preserved_when_temp_directory_omitted(
+        self, fsq_parquet, tmp_path, monkeypatch
+    ):
+        """When temp_directory is omitted, spill must still land at
+        run_dir + '.spill' (existing behavior, preserved for callers that
+        don't supply temp_directory)."""
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_td3"
+        )
+        tiles_root = str(tmp_path / "tiles_td3")
+
+        real_connect = stages_mod.duckdb.connect
+        recorded = {"statements": []}
+
+        class _RecordingConn:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *a, **kw):
+                recorded["statements"].append(sql)
+                return self._real.execute(sql, *a, **kw)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        def spy_connect(*a, **kw):
+            return _RecordingConn(real_connect(*a, **kw))
+
+        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+
+        run_dir = stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+                               tiles_root, time.monotonic(), memory_limit="4GB",
+                               force=True)
+
+        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
+        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {recorded['statements']}"
+        assert run_dir + ".spill" in temp_dir_stmts[0], (
+            f"default spill location must remain run_dir + '.spill'; got: {temp_dir_stmts[0]!r}"
+        )
+
+
+class TestRunPipelineTempDirectoryThreading:
+    """run_pipeline must thread temp_directory into stage_export, matching
+    every other stage it already threads it into (stage_import,
+    stage_covering, ensure_covering, stage_tile_assignment,
+    compute_containment)."""
+
+    def test_run_pipeline_passes_temp_directory_to_stage_export(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        import garganorn.quadtree as quadtree_mod
+
+        calls = []
+
+        def fake_stage_export(*args, **kwargs):
+            calls.append(kwargs)
+            return str(tmp_path / "fake_run_dir")
+
+        monkeypatch.setattr(quadtree_mod, "stage_export", fake_stage_export)
+
+        scratch = tmp_path / "scratch_rp"
+        scratch.mkdir()
+
+        quadtree_mod.run_pipeline(
+            "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            str(tmp_path / "output_rp"), memory_limit="4GB", max_per_tile=100,
+            density_parquet=density_parquet, temp_directory=str(scratch),
+        )
+
+        assert calls, "stage_export must have been called"
+        assert calls[-1].get("temp_directory") == str(scratch), (
+            f"run_pipeline must pass temp_directory through to stage_export; "
+            f"got kwargs={calls[-1]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# stage_import applies its temp_directory parameter to its own ephemeral
+# connection for the foursquare/overture_place/osm branches, and forwards it
+# to stage_division_import for the overture_division dispatch, matching
+# stage_division_import's own `if temp_directory: con.execute(f"SET
+# temp_directory = '{temp_directory}'")` precedent.
+#
+# Production incident: a global run configured with
+# temp_directory=/home/sderle/garganorn-global-tiles/tmp crashed at 506 GiB
+# -- free space on the root filesystem, not the configured scratch volume.
+# After the crash the configured temp_directory measured 4.0K (empty): the
+# spill never went there. max_temp_directory_size defaults to available disk
+# on whatever volume temp_directory actually resolves to, so the ceiling hit
+# belonged to the wrong filesystem.
+# ---------------------------------------------------------------------------
+
+class TestStageImportTempDirectory:
+    """stage_import must apply its temp_directory parameter to its own
+    DuckDB connection (foursquare/overture_place/osm branches), matching
+    stage_division_import's precedent (stages.py:766-767) and every other
+    stage."""
+
+    def test_honors_temp_directory_on_its_own_connection(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        import garganorn.stages as stages_mod
+
+        places_parquet = str(tmp_path / "places_import_td.parquet")
+        scratch = tmp_path / "scratch_import"
+        scratch.mkdir()
+
+        real_connect = stages_mod.duckdb.connect
+        recorded = {"statements": []}
+
+        class _RecordingConn:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *a, **kw):
+                recorded["statements"].append(sql)
+                return self._real.execute(sql, *a, **kw)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        def spy_connect(*a, **kw):
+            return _RecordingConn(real_connect(*a, **kw))
+
+        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True,
+                     density_parquet=density_parquet, temp_directory=str(scratch))
+
+        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
+        assert temp_dir_stmts, (
+            f"stage_import must SET temp_directory on its own connection when "
+            f"temp_directory is supplied (matching stage_division_import's "
+            f"precedent); no such statement was recorded. "
+            f"Statements executed: {recorded['statements']}"
+        )
+        assert str(scratch) in temp_dir_stmts[0], (
+            f"stage_import must SET temp_directory to the caller-supplied "
+            f"value ({scratch}); got: {temp_dir_stmts[0]!r}"
+        )
+
+    def test_omitted_temp_directory_does_not_set_it(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """Preserve existing behavior when temp_directory is None: no SET
+        temp_directory statement at all (DuckDB's own default applies), same
+        as stage_division_import's `if temp_directory:` guard."""
+        import garganorn.stages as stages_mod
+
+        places_parquet = str(tmp_path / "places_import_td2.parquet")
+
+        real_connect = stages_mod.duckdb.connect
+        recorded = {"statements": []}
+
+        class _RecordingConn:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, *a, **kw):
+                recorded["statements"].append(sql)
+                return self._real.execute(sql, *a, **kw)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        def spy_connect(*a, **kw):
+            return _RecordingConn(real_connect(*a, **kw))
+
+        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True,
+                     density_parquet=density_parquet)
+
+        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
+        assert not temp_dir_stmts, (
+            f"stage_import must not SET temp_directory when it wasn't "
+            f"supplied; got: {temp_dir_stmts}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 -- density_tiles and idf_scores lookup tables built by stage_import
+# from --density-parquet/--idf-parquet are not checked for key uniqueness
+# anywhere. The import SQL LEFT JOINs them on tile_qk15 and category
+# respectively; a duplicate key multiplies the matching place's row through
+# the join at every join site. Production data is clean today (density_tiles
+# is GROUP BY-guaranteed unique by its producer, density_extract.sql), but
+# --density-parquet/--idf-parquet accept arbitrary files, so the guarantee is
+# convention, not contract. stage_import must fail loudly, before running the
+# import SQL, when either lookup table's key isn't unique.
+# ---------------------------------------------------------------------------
+
+def _write_null_key_density_parquet(path):
+    """Write a density_tiles-shaped parquet with a single NULL tile_qk15 key
+    and no duplicates among the non-NULL keys.
+
+    Mirrors production reachability: density_extract.sql groups
+    left(ST_QuadKey(...), 15) over the whole Overture places parquet with no
+    NULL/geometry filter, so a single NULL-bbox row yields exactly one NULL
+    tile_qk15 group. NULL = NULL is never true in SQL, so a NULL key can
+    never fan out a LEFT JOIN -- this must not trip the uniqueness guard.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE t (
+            tile_qk15 VARCHAR, density_score DOUBLE,
+            tile_xmin DOUBLE, tile_ymin DOUBLE, tile_xmax DOUBLE, tile_ymax DOUBLE
+        )
+    """)
+    conn.execute("""
+        INSERT INTO t VALUES
+            (NULL, 3.0, NULL, NULL, NULL, NULL),
+            ('123030123030123', 5.0, -122.5, 37.7, -122.4, 37.8),
+            ('300000000000000', 1.0, -180.0, -90.0, 180.0, 90.0)
+    """)
+    conn.execute(f"COPY t TO '{path}' (FORMAT PARQUET)")
+    conn.close()
+
+
+def _write_null_key_idf_parquet(path):
+    """Write an idf_scores-shaped parquet with a single NULL category key
+    and no duplicates among the non-NULL keys.
+
+    Mirrors production reachability: foursquare_idf.sql derives category
+    from fsq_category_ids, and a NULL inside that array survives as a NULL
+    category group. Must not trip the uniqueness guard (see
+    _write_null_key_density_parquet's docstring for why).
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE t (category VARCHAR, n_places BIGINT, idf_score DOUBLE)
+    """)
+    conn.execute("""
+        INSERT INTO t VALUES
+            (NULL, 2, 3.0),
+            ('coffee_shop', 10, 5.0),
+            ('park', 5, 1.0)
+    """)
+    conn.execute(f"COPY t TO '{path}' (FORMAT PARQUET)")
+    conn.close()
+
+
+class TestStageImportLookupKeyUniqueness:
+    """stage_import must assert every non-NULL key in density_tiles
+    (tile_qk15) and idf_scores (category) is unique after loading them from
+    parquet, and raise a clear error naming the offending file and key
+    counts if the assertion fails -- before hours of downstream work run on
+    a silently-multiplied join. NULL keys are exempt (NULL = NULL is never
+    true, so a NULL key cannot fan out the LEFT JOIN)."""
+
+    def test_duplicate_density_tile_qk15_raises(self, fsq_parquet, tmp_path):
+        density_path = tmp_path / "dup_density.parquet"
+        _write_duplicate_density_parquet(density_path)
+        places_parquet = str(tmp_path / "places_dup_density.parquet")
+
+        with pytest.raises(ValueError) as excinfo:
+            stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                         places_parquet, memory_limit="4GB", force=True,
+                         density_parquet=str(density_path))
+
+        msg = str(excinfo.value)
+        assert str(density_path) in msg, f"error must name the offending file; got: {msg!r}"
+        assert "tile_qk15" in msg, f"error must name the offending key; got: {msg!r}"
+        assert "3 rows" in msg and "2 distinct" in msg, (
+            f"error should surface the offending key counts (3 rows, 2 distinct "
+            f"tile_qk15 values); got: {msg!r}"
+        )
+        assert not os.path.exists(places_parquet), (
+            "stage_import must fail before writing any output artifact"
+        )
+
+    @pytest.mark.parametrize(
+        "source", ["foursquare", "overture_place", "osm", "overture_division"]
+    )
+    def test_duplicate_density_tile_qk15_raises_for_every_density_parquet_consumer(
+        self, source, fsq_parquet, overture_parquet, osm_parquet, division_parquet, tmp_path
+    ):
+        """stage_import dispatches to stage_division_import for
+        overture_division and RETURNS before its own _assert_unique_key call
+        -- but overture_division is on the global run path and IS passed
+        density_parquet (quadtree.py _cmd_all). Without a guard covering it,
+        a duplicated tile_qk15 in --density-parquet silently corrupts
+        importance for division rows too (division_density's
+        avg(density_score) double-counts the duplicate), rather than
+        raising. Parametrized over all four sources that can receive
+        --density-parquet through stage_import so a fix covering only the
+        non-division path can't pass silently."""
+        density_path = tmp_path / f"dup_density_{source}.parquet"
+        _write_duplicate_density_parquet(density_path)
+        places_parquet = str(tmp_path / f"places_dup_density_{source}.parquet")
+
+        parquet_glob = {
+            "foursquare": fsq_parquet,
+            "overture_place": overture_parquet,
+            "osm": (osm_parquet["node"], osm_parquet["way"]),
+            "overture_division": division_parquet,
+        }[source]
+
+        with pytest.raises(ValueError) as excinfo:
+            stage_import(source, parquet_glob, (-122.55, 37.60, -122.30, 37.85),
+                         places_parquet, memory_limit="4GB", force=True,
+                         density_parquet=str(density_path))
+
+        msg = str(excinfo.value)
+        assert str(density_path) in msg, f"error must name the offending file; got: {msg!r}"
+        assert "tile_qk15" in msg, f"error must name the offending key; got: {msg!r}"
+        assert not os.path.exists(places_parquet), (
+            f"stage_import must fail before writing any output artifact "
+            f"(source={source})"
+        )
+        if source == "overture_division":
+            boundaries_path = str(Path(places_parquet).parent / "boundaries.duckdb")
+            assert not os.path.exists(boundaries_path), (
+                "stage_import must fail before writing boundaries.duckdb "
+                "for overture_division"
+            )
+
+    def test_uniqueness_check_runs_before_division_dispatch(
+        self, division_parquet, tmp_path, monkeypatch
+    ):
+        """The density guard for overture_division must run before
+        stage_import dispatches to stage_division_import (and returns) --
+        otherwise duplicate density keys silently reach division_density's
+        avg() aggregation instead of raising. Spy on stage_division_import
+        to prove it is never called when the density lookup fails
+        uniqueness -- the same ordering guarantee
+        test_uniqueness_check_runs_before_expensive_import_sql below pins
+        for the non-division sources."""
+        import garganorn.stages as stages_mod
+
+        density_path = tmp_path / "dup_density_division_ordering.parquet"
+        _write_duplicate_density_parquet(density_path)
+        places_parquet = str(tmp_path / "places_dup_density_division_ordering.parquet")
+
+        calls = []
+        real_stage_division_import = stages_mod.stage_division_import
+
+        def spy_stage_division_import(*args, **kwargs):
+            calls.append((args, kwargs))
+            return real_stage_division_import(*args, **kwargs)
+
+        monkeypatch.setattr(stages_mod, "stage_division_import", spy_stage_division_import)
+
+        with pytest.raises(ValueError):
+            stages_mod.stage_import(
+                "overture_division", division_parquet, (-122.55, 37.60, -122.30, 37.85),
+                places_parquet, force=True, density_parquet=str(density_path),
+            )
+
+        assert not calls, (
+            "stage_division_import must not be called when the density "
+            f"uniqueness check fails; got {len(calls)} call(s)"
+        )
+
+    def test_duplicate_idf_category_raises(self, fsq_parquet, tmp_path):
+        idf_path = tmp_path / "dup_idf.parquet"
+        _write_duplicate_idf_parquet(idf_path)
+        places_parquet = str(tmp_path / "places_dup_idf.parquet")
+
+        with pytest.raises(ValueError) as excinfo:
+            stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                         places_parquet, memory_limit="4GB", force=True,
+                         idf_parquet=str(idf_path))
+
+        msg = str(excinfo.value)
+        assert str(idf_path) in msg, f"error must name the offending file; got: {msg!r}"
+        assert "category" in msg, f"error must name the offending key; got: {msg!r}"
+        assert "3 rows" in msg and "2 distinct" in msg, (
+            f"error should surface the offending key counts (3 rows, 2 distinct "
+            f"category values); got: {msg!r}"
+        )
+        assert not os.path.exists(places_parquet), (
+            "stage_import must fail before writing any output artifact"
+        )
+
+    def test_null_density_tile_qk15_does_not_raise(self, fsq_parquet, tmp_path):
+        """A single NULL tile_qk15 key (and zero duplicates among the
+        non-NULL keys) must not trip the uniqueness guard -- this is exactly
+        the production shape density_extract.sql produces for a NULL-bbox
+        row (see IMPORTANT 1 in the review that motivated this test)."""
+        density_path = tmp_path / "null_density.parquet"
+        _write_null_key_density_parquet(density_path)
+        places_parquet = str(tmp_path / "places_null_density.parquet")
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True,
+                     density_parquet=str(density_path))
+        assert os.path.exists(places_parquet)
+
+    def test_null_idf_category_does_not_raise(self, fsq_parquet, tmp_path):
+        """A single NULL category key (and zero duplicates among the
+        non-NULL keys) must not trip the uniqueness guard."""
+        idf_path = tmp_path / "null_idf.parquet"
+        _write_null_key_idf_parquet(idf_path)
+        places_parquet = str(tmp_path / "places_null_idf.parquet")
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True,
+                     idf_parquet=str(idf_path))
+        assert os.path.exists(places_parquet)
+
+    def test_uniqueness_check_runs_before_expensive_import_sql(
+        self, fsq_parquet, tmp_path, monkeypatch
+    ):
+        """_assert_unique_key must raise BEFORE osm_import.sql/
+        overture_place_import.sql/foursquare_import.sql runs -- that
+        ordering is the entire point of the guard (fail fast, before hours
+        of downstream work). Spy on stages._run_sql (the function that runs
+        the import SQL) to prove it is never called when the density lookup
+        table fails the uniqueness check."""
+        import garganorn.stages as stages_mod
+
+        density_path = tmp_path / "dup_density_ordering.parquet"
+        _write_duplicate_density_parquet(density_path)
+        places_parquet = str(tmp_path / "places_dup_density_ordering.parquet")
+
+        calls = []
+        real_run_sql = stages_mod._run_sql
+
+        def spy_run_sql(*args, **kwargs):
+            calls.append((args, kwargs))
+            return real_run_sql(*args, **kwargs)
+
+        monkeypatch.setattr(stages_mod, "_run_sql", spy_run_sql)
+
+        with pytest.raises(ValueError):
+            stages_mod.stage_import(
+                "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                places_parquet, memory_limit="4GB", force=True,
+                density_parquet=str(density_path),
+            )
+
+        assert not calls, (
+            "_run_sql (which runs the import SQL) must not be called when "
+            f"the uniqueness check fails; got {len(calls)} call(s)"
+        )
+
+    def test_unique_keys_do_not_raise(self, fsq_parquet, density_parquet, tmp_path):
+        """Sanity check: clean lookup tables (the production contract,
+        guaranteed unique by density_extract.sql's GROUP BY) must not trip
+        the uniqueness guard, and the density lookup must actually have been
+        used -- an implementation that silently loaded density_tiles empty
+        would also pass a bare os.path.exists() check."""
+        places_parquet = str(tmp_path / "places_clean.parquet")
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True,
+                     density_parquet=density_parquet)
+        assert os.path.exists(places_parquet)
+
+        con = duckdb.connect()
+        max_importance = con.execute(
+            f"SELECT max(importance) FROM read_parquet('{places_parquet}')"
+        ).fetchone()[0]
+        con.close()
+        assert max_importance is not None and max_importance > 0, (
+            f"expected at least one place with importance > 0 (proving the "
+            f"density lookup was actually joined in, not loaded empty); got "
+            f"max(importance) = {max_importance!r}"
+        )
+
+    def test_does_not_materialize_the_parquet(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """The uniqueness count must query read_parquet(density_parquet)
+        directly so DuckDB streams the single column it needs via
+        projection pushdown, rather than materializing the whole file into
+        a TEMP TABLE first."""
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_stream.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet)
+
+        assert not any("_density_uniqueness_check" in s for s in statements), (
+            f"density_parquet must not be materialized into a TEMP TABLE "
+            f"before the uniqueness count runs; statements: {statements}"
+        )
+        count_stmt = next(s for s in statements if "count(DISTINCT tile_qk15)" in s)
+        assert "read_parquet(" in count_stmt, (
+            f"the uniqueness count must query read_parquet(...) directly; "
+            f"got: {count_stmt!r}"
+        )
+
+    def test_memory_limit_set_before_any_query(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """memory_limit must be set on the uniqueness-check's own connection
+        before any query runs on it, so the count itself is bounded rather
+        than running at DuckDB's ~80%-of-RAM default."""
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_memlimit.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet)
+
+        assert statements, "expected at least one statement recorded"
+        assert "SET memory_limit" in statements[0] and "4GB" in statements[0], (
+            f"the uniqueness-check connection must SET memory_limit before "
+            f"any query runs on it; first statement was: {statements[0]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# max_temp_directory_size bounds DuckDB's spill so a runaway query fails fast
+# with a clear "temp directory full" error instead of consuming every byte on
+# the volume. Configuring temp_directory alone only chooses WHERE spill goes;
+# without a size bound the ceiling is whatever free space that filesystem
+# happens to have.
+#
+# max_temp_directory_size is an independent DuckDB setting: every stage
+# guards it on its own truthiness only, applying it whether or not
+# temp_directory is also configured, so an unconfigured temp_directory never
+# leaves spill unbounded at DuckDB's default location.
+# ---------------------------------------------------------------------------
+
+def _spy_on_duckdb_connect(monkeypatch, module):
+    """Record every SQL statement executed on connections opened by `module`.
+
+    Returns the list that accumulates statements. The connection is a
+    transparent proxy: __getattr__ forwards everything untouched, so the
+    stage under test behaves exactly as it would unspied.
+    """
+    real_connect = module.duckdb.connect
+    statements = []
+
+    class _RecordingConn:
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, *a, **kw):
+            statements.append(sql)
+            return self._real.execute(sql, *a, **kw)
+
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
+    monkeypatch.setattr(
+        module.duckdb, "connect", lambda *a, **kw: _RecordingConn(real_connect(*a, **kw))
+    )
+    return statements
+
+
+def _max_temp_stmts(statements):
+    return [s for s in statements if "SET max_temp_directory_size" in s]
+
+
+def _build_export_inputs(fsq_parquet, tmp_path, subdir):
+    """Run stage_import/stage_tile_assignment/compute_containment; return
+    (places_parquet, ta_parquet, containment_dir) for a direct stage_export call."""
+    base = tmp_path / subdir
+    base.mkdir()
+    places_parquet = str(base / "places.parquet")
+    ta_parquet = str(base / "tile_assignments.parquet")
+    containment_dir = str(base / "containment")
+
+    stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                 places_parquet, memory_limit="4GB", force=True)
+    stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+                          max_per_tile=100, memory_limit="4GB", force=True)
+    pk_expr = SOURCES["foursquare"].source_pk
+    lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+    compute_containment(places_parquet, ta_parquet, None,
+                        pk_expr, lon_expr, lat_expr, containment_dir,
+                        memory_limit="4GB", force=True)
+    return places_parquet, ta_parquet, containment_dir
+
+
+# Spill sites deliberately left unbounded, as a visible ledger rather than a
+# silent hole in the enforcement test below. Every entry must state why
+# (test_exempt_spill_sites_have_a_reason enforces it). Mirrors the
+# EXEMPT_IMPORT_SQL_FILES ledger in tests/test_regressions.py.
+#
+# Keys are (module, qualified_function_name); qualified names are
+# Class.method for methods, so that e.g. database.py's two distinct
+# `connect` methods (Database.connect, OvertureDivisions.connect) each get
+# their own entry rather than one key silently covering both (C5).
+EXEMPT_SPILL_SITES = [
+    {
+        "module": "database.py",
+        "function": "Database.connect",
+        "reason": (
+            "Serving-path read connection (foursquare/overture_place/osm "
+            "query engines), not the import pipeline. Bounding it changes "
+            "live query behavior on places.atgeo.org and belongs to a "
+            "separate change with its own review (garganorn-serving-spill "
+            "is doing this), not to the import-spill fix. Already redirects "
+            "temp_directory to a private mkdtemp() but never bounds it -- "
+            "spill capped only by free disk."
+        ),
+    },
+    {
+        "module": "database.py",
+        "function": "OvertureDivisions.connect",
+        "reason": (
+            "Serving-path read connection for OvertureDivisions record "
+            "resolution, not the import pipeline. Same rationale as "
+            "Database.connect above: separate change, separate review "
+            "(garganorn-serving-spill)."
+        ),
+    },
+    {
+        "module": "boundaries.py",
+        "function": "BoundaryLookup.connect",
+        "reason": (
+            "Serving-path read connection opened by the Flask app "
+            "(garganorn/__main__.py create_app) for point-in-polygon "
+            "containment lookups against boundaries.duckdb. Not on the "
+            "import pipeline; never redirects temp_directory at all."
+        ),
+    },
+    {
+        "module": "quadtree.py",
+        "function": "TileManifest.__init__",
+        "reason": (
+            "Serving-path read connection opened once at Flask app startup "
+            "to read a tile collection's manifest.duckdb (SELECT DISTINCT "
+            "tile_qk) for getCoverage. Not on the import pipeline; never "
+            "redirects temp_directory at all."
+        ),
+    },
+    {
+        "module": "tile_reader.py",
+        "function": "TileBackedCollection._con",
+        "reason": (
+            "Serving-path per-thread read connection for getRecord tile "
+            "lookups against manifest.duckdb -- a single point query "
+            "(SELECT tile_qk FROM record_tiles WHERE rkey = ?). Not on the "
+            "import pipeline; never redirects temp_directory at all."
+        ),
+    },
+]
+
+
+class TestMaxTempDirectorySizeSourceEnforcement:
+    """Every function that opens a DuckDB connection must bound its own
+    spill, or be an explicit, reasoned exemption. Checked structurally over
+    every duckdb.connect() call site in the package -- not just sites that
+    already emit a SET statement, which is blind to a function with NO
+    spill configuration at all (write_manifest_db, before it threaded
+    temp_directory/max_temp_directory_size) and equally blind to a
+    regression that DELETES a SET temp_directory from an existing stage:
+    the function would simply drop out of the old "sets_temp" set rather
+    than being flagged.
+    """
+
+    @staticmethod
+    def _docstring_node_ids(tree):
+        """id() of every string-literal Constant node that IS a docstring
+        (module, class, or function), anywhere in `tree`. A function whose
+        docstring merely mentions "SET max_temp_directory_size" in prose
+        must not count as actually bounding its spill (C2)."""
+        ids = set()
+        for n in ast.walk(tree):
+            if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+                if (n.body and isinstance(n.body[0], ast.Expr)
+                        and isinstance(n.body[0].value, ast.Constant)
+                        and isinstance(n.body[0].value.value, str)):
+                    ids.add(id(n.body[0].value))
+        return ids
+
+    @staticmethod
+    def _string_pieces(node, docstring_ids):
+        """Every string literal anywhere under `node`, including the constant
+        segments of f-strings (an f-string's literal prefix is a Constant
+        child of a JoinedStr, so `SET temp_directory = '{x}'` yields the piece
+        "SET temp_directory = '"), but excluding docstrings (C2)."""
+        return [
+            n.value for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+            and id(n) not in docstring_ids
+        ]
+
+    @staticmethod
+    def _iter_functions(tree):
+        """Yield (qualified_name, FunctionDef/AsyncFunctionDef) for every
+        function in `tree`, qualified by enclosing class name (Class.method)
+        so that same-named methods on different classes never collide under
+        one ledger key (C5)."""
+        def walk(node, prefix):
+            for child in ast.iter_child_nodes(node):
+                if isinstance(child, ast.ClassDef):
+                    yield from walk(child, f"{child.name}.")
+                elif isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    yield (prefix + child.name, child)
+                    yield from walk(child, prefix + child.name + ".")
+                else:
+                    yield from walk(child, prefix)
+        yield from walk(tree, "")
+
+    @staticmethod
+    def _calls_duckdb_connect(func_node):
+        """True if `func_node` itself -- not a nested function/class defined
+        inside it, which is discovered separately -- calls
+        duckdb.connect(...) anywhere in its body."""
+        def visit(n):
+            for child in ast.iter_child_nodes(n):
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    continue
+                if (isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                        and child.func.attr == "connect"
+                        and isinstance(child.func.value, ast.Name)
+                        and child.func.value.id == "duckdb"):
+                    return True
+                if visit(child):
+                    return True
+            return False
+        return visit(func_node)
+
+    def _spill_call_sites(self):
+        """(module_name, qualified_function_name, sets_temp, sets_max) for
+        every function in the package that itself opens a duckdb.connect()
+        connection."""
+        import garganorn
+
+        pkg_dir = Path(garganorn.__file__).parent
+        found = []
+        for py in sorted(pkg_dir.glob("*.py")):
+            tree = ast.parse(py.read_text())
+            docstring_ids = self._docstring_node_ids(tree)
+            for qualname, node in self._iter_functions(tree):
+                if not self._calls_duckdb_connect(node):
+                    continue
+                pieces = self._string_pieces(node, docstring_ids)
+                sets_temp = any("SET temp_directory" in p for p in pieces)
+                sets_max = any("SET max_temp_directory_size" in p for p in pieces)
+                found.append((py.name, qualname, sets_temp, sets_max))
+        return found
+
+    def test_every_duckdb_connect_site_bounds_its_spill(self):
+        """A function that opens a DuckDB connection but does not both
+        redirect (SET temp_directory) AND bound (SET
+        max_temp_directory_size) its spill leaves spill capped only by free
+        disk on whatever volume DuckDB defaults to -- the exact shape of the
+        production incident this setting exists to prevent, whether the
+        function issues no SET at all or issues temp_directory without a
+        bound."""
+        exempt = {(e["module"], e["function"]) for e in EXEMPT_SPILL_SITES}
+        unbounded = [
+            (mod, fn) for mod, fn, sets_temp, sets_max in self._spill_call_sites()
+            if not (sets_temp and sets_max) and (mod, fn) not in exempt
+        ]
+        assert not unbounded, (
+            f"these functions open a DuckDB connection but do not both "
+            f"redirect and bound its spill directory: {unbounded}. Add "
+            f"`if temp_directory: con.execute(f\"SET temp_directory = "
+            f"'{{temp_directory}}'\"); if max_temp_directory_size: "
+            f"con.execute(f\"SET max_temp_directory_size = "
+            f"'{{max_temp_directory_size}}'\")`, following stage_import's "
+            f"pattern, or add to EXEMPT_SPILL_SITES with a stated reason."
+        )
+
+    def test_exempt_spill_sites_have_a_reason(self):
+        """An exemption without a reason is indistinguishable from an
+        oversight. Same contract as EXEMPT_IMPORT_SQL_FILES in
+        tests/test_regressions.py."""
+        for entry in EXEMPT_SPILL_SITES:
+            assert entry.get("reason", "").strip(), (
+                f"{entry.get('module')}::{entry.get('function')} is exempt from "
+                f"spill-bound enforcement but states no reason. The ledger must "
+                f"be visible debt, not a silent hole."
+            )
+
+    def test_exempt_spill_sites_still_exist(self):
+        """A stale exemption silently un-enforces a site that was since fixed
+        or removed. Every entry must still name a real unbounded site."""
+        actual = {
+            (mod, fn) for mod, fn, sets_temp, sets_max in self._spill_call_sites()
+            if not (sets_temp and sets_max)
+        }
+        for entry in EXEMPT_SPILL_SITES:
+            key = (entry["module"], entry["function"])
+            assert key in actual, (
+                f"{key} is listed in EXEMPT_SPILL_SITES but is no longer an "
+                f"unbounded spill site -- it was bounded or removed. Drop the "
+                f"exemption so the ledger reflects real debt. Currently "
+                f"unbounded: {sorted(actual)}"
+            )
+
+    def test_enforcement_actually_finds_the_known_sites(self):
+        """Guard against the check above passing vacuously: if the AST walk
+        silently matched nothing (a refactor to a helper, a renamed setting),
+        `unbounded` would be empty and the test would pass while checking
+        nothing. Pin the sites we know exist today."""
+        found = self._spill_call_sites()
+        assert found, (
+            "the source walk found no duckdb.connect() call sites at all -- "
+            "the enforcement test above is passing vacuously. Did connect() "
+            "move behind a helper?"
+        )
+        by_name = {(mod, fn) for mod, fn, _, _ in found}
+        for expected in [
+            ("stages.py", "stage_import"),
+            ("stages.py", "stage_export"),
+            ("stages.py", "stage_division_import"),
+            ("stages.py", "compute_containment"),
+            ("stages.py", "stage_density_extract"),
+            ("stages.py", "stage_idf"),
+            ("stages.py", "stage_tile_assignment"),
+            ("stages.py", "write_manifest_db"),
+            ("covering.py", "stage_covering"),
+        ]:
+            assert expected in by_name, (
+                f"{expected} no longer appears to open a DuckDB connection. If "
+                f"it was intentionally removed, drop it from this list; if it "
+                f"was refactored behind a helper, the enforcement test above "
+                f"needs to follow it there or it will pass vacuously. Found: "
+                f"{sorted(by_name)}"
+            )
+
+    # -----------------------------------------------------------------
+    # Regression tests pinning the two concrete review findings (C2, C5)
+    # against synthetic source, independent of what the real package
+    # currently looks like.
+    # -----------------------------------------------------------------
+
+    def test_c2_docstring_mention_does_not_count_as_bounding(self):
+        """A function whose docstring merely mentions the SET statements,
+        but whose body never issues them, must not be treated as bounded.
+        This is exactly how a real removed SET call passed review silently:
+        the SET call was deleted and the docstring reworded to still
+        mention it."""
+        src = (
+            "import duckdb\n\n"
+            "def looks_bounded_but_isnt(temp_directory=None, max_temp_directory_size='250GB'):\n"
+            '    """Sets SET temp_directory and SET max_temp_directory_size to bound spill."""\n'
+            "    con = duckdb.connect()\n"
+            "    con.execute('SELECT 1')\n"
+        )
+        tree = ast.parse(src)
+        docstring_ids = self._docstring_node_ids(tree)
+        [(qualname, node)] = list(self._iter_functions(tree))
+        pieces = self._string_pieces(node, docstring_ids)
+        sets_temp = any("SET temp_directory" in p for p in pieces)
+        sets_max = any("SET max_temp_directory_size" in p for p in pieces)
+        assert not sets_temp and not sets_max, (
+            f"docstring prose must not be treated as an actual SET "
+            f"statement; pieces found: {pieces}"
+        )
+
+    def test_c5_same_named_methods_on_different_classes_get_distinct_keys(self):
+        """database.py has two functions named `connect` on different
+        classes (Database.connect, OvertureDivisions.connect). A ledger
+        keyed on bare function name would let one entry silently cover
+        both, so bounding one and leaving the other unbounded would still
+        read as fully exempted."""
+        src = (
+            "import duckdb\n\n"
+            "class A:\n"
+            "    def connect(self):\n"
+            "        duckdb.connect()\n\n"
+            "class B:\n"
+            "    def connect(self):\n"
+            "        duckdb.connect()\n"
+        )
+        tree = ast.parse(src)
+        names = [q for q, _ in self._iter_functions(tree)]
+        assert "A.connect" in names, names
+        assert "B.connect" in names, names
+        assert names.count("connect") == 0, (
+            f"qualified names must never fall back to the bare method name; "
+            f"got {names}"
+        )
+
+    def test_bare_unbounded_connect_is_discovered_at_all(self):
+        """The blind spot this test class exists to close: a function that
+        calls duckdb.connect() and issues NO SET statement whatsoever must
+        still be discovered (and therefore flagged, absent an exemption) --
+        not silently absent from the candidate set the way the old
+        SET-string-first discovery left write_manifest_db invisible."""
+        src = (
+            "import duckdb\n\n"
+            "def totally_unbounded():\n"
+            "    con = duckdb.connect()\n"
+            "    con.execute('SELECT 1')\n"
+        )
+        tree = ast.parse(src)
+        docstring_ids = self._docstring_node_ids(tree)
+        [(qualname, node)] = list(self._iter_functions(tree))
+        assert self._calls_duckdb_connect(node), (
+            "a bare duckdb.connect() call must be discovered even with no "
+            "SET statement anywhere in the function"
+        )
+        pieces = self._string_pieces(node, docstring_ids)
+        assert not any("SET temp_directory" in p for p in pieces)
+        assert not any("SET max_temp_directory_size" in p for p in pieces)
+
+
+class TestAssertDensityParquetUniqueMaxTempDirectorySize:
+    """_assert_density_parquet_unique opens its own duckdb.connect(":memory:")
+    ahead of stage_import's dispatch (I3's single-placement guard) and must
+    bound its spill the same way every other import-pipeline connection
+    does, threaded from stage_import's own temp_directory/
+    max_temp_directory_size rather than exempted."""
+
+    @staticmethod
+    def _statements_before_density_check(statements):
+        """Statements recorded strictly before _assert_density_parquet_unique's
+        own uniqueness query -- isolates ITS connection's SET calls from
+        stage_import's own (later) connection, since _spy_on_duckdb_connect
+        records every execute() across every connection into one flat,
+        time-ordered list."""
+        create_idx = next(
+            i for i, s in enumerate(statements) if "count(DISTINCT tile_qk15)" in s
+        )
+        return statements[:create_idx]
+
+    def test_applies_caller_supplied_value(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        scratch = tmp_path / "scratch_adpu"
+        scratch.mkdir()
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_adpu.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet,
+                     temp_directory=str(scratch), max_temp_directory_size="8GB")
+
+        before = self._statements_before_density_check(statements)
+        stmts = _max_temp_stmts(before)
+        assert stmts, (
+            f"_assert_density_parquet_unique's OWN connection must bound "
+            f"spill when stage_import redirects temp_directory; no SET "
+            f"max_temp_directory_size recorded before its CREATE TEMP "
+            f"TABLE. Statements before: {before}"
+        )
+        assert "8GB" in stmts[0], (
+            f"must apply the caller-supplied bound (8GB); got: {stmts[0]!r}"
+        )
+
+    def test_bound_applied_when_temp_directory_omitted(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """max_temp_directory_size is an independent DuckDB setting: it must
+        bound spill even when temp_directory is never redirected, since spill
+        then goes to DuckDB's own default location -- unbounded there is
+        exactly the incident this setting exists to prevent."""
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_adpu_notd.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet)
+
+        before = self._statements_before_density_check(statements)
+        stmts = _max_temp_stmts(before)
+        assert stmts, (
+            f"with temp_directory omitted, _assert_density_parquet_unique must "
+            f"still bound spill; no SET max_temp_directory_size recorded. "
+            f"Statements before: {before}"
+        )
+        assert "250GB" in stmts[0], (
+            f"default bound must be 250GB; got: {stmts[0]!r}"
+        )
+
+
+class TestStageImportMaxTempDirectorySize:
+    """stage_import bounds spill on its own connection whenever it redirects
+    spill (stages.py:1006-1009)."""
+
+    def test_applies_caller_supplied_value(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        scratch = tmp_path / "scratch_mtds"
+        scratch.mkdir()
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_mtds.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet,
+                     temp_directory=str(scratch), max_temp_directory_size="7GB")
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, (
+            f"stage_import must bound spill when it redirects temp_directory; "
+            f"no SET max_temp_directory_size recorded. Statements: {statements}"
+        )
+        assert "7GB" in stmts[0], (
+            f"must apply the caller-supplied bound (7GB); got: {stmts[0]!r}"
+        )
+
+    def test_applies_default_when_not_specified(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """The default is a real bound, not None -- an unbounded default would
+        make the setting opt-in and leave every existing caller exposed."""
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        scratch = tmp_path / "scratch_mtds_def"
+        scratch.mkdir()
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_mtds_def.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet,
+                     temp_directory=str(scratch))
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, f"expected a default bound; statements: {statements}"
+        assert "250GB" in stmts[0], (
+            f"default bound must be 250GB, matching config.yaml.example and "
+            f"every stage signature; got: {stmts[0]!r}"
+        )
+
+    def test_explicit_none_disables_the_bound(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """`if max_temp_directory_size:` lets a caller opt out deliberately."""
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        scratch = tmp_path / "scratch_mtds_none"
+        scratch.mkdir()
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_mtds_none.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet,
+                     temp_directory=str(scratch), max_temp_directory_size=None)
+
+        assert not _max_temp_stmts(statements), (
+            f"max_temp_directory_size=None must issue no bound; got: "
+            f"{_max_temp_stmts(statements)}"
+        )
+
+    def test_bound_applied_when_temp_directory_omitted(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """max_temp_directory_size must bound spill independently of
+        temp_directory: a caller that never redirects spill still gets the
+        bound applied, so DuckDB's own default temp location is capped
+        rather than limited only by free disk -- the exact shape of the
+        production incident (506 GiB filled on /) this setting exists to
+        prevent."""
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path / "places_mtds_notd.parquet"), memory_limit="4GB",
+                     force=True, density_parquet=density_parquet)
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, (
+            f"with temp_directory omitted, stage_import must still bound "
+            f"spill; no SET max_temp_directory_size recorded. Statements: "
+            f"{statements}"
+        )
+        assert "250GB" in stmts[0], (
+            f"default bound must be 250GB; got: {stmts[0]!r}"
+        )
+
+
+class TestStageExportMaxTempDirectorySize:
+    """stage_export always owns a spill dir, so it always bounds it."""
+
+    def test_bounds_spill_even_without_temp_directory(
+        self, fsq_parquet, tmp_path, monkeypatch
+    ):
+        """Unlike stage_import, stage_export redirects spill unconditionally
+        (to run_dir + '.spill'), so it must bound it unconditionally too."""
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = _build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_mtds1"
+        )
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+                     str(tmp_path / "tiles_mtds1"), time.monotonic(),
+                     memory_limit="4GB", force=True)
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, (
+            f"stage_export spills to its own dir on every call and must bound "
+            f"it even when no temp_directory is supplied. Statements: {statements}"
+        )
+        assert "250GB" in stmts[0], f"expected the 250GB default; got: {stmts[0]!r}"
+
+    def test_applies_caller_supplied_value(
+        self, fsq_parquet, tmp_path, monkeypatch
+    ):
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = _build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_mtds2"
+        )
+        scratch = tmp_path / "scratch_export_mtds"
+        scratch.mkdir()
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+                     str(tmp_path / "tiles_mtds2"), time.monotonic(),
+                     memory_limit="4GB", force=True, temp_directory=str(scratch),
+                     max_temp_directory_size="9GB")
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, f"no bound recorded; statements: {statements}"
+        assert "9GB" in stmts[0], (
+            f"must apply the caller-supplied bound (9GB); got: {stmts[0]!r}"
+        )
+
+
+class TestWriteManifestDbMaxTempDirectorySize:
+    """write_manifest_db opens its own bare connection and runs a
+    CREATE TABLE ... ORDER BY over the full tile_assignments parquet, AFTER
+    stage_export's own bounded connection has closed. It must accept and
+    apply the same temp_directory/max_temp_directory_size contract as
+    stage_import (bound only applied when temp_directory is supplied)."""
+
+    def test_applies_caller_supplied_value(self, fsq_parquet, tmp_path, monkeypatch):
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = _build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_wmdb1"
+        )
+        scratch = tmp_path / "scratch_wmdb1"
+        scratch.mkdir()
+        out_dir = tmp_path / "manifest_out1"
+        out_dir.mkdir()
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        write_manifest_db(ta_parquet, str(out_dir), "foursquare",
+                          temp_directory=str(scratch), max_temp_directory_size="6GB")
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, (
+            f"write_manifest_db must bound spill when it redirects "
+            f"temp_directory; no SET max_temp_directory_size recorded. "
+            f"Statements: {statements}"
+        )
+        assert "6GB" in stmts[0], (
+            f"must apply the caller-supplied bound (6GB); got: {stmts[0]!r}"
+        )
+
+    def test_applies_default_when_not_specified(self, fsq_parquet, tmp_path, monkeypatch):
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = _build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_wmdb2"
+        )
+        scratch = tmp_path / "scratch_wmdb2"
+        scratch.mkdir()
+        out_dir = tmp_path / "manifest_out2"
+        out_dir.mkdir()
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        write_manifest_db(ta_parquet, str(out_dir), "foursquare",
+                          temp_directory=str(scratch))
+
+        stmts = _max_temp_stmts(statements)
+        assert stmts, f"expected a default bound; statements: {statements}"
+        assert "250GB" in stmts[0], (
+            f"default bound must be 250GB, matching every other stage "
+            f"signature; got: {stmts[0]!r}"
+        )
+
+    def test_explicit_none_disables_the_bound(self, fsq_parquet, tmp_path, monkeypatch):
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = _build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_wmdb3"
+        )
+        scratch = tmp_path / "scratch_wmdb3"
+        scratch.mkdir()
+        out_dir = tmp_path / "manifest_out3"
+        out_dir.mkdir()
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+
+        write_manifest_db(ta_parquet, str(out_dir), "foursquare",
+                          temp_directory=str(scratch), max_temp_directory_size=None)
+
+        assert not _max_temp_stmts(statements), (
+            f"max_temp_directory_size=None must issue no bound; got: "
+            f"{_max_temp_stmts(statements)}"
+        )
+
+    def test_stage_export_threads_its_own_values_to_write_manifest_db(
+        self, fsq_parquet, tmp_path, monkeypatch
+    ):
+        """stage_export must pass its own temp_directory/max_temp_directory_size
+        through to write_manifest_db so the manifest step spills where the
+        export did, rather than to DuckDB's unbounded default location."""
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = _build_export_inputs(
+            fsq_parquet, tmp_path, "inputs_wmdb4"
+        )
+        scratch = tmp_path / "scratch_wmdb4"
+        scratch.mkdir()
+
+        calls = []
+        real_write_manifest_db = stages_mod.write_manifest_db
+
+        def spy_write_manifest_db(*a, **kw):
+            calls.append(kw)
+            return real_write_manifest_db(*a, **kw)
+
+        monkeypatch.setattr(stages_mod, "write_manifest_db", spy_write_manifest_db)
+
+        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+                     str(tmp_path / "tiles_wmdb4"), time.monotonic(),
+                     memory_limit="4GB", force=True, temp_directory=str(scratch),
+                     max_temp_directory_size="12GB")
+
+        assert calls, "stage_export must have called write_manifest_db"
+        assert calls[-1].get("temp_directory") == str(scratch), (
+            f"stage_export's temp_directory must reach write_manifest_db; "
+            f"got kwargs={calls[-1]}"
+        )
+        assert calls[-1].get("max_temp_directory_size") == "12GB", (
+            f"stage_export's max_temp_directory_size must reach "
+            f"write_manifest_db; got kwargs={calls[-1]}"
+        )
+
+
+class TestMaxTempDirectorySizeThreading:
+    """The bound is useless if a caller in the chain drops it. Every path that
+    reaches a spilling stage must carry it through: run_pipeline, the config
+    file, and the CLI flags."""
+
+    def test_run_pipeline_threads_it_to_stage_export(
+        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        import garganorn.quadtree as quadtree_mod
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "stage_export",
+            lambda *a, **kw: (calls.append(kw), str(tmp_path / "fake_run_dir"))[1],
+        )
+
+        quadtree_mod.run_pipeline(
+            "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            str(tmp_path / "output_mtds"), memory_limit="4GB", max_per_tile=100,
+            density_parquet=density_parquet, max_temp_directory_size="11GB",
+        )
+
+        assert calls, "stage_export must have been called"
+        assert calls[-1].get("max_temp_directory_size") == "11GB", (
+            f"run_pipeline must thread max_temp_directory_size through to "
+            f"stage_export; got kwargs={calls[-1]}"
+        )
+
+    def test_covering_cli_flag_reaches_stage_covering(self, tmp_path, monkeypatch):
+        """--max-temp-directory-size on the covering subcommand must reach
+        stage_covering, not be parsed and dropped."""
+        import garganorn.quadtree as quadtree_mod
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "stage_covering", lambda *a, **kw: calls.append(kw)
+        )
+
+        args = argparse.Namespace(
+            boundaries=str(tmp_path / "b.duckdb"), output=str(tmp_path / "cov"),
+            force=True, memory_limit=None, temp_directory=None,
+            max_temp_directory_size="13GB", min_zoom=None, max_zoom=None,
+        )
+        quadtree_mod._cmd_covering(args)
+
+        assert calls, "stage_covering must have been called"
+        assert calls[-1].get("max_temp_directory_size") == "13GB", (
+            f"the covering subcommand parses --max-temp-directory-size but did "
+            f"not pass it on; got kwargs={calls[-1]}"
+        )
+
+    def test_config_file_value_reaches_run_pipeline(self, tmp_path, monkeypatch):
+        """`_cmd_all` is the global-run entry point -- the one that crashed at
+        506 GiB. Its bound comes from the config file, so a dropped value there
+        is the highest-consequence version of this defect."""
+        import garganorn.quadtree as quadtree_mod
+
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            f"  output: {tmp_path / 'out'}\n"
+            "  memory_limit: 4GB\n"
+            "  max_temp_directory_size: 17GB\n"
+            "  sources:\n"
+            "    foursquare:\n"
+            "      parquet: /nonexistent/*.parquet\n"
+        )
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+        for name in ("stage_density_extract", "stage_idf"):
+            if hasattr(quadtree_mod, name):
+                monkeypatch.setattr(quadtree_mod, name, lambda *a, **kw: None)
+
+        quadtree_mod._cmd_all(argparse.Namespace(config=str(config), force=False))
+
+        assert calls, "_cmd_all must have called run_pipeline"
+        assert calls[-1].get("max_temp_directory_size") == "17GB", (
+            f"the configured max_temp_directory_size must reach run_pipeline; "
+            f"got kwargs={calls[-1]}"
+        )
+
+    def test_config_default_when_absent(self, tmp_path, monkeypatch):
+        """A config that predates the setting must still get a bound."""
+        import garganorn.quadtree as quadtree_mod
+
+        config = tmp_path / "config_nodefault.yaml"
+        config.write_text(
+            "pipeline:\n"
+            f"  output: {tmp_path / 'out2'}\n"
+            "  memory_limit: 4GB\n"
+            "  sources:\n"
+            "    foursquare:\n"
+            "      parquet: /nonexistent/*.parquet\n"
+        )
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+        for name in ("stage_density_extract", "stage_idf"):
+            if hasattr(quadtree_mod, name):
+                monkeypatch.setattr(quadtree_mod, name, lambda *a, **kw: None)
+
+        quadtree_mod._cmd_all(argparse.Namespace(config=str(config), force=False))
+
+        assert calls, "_cmd_all must have called run_pipeline"
+        assert calls[-1].get("max_temp_directory_size") == "250GB", (
+            f"a config without max_temp_directory_size must fall back to the "
+            f"250GB default, not to no bound; got kwargs={calls[-1]}"
+        )
+
+    @staticmethod
+    def _cmd_run_args(**overrides):
+        """Minimal argparse.Namespace for _cmd_run with a foursquare source,
+        matching what the `run` subparser would produce."""
+        defaults = dict(
+            source="foursquare", parquet="/nonexistent/*.parquet",
+            parquet_dir=None, division_parquet=None, division_area_parquet=None,
+            output="/nonexistent/out", bbox=None, config=None,
+            memory_limit=None, max_per_tile=None, boundaries=None,
+            export_workers=None, density_parquet=None, idf_parquet=None,
+            temp_directory=None, max_temp_directory_size=None, force=False,
+        )
+        defaults.update(overrides)
+        return argparse.Namespace(**defaults)
+
+    def test_cmd_run_config_file_temp_directory_reaches_run_pipeline(
+        self, tmp_path, monkeypatch
+    ):
+        """`_cmd_run` is a separate entry point from `_cmd_all` and must read
+        temp_directory from the pipeline: config section on its own, not only
+        via --temp-directory."""
+        import garganorn.quadtree as quadtree_mod
+
+        scratch = tmp_path / "cfg_scratch"
+        config = tmp_path / "config.yaml"
+        config.write_text(
+            "pipeline:\n"
+            f"  temp_directory: {scratch}\n"
+        )
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+
+        args = self._cmd_run_args(config=str(config))
+        quadtree_mod._cmd_run(args, run_parser=None)
+
+        assert calls, "_cmd_run must have called run_pipeline"
+        assert calls[-1].get("temp_directory") == str(scratch), (
+            f"the configured temp_directory must reach run_pipeline via "
+            f"_cmd_run; got kwargs={calls[-1]}"
+        )
+
+    def test_cmd_run_config_file_max_temp_directory_size_reaches_run_pipeline(
+        self, tmp_path, monkeypatch
+    ):
+        import garganorn.quadtree as quadtree_mod
+
+        config = tmp_path / "config2.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  max_temp_directory_size: 19GB\n"
+        )
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+
+        args = self._cmd_run_args(config=str(config))
+        quadtree_mod._cmd_run(args, run_parser=None)
+
+        assert calls, "_cmd_run must have called run_pipeline"
+        assert calls[-1].get("max_temp_directory_size") == "19GB", (
+            f"the configured max_temp_directory_size must reach run_pipeline "
+            f"via _cmd_run; got kwargs={calls[-1]}"
+        )
+
+    def test_cmd_run_cli_flag_overrides_config(self, tmp_path, monkeypatch):
+        """Explicit CLI args must win over the config file, matching the
+        precedence already used for memory_limit/max_per_tile in _cmd_run."""
+        import garganorn.quadtree as quadtree_mod
+
+        config = tmp_path / "config3.yaml"
+        config.write_text(
+            "pipeline:\n"
+            "  temp_directory: /from/config\n"
+            "  max_temp_directory_size: 19GB\n"
+        )
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+
+        args = self._cmd_run_args(
+            config=str(config), temp_directory="/from/cli",
+            max_temp_directory_size="5GB",
+        )
+        quadtree_mod._cmd_run(args, run_parser=None)
+
+        assert calls, "_cmd_run must have called run_pipeline"
+        assert calls[-1].get("temp_directory") == "/from/cli"
+        assert calls[-1].get("max_temp_directory_size") == "5GB"
+
+    def test_cmd_run_config_default_when_absent(self, tmp_path, monkeypatch):
+        """A config that predates the setting -- or no --config at all --
+        must still get the 250GB bound."""
+        import garganorn.quadtree as quadtree_mod
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+
+        args = self._cmd_run_args()
+        quadtree_mod._cmd_run(args, run_parser=None)
+
+        assert calls, "_cmd_run must have called run_pipeline"
+        assert calls[-1].get("max_temp_directory_size") == "250GB", (
+            f"absent config and CLI flag must fall back to the 250GB "
+            f"default, not to no bound; got kwargs={calls[-1]}"
+        )
+
+    def test_cmd_run_empty_string_cli_flag_disables_bound(
+        self, tmp_path, monkeypatch
+    ):
+        """C3: `--max-temp-directory-size ""` must disable the bound, not
+        silently become 250GB. The `or "250GB"` form in _cmd_run treated
+        empty string as falsy; `is not None` (matching _cmd_density,
+        _cmd_idf, _cmd_covering) preserves the caller's explicit choice."""
+        import garganorn.quadtree as quadtree_mod
+
+        calls = []
+        monkeypatch.setattr(
+            quadtree_mod, "run_pipeline", lambda *a, **kw: calls.append(kw)
+        )
+
+        args = self._cmd_run_args(max_temp_directory_size="")
+        quadtree_mod._cmd_run(args, run_parser=None)
+
+        assert calls, "_cmd_run must have called run_pipeline"
+        assert calls[-1].get("max_temp_directory_size") == "", (
+            f"an explicit empty string must reach run_pipeline unchanged, "
+            f"not be replaced with the 250GB default; got kwargs={calls[-1]}"
         )

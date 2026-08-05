@@ -937,6 +937,147 @@ def overture_parquet(tmp_path_factory):
         )
     """)
 
+    # ------------------------------------------------------------------
+    # Rows below characterize the `variants` column derivation in
+    # overture_place_import.sql (names.common + names.rules -> variants).
+    # Added for the ov_base/variants CTE-spill fix; do not alter rows above.
+    # ------------------------------------------------------------------
+
+    # ov010 — names.rules populated, names.common IS NULL (SQL NULL, not empty map).
+    # Exercises the "common NULL, rules populated" combination and pins the
+    # 'official' -> 'official' variant-type mapping.
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov010',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Rules Only Place',
+             'common': NULL::MAP(VARCHAR, VARCHAR),
+             'rules':  [{'language': 'en', 'value': 'Rules Value', 'variant': 'official'}]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov011 — names.common populated, names.rules IS NULL (SQL NULL, not empty list).
+    # Exercises the "common populated, rules NULL" combination and pins the
+    # default 'alternate' type assigned to every names.common entry.
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov011',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Common Only Place',
+             'common': map(['fr'], ['Nom Commun']),
+             'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov012 — names.rules covers all four recognized variant strings plus one
+    # unrecognized string ('colloquial'), pinning the full CASE mapping:
+    # common->alternate, official->official, alternate->alternate,
+    # short->short, anything else->alternate. Names are chosen so
+    # alphabetic ORDER BY name has no ties, isolating the mapping from
+    # tie-order ambiguity (see ov014 for the tie case).
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov012',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'All Variants Place',
+             'common': NULL::MAP(VARCHAR, VARCHAR),
+             'rules':  [
+                 {'language': 'en', 'value': 'Zeta Common', 'variant': 'common'},
+                 {'language': 'en', 'value': 'Alpha Official', 'variant': 'official'},
+                 {'language': 'en', 'value': 'Mid Alternate', 'variant': 'alternate'},
+                 {'language': 'en', 'value': 'Omega Short', 'variant': 'short'},
+                 {'language': 'en', 'value': 'Beta Colloquial', 'variant': 'colloquial'}
+             ]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov013 — every candidate variant has a NULL or '' value, from both
+    # names.common and names.rules. All must be excluded, leaving variants
+    # == [] (not NULL) even though both source fields are non-empty.
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov013',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Null Empty Values Place',
+             'common': map(['en', 'fr'], [NULL::VARCHAR, '']),
+             'rules':  [
+                 {'language': 'de', 'value': NULL::VARCHAR, 'variant': 'short'},
+                 {'language': 'es', 'value': '', 'variant': 'official'}
+             ]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov014 — several names across both names.common and names.rules,
+    # including two entries that share the same name ('Golden Gate') so the
+    # ORDER BY name tie behavior is captured. See test_import_overture.py
+    # for how the tie is asserted (set equality among tied entries, not a
+    # fixed order between them).
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov014',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Order Tie Place',
+             'common': map(['en', 'fr'], ['Golden Gate', 'Porte Doree']),
+             'rules':  [
+                 {'language': 'es', 'value': 'Golden Gate', 'variant': 'official'},
+                 {'language': 'de', 'value': 'Zelle', 'variant': 'short'}
+             ]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov015 — the same (name, type, language) tuple appears twice within
+    # names.rules alone. Pins whether variants dedupes exact-duplicate
+    # entries (currently: no, both copies survive).
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov015',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Duplicate Within Rules Place',
+             'common': NULL::MAP(VARCHAR, VARCHAR),
+             'rules':  [
+                 {'language': 'en', 'value': 'Repeat Name', 'variant': 'alternate'},
+                 {'language': 'en', 'value': 'Repeat Name', 'variant': 'alternate'}
+             ]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
+    # ov016 — the same (name, type, language) tuple arises once from
+    # names.common (which is always typed 'alternate') and once from an
+    # explicit names.rules entry with variant='alternate'. Pins whether
+    # variants dedupes across the two source fields (currently: no).
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov016',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Duplicate Across Common And Rules Place',
+             'common': map(['en'], ['Repeat Name']),
+             'rules':  [
+                 {'language': 'en', 'value': 'Repeat Name', 'variant': 'alternate'}
+             ]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
     conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
     conn.close()
 

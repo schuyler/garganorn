@@ -6,6 +6,8 @@ This module is a plain Python module, not a pytest conftest. Import directly.
 import pathlib
 import string
 
+import duckdb
+
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 
@@ -36,6 +38,67 @@ def _strip_memory_limit(sql: str) -> str:
 SF_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
 OV_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
 OSM_SF_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
+
+
+def _density_cte_sql(density_rows):
+    """Build the density_tiles temp-table SQL fragment.
+
+    density_rows=None (the default used by every *_import helper below)
+    creates an empty table, exactly matching prior behavior — importance
+    defaults to 0 and the density LEFT JOIN never matches.
+
+    density_rows: optional list of (tile_qk15, density_score, tile_xmin,
+        tile_ymin, tile_xmax, tile_ymax) tuples to populate density_tiles
+        with real rows, e.g. to exercise the density join with actual
+        matches (including deliberately duplicate tile_qk15 keys, to test
+        for row fan-out through the join).
+
+    This is the single shared implementation used by run_fsq_import,
+    run_overture_import, and run_osm_import — do not copy this literal
+    per import helper.
+    """
+    if density_rows is None:
+        return (
+            "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, "
+            "NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, "
+            "NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, "
+            "NULL::DOUBLE AS tile_ymax WHERE 1=0;"
+        )
+    values_sql = ", ".join(
+        f"('{qk15}', {score}, {xmin}, {ymin}, {xmax}, {ymax})"
+        for qk15, score, xmin, ymin, xmax, ymax in density_rows
+    )
+    return (
+        "CREATE TEMP TABLE density_tiles (tile_qk15 VARCHAR, density_score DOUBLE, "
+        "tile_xmin DOUBLE, tile_ymin DOUBLE, tile_xmax DOUBLE, tile_ymax DOUBLE);\n"
+        f"INSERT INTO density_tiles VALUES {values_sql};"
+    )
+
+
+def _idf_cte_sql(idf_rows):
+    """Build the idf_scores temp-table SQL fragment.
+
+    idf_rows=None (the default used by every *_import helper below) creates
+    an empty table, exactly matching prior behavior.
+
+    idf_rows: optional list of (category, idf_score) tuples to populate
+        idf_scores with real rows (including deliberately duplicate
+        category keys, to test for row fan-out through the join).
+
+    This is the single shared implementation used by run_fsq_import,
+    run_overture_import, and run_osm_import — do not copy this literal
+    per import helper.
+    """
+    if idf_rows is None:
+        return (
+            "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, "
+            "NULL::DOUBLE AS idf_score WHERE 1=0;"
+        )
+    values_sql = ", ".join(f"('{category}', {score})" for category, score in idf_rows)
+    return (
+        "CREATE TEMP TABLE idf_scores (category VARCHAR, idf_score DOUBLE);\n"
+        f"INSERT INTO idf_scores VALUES {values_sql};"
+    )
 
 # (fsq_place_id, name, latitude, longitude, date_refreshed, date_closed, geom_wkt,
 #  fsq_category_ids, expected_in_result)
@@ -70,9 +133,8 @@ FSQ_ROWS = [
 def run_fsq_import(conn, parquet_glob, bbox=None):
     if bbox is None:
         bbox = SF_BBOX
-    # Create empty density and IDF temp tables for test imports (importance defaults to 0)
-    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-    idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
+    density_cte = _density_cte_sql(None)
+    idf_cte = _idf_cte_sql(None)
     substitutions = {
         "memory_limit": "4GB",
         "parquet_glob": parquet_glob,
@@ -90,12 +152,25 @@ def run_fsq_import(conn, parquet_glob, bbox=None):
     conn.execute(sql)
 
 
-def run_overture_import(conn, parquet_glob, bbox=None):
+def run_overture_import(conn, parquet_glob, bbox=None, density_rows=None, idf_rows=None,
+                         density_norm=10.0, idf_norm=18.0):
+    """Run overture_place_import.sql against `parquet_glob`.
+
+    By default (density_rows=None, idf_rows=None) density_tiles/idf_scores are
+    created empty, exactly as before — existing callers are unaffected.
+
+    density_rows: optional list of (tile_qk15, density_score, tile_xmin,
+        tile_ymin, tile_xmax, tile_ymax) tuples to populate density_tiles with
+        real rows, e.g. to exercise the density join with actual matches
+        (including deliberately duplicate tile_qk15 keys, to test for
+        row fan-out through the join).
+    idf_rows: optional list of (category, idf_score) tuples to populate
+        idf_scores with real rows.
+    """
     if bbox is None:
         bbox = OV_BBOX
-    # Create empty density and IDF temp tables for test imports (importance defaults to 0)
-    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-    idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
+    density_cte = _density_cte_sql(density_rows)
+    idf_cte = _idf_cte_sql(idf_rows)
     substitutions = {
         "memory_limit": "4GB",
         "parquet_glob": parquet_glob,
@@ -105,22 +180,29 @@ def run_overture_import(conn, parquet_glob, bbox=None):
         "ymax": bbox["ymax"],
         "density_cte": density_cte,
         "idf_cte": idf_cte,
-        "density_norm": 10.0,
-        "idf_norm": 18.0,
+        "density_norm": density_norm,
+        "idf_norm": idf_norm,
     }
     raw_sql = _load_sql("overture_place_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
     conn.execute(sql)
 
 
-def run_osm_import(conn, node_glob, way_glob=None, bbox=None):
+def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None, idf_rows=None,
+                    density_norm=10.0, idf_norm=18.0):
+    """Run osm_import.sql against node_glob/way_glob.
+
+    By default (density_rows=None, idf_rows=None) density_tiles/idf_scores are
+    created empty, exactly as before — existing callers are unaffected.
+
+    density_rows/idf_rows: see _density_cte_sql/_idf_cte_sql docstrings.
+    """
     if bbox is None:
         bbox = OSM_SF_BBOX
     if way_glob is None:
         way_glob = node_glob
-    # Create empty density and IDF temp tables for test imports (importance defaults to 0)
-    density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-    idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
+    density_cte = _density_cte_sql(density_rows)
+    idf_cte = _idf_cte_sql(idf_rows)
     # Load OSM category case SQL
     osm_category_case = (REPO_ROOT / "garganorn" / "sql" / "_osm_category_case.sql").read_text().strip()
     substitutions = {
@@ -133,8 +215,8 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None):
         "ymax": bbox["ymax"],
         "density_cte": density_cte,
         "idf_cte": idf_cte,
-        "density_norm": 10.0,
-        "idf_norm": 18.0,
+        "density_norm": density_norm,
+        "idf_norm": idf_norm,
         "osm_category_case": osm_category_case,
     }
     raw_sql = _load_sql("osm_import.sql", substitutions)
@@ -171,3 +253,61 @@ def make_tile_assignment_db(conn, places):
             "INSERT INTO places VALUES (?, ?, ?, ?, ST_QuadKey(?, ?, 17))",
             [fsq_id, f"Place {fsq_id}", lat, lon, lon, lat],
         )
+
+
+def write_minimal_overture_parquet(path, place_rows):
+    """Write a minimal Overture-schema parquet with the given (id, lon, lat, category) rows.
+
+    Used by tests that need full control over which places match which
+    density/idf keys (e.g. row-fan-out or importance-arithmetic
+    characterization), independent of the shared overture_parquet fixture.
+    names.common and names.rules are both NULL for every row; these rows
+    are not intended to exercise variants derivation.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE tmp_ov (
+            id          VARCHAR,
+            bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            geometry    VARCHAR,
+            names       STRUCT(
+                            "primary" VARCHAR,
+                            common MAP(VARCHAR, VARCHAR),
+                            rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                        ),
+            categories  STRUCT("primary" VARCHAR),
+            addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+            websites    VARCHAR[],
+            socials     VARCHAR[],
+            emails      VARCHAR[],
+            phones      VARCHAR[],
+            brand       VARCHAR,
+            confidence  DOUBLE,
+            version     INTEGER,
+            sources     VARCHAR[]
+        )
+    """)
+    for place_id, lon, lat, category in place_rows:
+        conn.execute(
+            """
+            INSERT INTO tmp_ov VALUES (
+                ?,
+                {'xmin': ?, 'ymin': ?, 'xmax': ?, 'ymax': ?},
+                ?,
+                {'primary': NULL::VARCHAR,
+                 'common': NULL::MAP(VARCHAR, VARCHAR),
+                 'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+                {'primary': ?},
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+            )
+            """,
+            [
+                place_id,
+                lon - 0.001, lat - 0.001, lon + 0.001, lat + 0.001,
+                f"POINT({lon} {lat})",
+                category,
+            ],
+        )
+    conn.execute(f"COPY tmp_ov TO '{path}' (FORMAT PARQUET)")
+    conn.close()
