@@ -1,7 +1,8 @@
 # compute_containment() OOM: root cause and fix design
 
-Status: design reviewed and PASSED (Opus 4.7, read-only review against current code — no
-critical/important findings). Not yet implemented. Next step is Red/Green.
+Status: both fixes below implemented, reviewed PASSED, and merged. The z6-partitioning fix
+(commit `85d569d`) was necessary but not sufficient — a second, distinct OOM surfaced at global
+scale after it shipped, root-caused and fixed separately (see "Second OOM" below).
 
 ## The problem
 
@@ -112,6 +113,52 @@ Recommended placement: `stage_division_import` (`garganorn/stages.py:864-899`, a
 existing subtype validator). Flag loudly (`RuntimeError` or `WARNING` + record in the import
 `_meta.json`) rather than silently drop — matches this codebase's existing "never default or
 guess" convention for bad source data.
+
+## Second OOM (surfaced after the z6 fix shipped, at global scale)
+
+A third global-build attempt with the z6 fix live got much further (past import, tile
+assignment, and 58+ containment batches) but still OOM'd in `compute_containment`, same code
+site, same symptom. Root-caused via direct experimentation on the deploy box (garganorn-1)
+against real data — not a repeat of the `list()`/aggregate-density problem above, a genuinely
+different mechanism:
+
+**Cause**: `compute_containment.sql`'s `p` CTE filters the ~75.6M-row `places_slim` TEMP TABLE
+live (`WHERE left(qk17, N) = '${prefix}'`). DuckDB plans the query against `places_slim`'s full
+size regardless of the filter's actual selectivity. For almost all batches this is harmless. But
+when the `edge` arm then joins that plan against a boundary with an extremely complex geometry —
+found: Canada (`id=d5654a87...`, 197,834 vertices) and Nunavut (`id=d8b0d60b...`, 226,060
+vertices, both real, legitimate geometries reflecting the Canadian Arctic Archipelago's
+coastline, not a data defect — the combination caused memory to blow up 100x+ (145MB vs 30GB+)
+for a batch of just 126 places.
+
+Confirmed by elimination, each tested directly on real data before accepting it:
+- Not scan pattern: rewriting the filter as a proper sorted range (enabling zone-map pruning,
+  0.501s → 0.0016s) didn't change the crash at all.
+- Not thread count: `SET threads=1` didn't prevent it either.
+- Not the TEMP TABLE specifically: reading fresh from `places.parquet` per batch (no persisted
+  `places_slim` at all) crashed identically.
+- **Is** the source relation's apparent size: materializing `p` into its own small
+  `CREATE TEMP TABLE` before the query — exactly the same pattern already used for `cov` —
+  fixed it. Same query, same data, memory stayed flat (~10.6→10.9 GiB) instead of exploding.
+
+No confirmed DuckDB-internals explanation for *why* (a plausible mechanism is that DuckDB's
+join planner sizes work off the source relation's cardinality rather than the true
+post-filter cardinality, and that only matters when what's being over-provisioned for is a
+multi-MB geometry) — not pursued further since the fix doesn't depend on knowing the exact
+internal mechanism. Two related, currently-open upstream issues make this plausible as a genuine
+DuckDB/duckdb-spatial limitation rather than a bug in this codebase:
+[duckdb/duckdb#14087](https://github.com/duckdb/duckdb/issues/14087) and
+[duckdb/duckdb#18330](https://github.com/duckdb/duckdb/issues/18330) (temp table memory not
+reclaimed); DuckDB's own [OOM guide](https://duckdb.org/docs/current/guides/performance/oom)
+states some operations "circumvent the database's buffer manager," and duckdb-spatial's internals
+docs confirm GEOS-backed functions (`ST_Contains` among them) take an extra allocation path
+outside it.
+
+**Fix**: `compute_containment()` now materializes `p` as `CREATE TEMP TABLE p AS SELECT ...
+FROM places_slim WHERE qk17 >= '${prefix}' AND qk17 <= '${prefix_upper}'` per batch (range form,
+not `left(qk17,N)=`, since it enables zone-map pruning as a free bonus), and drops it after —
+symmetric with the existing `cov` handling. `compute_containment.sql`'s `WITH p AS (...)` CTE is
+removed; `p` is now a precondition like `cov`, documented in the file header.
 
 ## Files involved
 

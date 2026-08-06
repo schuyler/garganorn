@@ -465,19 +465,29 @@ def compute_containment(
                     """)
                     try:
                         for prefix, _n in group:
-                            out_path = os.path.join(tmp_dir, f"{prefix}.parquet")
-                            out_path_sql = out_path.replace("'", "''")
+                            # p is pre-materialized (not a CTE over places_slim) so the
+                            # join plans against this batch's true small size, not the
+                            # ~75M-row backing table -- see compute_containment.sql header.
+                            prefix_upper = prefix + "3" * (17 - len(prefix))
+                            con.execute(f"""
+                                CREATE TEMP TABLE p AS
+                                SELECT place_id, qk17, lon, lat FROM places_slim
+                                WHERE qk17 >= '{prefix}' AND qk17 <= '{prefix_upper}'
+                            """)
+                            try:
+                                out_path = os.path.join(tmp_dir, f"{prefix}.parquet")
+                                out_path_sql = out_path.replace("'", "''")
 
-                            sql = template_sql
-                            sql = sql.replace("${prefix}", prefix)
-                            sql = sql.replace("${prefix_len}", str(len(prefix)))
-                            sql = sql.replace("${interior_arms}", interior_arms)
-                            sql = sql.replace("${max_zoom}", str(cover_max_zoom))
-                            sql = sql.replace("${collection_prefix}", collection_prefix)
+                                sql = template_sql
+                                sql = sql.replace("${interior_arms}", interior_arms)
+                                sql = sql.replace("${max_zoom}", str(cover_max_zoom))
+                                sql = sql.replace("${collection_prefix}", collection_prefix)
 
-                            con.execute(
-                                f"COPY ({sql}) TO '{out_path_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)"
-                            )
+                                con.execute(
+                                    f"COPY ({sql}) TO '{out_path_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+                                )
+                            finally:
+                                con.execute("DROP TABLE p")
                     finally:
                         con.execute("DROP TABLE cov")
             finally:

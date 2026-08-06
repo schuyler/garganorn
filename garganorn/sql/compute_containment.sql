@@ -3,17 +3,24 @@
 -- Parameters substituted by compute_containment() in stages.py (dollar-brace
 -- placeholders; not repeated literally in these comments because substitution
 -- is plain string replacement and would corrupt the comment text):
---   prefix            : quadkey prefix at partition_zoom depth
---   prefix_len        : partition depth (length of ${prefix})
 --   interior_arms     : UNION ALL of interior-arm SELECTs (one per zoom level L)
 --   max_zoom          : COVER_MAX_ZOOM for the edge arm tile length
 --   collection_prefix : rkey NSID prefix (org.atgeo.places.overture.division)
 --
 -- Preconditions (set up by compute_containment before executing this):
 --   - LOAD spatial; ATTACH boundaries_db READ_ONLY AS bnd
---   - TEMP TABLE places_slim(place_id, qk17, lon, lat) sorted by qk17
 --   - TABLE tile_assignments(place_id, tile_qk) in the working connection
 --   - TEMP TABLE cov, built once per z4 group from covering/<z4_prefix>.parquet
+--   - TEMP TABLE p(place_id, qk17, lon, lat), built once per batch from a
+--     qk17 range filter on places_slim. Deliberately a real table, not a
+--     CTE filtering places_slim inline: DuckDB plans a CTE against the full
+--     ~75M-row backing relation regardless of filter selectivity, which
+--     measured a catastrophic (100x+) memory blowup once the edge arm joined
+--     that plan against a geometrically complex boundary (observed: Canada/
+--     Nunavut, ~200k vertices). Pre-materializing the tiny per-batch subset,
+--     exactly like `cov`, keeps the join's true input size visible to the
+--     planner. Confirmed empirically: identical query, identical output,
+--     ~150MB vs 30GB+ depending on whether `p` is pre-built or inlined.
 --
 -- D7: antimeridian-crossing boundaries have min_longitude > max_longitude.
 -- The edge arm WHERE clause uses OR-logic for this case so that points in
@@ -24,12 +31,7 @@
 -- Output: (tile_qk, place_id, relations_json) sorted (tile_qk, place_id).
 -- Written directly to ${output_tmp} via COPY; caller renames to final path.
 
-WITH p AS (
-    SELECT place_id, qk17, lon, lat
-    FROM places_slim
-    WHERE left(qk17, ${prefix_len}) = '${prefix}'
-),
-interior AS (
+WITH interior AS (
 ${interior_arms}
 ),
 edge AS (
