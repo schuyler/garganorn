@@ -11,6 +11,7 @@ Consider consolidating in a future refactor.
 """
 import glob as glob_module
 import gzip
+import itertools
 import json
 import logging
 import math
@@ -281,6 +282,7 @@ def compute_containment(
     temp_directory=None,
     max_temp_directory_size="250GB",
     force=False,
+    partition_zoom: int = 6,
 ) -> None:
     """Write <src>/containment/ with per-prefix parquet files and _meta.json (Phase 2).
 
@@ -312,6 +314,9 @@ def compute_containment(
             docs/pipeline-restructure-design.md "5. Memory and disk budget"),
             independently of whether temp_directory is also supplied.
         force: Re-build even when the artifact is fresh.
+        partition_zoom: Quadkey prefix depth used to batch the containment query
+            (default 6, was hardcoded 4). Finer batches bound peak memory per
+            batch at the cost of more COPY calls.
     """
     # Resolve covering zoom range from covering _meta.json (fallback to defaults)
     cover_min_zoom = 4
@@ -337,6 +342,7 @@ def compute_containment(
         "collection_prefix": collection_prefix,
         "cover_min_zoom": cover_min_zoom,
         "cover_max_zoom": cover_max_zoom,
+        "partition_zoom": partition_zoom,
     }
 
     # Freshness gate: containment_dir/_meta.json is the completion sentinel
@@ -429,35 +435,51 @@ def compute_containment(
                 FROM read_parquet('{ta_sql}')
             """)
 
-            # Get qk4 prefix list from places
-            place_prefixes = [
-                row[0]
-                for row in con.execute(
-                    "SELECT DISTINCT left(qk17, 4) FROM places_slim ORDER BY 1"
-                ).fetchall()
-            ]
+            # Get prefix list (at partition_zoom depth) with per-prefix counts,
+            # used both to batch the containment query and to log the largest
+            # batches. Sorted ascending (SQL ORDER BY 1) so identical z4
+            # prefixes are contiguous for the itertools.groupby below.
+            prefix_counts = con.execute(
+                f"SELECT left(qk17, {partition_zoom}) AS prefix, count(*) AS n "
+                f"FROM places_slim GROUP BY 1 ORDER BY 1"
+            ).fetchall()
+            if prefix_counts:
+                top = sorted(prefix_counts, key=lambda r: -r[1])[:10]
+                log.info(
+                    "compute_containment: largest batches (partition_zoom=%d): %s",
+                    partition_zoom,
+                    ", ".join(f"{p}={n}" for p, n in top),
+                )
 
             con.execute(f"ATTACH '{bnd_sql}' AS bnd (READ_ONLY)")
             try:
-                for prefix in place_prefixes:
-                    covering_file = covering_parquets.get(prefix)
+                for z4_prefix, group in itertools.groupby(prefix_counts, key=lambda r: r[0][:4]):
+                    covering_file = covering_parquets.get(z4_prefix)
                     if covering_file is None:
                         continue
 
-                    out_path = os.path.join(tmp_dir, f"{prefix}.parquet")
-                    out_path_sql = out_path.replace("'", "''")
                     covering_file_sql = covering_file.replace("'", "''")
+                    con.execute(f"""
+                        CREATE TEMP TABLE cov AS
+                        SELECT * FROM read_parquet('{covering_file_sql}')
+                    """)
+                    try:
+                        for prefix, _n in group:
+                            out_path = os.path.join(tmp_dir, f"{prefix}.parquet")
+                            out_path_sql = out_path.replace("'", "''")
 
-                    sql = template_sql
-                    sql = sql.replace("${prefix}", prefix)
-                    sql = sql.replace("${covering_file}", covering_file_sql)
-                    sql = sql.replace("${interior_arms}", interior_arms)
-                    sql = sql.replace("${max_zoom}", str(cover_max_zoom))
-                    sql = sql.replace("${collection_prefix}", collection_prefix)
+                            sql = template_sql
+                            sql = sql.replace("${prefix}", prefix)
+                            sql = sql.replace("${prefix_len}", str(len(prefix)))
+                            sql = sql.replace("${interior_arms}", interior_arms)
+                            sql = sql.replace("${max_zoom}", str(cover_max_zoom))
+                            sql = sql.replace("${collection_prefix}", collection_prefix)
 
-                    con.execute(
-                        f"COPY ({sql}) TO '{out_path_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)"
-                    )
+                            con.execute(
+                                f"COPY ({sql}) TO '{out_path_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+                            )
+                    finally:
+                        con.execute("DROP TABLE cov")
             finally:
                 try:
                     con.execute("DETACH bnd")

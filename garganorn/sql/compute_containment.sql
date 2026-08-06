@@ -3,8 +3,8 @@
 -- Parameters substituted by compute_containment() in stages.py (dollar-brace
 -- placeholders; not repeated literally in these comments because substitution
 -- is plain string replacement and would corrupt the comment text):
---   prefix            : 4-char quadkey prefix (z4 tile)
---   covering_file     : path to covering/<prefix>.parquet
+--   prefix            : quadkey prefix at partition_zoom depth
+--   prefix_len        : partition depth (length of ${prefix})
 --   interior_arms     : UNION ALL of interior-arm SELECTs (one per zoom level L)
 --   max_zoom          : COVER_MAX_ZOOM for the edge arm tile length
 --   collection_prefix : rkey NSID prefix (org.atgeo.places.overture.division)
@@ -13,6 +13,7 @@
 --   - LOAD spatial; ATTACH boundaries_db READ_ONLY AS bnd
 --   - TEMP TABLE places_slim(place_id, qk17, lon, lat) sorted by qk17
 --   - TABLE tile_assignments(place_id, tile_qk) in the working connection
+--   - TEMP TABLE cov, built once per z4 group from covering/<z4_prefix>.parquet
 --
 -- D7: antimeridian-crossing boundaries have min_longitude > max_longitude.
 -- The edge arm WHERE clause uses OR-logic for this case so that points in
@@ -26,10 +27,7 @@
 WITH p AS (
     SELECT place_id, qk17, lon, lat
     FROM places_slim
-    WHERE left(qk17, 4) = '${prefix}'
-),
-cov AS (
-    SELECT * FROM read_parquet('${covering_file}')
+    WHERE left(qk17, ${prefix_len}) = '${prefix}'
 ),
 interior AS (
 ${interior_arms}

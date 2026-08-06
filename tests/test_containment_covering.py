@@ -18,6 +18,7 @@ ModuleNotFoundError.
   6. End-to-end export integration          → TestExportIntegration
   7. Edge-arm D7 antimeridian              → TestAntimeridianEdgeArm
 """
+import collections
 import gzip
 import inspect
 import json
@@ -616,7 +617,7 @@ class TestContainmentArtifacts:
     """
 
     def test_containment_parquets_written(self, simple_boundaries_db, tmp_path):
-        """compute_containment writes containment/<qk4>.parquet files.
+        """compute_containment writes containment/<qk6>.parquet files (default partition_zoom).
 
         Uses Phase 2 parquet inputs.  Fails RED with TypeError.
         """
@@ -647,10 +648,10 @@ class TestContainmentArtifacts:
 
         assert os.path.isdir(containment_dir), "containment_dir not created"
         parquets = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
-        assert len(parquets) > 0, "No containment/<qk4>.parquet files written"
+        assert len(parquets) > 0, "No containment/<qk6>.parquet files written"
         for fname in parquets:
             stem = fname[:-8]
-            assert len(stem) == 4, f"{fname!r}: stem not length 4"
+            assert len(stem) == 6, f"{fname!r}: stem not length 6"
             assert all(c in "0123" for c in stem), f"{fname!r}: non-quadkey chars"
 
     def test_containment_parquet_schema(self, simple_boundaries_db, tmp_path):
@@ -1742,4 +1743,148 @@ class TestContainmentQ3ExportAndIdempotency:
             meta = json.load(f)
         assert meta.get("empty") is True, (
             f"Q3 containment _meta.json must have 'empty': true; got: {meta}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# compute_containment OOM fix: partition_zoom kwarg
+# (see docs/compute-containment-oom-fix.md)
+# ---------------------------------------------------------------------------
+
+class TestContainmentPartitionZoom:
+    """RED tests for the new partition_zoom kwarg (default 6, was hardcoded z4).
+
+    All three tests fail against current code with TypeError: the current
+    compute_containment signature has no partition_zoom parameter at all.
+    """
+
+    def test_partition_zoom_param_accepted(self, simple_boundaries_db, tmp_path):
+        """compute_containment accepts partition_zoom=4 (explicit opt-in to old behavior).
+
+        Fails RED with TypeError: unexpected keyword argument 'partition_zoom' --
+        the current code has no such parameter.
+        """
+        from garganorn.covering import stage_covering
+
+        covering_dir = str(tmp_path / "pz4_covering")
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "pz4_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023010")], "pz4_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "pz4_containment")
+
+        compute_containment(
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir,
+            partition_zoom=4,
+            force=True,
+        )
+
+        parquets = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+        assert len(parquets) > 0, "No containment parquets written"
+        for fname in parquets:
+            stem = fname[:-8]
+            assert len(stem) == 4, (
+                f"{fname!r}: explicit partition_zoom=4 should produce 4-char stems, got {stem!r}"
+            )
+
+    def test_partition_zoom_default_produces_finer_stems(self, simple_boundaries_db, tmp_path):
+        """With no partition_zoom argument, output stems default to 6 chars, not 4.
+
+        Fails RED for two reasons: current code produces 4-char stems
+        unconditionally (so asserting 6 fails), and there is no partition_zoom
+        kwarg yet for a default to apply to.
+        """
+        from garganorn.covering import stage_covering
+
+        covering_dir = str(tmp_path / "pzdef_covering")
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        places_parquet = _make_parquet_places(
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "pzdef_places.parquet"
+        )
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_sf", "023010")], "pzdef_ta.parquet"
+        )
+        containment_dir = str(tmp_path / "pzdef_containment")
+
+        compute_containment(
+            places_parquet, ta_parquet, str(simple_boundaries_db),
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir,
+            force=True,
+        )
+
+        parquets = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
+        assert len(parquets) > 0, "No containment parquets written"
+        for fname in parquets:
+            stem = fname[:-8]
+            assert len(stem) == 6, (
+                f"{fname!r}: default partition_zoom should produce 6-char stems, got {stem!r}"
+            )
+
+    def test_partition_zoom_output_rows_invariant(self, simple_boundaries_db, tmp_path):
+        """Repartitioning at z4 vs z6 must produce the identical set of output rows.
+
+        Fixture: p_a (-122.4194, 37.7749) and p_e (-120.0, 35.0) share qk17[:4] ==
+        "0230" (same z4 covering file, same z4 output batch) but differ at
+        qk17[:6] ("023010" vs "023012" -- different z6 output batches). Verified
+        empirically at test-write time with ST_QuadKey(lon, lat, 17) against these
+        exact coordinates. Both points fall inside div_continent_na's,
+        div_country_us's, and div_region_ca's bboxes; p_a additionally falls
+        inside div_locality_sf's bbox, p_e does not -- so both produce
+        non-trivial, comparable containment relations.
+
+        Fails RED with TypeError: partition_zoom is not a recognized keyword
+        argument on the current compute_containment signature (fails on the
+        first, partition_zoom=4, sub-run).
+        """
+        from garganorn.covering import stage_covering
+
+        covering_dir = str(tmp_path / "pzinv_covering")
+        stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        places = [("p_a", -122.4194, 37.7749), ("p_e", -120.0, 35.0)]
+        places_parquet = _make_parquet_places(tmp_path, places, "pzinv_places.parquet")
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p_a", "023010"), ("p_e", "023012")], "pzinv_ta.parquet"
+        )
+
+        def _run(partition_zoom, dirname):
+            containment_dir = str(tmp_path / dirname)
+            kwargs = dict(covering_dir=covering_dir, force=True)
+            if partition_zoom is not None:
+                kwargs["partition_zoom"] = partition_zoom
+            compute_containment(
+                places_parquet, ta_parquet, str(simple_boundaries_db),
+                "place_id", "longitude", "latitude", containment_dir,
+                **kwargs,
+            )
+            parquet_files = [
+                os.path.join(containment_dir, f)
+                for f in os.listdir(containment_dir)
+                if f.endswith(".parquet")
+            ]
+            if not parquet_files:
+                return collections.Counter()
+            check_con = duckdb.connect()
+            rows = check_con.execute(
+                f"SELECT tile_qk, place_id, relations_json FROM read_parquet({parquet_files!r})"
+            ).fetchall()
+            check_con.close()
+            return collections.Counter(rows)
+
+        rows_z4 = _run(4, "pzinv_z4_containment")
+        rows_z6 = _run(None, "pzinv_z6_containment")
+
+        assert len(rows_z4) > 0, "z4 run produced no containment rows"
+        assert rows_z4 == rows_z6, (
+            f"Repartitioning changed output rows.\n"
+            f"  Only in z4 run: {rows_z4 - rows_z6}\n"
+            f"  Only in z6 run: {rows_z6 - rows_z4}"
         )
