@@ -81,7 +81,7 @@
                     },
                     "published_at": {
                         "type": "string",
-                        "description": "The date when the place record was last updated",
+                        "description": "The datetime when this version of the place record was published.",
                         "format": "datetime"
                     },
                     "relations": {
@@ -147,7 +147,7 @@
                 },
                 "published_at": {
                     "type": "string",
-                    "description": "The date when the place record was last updated",
+                    "description": "The datetime when this version of the place record was published.",
                     "format": "datetime"
                 }
             }
