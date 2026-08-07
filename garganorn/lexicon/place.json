@@ -4,13 +4,18 @@
     "defs": {
         "relation": {
             "type": "object",
-            "description": "A reference to a related place record.",
+            "description": "A lean link to another place, identified by rkey (and optionally cid). Today rkey may be collection-qualified (e.g. org.atgeo.places.{source}:{id}); a companion change splits that into explicit collection + rkey fields.",
             "required": ["rkey"],
             "properties": {
                 "rkey": {
                     "type": "string",
                     "description": "Collection-qualified record key (e.g. org.atgeo.places.{source}:{id}).",
                     "format": "record-key"
+                },
+                "cid": {
+                    "type": "string",
+                    "description": "An optional reference to a specific version of the related place.",
+                    "format": "cid"
                 },
                 "name": {
                     "type": "string",
@@ -111,18 +116,23 @@
         },
         "ref": {
             "type": "object",
-            "description": "A reference to a geographic place defined elsewhere.",
-            "required": ["id"],
+            "description": "A reference to a geographic place defined elsewhere. Uses the same identity fields as #relation (collection + rkey, optional cid), plus optional denormalized snapshot fields (name, locations, attributes, published_at).",
+            "required": ["collection", "rkey"],
             "properties": {
+                "collection": {
+                    "type": "string",
+                    "format": "nsid",
+                    "description": "The NSID of the place's source collection."
+                },
+                "rkey": {
+                    "type": "string",
+                    "description": "The record key within that collection.",
+                    "format": "record-key"
+                },
                 "cid": {
                     "type": "string",
                     "description": "An optional reference to a specific version of the place definition.",
                     "format": "cid"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "A globally unique identifier for the place.",
-                    "format": "record-key"
                 },
                 "locations": {
                     "type": "array",
