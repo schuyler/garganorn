@@ -50,6 +50,15 @@
                         "description": "A globally unique identifier for this place record.",
                         "format": "record-key"
                     },
+                    "collection": {
+                        "type": "string",
+                        "format": "nsid",
+                        "description": "The NSID of the source collection this place belongs to (e.g. org.atgeo.places.foursquare)."
+                    },
+                    "importance": {
+                        "type": "integer",
+                        "description": "Optional ranking signal used by gazetteer search and tile serving; higher is more important."
+                    },
                     "locations": {
                         "type": "array",
                         "items": {
