@@ -281,36 +281,29 @@ class TestOsmVariantsCharacterization:
 
 
 # ---------------------------------------------------------------------------
-# E. Lexicon includes "historical" in variant type description
+# E. Lexicon lists "historical" among the variant type knownValues
 # ---------------------------------------------------------------------------
 
 class TestLexiconVariantType:
-    """place.json variant type description must include 'historical'."""
+    """place.json variant type knownValues must include 'historical'."""
 
-    def _load_lexicon(self):
+    def _known_values(self):
         lexicon_path = Path(__file__).parent.parent / "garganorn" / "lexicon" / "place.json"
         with open(lexicon_path) as f:
-            return json.load(f)
+            lexicon = json.load(f)
+        return lexicon["defs"]["variant"]["properties"]["type"]["knownValues"]
 
-    def test_variant_type_description_includes_historical(self):
-        """The variant.type.description in place.json includes the word 'historical'."""
-        lexicon = self._load_lexicon()
-        variant_def = lexicon["defs"]["variant"]
-        type_description = variant_def["properties"]["type"]["description"]
-        assert "historical" in type_description, (
-            f"Expected 'historical' in variant type description, got: {type_description!r}"
+    def test_variant_type_known_values_include_historical(self):
+        """The variant.type knownValues in place.json include 'historical'."""
+        known_values = self._known_values()
+        assert "historical" in known_values, (
+            f"Expected 'historical' in variant type knownValues, got: {known_values!r}"
         )
 
-    def test_variant_type_description_includes_official(self):
-        """The variant.type.description retains 'official'."""
-        lexicon = self._load_lexicon()
-        variant_def = lexicon["defs"]["variant"]
-        type_description = variant_def["properties"]["type"]["description"]
-        assert "official" in type_description
+    def test_variant_type_known_values_include_official(self):
+        """The variant.type knownValues retain 'official'."""
+        assert "official" in self._known_values()
 
-    def test_variant_type_description_includes_alternate(self):
-        """The variant.type.description retains 'alternate'."""
-        lexicon = self._load_lexicon()
-        variant_def = lexicon["defs"]["variant"]
-        type_description = variant_def["properties"]["type"]["description"]
-        assert "alternate" in type_description
+    def test_variant_type_known_values_include_alternate(self):
+        """The variant.type knownValues retain 'alternate'."""
+        assert "alternate" in self._known_values()

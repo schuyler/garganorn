@@ -40,7 +40,14 @@
                 "type": {
                     "type": "string",
                     "maxLength": 64,
-                    "description": "The kind of variant: official, alternate, short, colloquial, historical."
+                    "description": "The kind of variant name.",
+                    "knownValues": [
+                        "official",
+                        "alternate",
+                        "short",
+                        "colloquial",
+                        "historical"
+                    ]
                 },
                 "language": {
                     "type": "string",
