@@ -206,7 +206,8 @@ class TestComputeContainmentOverture:
         check_con.close()
         assert len(rows) == 1, f"Expected 1 containment row, got {len(rows)}"
         assert rows[0][0] == "ovr001"
-        assert "org.atgeo.places.overture.division:85922583" in rows[0][1]
+        assert "85922583" in rows[0][1]
+        assert "org.atgeo.places.overture.division" in rows[0][1]
 
     def test_overture_containment_result_has_correct_division_rkey(self, tmp_path):
         """The containment record for an overture place references the expected division rkey."""
@@ -273,5 +274,6 @@ class TestComputeContainmentOverture:
         relations = json.loads(rows[0][1])
         within = relations.get("within", [])
         rkeys = [r["rkey"] for r in within]
-        assert any("85922583" in rk for rk in rkeys), \
-            f"Expected division rkey containing '85922583' in relations: {rkeys}"
+        assert "85922583" in rkeys, \
+            f"Expected division rkey '85922583' in relations: {rkeys}"
+        assert all(r["collection"] == "org.atgeo.places.overture.division" for r in within)

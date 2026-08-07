@@ -16,11 +16,11 @@ class TestBoundaryLookupContainment:
         """Point in SF returns continent, country, region, and locality."""
         result = boundary_lookup.containment(37.7749, -122.4194)
         rkeys = [r["rkey"] for r in result]
-        assert any("div_continent_na" in rk for rk in rkeys)
-        assert any("div_country_us" in rk for rk in rkeys)
-        assert any("div_region_ca" in rk for rk in rkeys)
-        assert any("div_locality_sf" in rk for rk in rkeys)
-        assert not any("div_borough_manhattan" in rk for rk in rkeys)
+        assert "div_continent_na" in rkeys
+        assert "div_country_us" in rkeys
+        assert "div_region_ca" in rkeys
+        assert "div_locality_sf" in rkeys
+        assert "div_borough_manhattan" not in rkeys
 
     def test_ordered_by_level_ascending(self, boundary_lookup):
         """Results are ordered continent-first, most-specific-last.
@@ -32,19 +32,19 @@ class TestBoundaryLookupContainment:
         rkeys = [r["rkey"] for r in result]
         # Division test data level order: continent(0), country(10), region(25), locality(50)
         expected_order = ["div_continent_na", "div_country_us", "div_region_ca", "div_locality_sf"]
-        actual_ids = [rk.split(":")[-1] for rk in rkeys]
-        assert actual_ids == expected_order
+        assert rkeys == expected_order
 
     def test_rkeys_are_collection_qualified(self, boundary_lookup):
-        """Each rkey is prefixed with org.atgeo.places.overture.division:"""
+        """Each entry has collection set to org.atgeo.places.overture.division."""
         result = boundary_lookup.containment(37.7749, -122.4194)
         for entry in result:
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:")
+            assert entry["collection"] == "org.atgeo.places.overture.division"
 
     def test_containment_returns_rkey_only(self, boundary_lookup):
-        """containment() dicts must have 'rkey' only -- no 'name', no 'level'."""
+        """containment() dicts must have collection+rkey only -- no 'name', no 'level'."""
         result = boundary_lookup.containment(37.7749, -122.4194)
         for entry in result:
+            assert "collection" in entry
             assert "rkey" in entry
             assert "name" not in entry, f"'name' key must not appear: {entry}"
             assert "level" not in entry, f"'level' key must not appear: {entry}"
@@ -58,11 +58,11 @@ class TestBoundaryLookupContainment:
         """Point in Manhattan returns continent+country+borough but not CA/SF."""
         result = boundary_lookup.containment(40.7831, -73.9712)
         rkeys = [r["rkey"] for r in result]
-        assert any("div_continent_na" in rk for rk in rkeys)
-        assert any("div_country_us" in rk for rk in rkeys)
-        assert any("div_borough_manhattan" in rk for rk in rkeys)
-        assert not any("div_region_ca" in rk for rk in rkeys)
-        assert not any("div_locality_sf" in rk for rk in rkeys)
+        assert "div_continent_na" in rkeys
+        assert "div_country_us" in rkeys
+        assert "div_borough_manhattan" in rkeys
+        assert "div_region_ca" not in rkeys
+        assert "div_locality_sf" not in rkeys
 
 
 

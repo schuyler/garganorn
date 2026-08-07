@@ -5,7 +5,7 @@
 -- is plain string replacement and would corrupt the comment text):
 --   interior_arms     : UNION ALL of interior-arm SELECTs (one per zoom level L)
 --   max_zoom          : COVER_MAX_ZOOM for the edge arm tile length
---   collection_prefix : rkey NSID prefix (org.atgeo.places.overture.division)
+--   collection_prefix : collection NSID (org.atgeo.places.overture.division)
 --
 -- Preconditions (set up by compute_containment before executing this):
 --   - LOAD spatial; ATTACH boundaries_db READ_ONLY AS bnd
@@ -55,7 +55,7 @@ matches AS (
 )
 SELECT ta.tile_qk,
        m.place_id,
-       to_json({within: list({rkey: '${collection_prefix}:' || m.boundary_id}
+       to_json({within: list({collection: '${collection_prefix}', rkey: m.boundary_id}
                               ORDER BY m.level ASC, m.boundary_id ASC)})::VARCHAR AS relations_json
 FROM matches m
 JOIN tile_assignments ta ON ta.place_id = m.place_id

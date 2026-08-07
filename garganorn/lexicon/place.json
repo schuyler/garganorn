@@ -5,11 +5,16 @@
         "relation": {
             "type": "object",
             "description": "A reference to a related place record.",
-            "required": ["rkey"],
+            "required": ["collection", "rkey"],
             "properties": {
+                "collection": {
+                    "type": "string",
+                    "format": "nsid",
+                    "description": "The NSID of the related place's collection (e.g. org.atgeo.places.overture.division)."
+                },
                 "rkey": {
                     "type": "string",
-                    "description": "Collection-qualified record key (e.g. org.atgeo.places.{source}:{id}).",
+                    "description": "The record key within that collection.",
                     "format": "record-key"
                 },
                 "name": {
