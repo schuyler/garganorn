@@ -412,6 +412,7 @@ def compute_containment(
             if memory_limit:
                 con.execute(f"SET memory_limit = '{memory_limit}'")
             con.execute("SET preserve_insertion_order = false")
+            con.execute("SET enable_progress_bar = false")
             con.execute("LOAD spatial")
 
             # Build places_slim from parquet (sorted by qk17 for zone-map optimization)
@@ -451,6 +452,8 @@ def compute_containment(
                     ", ".join(f"{p}={n}" for p, n in top),
                 )
 
+            total_batches = len(prefix_counts)
+            batch_num = 0
             con.execute(f"ATTACH '{bnd_sql}' AS bnd (READ_ONLY)")
             try:
                 for z4_prefix, group in itertools.groupby(prefix_counts, key=lambda r: r[0][:4]):
@@ -464,7 +467,13 @@ def compute_containment(
                         SELECT * FROM read_parquet('{covering_file_sql}')
                     """)
                     try:
-                        for prefix, _n in group:
+                        for prefix, n in group:
+                            batch_num += 1
+                            t0 = time.monotonic()
+                            log.info(
+                                "compute_containment: batch %d/%d prefix=%s n=%d",
+                                batch_num, total_batches, prefix, n,
+                            )
                             # p is pre-materialized (not a CTE over places_slim) so the
                             # join plans against this batch's true small size, not the
                             # ~75M-row backing table -- see compute_containment.sql header.
@@ -488,6 +497,10 @@ def compute_containment(
                                 )
                             finally:
                                 con.execute("DROP TABLE p")
+                            log.info(
+                                "compute_containment: batch %d/%d prefix=%s done (%.1fs)",
+                                batch_num, total_batches, prefix, time.monotonic() - t0,
+                            )
                     finally:
                         con.execute("DROP TABLE cov")
             finally:

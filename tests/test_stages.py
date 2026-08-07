@@ -114,6 +114,37 @@ class TestStageContainment:
         meta = json.loads(open(meta_path).read())
         assert meta.get("empty") is True, "meta should have empty=True when no boundaries"
 
+    def test_logs_per_batch_progress(self, fsq_parquet, density_parquet, division_db_path,
+                                      tmp_path, caplog):
+        """compute_containment logs per-batch start/done progress (not DuckDB's progress bar)."""
+        from garganorn.covering import stage_covering
+
+        places_parquet = str(tmp_path / "places.parquet")
+        ta_parquet = str(tmp_path / "tile_assignments.parquet")
+        covering_dir = str(tmp_path / "covering")
+        containment_dir = str(tmp_path / "containment")
+
+        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True)
+        stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+                              max_per_tile=100, memory_limit="4GB", force=True)
+        stage_covering(str(division_db_path), covering_dir,
+                       cover_min_zoom=4, cover_max_zoom=12, force=True)
+
+        pk_expr = SOURCES["foursquare"].source_pk
+        lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+        with caplog.at_level(logging.INFO):
+            compute_containment(places_parquet, ta_parquet, str(division_db_path),
+                                pk_expr, lon_expr, lat_expr, containment_dir,
+                                covering_dir=covering_dir,
+                                memory_limit="4GB", force=True)
+
+        messages = [r.message for r in caplog.records]
+        starts = [m for m in messages if "batch 1/" in m and "prefix=" in m and "n=" in m]
+        assert starts, f"expected a per-batch start log line; got: {messages}"
+        done = [m for m in messages if "batch 1/" in m and "done" in m]
+        assert done, f"expected a per-batch completion log line with elapsed time; got: {messages}"
+
 
 class TestStageExport:
     """Tests for stage_export function."""
