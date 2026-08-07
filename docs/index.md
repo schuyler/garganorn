@@ -13,7 +13,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [atgeo-spec.md](atgeo-spec.md) | Normative tile/manifest/envelope protocol spec (1.0-draft, Schuyler review pending) |
+| [atgeo-spec.md](atgeo-spec.md) | Tile format, record envelope, containment levels, and the XRPC methods a client can call |
 | [atgeo-appview-sdk-design.md](atgeo-appview-sdk-design.md) | Spatial AppView + client SDK design (mostly unbuilt) |
 | [org.atgeo.tiles.service.json](org.atgeo.tiles.service.json) | Lexicon schema for `org.atgeo.tiles.service` records |
 

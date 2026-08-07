@@ -234,7 +234,7 @@ fixture checklist. Orthogonality: OQ-P2-2 changes the division record's
   country 10, dependency 15, region 25, county 35, localadmin 45, locality
   50, borough 55, macrohood 60, neighborhood 65, microhood 70.
 - **Hoods renumbered on uniform stride-5** — a protocol amendment to
-  atgeo-spec.md §7. macrohood (60) and microhood (70) were absent from the
+  atgeo-spec.md's Containment levels section. macrohood (60) and microhood (70) were absent from the
   normative table and had to be added; rather than wedge macrohood into the
   narrow 55–60 gap (breaking the stride, leaving no insertion room), the hoods were
   renumbered, which **moves normative neighborhood from 60 to 65**. Chosen

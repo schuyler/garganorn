@@ -64,7 +64,7 @@ spec file review sign-off (HD-4). Size: small — days, one agent.
 Executes `pipeline-restructure-design.md` as written, Phases 0–4, on the
 production box. The envelope adoption (§3.8 amendment) lands in Phase 2
 and consumes WS-1's frozen envelope. The level-vocabulary mapping (§3.4)
-consumes atgeo-spec.md §7 and must verify the Overture subtype set against
+consumes atgeo-spec.md's Containment levels section and must verify the Overture subtype set against
 current parquet, amending the table upward rather than guessing.
 
 Acceptance: as specified per phase in that document. The Phase 4 global
@@ -149,7 +149,7 @@ each item:
 3. API page: remove `searchRecords`/`getCoverage`; document the manifest
    + tile fetch pattern and point at the SDK. (Same change set as WS-2
    Phase 3 — the design doc requires this coupling.)
-4. Lexicon page: reference atgeo-spec.md §7 as normative for `within`
+4. Lexicon page: reference atgeo-spec.md's Containment levels section as normative for `within`
    levels. (With WS-1.)
 5. Usage page: replace API-first integration guidance with the five-line
    SDK integration. (With WS-3 release.)
