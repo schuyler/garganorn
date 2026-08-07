@@ -67,6 +67,59 @@ but can cause unexpected row count changes.
 **Why it matters**: Places with NULL category arrays get no IDF score
 (defaults to 0 via coalesce). This is intentional but should be documented.
 
+### D6: No unbounded complex-state aggregation
+
+DuckDB cannot spill intermediate state for `list()`, `string_agg()`, and other
+holistic aggregates. Any query using them must run over a bounded partition —
+per-tile, or per qk4 prefix.
+
+**Applies to**: every SQL file; `compute_containment` partitions at z6 for
+exactly this reason
+
+**Why it matters**: it is the most reliable way to exhaust memory on the 72 GB
+target, and it has done so. Treat it as a review criterion for new SQL, not a
+thing to discover at scale.
+
+### D7: Antimeridian bboxes are two lobes
+
+Where a bbox filter is derived from a geometry's min/max longitude,
+`min_longitude > max_longitude` means the feature crosses ±180°, and a naive
+`BETWEEN` drops it. The correct filter is `(lon >= min OR lon <= max)`, or a
+tile-seed set built as the union of the two lobes.
+
+**Applies to**: `covering.py:68-78` (two-lobe split) and `stages.py:725-752`
+(`bboxes_intersect` wrap branches) implement this but have no test coverage.
+The import-side bbox filter does not, so features crossing ±180° are dropped
+there.
+
+**Why it matters**: it affects Pacific data — eastern Russia, Fiji,
+Antarctica. A global build makes it reachable where a CONUS-bounded one did
+not. Deliberately deferred, and recorded here so the rule is known when the
+code is next touched.
+
+### D8: `strip_json_nulls()` is vulnerable to special key characters
+
+The custom `strip_json_nulls()` helper may fail on JSON keys containing `{`,
+`}`, `"`, or `,`. No failures observed in practice.
+
+**Applies to**: `sql/overture_place_export_tiles.sql`,
+`sql/overture_division_export_tiles.sql`,
+`sql/foursquare_export_tiles.sql`
+
+**Why it matters**: it exists only because DuckDB has no native
+`json_strip_nulls()` (PR #21748). Replace it with the native function when
+that lands rather than hardening the workaround.
+
+### D9: `ST_Union_Agg` is a memory-pressure point
+
+`ST_Union_Agg` merges a division's multiple geometry rows into one geometry
+and can consume substantial memory on large multi-part divisions.
+
+**Applies to**: `sql/overture_division_import.sql:52`
+
+**Why it matters**: it is a place to look first when the division import
+runs out of memory, alongside the CTAS sort in D4.
+
 ---
 
 ## Pipeline Architecture Constraints
@@ -100,12 +153,17 @@ The density spatial join for division localities uses bbox-overlap-bbox
 rather than centroid-in-bbox. A density tile contributes to a locality's
 score if the tile bbox intersects the locality bbox.
 
-**Applies to**: `overture_division_import.sql:84-88`
+**Applies to**: `overture_division_import.sql:96-100`
 
 **Why it matters**: Centroid-based joins systematically under-scored small
-localities and edge tiles. This is a known, open limitation (`SPATIAL-3` in
-`pipeline-status.md`), not fixed — Phase 4 (global validation), where it
-would be revisited, has not started.
+localities, which may contain no tile centroid at all and so scored zero.
+
+The tradeoff is deliberate and unfixed: a tile that barely touches a
+locality's bbox still contributes to its density average, so density is
+over-estimated near division edges. Weighted intersection area would be more
+accurate but needs an `ST_Intersection` per tile per locality. The impact is
+negligible — density is one component of a composite importance score, so a
+few percent of noise moves rankings very little.
 
 ### P4: Five independent, freshness-gated CLI subcommands (no fixed stage order)
 

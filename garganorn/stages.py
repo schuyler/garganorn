@@ -310,9 +310,8 @@ def compute_containment(
         memory_limit: DuckDB memory_limit string.
         temp_directory: DuckDB temp_directory for spill (optional).
         max_temp_directory_size: DuckDB max_temp_directory_size string,
-            bounding spill (default "250GB", per
-            docs/pipeline-restructure-design.md "5. Memory and disk budget"),
-            independently of whether temp_directory is also supplied.
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
         force: Re-build even when the artifact is fresh.
         partition_zoom: Quadkey prefix depth used to batch the containment query
             (default 6, was hardcoded 4). Finer batches bound peak memory per

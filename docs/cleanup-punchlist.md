@@ -1,12 +1,13 @@
 # Cleanup punch list
 
 What is left to do to bring the code, the lexicons, and the documentation into
-line with the decisions the project has actually made. One line per item, each
-either checked or not.
+line with the decisions the project has actually made.
 
-Rationale is deliberately absent. Why the gazetteer serves no search endpoint
-lives in `tile-privacy-design.md`; what the tile format is lives in
-`atgeo-spec.md`. This file only records what remains.
+Items carry enough context to act on and no more. Design rationale belongs
+elsewhere — why the gazetteer serves no search endpoint is in
+`tile-privacy-design.md`, what the tile format is is in `atgeo-spec.md`.
+Restating that reasoning here is how the last planning document grew into a
+schedule that reality diverged from.
 
 **Delete this file when every box is checked.**
 
@@ -85,6 +86,9 @@ undocumented.
       precomputed `relations.within`
 - [ ] Remove `databases:` from config, `DATABASE_TYPES` from `config.py`, and
       `self.db` from `Server`
+- [ ] Remove `design-constraints.md` entries Q1 and Q2, and the
+      `JW_THRESHOLD`, `JW_TOKEN_ALPHA`, and `IMPORTANCE_FLOOR_K` rows from its
+      constants table
 
 `boundaries.duckdb`, the pipeline artifact, is unaffected — only the
 serving-time `BoundaryLookup` class goes.
@@ -115,18 +119,48 @@ Forces a full re-export. Land P1 and P2 first.
 
 ## P7 — Documentation
 
+- [ ] Schuyler reviews `atgeo-spec.md` intensively. No piecemeal edits to it
+      until he has
 - [ ] State the user-safety principle once, prominently, and reference it
-      rather than re-deriving it at each error condition
+      rather than re-deriving it at each error condition. Blocked on the spec
+      review above
 - [ ] Rewrite the README: no searchRecords, no Foursquare, worked examples
       actually run against overture/osm, `getCoverage` + tile fetch as the
-      interface, remove the dead `docs/s2_duckdb_design.md` link
-- [ ] Delete `atgeo-execution-plan.md`
-- [ ] Correct `pipeline-status.md`: Phase 3 no longer claims `getCoverage`
-      removal, the searchRecords "decision pending" section is resolved, and
-      OQ-P2-8 is answered
-- [ ] Promote `tile-privacy-design.md` out of "Feature Specs" in `index.md`
+      interface, remove the dead `docs/s2_duckdb_design.md` link, and state
+      which collections are served and that the server has no users
+- [x] Delete `atgeo-execution-plan.md`
+- [x] Dissolve `pipeline-status.md`: durable tradeoffs to `design-constraints.md`,
+      open items here, the rest deleted
+- [x] Promote `tile-privacy-design.md` out of "Feature Specs" in `index.md`
 - [ ] `getCoverage.json`'s description carries the reason there is no `q`
       parameter
+- [ ] Record the licensing posture in the repo: the OSM tileset is an ODbL
+      Derivative Database, the density artifact is a Produced Work, and
+      attribution is a source link plus a license link. Currently written down
+      nowhere in the repo
+- [x] Delete `pipeline-restructure-design.md`
+- [ ] Write reference material for the pipeline artifacts — what each stage
+      writes, the schemas, the sort orders — from the code rather than from
+      the deleted design document
+- [ ] Repoint or remove the ~212 `§N` cross-references in `garganorn/` (18)
+      and `tests/` (194) across 28 files. They point into `atgeo-spec.md` and
+      the deleted `pipeline-restructure-design.md`, neither of which has
+      numbered sections any more
+- [ ] Find every place in the code that references a non-authoritative design
+      document and remove the reference
+- [ ] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
+      claims they "fail visibly when a statement stops being true," but two were
+      found stale by inspection. Either check them in CI or stop claiming they
+      self-verify
+- [ ] Delete `lexicon-discovery-plan.md`, after correcting its
+      `explored-and-discarded.md` entry, which says "not yet adopted" but the
+      lexicon-schema serving in `getRecord` shipped and the `listRecords` half
+      is being reverted
+- [ ] Strip the dead `Explored in` pointers from
+      `explored-and-discarded.md` and drop the field; the summaries are
+      self-contained
+- [ ] Assess `compute-containment-oom-fix.md` — likely a completed-work
+      artifact in the same category
 
 `atgeo-appview-sdk-design.md` and `org.atgeo.tiles.service.json` stay, framed
 as aspirational.
@@ -140,15 +174,30 @@ as aspirational.
 - [ ] Remove the compatibility shim at `tile_reader.py:41-49` — its stated
       removal condition (first re-export after the envelope deploy) is met
 - [ ] Remove the dead `tiles.max_per_tile` config key
-- [ ] Remove `print()` calls from production paths (EXPORT-11)
+- [ ] Remove `print()` calls from production paths
+- [ ] Assert the division-import Hilbert sort is actually applied
+      (`ST_Hilbert` in `stages.py`); nothing tests it today. See D2
+- [ ] Filter empty and whitespace-only names at import; they currently reach
+      tiles as blank-named records
+- [ ] Sweep the suite for tests that enforce nothing — ones asserting against
+      their own fixtures, or exercising code that no longer exists. Find them
+      by mutating the source and seeing what stays green. Known instance:
+      `tests/test_audit_spatial_processing.py`
+- [ ] Evaluate once the removals above are done: should maritime divisions
+      keep being dropped by the `is_land=true` filter, which excludes bays,
+      straits, and seas? It is a completeness question, not a logging one
+- [ ] Evaluate once the removals above are done: does `IDF ln(N/0)` survive
+      the trigram removal, or was it only reachable through the search path?
+- [ ] Strip orphaned audit finding IDs (`SCORE-n`, `SPATIAL-n`, `DATA-n`,
+      `EXPORT-n`) from source comments, test names, and `docs/` as those files
+      are touched — nothing defines them any more
 
 ---
 
 ## Sequencing
 
-`P1 → P2 → P6` is the only hard ordering. P3, P4, P5, P7 are largely
-file-disjoint and can run in parallel, except that P3's `place.json` work
-wants P4 landed first so the two emitters have stopped disagreeing.
+Recommended order: **P5 → P4 → P3 → P1 → P2 → P6**, with P7 and P8 folded in
+wherever they fit.
 
 ## Out of scope
 

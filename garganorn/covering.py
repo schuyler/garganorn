@@ -1,7 +1,4 @@
-"""Covering stage: build quadkey covering for boundaries.duckdb.
-
-Implements §3.5 of docs/pipeline-restructure-design.md (Phase 1).
-"""
+"""Covering stage: build quadkey covering for boundaries.duckdb."""
 import json
 import logging
 import math

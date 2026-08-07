@@ -348,15 +348,14 @@ fixture checklist. Orthogonality: OQ-P2-2 changes the division record's
 - **Ansible `tiles:` wiring and the `config.yaml.j2` `type: overture` bug**
   (should be `overture_place`) were deferred at merge time until prod
   actually served tiles; both shipped as the OQ-P2-5 infra follow-up
-  (`atgeo-server-config` `380cbb3`) with the 2026-08-03 production deploy —
-  see `pipeline-status.md`. Disk source dirs stay snake_case (renaming
+  (`atgeo-server-config` `380cbb3`). Disk source dirs stay snake_case (renaming
   reopens the accepted on-disk contract for a client-invisible gain).
 
 ## Phase 2 acceptance (recorded)
 
 Both conditions passed on-box 2026-07-09 (Overture release `2026-06-17.0`,
 box DuckDB 1.4.4), per the Phase 2 acceptance criteria in
-`pipeline-restructure-design.md` §8: byte-comparability — zero diffs on both
+Byte-comparability — zero diffs on both
 `overture_division` and `overture_place` (with containment); `kill -9`
 mid-import — the killed run left no partial/fresh-looking artifact, and an
 unmodified rerun (no cleanup, no `--force`) rebuilt from import and matched a

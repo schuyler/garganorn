@@ -292,7 +292,7 @@ class TestOvertureVariantsCteSpillFix:
     The ov_base-reference-count and forbidden-helper-CTE checks that used
     to live here have moved to TestImportSqlD6Enforcement below, which
     parametrizes the same checks over a list of import SQL files (D6,
-    docs/pipeline-restructure-design.md:109) instead of hand-writing them
+    docs/design-constraints.md D6) instead of hand-writing them
     per file. The tests remaining here (no unnest on names.common/rules, no
     GROUP BY id) are specific to how Overture's `variants` column is
     derived and have no OSM equivalent, so they stay Overture-specific.
@@ -372,7 +372,7 @@ class TestOvertureVariantsCteSpillFix:
 
 # ---------------------------------------------------------------------------
 # D6 enforcement ledger: "No unbounded complex-state aggregation... a hard
-# review criterion for every SQL file" (docs/pipeline-restructure-design.md:109).
+# review criterion for every SQL file" (docs/design-constraints.md D6).
 #
 # D6 was stated as a design constraint but never coded as a test, and never
 # tied to a specific, enumerable list of files — so it was never actually
@@ -445,7 +445,7 @@ EXEMPT_IMPORT_SQL_FILES = [
 
 
 class TestImportSqlD6Enforcement:
-    """D6 (docs/pipeline-restructure-design.md:109) as executable tests,
+    """D6 (docs/design-constraints.md) as executable tests,
     parametrized over IMPORT_SQL_FILES rather than hand-written per file.
 
     FAILS now for both overture_place_import.sql and osm_import.sql (both

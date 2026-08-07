@@ -274,7 +274,7 @@ Coverage is answered from `manifest.duckdb`: the server caches every distinct
 `tile_qk` at boot (`quadtree.py:117-124`) and intersects the bbox against each
 tile's bounds. `bboxes_intersect` treats touching edges and corners as
 intersecting and handles bboxes crossing the antimeridian by wrap detection
-(`stages.py:680-707`).
+(`stages.py:725-752`).
 
 ### `com.atproto.repo.getRecord`
 
@@ -353,7 +353,7 @@ Only the `pipeline:` section is loaded (`quadtree.py:141-145`); the effective
 key is `pipeline.max_per_tile` at `config.yaml.example:40`.
 
 **Antimeridian handling is implemented but untested.** The wrap branches in
-`bboxes_intersect` (`stages.py:687-707`) and the two-lobe split in
+`bboxes_intersect` (`stages.py:725-752`) and the two-lobe split in
 `bbox_to_quadkeys` (`covering.py:68-78`) have no test coverage.
 
 ---
