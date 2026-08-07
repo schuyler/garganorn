@@ -51,6 +51,13 @@ Land before P6's rebuild, or the rebuild will not take effect.
       ~90 minutes. The value is a kill-ceiling, not a build cadence, and must
       not be lowered — doing so would kill planet-scale builds. There is no
       such value in `host_vars/garganorn-1.yml`
+- [ ] Reconcile `garganorn_bbox` and `garganorn_tile_bbox`. They are separate
+      variables with different defaults — `garganorn_bbox` (empty default)
+      drives the import stage in `import.yml`; `garganorn_tile_bbox` (CONUS
+      default in `defaults/main.yml`) drives the pipeline `bbox` in
+      `config.yaml.j2`. Setting only the first renders a CONUS tile build while
+      appearing to be configured for planet. Either give them one name or make
+      the tile variable default to the import one
 - [ ] Remove the Foursquare find/assert block and `garganorn_source_fsq`; check
       whether `garganorn_source_wof` is referenced before removing it
 - [ ] `config.yaml.j2` updated for P1's versioned `base_url` and P6's
@@ -189,6 +196,12 @@ as aspirational.
 - [ ] Remove `print()` calls from production paths
 - [ ] Assert the division-import Hilbert sort is actually applied
       (`ST_Hilbert` in `stages.py`); nothing tests it today. See D2
+- [ ] Preflight the configured source globs before a build runs. `config.yaml`
+      globs `db/cache/overture/*/part-*.parquet`; when the cache holds only
+      divisions the glob matches nothing and the pipeline produces an empty
+      collection with no error. `download-overture.sh` verifies per file
+      against the S3 manifest, so the gap is not in downloading — nothing
+      checks that what the config asks for exists before building on it
 - [ ] Filter empty and whitespace-only names at import; they currently reach
       tiles as blank-named records
 - [ ] Sweep the suite for tests that enforce nothing — ones asserting against
