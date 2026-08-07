@@ -19,15 +19,15 @@
                     },
                     "latitude": {
                         "type": "string",
-                        "description": "The latitude of the search centroid"
+                        "description": "WGS84 latitude in decimal degrees as a string. Must be provided together with longitude for point search. South of the equator is negative."
                      },
                     "longitude": {
                         "type": "string",
-                        "description": "The longitude of the search centroid"
+                        "description": "WGS84 longitude in decimal degrees as a string. Must be provided together with latitude for point search. West of the prime meridian is negative."
                     },
                     "bbox": {
                         "type": "string",
-                        "description": "Bounding box as xmin,ymin,xmax,ymax in WGS84 decimal degrees"
+                        "description": "Bounding box as xmin,ymin,xmax,ymax (= west,south,east,north) in WGS84 decimal degrees. Axis order differs from the community.lexicon.location.bbox object, which uses named north/west/south/east fields."
                     },
                     "limit": {
                         "type": "integer",

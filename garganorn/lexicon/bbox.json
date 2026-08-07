@@ -14,19 +14,19 @@
             "properties": {
                 "north": {
                     "type": "string",
-                    "description": "The northern latitude boundary of the bounding box."
+                    "description": "The northern latitude boundary of the bounding box, as a WGS84 decimal degrees string."
                 },
                 "west": {
                     "type": "string",
-                    "description": "The western longitude boundary of the bounding box."
+                    "description": "The western longitude boundary of the bounding box, as a WGS84 decimal degrees string. West of the prime meridian is negative."
                 },
                 "south": {
                     "type": "string",
-                    "description": "The southern latitude boundary of the bounding box."
+                    "description": "The southern latitude boundary of the bounding box, as a WGS84 decimal degrees string. South of the equator is negative."
                 },
                 "east": {
                     "type": "string",
-                    "description": "The eastern longitude boundary of the bounding box."
+                    "description": "The eastern longitude boundary of the bounding box, as a WGS84 decimal degrees string."
                 }
 ,                "name": {
                     "type": "string",
