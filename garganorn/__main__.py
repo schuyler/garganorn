@@ -1,5 +1,5 @@
 import os, logging
-from flask import Flask, abort, send_file
+from flask import Flask, abort, request, send_file
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
@@ -19,7 +19,7 @@ def create_app():
     tile_manifests = {}
     tile_collections = {}
     max_coverage_tiles = 50
-    tile_dirs = {}  # slug -> (tiles_dir, cache_ttl)
+    tile_dirs = {}  # slug -> tiles_dir
     if tiles_config:
         from garganorn.quadtree import TileManifest
         from garganorn.tile_reader import TileBackedCollection
@@ -48,18 +48,22 @@ def create_app():
                     "marker); tile serving disabled for this collection", collection,
                 )
             if ready:
-                tile_manifests[collection] = TileManifest(manifest_path, coll_cfg["base_url"])
+                run_dir = os.path.realpath(os.path.dirname(manifest_path))
+                stamp = os.path.basename(run_dir)
+                tiles_root = os.path.dirname(run_dir)
+                tile_manifests[collection] = TileManifest(manifest_path, f"{base_url}/{stamp}")
                 if "tiles_dir" in coll_cfg:
                     tile_collections[collection] = TileBackedCollection(
                         collection=collection,
                         manifest_db_path=manifest_path,
-                        tiles_dir=coll_cfg["tiles_dir"],
-                        attribution=coll_cfg.get("attribution", ""),
+                        tiles_dir=run_dir,
+                        source_url=coll_cfg.get("source", ""),
+                        license_url=coll_cfg.get("license", ""),
                     )
                     # Gate serving on the SAME readiness condition: the route
                     # must not serve a collection whose tiles are otherwise disabled.
                     if slug:
-                        tile_dirs[slug] = (coll_cfg["tiles_dir"], coll_cfg.get("cache_ttl"))
+                        tile_dirs[slug] = tiles_root
                     elif base_url:
                         app.logger.warning(
                             "Collection %s has base_url but no slug; getCoverage URLs will 404",
@@ -110,20 +114,27 @@ def create_app():
     @app.route("/tiles/<slug>/<path:tile_path>")
     def serve_tile(slug, tile_path):
         """Serve a gzipped JSON tile file with correct headers."""
-        entry = tile_dirs.get(slug)
-        if entry is None:
+        if not tile_path.endswith(".json.gz"):
             return ("Not found", 404)
-        tiles_dir, cache_ttl = entry
+        tiles_dir = tile_dirs.get(slug)
+        if tiles_dir is None:
+            return ("Not found", 404)
         full_path = safe_join(tiles_dir, tile_path)
         if full_path is None or not os.path.isfile(full_path):
             return ("Not found", 404)
         response = send_file(full_path, mimetype="application/json")
         response.headers["Content-Encoding"] = "gzip"
-        if cache_ttl:
-            # NOT `immutable`: `current` is a symlink repointed each pipeline run, so
-            # the same URL can return new bytes; immutable would let caches serve stale
-            # tiles for the full max-age.
-            response.headers["Cache-Control"] = f"public, max-age={cache_ttl}"
+        response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        return response
+
+    @app.after_request
+    def add_coverage_cache_control(response):
+        if (
+            request.endpoint == "xrpc-endpoint"
+            and request.view_args.get("nsid") == "org.atgeo.getCoverage"
+            and response.status_code == 200
+        ):
+            response.headers["Cache-Control"] = "public, max-age=3600"
         return response
 
     return app

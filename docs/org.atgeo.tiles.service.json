@@ -31,7 +31,7 @@
                     },
                     "attribution": {
                         "type": "string",
-                        "description": "Human-readable data attribution, duplicated from the tile envelope for display in discovery UIs.",
+                        "description": "Human-readable data attribution, for display in discovery UIs. The tile envelope itself carries source/license URLs, not this field.",
                         "maxGraphemes": 500
                     },
                     "createdAt": {

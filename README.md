@@ -74,7 +74,7 @@ python -m garganorn.quadtree run \
   --source overture_division \
   --division-parquet /data/overture/division.parquet \
   --division-area-parquet /data/overture/division_area.parquet \
-  --output /srv/tiles
+  --output /srv/data
 ```
 
 To enrich another source's tiles with division containment (adds `relations.within` to each record):
@@ -83,8 +83,8 @@ To enrich another source's tiles with division containment (adds `relations.with
 python -m garganorn.quadtree run \
   --source overture_place \
   --parquet '/data/overture/places/*.parquet' \
-  --boundaries /srv/tiles/overture_division/boundaries.duckdb \
-  --output /srv/tiles
+  --boundaries /srv/data/overture_division/boundaries.duckdb \
+  --output /srv/data
 ```
 
 Optional arguments (`run`, all sources):

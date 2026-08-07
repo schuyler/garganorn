@@ -11,9 +11,10 @@ class TileBackedCollection:
     """Serves getRecord from static tile files + manifest.duckdb."""
 
     def __init__(self, collection: str, manifest_db_path: str,
-                 tiles_dir: str, attribution: str):
+                 tiles_dir: str, source_url: str, license_url: str):
         self.collection = collection
-        self.attribution = attribution
+        self.source_url = source_url
+        self.license_url = license_url
         self.tiles_dir = tiles_dir
         self._db_path = manifest_db_path
         self._local = threading.local()

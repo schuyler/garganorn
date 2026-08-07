@@ -562,7 +562,8 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
             for rkey, record_json in records
         ]
         payload = envelope.build_tile_payload(
-            source_cls.collection, source_cls.attribution, generated_at, wrapped
+            source_cls.collection, source_cls.source_url, source_cls.license_url,
+            generated_at, wrapped
         )
         subdir = os.path.join(output_dir, qk[:6])
         os.makedirs(subdir, exist_ok=True)
@@ -673,29 +674,23 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
             """)
         con.execute("""
             CREATE TABLE manifest.metadata AS
-            SELECT ? AS atgeo, ? AS source, ? AS collection, ? AS generated_at
-        """, [envelope.ATGEO_VERSION, source, source_cls.collection, generated_at])
+            SELECT ? AS source, ? AS collection, ? AS generated_at
+        """, [source, source_cls.collection, generated_at])
         con.execute("DETACH manifest")
     finally:
         con.close()
     os.rename(tmp_path, manifest_path)
 
 
-def write_manifest(manifest, output_dir, source, *, generated_at):
-    """Write manifest.json in the atgeo v1 envelope shape
+def write_manifest(output_dir, *, generated_at):
+    """Write manifest.json as the run's completeness marker
     (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope adoption").
 
     generated_at is required-keyword: callers must supply the single
     run-scoped timestamp shared with every tile and manifest.duckdb (per the
     envelope decision above).
-    collection/attribution are resolved from _SOURCES[source] internally,
-    same as flush_tile.
     """
-    source_cls = _SOURCES[source]
-    data = envelope.build_manifest(
-        source, source_cls.collection, source_cls.attribution,
-        generated_at, list(manifest.keys()),
-    )
+    data = {"generated_at": generated_at}
     manifest_path = os.path.join(output_dir, "manifest.json")
     tmp_path = manifest_path + ".tmp"
     with open(tmp_path, "w") as f:
@@ -1685,7 +1680,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                 for rkey, record_json in records
             ]
             payload = envelope.build_tile_payload(
-                source_cls.collection, source_cls.attribution, generated_at, wrapped
+                source_cls.collection, source_cls.source_url, source_cls.license_url,
+                generated_at, wrapped
             )
             subdir = os.path.join(run_dir, qk[:6])
             os.makedirs(subdir, exist_ok=True)
@@ -1738,7 +1734,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     write_manifest_db(tile_assignments_parquet, run_dir, source, generated_at=generated_at,
                       temp_directory=temp_directory,
                       max_temp_directory_size=max_temp_directory_size)
-    write_manifest(manifest, run_dir, source, generated_at=generated_at)
+    write_manifest(run_dir, generated_at=generated_at)
 
     # Step 8: Symlink swap — atomic on POSIX via tmp-symlink + rename
     link_path = os.path.join(tiles_root, "current")

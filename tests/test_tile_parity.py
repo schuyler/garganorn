@@ -200,13 +200,13 @@ def test_cli_diff_difference_exits_nonzero(tmp_path):
 # New envelope (§6 item 7; pipeline-implementation-decisions.md
 # "OQ-P2-1 — record envelope adoption")
 #
-# atgeo v1 tiles carry {atgeo, collection, attribution, generated_at, records}
+# atgeo v1 tiles carry {collection, source, license, generated_at, records}
 # with records wrapped as {uri, cid, value}. canonical_tile() must (a) strip
 # the tile-level generated_at (not just the manifest's) and (b) sort/key
 # records by value.rkey rather than top-level rkey.
 # ---------------------------------------------------------------------------
 
-def _write_envelope_tile(tiles_dir, qk, wrapped_records, attribution="attr",
+def _write_envelope_tile(tiles_dir, qk, wrapped_records, source="src", license_="lic",
                          collection="col", generated_at="2026-07-09T18:00:00Z"):
     """Write a new-shape (atgeo v1) .json.gz tile.
 
@@ -216,7 +216,7 @@ def _write_envelope_tile(tiles_dir, qk, wrapped_records, attribution="attr",
     os.makedirs(sub, exist_ok=True)
     path = os.path.join(sub, qk + ".json.gz")
     obj = {
-        "atgeo": 1, "collection": collection, "attribution": attribution,
+        "collection": collection, "source": source, "license": license_,
         "generated_at": generated_at, "records": wrapped_records,
     }
     with gzip.open(path, "wt") as f:

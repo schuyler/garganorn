@@ -10,8 +10,6 @@ Imports nothing from garganorn — no import cycle with server.py or stages.py.
 """
 import json
 
-ATGEO_VERSION = 1
-
 
 def record_uri(repo: str, collection: str, rkey: str) -> str:
     """Build the canonical dereferenceable record URI (pipeline-implementation-decisions.md
@@ -39,44 +37,24 @@ def wrap_record(uri: str, record_json: str) -> str:
     return '{"uri":%s,"cid":null,"value":%s}' % (json.dumps(uri), record_json)
 
 
-def build_tile_payload(collection: str, attribution: str, generated_at: str,
-                        wrapped_records: list) -> bytes:
+def build_tile_payload(collection: str, source_url: str, license_url: str,
+                        generated_at: str, wrapped_records: list) -> bytes:
     """Build the top-level tile payload (per the envelope decisions above).
 
-    Top-level keys are exactly {atgeo, collection, attribution, generated_at,
+    Top-level keys are exactly {collection, source, license, generated_at,
     records}. wrapped_records is a list of already-wrap_record()-wrapped JSON
     strings; they are embedded verbatim via string composition, matching
     wrap_record's no-parse-round-trip contract.
     """
     header = json.dumps({
-        "atgeo": ATGEO_VERSION,
         "collection": collection,
-        "attribution": attribution,
+        "source": source_url,
+        "license": license_url,
         "generated_at": generated_at,
     })
-    # header is '{"atgeo": 1, ..., "generated_at": "..."}' -- splice "records"
-    # in before the closing brace, joining the wrapped record strings verbatim.
+    # header is '{"collection": ..., ..., "generated_at": "..."}' -- splice
+    # "records" in before the closing brace, joining the wrapped record
+    # strings verbatim.
     joined_records = ",".join(wrapped_records)
     payload = header[:-1] + ',"records":[' + joined_records + ']}'
     return payload.encode("utf-8")
-
-
-def build_manifest(source: str, collection: str, attribution: str,
-                    generated_at: str, quadkeys: list) -> dict:
-    """Build the manifest.json dict (per the envelope decisions above).
-
-    Field set is exactly {atgeo, source, collection, attribution,
-    generated_at, tile_url_template, cache, quadkeys}. generated_at is
-    passed through verbatim -- callers capture one run-scoped timestamp
-    (per the envelope decisions above) and this function does not reformat it. quadkeys is sorted.
-    """
-    return {
-        "atgeo": ATGEO_VERSION,
-        "source": source,
-        "collection": collection,
-        "attribution": attribution,
-        "generated_at": generated_at,
-        "tile_url_template": "{base}/{qk6}/{qk}.json.gz",
-        "cache": {"max_age": 86400, "immutable": False},
-        "quadkeys": sorted(quadkeys),
-    }

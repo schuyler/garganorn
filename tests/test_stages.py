@@ -177,11 +177,7 @@ class TestStageManifest:
 
         with open(manifest_path) as f:
             data = json.load(f)
-        assert "source" in data
         assert "generated_at" in data
-        assert "quadkeys" in data
-        assert data["source"] == "foursquare"
-        assert isinstance(data["quadkeys"], list)
 
     def test_writes_manifest_duckdb(self, fsq_parquet, density_parquet, tmp_path):
         """stage_export writes manifest.duckdb."""
@@ -222,19 +218,18 @@ class TestEnvelopeShape:
     """§6 item 6 — envelope shape on the real stage_export production path."""
 
     def test_tile_top_level_keys_exact(self, fsq_parquet, density_parquet, tmp_path):
-        """Tile top-level == exactly {atgeo, collection, attribution,
-        generated_at, records} with atgeo == 1 (per the envelope decisions above)."""
+        """Tile top-level == exactly {collection, source, license,
+        generated_at, records} (per the envelope decisions above)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
         tiles_current = tmp_path / "foursquare" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
-        assert set(tile.keys()) == {"atgeo", "collection", "attribution", "generated_at", "records"}, (
-            f"tile top-level must be exactly {{atgeo, collection, attribution, generated_at, "
+        assert set(tile.keys()) == {"collection", "source", "license", "generated_at", "records"}, (
+            f"tile top-level must be exactly {{collection, source, license, generated_at, "
             f"records}}; got {list(tile)}"
         )
-        assert tile["atgeo"] == 1
 
     def test_tile_records_are_uri_cid_value_wrapped(self, fsq_parquet, density_parquet, tmp_path):
         """Each record == exactly {uri, cid, value} with cid is None (per the envelope decisions above)."""
@@ -285,19 +280,12 @@ class TestEnvelopeShape:
         tiles_current = tmp_path / "foursquare" / "tiles" / "current"
         with open(tiles_current / "manifest.json") as f:
             manifest = json.load(f)
-        expected = {
-            "atgeo", "source", "collection", "attribution", "generated_at",
-            "tile_url_template", "cache", "quadkeys",
-        }
-        assert set(manifest.keys()) == expected, (
+        assert set(manifest.keys()) == {"generated_at"}, (
             f"manifest.json must match the manifest-shape field set; got {sorted(manifest.keys())}"
         )
-        assert manifest["atgeo"] == 1
-        assert manifest["collection"] == "org.atgeo.places.foursquare"
-        assert manifest["cache"] == {"max_age": 86400, "immutable": False}
 
-    def test_manifest_duckdb_metadata_has_atgeo_and_collection(self, fsq_parquet, density_parquet, tmp_path):
-        """manifest.duckdb metadata gains atgeo/collection columns (per the envelope decisions above, §6 item 9)."""
+    def test_manifest_duckdb_metadata_has_collection(self, fsq_parquet, density_parquet, tmp_path):
+        """manifest.duckdb metadata has a collection column (per the envelope decisions above, §6 item 9)."""
         run_pipeline("foursquare", fsq_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -305,13 +293,12 @@ class TestEnvelopeShape:
         tiles_current = tmp_path / "foursquare" / "tiles" / "current"
         con = duckdb.connect(str(tiles_current / "manifest.duckdb"), read_only=True)
         cols = {row[1] for row in con.execute("PRAGMA table_info('metadata')").fetchall()}
-        row = con.execute("SELECT atgeo, collection, source, generated_at FROM metadata").fetchone()
+        row = con.execute("SELECT collection, source, generated_at FROM metadata").fetchone()
         con.close()
-        assert {"atgeo", "collection"} <= cols, (
-            f"manifest.duckdb metadata must have atgeo/collection columns; got {cols}"
+        assert "collection" in cols, (
+            f"manifest.duckdb metadata must have a collection column; got {cols}"
         )
-        atgeo, collection, source, generated_at = row
-        assert atgeo == 1
+        collection, source, generated_at = row
         assert collection == "org.atgeo.places.foursquare"
 
 

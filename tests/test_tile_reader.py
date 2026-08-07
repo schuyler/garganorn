@@ -21,7 +21,8 @@ import pytest
 from garganorn.tile_reader import TileBackedCollection
 
 COLLECTION = "org.atgeo.places.test"
-ATTRIBUTION = "https://example.com/tile-attribution"
+SOURCE_URL = "https://example.com/tile-source"
+LICENSE_URL = "https://example.com/tile-license"
 
 
 def _make_manifest_db(tmp_path, entries):
@@ -43,7 +44,8 @@ def _write_tile(tiles_dir, tile_qk, records):
     os.makedirs(subdir, exist_ok=True)
     path = os.path.join(subdir, f"{tile_qk}.json.gz")
     with gzip.open(path, "wt") as f:
-        json.dump({"collection": COLLECTION, "attribution": ATTRIBUTION, "records": records}, f)
+        json.dump({"collection": COLLECTION, "source": SOURCE_URL, "license": LICENSE_URL,
+                   "records": records}, f)
     return path
 
 
@@ -62,7 +64,7 @@ def _write_envelope_tile(tiles_dir, tile_qk, values, generated_at="2026-07-09T18
     ]
     with gzip.open(path, "wt") as f:
         json.dump({
-            "atgeo": 1, "collection": COLLECTION, "attribution": ATTRIBUTION,
+            "collection": COLLECTION, "source": SOURCE_URL, "license": LICENSE_URL,
             "generated_at": generated_at, "records": records,
         }, f)
     return path
@@ -85,7 +87,8 @@ class TestTileBackedCollection:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, rkey)
 
@@ -105,7 +108,8 @@ class TestTileBackedCollection:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, "nonexistent")
 
@@ -122,7 +126,8 @@ class TestTileBackedCollection:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, rkey)
 
@@ -144,7 +149,8 @@ class TestTileBackedCollection:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
 
         with patch("garganorn.tile_reader.gzip.open", wraps=gzip.open) as mock_gzip:
@@ -182,7 +188,8 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, rkey)
 
@@ -209,7 +216,8 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, "nonexistent")
 
@@ -231,7 +239,8 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, "place002")
 
@@ -255,7 +264,8 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution=ATTRIBUTION,
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
         )
         first = col.get_record("repo", COLLECTION, rkey)
         first.pop("importance", None)

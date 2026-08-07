@@ -46,7 +46,8 @@ def _build_server(pipeline_dir, max_coverage_tiles=50):
         collection=FSQ_COLLECTION,
         manifest_db_path=manifest_path,
         tiles_dir=str(pipeline_dir),
-        attribution=SOURCES["foursquare"].attribution,
+        source_url=SOURCES["foursquare"].source_url,
+        license_url=SOURCES["foursquare"].license_url,
     )
     return Server(
         REPO, dbs=[], logger=logging.getLogger("test"),
@@ -198,7 +199,7 @@ class TestPipelineToCoverage:
 
     def test_tile_files_are_valid_gzipped_json(self, pipeline_output):
         """Each tile file is valid gzip-compressed JSON with the full atgeo v1
-        envelope: {atgeo, collection, attribution, generated_at, records}
+        envelope: {collection, source, license, generated_at, records}
         (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
         adoption", §6 item 6)."""
         server = _build_server(pipeline_output)
@@ -209,12 +210,12 @@ class TestPipelineToCoverage:
             file_path = pipeline_output / relative
             with gzip.open(file_path, "rt") as f:
                 tile = json.load(f)
-            assert set(tile.keys()) == {"atgeo", "collection", "attribution", "generated_at", "records"}, (
-                f"Tile {relative} top-level must be exactly {{atgeo, collection, attribution, "
+            assert set(tile.keys()) == {"collection", "source", "license", "generated_at", "records"}, (
+                f"Tile {relative} top-level must be exactly {{collection, source, license, "
                 f"generated_at, records}}; got {list(tile)}"
             )
-            assert tile["atgeo"] == 1
-            assert isinstance(tile["attribution"], str)
+            assert isinstance(tile["source"], str)
+            assert isinstance(tile["license"], str)
             assert isinstance(tile["collection"], str)
             assert isinstance(tile["generated_at"], str) and tile["generated_at"].endswith("Z")
             assert isinstance(tile["records"], list)
@@ -277,20 +278,19 @@ class TestPipelineToCoverage:
             f"Expected XrpcError name 'BboxTooLarge', got '{exc_info.value.name}'"
 
     def test_manifest_metadata(self, pipeline_output):
-        """manifest.duckdb metadata table contains atgeo=1, collection,
+        """manifest.duckdb metadata table contains collection,
         source='foursquare', and an RFC 3339 Z generated_at (per the envelope
         decisions above, §6 items 8/9)."""
         manifest_path = str(pipeline_output / "manifest.duckdb")
         con = duckdb.connect(manifest_path, read_only=True)
         cols = {row[1] for row in con.execute("PRAGMA table_info('metadata')").fetchall()}
-        row = con.execute("SELECT atgeo, collection, source, generated_at FROM metadata").fetchone()
+        row = con.execute("SELECT collection, source, generated_at FROM metadata").fetchone()
         con.close()
-        assert {"atgeo", "collection"} <= cols, (
-            f"manifest.duckdb metadata must have atgeo/collection columns; got {cols}"
+        assert "collection" in cols, (
+            f"manifest.duckdb metadata must have a collection column; got {cols}"
         )
         assert row is not None, "metadata table is empty"
-        atgeo, collection, source, generated_at = row
-        assert atgeo == 1
+        collection, source, generated_at = row
         assert collection == FSQ_COLLECTION
         assert source == "foursquare", f"Expected source='foursquare', got '{source}'"
         assert isinstance(generated_at, str) and generated_at.endswith("Z"), (
@@ -529,8 +529,11 @@ class TestExportWorkersParity:
         for rel_path in sorted(tiles1.keys()):
             content1 = tiles1[rel_path]
             content4 = tiles4[rel_path]
-            assert content1["attribution"] == content4["attribution"], (
-                f"Attribution differs in tile {rel_path}"
+            assert content1["source"] == content4["source"], (
+                f"Source differs in tile {rel_path}"
+            )
+            assert content1["license"] == content4["license"], (
+                f"License differs in tile {rel_path}"
             )
             # Sort wrapped records by value.rkey for deterministic comparison
             # (records are {uri, cid, value}-wrapped; rkey lives at value.rkey,

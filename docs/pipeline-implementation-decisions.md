@@ -269,10 +269,9 @@ fixture checklist. Orthogonality: OQ-P2-2 changes the division record's
 
 ### OQ-P2-1 — record envelope adoption
 
-- **Tile payload gains the atgeo v1 envelope:** `{atgeo:1, collection,
-  attribution, generated_at, records:[{uri, cid, value}]}`. `value` is
-  byte-for-byte the previous record JSON (value schemas are the existing
-  lexicons, unchanged).
+- **Tile payload gains the atgeo v1 envelope:** `{collection, source, license,
+  generated_at, records:[{uri, cid, value}]}`. `value` is byte-for-byte the
+  previous record JSON (value schemas are the existing lexicons, unchanged).
 - **`cid` is literally `null`, never computed** (approved). A real CID would
   require re-encoding every DuckDB-emitted record as canonical DAG-CBOR
   (~10⁸ times/run) in the flush threads, and the atproto data model bans
@@ -297,21 +296,18 @@ fixture checklist. Orthogonality: OQ-P2-2 changes the division record's
   in every file, destroying the determinism the parity harness relies on.
   Normalized to RFC 3339 `Z`, seconds precision. Never per-record. Protocol
   amendment P1 pins this so a second producer can't stamp per-flush times.
-- **`cache.immutable: false`** (approved), deliberately contradicting atgeo
-  §1.3's `true`. The deployed slug route serves via the `current` symlink,
-  so the *same* URL returns new bytes after a run; `immutable: true` would
-  let CDNs serve stale tiles for the full max-age. Immutable is deferred to
-  a Phase 3 serving path that embeds a run-unique URL segment (protocol
-  amendment P2). `tile_url_template` and manifest `attribution` (amendment
-  P3) ship now.
+- **`manifest.json` holds only `generated_at`.** It is a run-dir completeness
+  marker (`os.path.exists`/`isfile`, never opened for its contents by any
+  production reader); the fields once proposed for it (`tile_url_template`,
+  `cache`, `quadkeys`, source/collection/attribution metadata) never gained a
+  reader and were dropped.
 - **Envelope wrapping lives in Python, not SQL** (new `garganorn/
-  envelope.py`, `ATGEO_VERSION=1`). Centralizes the version constant, run
-  timestamp, URI construction, and the (never-taken) CID seam in one place
-  the AppView can share; the four export SQLs only expose `rkey` as a
-  column. `wrap_record` composes the wrapper by string interpolation (no
-  `json.loads` per record), which also stops `ensure_ascii`-escaping DuckDB's
-  UTF-8 — JSON-equivalent, byte-different, acceptable since byte-parity is
-  already retired.
+  envelope.py`). Centralizes the run timestamp, URI construction, and the
+  (never-taken) CID seam in one place the AppView can share; the four export
+  SQLs only expose `rkey` as a column. `wrap_record` composes the wrapper by
+  string interpolation (no `json.loads` per record), which also stops
+  `ensure_ascii`-escaping DuckDB's UTF-8 — JSON-equivalent, byte-different,
+  acceptable since byte-parity is already retired.
 - **Server ships atomically with the pipeline.** New server + old tiles →
   `KeyError: 'value'`. Covered by a temporary `record.get("value", record)`
   tolerance in `tile_reader.py` (removed after the first re-export) plus
@@ -339,9 +335,8 @@ fixture checklist. Orthogonality: OQ-P2-2 changes the division record's
   `getCoverage` emits URLs no route can serve. Serving is gated on the same
   manifest-exists condition as the rest of the collection config, so dev
   checkouts (no manifests) stay disabled via the existing warn-and-skip path.
-- **`Cache-Control: public, max-age=<cache_ttl>`, not `immutable`** (same
-  reasoning as the manifest `cache` object above). `cache_ttl` was
-  previously dead config.
+- **`Cache-Control: public, max-age=604800, immutable`** on every tile
+  response, unconditionally.
 - WoF is **not** involved: place-tile containment uses `overture_division`
   boundaries built in-run, not WoF. WoF is only the server's separate,
   deprecated reverse-geocode lookup.

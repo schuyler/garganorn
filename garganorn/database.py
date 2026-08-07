@@ -40,6 +40,9 @@ class SearchParams(TypedDict, total=False):
 class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
     collection: str = "org.atgeo"
+    source_url: str = ""
+    license_url: str = ""
+    # Read only by search_records (server.py:266); removed with it under P4.
     attribution: str = ""
 
     JW_THRESHOLD = 0.6
@@ -317,6 +320,10 @@ class FoursquareOSP(Database):
     source_key = "foursquare"
     source_pk = "fsq_place_id"
     attribution = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
+    # Placeholders: no production build exports foursquare, and this class
+    # is deleted under P4+P5. license_url is not a licensing claim.
+    source_url = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
+    license_url = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
 
     def record_columns(self):
         return f"""
@@ -647,6 +654,8 @@ class OverturePlaces(Database):
     source_key = "overture_place"
     source_pk = "id"
     attribution = "https://docs.overturemaps.org/attribution/"
+    source_url = "https://overturemaps.org/"
+    license_url = "https://docs.overturemaps.org/attribution/"
 
     def record_columns(self):
         return f"""
@@ -983,6 +992,8 @@ class OpenStreetMap(Database):
     source_key = "osm"
     source_pk = "rkey"
     attribution = "https://www.openstreetmap.org/copyright"
+    source_url = "https://www.openstreetmap.org/"
+    license_url = "https://opendatacommons.org/licenses/odbl/1-0/"
 
     def record_columns(self):
         return """
@@ -1351,6 +1362,8 @@ class OvertureDivisions(Database):
     source_key = "overture_division"
     source_pk = "id"
     attribution = "https://docs.overturemaps.org/attribution/"
+    source_url = "https://overturemaps.org/"
+    license_url = "https://docs.overturemaps.org/attribution/"
 
     def connect(self):
         """Connect to boundary database (no name_index validation)."""

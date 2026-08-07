@@ -374,9 +374,11 @@ class TestSearchRecordsAntimeridian:
         import logging
 
         # Create a mock database
-        mock_db = MagicMock()
+        mock_db = MagicMock(spec=Database)
         mock_db.collection = "org.atgeo.places.foursquare"
         mock_db.attribution = "https://example.com/attribution"
+        mock_db.source_url = "https://example.com/source"
+        mock_db.license_url = "https://example.com/license"
         mock_db.nearest.return_value = []
 
         logger = logging.getLogger("test")

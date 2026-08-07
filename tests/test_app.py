@@ -174,18 +174,16 @@ def _make_manifest_json(manifest_db_path):
 
 
 def _make_tile_config(tiles_dir, manifest_path, slug="foursquare",
-                      base_url="https://places.atgeo.org/tiles/foursquare",
-                      cache_ttl=None):
+                      base_url="https://places.atgeo.org/tiles/foursquare"):
     """Build a tiles_config dict for one collection using the slug schema."""
     coll_cfg = {
         "slug": slug,
         "manifest": str(manifest_path),
         "tiles_dir": str(tiles_dir),
         "base_url": base_url,
-        "attribution": "https://example.com",
+        "source": "https://example.com",
+        "license": "https://example.com",
     }
-    if cache_ttl is not None:
-        coll_cfg["cache_ttl"] = cache_ttl
     return {
         "collections": {
             FSQ_COLLECTION: coll_cfg,
@@ -193,34 +191,75 @@ def _make_tile_config(tiles_dir, manifest_path, slug="foursquare",
     }
 
 
-@pytest.fixture
-def tile_client(tmp_path):
-    """Flask test client with a slug-based collection and a real tile on disk."""
-    # Layout: tmp_path/foursquare/tiles/current/<qk6>/<qk>.json.gz
-    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
-    tile_subdir = tiles_current / "012301"
-    tile_subdir.mkdir(parents=True)
-    tile_file = tile_subdir / "012301.json.gz"
-    content = b'{"attribution": "https://example.com", "records": []}'
-    with gzip.open(tile_file, "wb") as f:
-        f.write(content)
-
-    manifest_path = tiles_current / "manifest.duckdb"
+def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True):
+    """Create tiles_root/<stamp>/ with a manifest (record_tiles: 'r1' -> qk),
+    optionally a tile file at tiles_root/<stamp>/<qk6>/<qk>.json.gz, and --
+    unless complete=False -- the manifest.json completeness marker (pass
+    complete=False to simulate a run that crashed before writing it).
+    Returns the run directory."""
+    run_dir = tiles_root / stamp
+    run_dir.mkdir(parents=True)
+    manifest_path = run_dir / "manifest.duckdb"
     _make_manifest_db(manifest_path)
-    _make_manifest_json(manifest_path)
+    if complete:
+        _make_manifest_json(manifest_path)
+    if tile_content is not None:
+        tile_subdir = run_dir / qk[:6]
+        tile_subdir.mkdir(parents=True)
+        with gzip.open(tile_subdir / f"{qk}.json.gz", "wb") as f:
+            f.write(tile_content)
+    return run_dir
 
-    mock_db = _make_mock_db(FSQ_COLLECTION)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=manifest_path,
-        slug="foursquare",
-        base_url="https://places.atgeo.org/tiles/foursquare",
-        cache_ttl=86400,
-    )
+
+def _point_current(tiles_root, run_dir):
+    """(Re)point tiles_root/current at run_dir as a symlink -- never a real
+    directory, so the stamp a build resolves to is never the literal string
+    'current' (see R1's fixture trap)."""
+    current = tiles_root / "current"
+    if current.exists() or current.is_symlink():
+        current.unlink()
+    current.symlink_to(run_dir, target_is_directory=True)
+    return current
+
+
+def _tile_json(name):
+    """A tile file's decoded content: one record with a distinguishing name,
+    shaped for TileBackedCollection.get_record (record.get('value', record))."""
+    return json.dumps({"records": [{"value": {"rkey": "r1", "name": name}}]}).encode()
+
+
+def _build_tile_app(mock_db, tiles_config):
     with patch("garganorn.__main__.load_config") as mock_load:
         mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
         app = create_app()
     app.config["TESTING"] = True
+    return app
+
+
+@pytest.fixture
+def tile_client(tmp_path):
+    """Flask test client with a slug-based collection and a real tile on disk.
+
+    Layout: tmp_path/foursquare/tiles/<stamp>/<qk6>/<qk>.json.gz, with
+    'current' a symlink to <stamp> -- not a literal directory named 'current'
+    (a literal directory would make the run stamp the string "current" and
+    hide any bug in stamp derivation).
+    """
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    run_dir = _make_run(
+        tiles_root, "20260101T000000",
+        tile_content=b'{"attribution": "https://example.com", "records": []}',
+    )
+    tiles_current = _point_current(tiles_root, run_dir)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current,
+        manifest_path=tiles_current / "manifest.duckdb",
+        slug="foursquare",
+        base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+    app = _build_tile_app(mock_db, tiles_config)
     with app.test_client() as c:
         yield c
 
@@ -228,31 +267,28 @@ def tile_client(tmp_path):
 @pytest.fixture
 def tile_client_empty(tmp_path):
     """Flask test client with a registered slug but no tile files on disk."""
-    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
-    tiles_current.mkdir(parents=True)
-
-    manifest_path = tiles_current / "manifest.duckdb"
-    _make_manifest_db(manifest_path)
-    _make_manifest_json(manifest_path)
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000")
+    tiles_current = _point_current(tiles_root, run_dir)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
         tiles_dir=tiles_current,
-        manifest_path=manifest_path,
+        manifest_path=tiles_current / "manifest.duckdb",
         slug="foursquare",
         base_url="https://places.atgeo.org/tiles/foursquare",
     )
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
-        app = create_app()
-    app.config["TESTING"] = True
+    app = _build_tile_app(mock_db, tiles_config)
     with app.test_client() as c:
         yield c
 
 
 def test_tile_served_successfully(tile_client):
-    """GET /tiles/<slug>/<qk6>/<qk>.json.gz returns 200 with correct headers."""
-    resp = tile_client.get("/tiles/foursquare/012301/012301.json.gz")
+    """GET /tiles/<slug>/<stamp>/<qk6>/<qk>.json.gz returns 200 with correct
+    headers. tile_client's run is stamped 20260101T000000 (R2: tiles_dir
+    roots at tiles/, one level above the run, so the stamp is part of the
+    path)."""
+    resp = tile_client.get("/tiles/foursquare/20260101T000000/012301/012301.json.gz")
     assert resp.status_code == 200
     assert resp.headers.get("Content-Encoding") == "gzip"
     assert "application/json" in resp.content_type
@@ -273,73 +309,44 @@ def test_tile_unknown_slug_returns_404(tile_client_empty):
     assert resp.status_code == 404
 
 
-def test_tile_cache_control_present_when_ttl_set(tile_client):
-    """Cache-Control is 'public, max-age=<ttl>' (not immutable) when cache_ttl is set."""
-    resp = tile_client.get("/tiles/foursquare/012301/012301.json.gz")
+def test_tile_cache_control_is_constant_immutable(tile_client):
+    """R5: tiles serve exactly this Cache-Control header, unconditionally,
+    regardless of collection config."""
+    resp = tile_client.get("/tiles/foursquare/20260101T000000/012301/012301.json.gz")
     assert resp.status_code == 200
-    cc = resp.headers.get("Cache-Control", "")
-    assert cc == "public, max-age=86400", (
-        f"Expected 'public, max-age=86400', got {cc!r}"
-    )
-    assert "immutable" not in cc
-
-
-def test_tile_cache_control_absent_when_no_ttl(tmp_path):
-    """Cache-Control public/max-age directives absent when cache_ttl is omitted from config."""
-    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
-    tile_subdir = tiles_current / "012301"
-    tile_subdir.mkdir(parents=True)
-    tile_file = tile_subdir / "012301.json.gz"
-    with gzip.open(tile_file, "wb") as f:
-        f.write(b'{"attribution": "https://example.com", "records": []}')
-    manifest_path = tiles_current / "manifest.duckdb"
-    _make_manifest_db(manifest_path)
-    _make_manifest_json(manifest_path)
-
-    mock_db = _make_mock_db(FSQ_COLLECTION)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=manifest_path,
-        slug="foursquare",
-        base_url="https://places.atgeo.org/tiles/foursquare",
-        # No cache_ttl
-    )
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
-        app = create_app()
-    app.config["TESTING"] = True
-    with app.test_client() as c:
-        resp = c.get("/tiles/foursquare/012301/012301.json.gz")
-    assert resp.status_code == 200
-    # When cache_ttl is omitted, the route must NOT emit a public/max-age directive.
-    # Flask's send_file may set Cache-Control: no-cache in testing mode, which is acceptable.
-    cc = resp.headers.get("Cache-Control", "")
-    assert "public" not in cc
-    assert "max-age" not in cc
+    assert resp.headers.get("Cache-Control") == "public, max-age=604800, immutable"
 
 
 def test_tile_path_traversal_rejected(tmp_path):
-    """safe_join blocks paths that escape tiles_dir (sibling and cross-source)."""
-    # Layout: tmp_path/<source>/tiles/current is the serving root.
-    # places.parquet lives at tmp_path/<source>/places.parquet — two .. up.
+    """safe_join blocks paths that escape tiles_dir.
+
+    Root is now {source}/tiles/ (R2), one level above the run directory --
+    escaping to a sibling of tiles/ (places.parquet) now takes ONE '..', not
+    two; escaping cross-source takes two, not three.
+
+    Two escapes, deliberately targeting different file types, because R17's
+    suffix guard (tile_path must end in .json.gz) runs in the same handler
+    and would 404 a places.parquet request on its own, before safe_join is
+    ever consulted:
+      - places.parquet doesn't end in .json.gz, so once R17 lands this case
+        proves the suffix guard, not containment.
+      - the cross-source target DOES end in .json.gz, so it's the one that
+        actually proves safe_join blocks the escape.
+    """
     source_dir = tmp_path / "overture_place"
-    tiles_current = source_dir / "tiles" / "current"
-    tile_subdir = tiles_current / "012301"
-    tile_subdir.mkdir(parents=True)
-    tile_file = tile_subdir / "012301.json.gz"
-    with gzip.open(tile_file, "wb") as f:
-        f.write(b'{"attribution": "https://example.com", "records": []}')
+    tiles_root = source_dir / "tiles"
+    run_dir = _make_run(
+        tiles_root, "20260101T000000",
+        tile_content=b'{"attribution": "https://example.com", "records": []}',
+    )
+    tiles_current = _point_current(tiles_root, run_dir)
 
-    manifest_path = tiles_current / "manifest.duckdb"
-    _make_manifest_db(manifest_path)
-    _make_manifest_json(manifest_path)
-
-    # Physically create the escape target so 404 proves blocking, not absence.
+    # Physically create the escape targets so 404 proves blocking, not absence.
     places_parquet = source_dir / "places.parquet"
     places_parquet.write_bytes(b"PAR1")  # minimal parquet magic bytes
 
-    # Cross-source escape target: another source's tiles dir
-    fsq_dir = tmp_path / "foursquare" / "tiles" / "current"
+    # Cross-source escape target: another source's tile file.
+    fsq_dir = tmp_path / "foursquare" / "tiles" / "20260101T000000"
     fsq_dir.mkdir(parents=True)
     cross_source_file = fsq_dir / "012301.json.gz"
     with gzip.open(cross_source_file, "wb") as f:
@@ -348,21 +355,18 @@ def test_tile_path_traversal_rejected(tmp_path):
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
         tiles_dir=tiles_current,
-        manifest_path=manifest_path,
+        manifest_path=tiles_current / "manifest.duckdb",
         slug="overture-place",
         base_url="https://places.atgeo.org/tiles/overture-place",
-        cache_ttl=86400,
     )
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
-        app = create_app()
-    app.config["TESTING"] = True
+    app = _build_tile_app(mock_db, tiles_config)
 
     with app.test_client() as client:
-        # Sibling escape: tiles/current/../../places.parquet = <source>/places.parquet
+        # Sibling escape to a non-tile file -- exercises the R17 suffix guard
+        # once it lands, not safe_join containment (see docstring).
         sibling_paths = [
-            "/tiles/overture-place/../../places.parquet",
-            "/tiles/overture-place/%2e%2e/%2e%2e/places.parquet",
+            "/tiles/overture-place/../places.parquet",
+            "/tiles/overture-place/%2e%2e/places.parquet",
         ]
         for path in sibling_paths:
             resp = client.get(path)
@@ -370,16 +374,221 @@ def test_tile_path_traversal_rejected(tmp_path):
                 f"Expected 404 for sibling traversal {path!r}, got {resp.status_code}"
             )
 
-        # Cross-source escape: tiles/current/../../../foursquare/tiles/current/012301.json.gz
+        # Cross-source escape to a .json.gz file -- this is the case that
+        # actually proves safe_join blocks containment escapes.
         cross_paths = [
-            "/tiles/overture-place/../../../foursquare/tiles/current/012301.json.gz",
-            "/tiles/overture-place/%2e%2e/%2e%2e/%2e%2e/foursquare/tiles/current/012301.json.gz",
+            "/tiles/overture-place/../../foursquare/tiles/20260101T000000/012301.json.gz",
+            "/tiles/overture-place/%2e%2e/%2e%2e/foursquare/tiles/20260101T000000/012301.json.gz",
         ]
         for path in cross_paths:
             resp = client.get(path)
             assert resp.status_code == 404, (
                 f"Expected 404 for cross-source traversal {path!r}, got {resp.status_code}"
             )
+
+
+# ---------------------------------------------------------------------------
+# R1 -- getCoverage returns run-stamped tile URLs
+# ---------------------------------------------------------------------------
+
+def test_consecutive_runs_produce_disjoint_coverage_urls(tmp_path):
+    """R1: getCoverage tile URLs carry the serving run's stamp, so two server
+    builds -- each pinned to a different completed run via 'current' -- emit
+    disjoint URL sets."""
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    run1 = _make_run(tiles_root, "20260101T000000",
+                      tile_content=b'{"attribution": "https://example.com", "records": []}')
+    run2 = _make_run(tiles_root, "20260102T000000",
+                      tile_content=b'{"attribution": "https://example.com", "records": []}')
+    current = _point_current(tiles_root, run1)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=current, manifest_path=current / "manifest.duckdb",
+        slug="foursquare", base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+
+    def coverage_urls(app):
+        with app.test_client() as client:
+            resp = client.get("/xrpc/org.atgeo.getCoverage", query_string={
+                "collection": FSQ_COLLECTION, "bbox": "-180,-85,180,85",
+            })
+        return set(resp.get_json()["tiles"])
+
+    urls1 = coverage_urls(_build_tile_app(mock_db, tiles_config))
+
+    # Pipeline completes a new run; symlink flips, server not yet restarted.
+    _point_current(tiles_root, run2)
+    urls2 = coverage_urls(_build_tile_app(mock_db, tiles_config))  # restart
+
+    assert urls1 and urls2, "expected non-empty coverage from both runs"
+    assert urls1.isdisjoint(urls2), (
+        f"consecutive runs must produce disjoint URL sets; overlap: {urls1 & urls2}"
+    )
+
+
+def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
+    """R1 AC (second half): a URL getCoverage advertised for a run that has
+    since been superseded must still resolve to that run's own bytes, as
+    long as the run is still on disk (keep-two retention)."""
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    run1 = _make_run(tiles_root, "20260101T000000", tile_content=b'{"marker": "RunOne"}')
+    run2 = _make_run(tiles_root, "20260102T000000", tile_content=b'{"marker": "RunTwo"}')
+    current = _point_current(tiles_root, run1)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=current, manifest_path=current / "manifest.duckdb",
+        slug="foursquare", base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+
+    app1 = _build_tile_app(mock_db, tiles_config)
+    with app1.test_client() as client1:
+        resp1 = client1.get("/xrpc/org.atgeo.getCoverage", query_string={
+            "collection": FSQ_COLLECTION, "bbox": "-180,-85,180,85",
+        })
+    prior_urls = resp1.get_json()["tiles"]
+    assert prior_urls, "expected at least one coverage URL from the prior run"
+
+    # New build completes and repoints 'current'; server restarts pinned to run2.
+    _point_current(tiles_root, run2)
+    app2 = _build_tile_app(mock_db, tiles_config)
+
+    with app2.test_client() as client2:
+        for url in prior_urls:
+            path = url[len("https://places.atgeo.org"):]
+            resp = client2.get(path)
+            assert resp.status_code == 200, (
+                f"prior-run URL {path!r} must still resolve after a new build; "
+                f"got {resp.status_code}"
+            )
+            body = json.loads(gzip.decompress(resp.data))
+            assert body == {"marker": "RunOne"}, (
+                f"prior-run URL {path!r} must serve the PRIOR run's bytes, "
+                f"got {body!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# R2 -- tile_dirs[slug] roots at {source}/tiles/
+# ---------------------------------------------------------------------------
+
+def test_tile_route_roots_at_tiles_not_run_dir(tmp_path):
+    """R2: tile_dirs[slug] roots at {source}/tiles/, one level above the run
+    directory, so a tile request must include the run's stamp segment to
+    resolve -- and the old un-stamped path, which resolved directly against
+    the run dir under today's root, must stop resolving."""
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    stamp = "20260101T000000"
+    run_dir = _make_run(tiles_root, stamp,
+                         tile_content=b'{"attribution": "https://example.com", "records": []}')
+    current = _point_current(tiles_root, run_dir)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=current, manifest_path=current / "manifest.duckdb",
+        slug="foursquare", base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+    app = _build_tile_app(mock_db, tiles_config)
+    with app.test_client() as client:
+        resp = client.get(f"/tiles/foursquare/{stamp}/012301/012301.json.gz")
+        assert resp.status_code == 200, (
+            f"expected tile_dirs[slug] to root at tiles/, making {stamp}/... "
+            f"resolve; got {resp.status_code}"
+        )
+
+        resp = client.get("/tiles/foursquare/012301/012301.json.gz")
+        assert resp.status_code == 404, (
+            "the un-stamped path resolved directly against the run dir under "
+            f"today's root; once tiles_dir is tiles/ it must stop resolving; "
+            f"got {resp.status_code}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# R6 -- getCoverage responses are cached; the lexicon route is not
+# ---------------------------------------------------------------------------
+
+def test_getcoverage_response_has_cache_control(tile_client):
+    """R6: getCoverage XRPC responses are cached for 1 hour."""
+    resp = tile_client.get("/xrpc/org.atgeo.getCoverage", query_string={
+        "collection": FSQ_COLLECTION, "bbox": "-180,-85,180,85",
+    })
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+
+
+def test_getcoverage_lexicon_route_lacks_cache_control(tile_client):
+    """R6 regression guard: GET /<nsid> (the lexicon route) matches
+    view_args == {'nsid': 'org.atgeo.getCoverage'}, identical to the XRPC
+    route's view_args for the same method -- a hook keyed on view_args alone
+    would wrongly cache this lexicon response too. The correct key is
+    request.endpoint == 'xrpc-endpoint'."""
+    resp = tile_client.get("/org.atgeo.getCoverage")
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") != "public, max-age=3600"
+
+
+# ---------------------------------------------------------------------------
+# R17 -- the manifest is not reachable over HTTP
+# ---------------------------------------------------------------------------
+
+def test_manifest_files_not_reachable_over_http(tmp_path):
+    """R17: neither manifest.duckdb nor manifest.json may be servable via
+    /tiles/<slug>/.... tiles_dir is set directly to the run's parent here
+    (rather than via a 'current' symlink) to isolate this guard from R2's
+    root-relocation, which is covered separately."""
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    stamp = "20260101T000000"
+    run_dir = _make_run(tiles_root, stamp)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_root, manifest_path=run_dir / "manifest.duckdb",
+        slug="foursquare", base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+    app = _build_tile_app(mock_db, tiles_config)
+    with app.test_client() as client:
+        resp = client.get(f"/tiles/foursquare/{stamp}/manifest.duckdb")
+        assert resp.status_code == 404, (
+            f"manifest.duckdb must not be reachable over HTTP; got {resp.status_code}"
+        )
+        resp = client.get(f"/tiles/foursquare/{stamp}/manifest.json")
+        assert resp.status_code == 404, (
+            f"manifest.json must not be reachable over HTTP; got {resp.status_code}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# R18 -- getRecord reads the run resolved at startup, not 'current' live
+# ---------------------------------------------------------------------------
+
+def test_get_record_reads_run_resolved_at_startup(tmp_path):
+    """R18: getRecord reads tiles from the run getCoverage advertises
+    (frozen at startup), not from wherever 'current' points to at request
+    time."""
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    run1 = _make_run(tiles_root, "20260101T000000", tile_content=_tile_json("RunOne"))
+    run2 = _make_run(tiles_root, "20260102T000000", tile_content=_tile_json("RunTwo"))
+    current = _point_current(tiles_root, run1)
+
+    mock_db = _make_mock_db(FSQ_COLLECTION)
+    tiles_config = _make_tile_config(
+        tiles_dir=current, manifest_path=current / "manifest.duckdb",
+        slug="foursquare", base_url="https://places.atgeo.org/tiles/foursquare",
+    )
+    app = _build_tile_app(mock_db, tiles_config)  # frozen while current -> run1
+
+    # A new build completes and repoints 'current' before the server restarts.
+    _point_current(tiles_root, run2)
+
+    with app.test_client() as client:
+        resp = client.get(f"/{FSQ_COLLECTION}/r1")
+    assert resp.status_code == 200
+    assert resp.get_json()["name"] == "RunOne", (
+        "getRecord followed the 'current' symlink to the new run instead of "
+        "the run resolved at startup"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -395,41 +604,33 @@ def test_incomplete_run_not_served(tmp_path):
     getCoverage keys off Server.tile_manifests independently of the
     /tiles/<slug>/... route (garganorn/server.py:213,221-223), so a fix that
     only special-cases serve_tile() would pass a route-only check yet still
-    leak coverage URLs for an incomplete collection. The design requires a
-    single `ready` gate that withholds tile_manifests, tile_collections, AND
-    tile_dirs[slug] together.
-
-    Today's code (garganorn/__main__.py) gates tile_manifests registration
-    (and thus getCoverage) as well as the /tiles/ route on manifest.duckdb
-    existence alone, so this currently serves the tile AND leaks it via
-    getCoverage -- this test must FAIL until the fix requires the sibling
-    manifest.json for all three (tile_manifests, tile_collections, tile_dirs).
+    leak coverage URLs for an incomplete collection. A single `ready` gate
+    withholds tile_manifests, tile_collections, AND tile_dirs[slug] together.
     """
-    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
-    tile_subdir = tiles_current / "012301"
-    tile_subdir.mkdir(parents=True)
-    tile_file = tile_subdir / "012301.json.gz"
-    with gzip.open(tile_file, "wb") as f:
-        f.write(b'{"attribution": "https://example.com", "records": []}')
-
-    manifest_path = tiles_current / "manifest.duckdb"
-    _make_manifest_db(manifest_path)
-    # Deliberately NOT calling _make_manifest_json -- simulates a crash
-    # between writing manifest.duckdb and the manifest.json marker.
+    # Deliberately complete=False -- simulates a crash between writing
+    # manifest.duckdb and the manifest.json marker.
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    stamp = "20260101T000000"
+    run_dir = _make_run(
+        tiles_root, stamp,
+        tile_content=b'{"attribution": "https://example.com", "records": []}',
+        complete=False,
+    )
+    tiles_current = _point_current(tiles_root, run_dir)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
         tiles_dir=tiles_current,
-        manifest_path=manifest_path,
+        manifest_path=tiles_current / "manifest.duckdb",
         slug="foursquare",
         base_url="https://places.atgeo.org/tiles/foursquare",
     )
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
-        app = create_app()
-    app.config["TESTING"] = True
+    app = _build_tile_app(mock_db, tiles_config)
     with app.test_client() as client:
-        resp = client.get("/tiles/foursquare/012301/012301.json.gz")
+        # Stamped path -- if this were unstamped, once R2 lands it would
+        # 404 on path resolution alone, masking whether the completeness
+        # gate itself still withholds tile_dirs[slug].
+        resp = client.get(f"/tiles/foursquare/{stamp}/012301/012301.json.gz")
         assert resp.status_code == 404, (
             "incomplete run (manifest.duckdb without manifest.json) must not "
             f"be served; got {resp.status_code}"
@@ -458,33 +659,28 @@ def test_incomplete_run_not_served(tmp_path):
 
 def test_complete_run_served(tmp_path):
     """Positive control: a run with BOTH manifest.duckdb and manifest.json
-    present is served normally. May already pass today -- it locks in the
-    behavior the A1 fix must preserve.
+    present is served normally -- it locks in the behavior the A1 fix must
+    preserve. Requests the stamped path (R2): once tiles_dir roots at
+    tiles/, the un-stamped path no longer resolves at all.
     """
-    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
-    tile_subdir = tiles_current / "012301"
-    tile_subdir.mkdir(parents=True)
-    tile_file = tile_subdir / "012301.json.gz"
-    with gzip.open(tile_file, "wb") as f:
-        f.write(b'{"attribution": "https://example.com", "records": []}')
-
-    manifest_path = tiles_current / "manifest.duckdb"
-    _make_manifest_db(manifest_path)
-    _make_manifest_json(manifest_path)
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    stamp = "20260101T000000"
+    run_dir = _make_run(
+        tiles_root, stamp,
+        tile_content=b'{"attribution": "https://example.com", "records": []}',
+    )
+    tiles_current = _point_current(tiles_root, run_dir)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = _make_tile_config(
         tiles_dir=tiles_current,
-        manifest_path=manifest_path,
+        manifest_path=tiles_current / "manifest.duckdb",
         slug="foursquare",
         base_url="https://places.atgeo.org/tiles/foursquare",
     )
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", [mock_db], None, tiles_config)
-        app = create_app()
-    app.config["TESTING"] = True
+    app = _build_tile_app(mock_db, tiles_config)
     with app.test_client() as client:
-        resp = client.get("/tiles/foursquare/012301/012301.json.gz")
+        resp = client.get(f"/tiles/foursquare/{stamp}/012301/012301.json.gz")
         assert resp.status_code == 200, (
             "complete run (manifest.duckdb + manifest.json) must be served; "
             f"got {resp.status_code}"
@@ -493,8 +689,8 @@ def test_complete_run_served(tmp_path):
 
 def test_no_manifest_key_still_boots(tmp_path):
     """F4 regression guard: a collection whose config has no 'manifest' key
-    at all must not crash create_app() (today's graceful "no manifest
-    configured" path, which A1's short-circuited `and` must preserve).
+    at all must not crash create_app(); the readiness check's short-circuited
+    `and` must gracefully treat the collection as tile-less.
     """
     mock_db = _make_mock_db(FSQ_COLLECTION)
     tiles_config = {
@@ -503,7 +699,8 @@ def test_no_manifest_key_still_boots(tmp_path):
                 "slug": "foursquare",
                 "base_url": "https://places.atgeo.org/tiles/foursquare",
                 # No "manifest" key, no "tiles_dir" key.
-                "attribution": "https://example.com",
+                "source": "https://example.com",
+                "license": "https://example.com",
             },
         }
     }
@@ -518,16 +715,15 @@ def test_no_manifest_key_still_boots(tmp_path):
 
 def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):
     """create_app raises ValueError when base_url does not end with /<slug>."""
-    tiles_current = tmp_path / "foursquare" / "tiles" / "current"
-    tiles_current.mkdir(parents=True)
-    manifest_path = tiles_current / "manifest.duckdb"
-    _make_manifest_db(manifest_path)
+    tiles_root = tmp_path / "foursquare" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000")
+    tiles_current = _point_current(tiles_root, run_dir)
 
     mock_db = _make_mock_db(FSQ_COLLECTION)
     # slug is "foursquare" but base_url ends with "wrong-slug"
     tiles_config = _make_tile_config(
         tiles_dir=tiles_current,
-        manifest_path=manifest_path,
+        manifest_path=tiles_current / "manifest.duckdb",
         slug="foursquare",
         base_url="https://places.atgeo.org/tiles/wrong-slug",
     )

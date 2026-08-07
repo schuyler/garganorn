@@ -17,32 +17,40 @@ schedule that reality diverged from.
 
 No re-export needed; the run directories already exist on disk. Land before P6.
 
-- [ ] Tile URLs embed the run version; `getCoverage` returns stamped URLs
-- [ ] Tiles serve `Cache-Control: public, max-age=<ttl>, immutable`
-- [ ] `tile_dirs[slug]` roots at `{source}/tiles/` so prior runs stay servable
-- [ ] Keep the `{source}/tiles/` nesting — it keeps `places.parquet`,
+- [x] Tile URLs embed the run version; `getCoverage` returns stamped URLs
+- [x] Tiles serve `Cache-Control: public, max-age=604800, immutable`
+- [x] `tile_dirs[slug]` roots at `{source}/tiles/` so prior runs stay servable
+- [x] Keep the `{source}/tiles/` nesting — it keeps `places.parquet`,
       `containment/`, and `boundaries.duckdb` out of the web-served tree
-- [ ] Retention becomes time-based (`stages.py:1709-1719` currently keeps two
-      runs); assert `retention >= max-age` at startup
-- [ ] Rename `pipeline.output` from `tiles` to `data`, giving
-      `data/{source}/tiles/{stamp}/`. Requires moving `{garganorn_home}/tiles`
-      on the server, and touches `config.yaml.example`, the Ansible role
-      defaults and template, the README, and the spec's serving-layout section
+- [x] Retention stays count-based, keep-two-runs; no time-based retention and
+      no startup assertion
+- [x] Rename `pipeline.output` from `tiles` to `data`, giving
+      `data/{source}/tiles/{stamp}/`, in `config.yaml.example` and the README.
+      The spec's serving-layout section needs no edit — it writes the path as
+      `{output_dir}`
+- [ ] Move `{garganorn_home}/tiles` to `{garganorn_home}/data` on the server
+      and rebase the Ansible role defaults and template onto `data/`. The
+      top-level `boundaries:` key is unaffected by this move — it points at
+      `db/wof-boundaries.duckdb`, outside the tiles tree
 
 **Accept:** two consecutive runs produce disjoint URL sets; the prior run's
 URLs still resolve after a new build; a request resolving to `places.parquet`
-returns 404; startup fails when `max-age` exceeds the retention window.
+returns 404.
 
 ## P2 — Ansible and deploy
 
 Land before P6's rebuild, or the rebuild will not take effect.
 
 - [ ] Tile build task notifies `restart garganorn`
-- [ ] Confirm the handler fires under `--tags tiles` — handlers are tag-filtered
-      and may need `tags: always`
-- [ ] Build timer to 14400 in both `tiles.yml` and `host_vars/garganorn-1.yml`;
-      replace the "has never been timed on the box" comment with the measured
-      ~90 minutes
+- [ ] Ansible handlers are not tag-filtered; they fire whenever notified,
+      independent of `--tags`. No `tags: always` needed — the actual gap is
+      the previous bullet, the tile pipeline task's missing
+      `notify: restart garganorn`
+- [ ] Replace the "has never been timed on the box" comment on the `async`
+      kill-ceiling in `defaults/main.yml` (currently 43200) with the measured
+      ~90 minutes. The value is a kill-ceiling, not a build cadence, and must
+      not be lowered — doing so would kill planet-scale builds. There is no
+      such value in `host_vars/garganorn-1.yml`
 - [ ] Remove the Foursquare find/assert block and `garganorn_source_fsq`; check
       whether `garganorn_source_wof` is referenced before removing it
 - [ ] `config.yaml.j2` updated for P1's versioned `base_url` and P6's
@@ -55,7 +63,7 @@ Land before P6's rebuild, or the rebuild will not take effect.
 
 - [ ] `getRecord.json` output `uri`: `format: at-uri` → `format: uri`
 - [ ] Delete the `cid` parameter from `getRecord.json`
-- [ ] Declare `attribution` (required) and `importance` (optional) in
+- [ ] Declare `source`/`license` (required) and `importance` (optional) in
       `getRecord`'s output schema
 - [ ] `place.json`: add `$type` and `importance`
 - [ ] `place.json`: delete `same_as`, `relation.name`, and the `#ref` def
@@ -111,10 +119,10 @@ unmodified; no imports of removed symbols remain.
 
 Forces a full re-export. Land P1 and P2 first.
 
-- [ ] Remove the `atgeo` version key from tile payloads, `manifest.json`,
+- [x] Remove the `atgeo` version key from tile payloads, `manifest.json`,
       `manifest.duckdb` metadata, and the test assertions pinning the five-key
       envelope
-- [ ] Replace `attribution` with sibling keys `source` and `license`
+- [x] Replace `attribution` with sibling keys `source` and `license`
 - [ ] Both changes ship in one re-export
 
 ## P7 — Documentation
@@ -161,6 +169,10 @@ Forces a full re-export. Land P1 and P2 first.
       self-contained
 - [ ] Assess `compute-containment-oom-fix.md` — likely a completed-work
       artifact in the same category
+- [ ] Reconcile `atgeo-appview-sdk-design.md` §1.2 and §1.3 with the shipped
+      envelope and manifest: no `atgeo` version field or version-rejection
+      rule, `source`/`license` in place of `attribution`, a `generated_at`-only
+      manifest that is not served over HTTP, and stamped tile URLs
 
 `atgeo-appview-sdk-design.md` and `org.atgeo.tiles.service.json` stay, framed
 as aspirational.

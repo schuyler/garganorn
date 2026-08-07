@@ -444,7 +444,8 @@ class TestTileReaderUsesRkeyMatching:
             collection=collection,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            attribution="https://example.com/attribution",
+            source_url="https://example.com/source",
+            license_url="https://example.com/license",
         )
 
         # This FAILS because current implementation looks for record["uri"]
@@ -508,5 +509,6 @@ class TestTileEnvelopeHasCollectionField:
             f"collection field should be 'org.atgeo.places.foursquare', "
             f"got {envelope.get('collection')!r}"
         )
-        assert "attribution" in envelope, "envelope must still have 'attribution' field"
+        assert "source" in envelope, "envelope must still have 'source' field"
+        assert "license" in envelope, "envelope must still have 'license' field"
         assert "records" in envelope, "envelope must still have 'records' field"

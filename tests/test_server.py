@@ -30,6 +30,8 @@ SAMPLE_RECORD = {
 
 
 TEST_ATTRIBUTION_URL = "https://example.com/attribution"
+TEST_SOURCE_URL = "https://example.com/source"
+TEST_LICENSE_URL = "https://example.com/license"
 
 
 def _make_mock_db(collection=FSQ_COLLECTION, records=None, nearest_results=None):
@@ -37,6 +39,8 @@ def _make_mock_db(collection=FSQ_COLLECTION, records=None, nearest_results=None)
     mock = MagicMock()
     mock.collection = collection
     mock.attribution = TEST_ATTRIBUTION_URL
+    mock.source_url = TEST_SOURCE_URL
+    mock.license_url = TEST_LICENSE_URL
     mock.get_record.return_value = records[0] if records else None
     mock.nearest.return_value = nearest_results or []
     return mock
@@ -328,15 +332,19 @@ def test_get_record_boundaries_empty_containment():
     assert "relations" not in result["value"]
 
 
-def test_get_record_includes_attribution():
-    """get_record response includes attribution as a string at envelope level, not inside value."""
+def test_get_record_includes_source_and_license():
+    """get_record response includes source/license as strings at envelope level, not inside value."""
     record = dict(SAMPLE_RECORD)
     server = _make_server(records=[record])
     result = server.get_record({}, repo="places.atgeo.org", collection=FSQ_COLLECTION, rkey="fsq001")
-    assert "attribution" in result
-    assert isinstance(result["attribution"], str)
-    assert result["attribution"] == TEST_ATTRIBUTION_URL
-    assert "attribution" not in result["value"]
+    assert "source" in result
+    assert isinstance(result["source"], str)
+    assert result["source"] == TEST_SOURCE_URL
+    assert "source" not in result["value"]
+    assert "license" in result
+    assert isinstance(result["license"], str)
+    assert result["license"] == TEST_LICENSE_URL
+    assert "license" not in result["value"]
 
 
 def test_search_records_includes_attribution():
@@ -370,8 +378,8 @@ def test_get_record_lexicon_schema():
     assert result["uri"] == "at://did:web:places.atgeo.org/com.atproto.lexicon.schema/org.atgeo.place"
     assert result["value"]["id"] == "org.atgeo.place"
     assert result["value"]["lexicon"] == 1
-    # No attribution for lexicon schemas
-    assert "attribution" not in result
+    # No source for lexicon schemas
+    assert "source" not in result
     # No importance for lexicon schemas
     assert "importance" not in result
 
@@ -471,13 +479,15 @@ def test_list_records_no_cursor_on_last_page():
 
 
 TILE_COLLECTION = "org.atgeo.places.tile"
-TILE_ATTRIBUTION = "https://example.com/tile-attribution"
+TILE_SOURCE_URL = "https://example.com/tile-source"
+TILE_LICENSE_URL = "https://example.com/tile-license"
 
 
 class MockTileBackedCollection:
     def __init__(self, collection=TILE_COLLECTION, record=None):
         self.collection = collection
-        self.attribution = TILE_ATTRIBUTION
+        self.source_url = TILE_SOURCE_URL
+        self.license_url = TILE_LICENSE_URL
         self._record = record
 
     def get_record(self, repo, collection, rkey):
@@ -501,7 +511,8 @@ def test_get_record_tile_backed_response_shape():
     )
 
     assert result["uri"] == f"https://places.atgeo.org/{TILE_COLLECTION}/tile001"
-    assert result["attribution"] == TILE_ATTRIBUTION
+    assert result["source"] == TILE_SOURCE_URL
+    assert result["license"] == TILE_LICENSE_URL
     assert result["value"]["rkey"] == "tile001"
     assert "_query" in result
     assert result["importance"] == 5

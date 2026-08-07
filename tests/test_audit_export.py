@@ -3,7 +3,6 @@
 These tests verify that the export pipeline correctly handles:
 - Empty trigram lists (short queries, non-ASCII scripts)
 - OSM rkey format consistency between export and manifest
-- JSON escaping in attribution strings
 
 All tests MUST FAIL with the current code and PASS after fixes are implemented.
 """
@@ -144,7 +143,8 @@ class TestOSMRkeyFormat:
         # Write mock tile file with reformatted rkeys (as export SQL does)
         tile_data = {
             "collection": "org.atgeo.places.osm",
-            "attribution": "https://www.openstreetmap.org/copyright",
+            "source": "https://www.openstreetmap.org/",
+            "license": "https://opendatacommons.org/licenses/odbl/1-0/",
             "records": [
                 {
                     "$type": "org.atgeo.place",
@@ -226,7 +226,8 @@ class TestOSMRkeyFormat:
             collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
-            attribution="https://www.openstreetmap.org/copyright"
+            source_url="https://www.openstreetmap.org/",
+            license_url="https://opendatacommons.org/licenses/odbl/1-0/"
         )
 
         # Try to get record with reformatted rkey (as tile has it)
@@ -249,7 +250,8 @@ class TestOSMRkeyFormat:
             collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
-            attribution="https://www.openstreetmap.org/copyright"
+            source_url="https://www.openstreetmap.org/",
+            license_url="https://opendatacommons.org/licenses/odbl/1-0/"
         )
 
         result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "way:67890")
@@ -269,7 +271,8 @@ class TestOSMRkeyFormat:
             collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
-            attribution="https://www.openstreetmap.org/copyright"
+            source_url="https://www.openstreetmap.org/",
+            license_url="https://opendatacommons.org/licenses/odbl/1-0/"
         )
 
         result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "relation:11111")
@@ -303,120 +306,3 @@ class TestOSMRkeyFormat:
         assert "n12345" not in rkeys_in_manifest, "Manifest should not contain old format 'n12345'"
         assert "w67890" not in rkeys_in_manifest, "Manifest should not contain old format 'w67890'"
         assert "r11111" not in rkeys_in_manifest, "Manifest should not contain old format 'r11111'"
-
-
-class TestAttributionJSONEscaping:
-    """Tests for EXPORT-14: Attribution string not JSON-escaped.
-
-    Bug: Attribution string inserted into JSON via f-string in export_tiles().
-    Quotes/backslashes break JSON.
-
-    The export_tiles function in stages.py builds payload like:
-    payload = f'{{"collection":"{source_cls.collection}","attribution":"{source_cls.attribution}","records":[{joined}]}}'
-
-    If source_cls.attribution contains quotes or backslashes, the JSON becomes invalid.
-
-    Fix spec: Build payload as dict and use json.dumps(), or properly escape
-    the attribution string.
-    """
-
-    def test_foursquare_attribution_produces_valid_json(self):
-        """Test that Foursquare attribution produces valid JSON.
-
-        Current Foursquare attribution: "© 2024 Foursquare" - no special chars.
-        This test documents current working behavior.
-        """
-        from garganorn.database import FoursquareOSP
-
-        attribution = FoursquareOSP.attribution
-
-        # Construct payload as export_tiles does
-        payload = f'{{"collection":"{FoursquareOSP.collection}","attribution":"{attribution}","records":[]}}'
-
-        # Should parse without error
-        data = json.loads(payload)
-        assert data["collection"] == FoursquareOSP.collection
-        assert data["attribution"] == attribution
-
-    def test_overture_attribution_produces_valid_json(self):
-        """Test that Overture attribution produces valid JSON.
-
-        Current Overture attribution: "© 2024 Overture Maps" - no special chars.
-        This test documents current working behavior.
-        """
-        from garganorn.database import OverturePlaces
-
-        attribution = OverturePlaces.attribution
-
-        payload = f'{{"collection":"{OverturePlaces.collection}","attribution":"{attribution}","records":[]}}'
-
-        data = json.loads(payload)
-        assert data["collection"] == OverturePlaces.collection
-        assert data["attribution"] == attribution
-
-    def test_osm_attribution_produces_valid_json(self):
-        """Test that OSM attribution produces valid JSON.
-
-        Current OSM attribution: "https://www.openstreetmap.org/copyright"
-        Contains forward slashes which are OK in JSON.
-        This test documents current working behavior.
-        """
-        from garganorn.database import OpenStreetMap
-
-        attribution = OpenStreetMap.attribution
-
-        payload = f'{{"collection":"{OpenStreetMap.collection}","attribution":"{attribution}","records":[]}}'
-
-        data = json.loads(payload)
-        assert data["collection"] == OpenStreetMap.collection
-        assert data["attribution"] == attribution
-
-    def test_problematic_attribution_with_quotes(self):
-        """Test that demonstrates the bug with quotes in attribution.
-
-        If attribution were changed to include quotes, current code would fail.
-        This test shows what happens with a problematic attribution string.
-        """
-        # Simulate a problematic attribution (hypothetical future change)
-        attribution = '© 2024 "The Company" & Partners'
-        collection = "org.atgeo.places.test"
-
-        # This is how export_tiles currently builds the payload
-        payload = f'{{"collection":"{collection}","attribution":"{attribution}","records":[]}}'
-
-        # Current behavior: This produces invalid JSON
-        # Expected behavior (after fix): This should produce valid JSON
-        with pytest.raises(json.JSONDecodeError):
-            # This will fail because the quotes aren't escaped
-            data = json.loads(payload)
-
-    def test_problematic_attribution_with_backslashes(self):
-        """Test that demonstrates the bug with backslashes in attribution.
-
-        Backslashes in attribution strings break JSON when inserted via f-string.
-        """
-        attribution = 'Data from C:\\Users\\Test\\Server'
-        collection = "org.atgeo.places.test"
-
-        # Current construction method
-        payload = f'{{"collection":"{collection}","attribution":"{attribution}","records":[]}}'
-
-        # Current behavior: Invalid JSON (backslashes not properly escaped)
-        # Expected behavior: Valid JSON
-        with pytest.raises(json.JSONDecodeError):
-            data = json.loads(payload)
-
-    def test_problematic_attribution_with_newlines(self):
-        """Test that demonstrates the bug with newlines in attribution.
-
-        Newlines and other control characters must be escaped in JSON.
-        """
-        attribution = '© 2024 Data\nLine 2 of attribution'
-        collection = "org.atgeo.places.test"
-
-        payload = f'{{"collection":"{collection}","attribution":"{attribution}","records":[]}}'
-
-        # Current behavior: Invalid JSON (newlines not escaped)
-        # Expected behavior: Valid JSON with \n escape sequence
-        with pytest.raises(json.JSONDecodeError):
-            data = json.loads(payload)

@@ -63,10 +63,7 @@ class TestRunPipeline:
         )
         with open(manifest_path) as fh:
             manifest = json.load(fh)
-        assert "source" in manifest, "manifest.json missing 'source'"
-        assert manifest["source"] == "foursquare", (
-            f"manifest source must be 'fsq'; got {manifest['source']!r}"
-        )
+        assert "generated_at" in manifest, "manifest.json missing 'generated_at'"
 
         # No leftover .duckdb temp file (manifest.duckdb is expected)
         duckdb_files = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
@@ -276,16 +273,10 @@ class TestRunPipeline:
 class TestWriteManifest:
     """Tests for garganorn.quadtree.write_manifest().
 
-    Migrated to the Phase 2b envelope (pipeline-implementation-decisions.md
-    "OQ-P2-1 — record envelope adoption"):
-    write_manifest(manifest, output_dir, source, *, generated_at) -- generated_at
-    is a required keyword-only arg (no default) -- and manifest.json's field set
-    is exactly {atgeo, source, collection, attribution, generated_at,
-    tile_url_template, cache, quadkeys}. These tests currently fail because the
-    production write_manifest() (garganorn/stages.py:513) still has the old
-    3-positional-arg signature and old {source, generated_at, quadkeys} shape;
-    that IS the RED signal for this feature. Fixed generated_at value matches
-    the convention used by tests/test_envelope.py::TestBuildManifest.
+    write_manifest(output_dir, *, generated_at) -- generated_at is a required
+    keyword-only arg (no default) -- and manifest.json's field set is exactly
+    {generated_at} (per the envelope decisions above). Fixed generated_at
+    value matches the convention used elsewhere in this suite.
     """
 
     _GENERATED_AT = "2026-07-09T18:00:00Z"
@@ -301,10 +292,7 @@ class TestWriteManifest:
         except (ImportError, ModuleNotFoundError):
             pytest.skip("garganorn.quadtree not available")
 
-        write_manifest(
-            {"023130": 42, "023131": 7}, str(tmp_path), "foursquare",
-            generated_at=self._GENERATED_AT,
-        )
+        write_manifest(str(tmp_path), generated_at=self._GENERATED_AT)
         assert (tmp_path / "manifest.json").exists(), "manifest.json not found"
 
     def test_manifest_structure(self, tmp_path):
@@ -316,59 +304,17 @@ class TestWriteManifest:
 
         out_dir = tmp_path / "manifest_struct"
         out_dir.mkdir()
-        write_manifest(
-            {"023130": 42}, str(out_dir), "foursquare",
-            generated_at=self._GENERATED_AT,
-        )
+        write_manifest(str(out_dir), generated_at=self._GENERATED_AT)
         with open(out_dir / "manifest.json") as fh:
             manifest = json.load(fh)
-        expected_keys = {
-            "atgeo", "source", "collection", "attribution", "generated_at",
-            "tile_url_template", "cache", "quadkeys",
-        }
+        expected_keys = {"generated_at"}
         assert set(manifest.keys()) == expected_keys, (
             f"manifest.json must match the manifest field set exactly; "
             f"got {sorted(manifest.keys())}, expected {sorted(expected_keys)}"
         )
-        assert isinstance(manifest["quadkeys"], list), "quadkeys must be a list"
-        assert manifest["source"] == "foursquare", (
-            f"source must be 'foursquare'; got {manifest['source']!r}"
-        )
-        assert manifest["atgeo"] == 1, f"atgeo must be 1; got {manifest['atgeo']!r}"
         assert manifest["generated_at"] == self._GENERATED_AT, (
             f"generated_at must be the passed-in run timestamp; "
             f"got {manifest['generated_at']!r}"
-        )
-        assert manifest["tile_url_template"] == "{base}/{qk6}/{qk}.json.gz", (
-            f"tile_url_template must be the manifest literal (per the envelope decisions above); "
-            f"got {manifest.get('tile_url_template')!r}"
-        )
-        assert manifest["cache"] == {"max_age": 86400, "immutable": False}, (
-            f"cache must be {{max_age: 86400, immutable: false}} (per the envelope decisions above, protocol "
-            f"change P2); got {manifest.get('cache')!r}"
-        )
-
-    def test_quadkeys_sorted(self, tmp_path):
-        """write_manifest must write quadkeys in sorted order regardless of input order."""
-        try:
-            from garganorn.quadtree import write_manifest
-        except (ImportError, ModuleNotFoundError):
-            pytest.skip("garganorn.quadtree not available")
-
-        out_dir = tmp_path / "manifest_sorted"
-        out_dir.mkdir()
-        # Pass unsorted dict
-        write_manifest(
-            {"023133": 5, "023130": 42, "023132": 17, "023131": 7},
-            str(out_dir),
-            "foursquare",
-            generated_at=self._GENERATED_AT,
-        )
-        with open(out_dir / "manifest.json") as fh:
-            manifest = json.load(fh)
-        qkeys = manifest["quadkeys"]
-        assert qkeys == sorted(qkeys), (
-            f"quadkeys must be sorted; got {qkeys}"
         )
 
 

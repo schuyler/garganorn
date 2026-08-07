@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 from lexrpc.base import XrpcError
 
+from garganorn.database import Database
 from garganorn.server import Server
 
 FSQ_COLLECTION = "org.atgeo.places.foursquare"
@@ -20,9 +21,11 @@ SAMPLE_TILES = [
 
 
 def _make_mock_db(collection=FSQ_COLLECTION):
-    mock = MagicMock()
+    mock = MagicMock(spec=Database)
     mock.collection = collection
     mock.attribution = "https://example.com/attribution"
+    mock.source_url = "https://example.com/source"
+    mock.license_url = "https://example.com/license"
     mock.get_record.return_value = None
     mock.nearest.return_value = []
     return mock

@@ -147,7 +147,7 @@ def _tile_value_diffs(qk, ref_text, cap_text):
         if ref_recs[rkey] != cap_recs[rkey]:
             diffs.append(f"tile {qk} rkey {rkey}: record value differs")
 
-    # Envelope-level differences (attribution, collection, etc.).
+    # Envelope-level differences (collection, source, license, etc.).
     ref_env = {k: v for k, v in ref_obj.items() if k != "records"}
     cap_env = {k: v for k, v in cap_obj.items() if k != "records"}
     if ref_env != cap_env:

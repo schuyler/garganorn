@@ -11,29 +11,34 @@ tiles:
   collections:
     org.atgeo.places.foursquare:
       slug: foursquare
-      manifest: tiles/foursquare/tiles/current/manifest.duckdb
-      tiles_dir: tiles/foursquare/tiles/current
+      manifest: data/foursquare/tiles/current/manifest.duckdb
+      # Presence enables tile-backed getRecord for this collection; the value is
+      # ignored, since the run directory is derived from `manifest`.
+      tiles_dir: data/foursquare/tiles/current
       base_url: https://places.atgeo.org/tiles/foursquare
-      attribution: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
-      cache_ttl: 86400
+      source: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
+      license: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
     org.atgeo.places.overture.place:
       slug: overture-place
-      manifest: tiles/overture_place/tiles/current/manifest.duckdb
-      tiles_dir: tiles/overture_place/tiles/current
+      manifest: data/overture_place/tiles/current/manifest.duckdb
+      tiles_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
-      attribution: https://docs.overturemaps.org/attribution/
-      cache_ttl: 86400
+      source: https://overturemaps.org/
+      license: https://docs.overturemaps.org/attribution/
     org.atgeo.places.osm:
       slug: osm
-      manifest: tiles/osm/tiles/current/manifest.duckdb
-      tiles_dir: tiles/osm/tiles/current
+      manifest: data/osm/tiles/current/manifest.duckdb
+      tiles_dir: data/osm/tiles/current
       base_url: https://places.atgeo.org/tiles/osm
-      attribution: https://www.openstreetmap.org/copyright
-      cache_ttl: 86400
+      source: https://www.openstreetmap.org/
+      license: https://opendatacommons.org/licenses/odbl/1-0/
   max_coverage_tiles: 50
 
+# Two runs are retained and tiles serve max-age=604800, so a build interval
+# under about 3.5 days would delete a run while clients still hold its URLs
+# as fresh.
 pipeline:
-  output: tiles
+  output: data
   memory_limit: 48GB
   temp_directory: /tmp/duckdb
   max_temp_directory_size: 250GB

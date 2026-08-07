@@ -10,16 +10,12 @@ tests/test_levels.py for garganorn.levels.
 Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.md
 "OQ-P2-1 — record envelope adoption") items 6 and 9,
 plus the module-level contract from those same decisions:
-  - ATGEO_VERSION == 1
   - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}"
   - wrap_record(uri, record_json) -> '{"uri":...,"cid":null,"value":...}' string,
     cid is literally null, never computed
-  - build_tile_payload(collection, attribution, generated_at, wrapped_records)
-    -> bytes; top-level == exactly {atgeo, collection, attribution,
-    generated_at, records}
-  - build_manifest(source, collection, attribution, generated_at, quadkeys)
-    -> dict matching the manifest field set exactly, including cache.immutable=false
-    (protocol change P2)
+  - build_tile_payload(collection, source_url, license_url, generated_at,
+    wrapped_records) -> bytes; top-level == exactly {collection, source,
+    license, generated_at, records}
 
 Item 7 (determinism), item 8 (timestamp coherence), and item 10 (server
 round-trip) are covered end-to-end against the real stage_export/tile_reader
@@ -47,19 +43,6 @@ def _check_envelope():
             f"garganorn.envelope not importable: {_ENVELOPE_ERROR}",
             pytrace=False,
         )
-
-
-# ---------------------------------------------------------------------------
-# ATGEO_VERSION (envelope decisions, see module docstring)
-# ---------------------------------------------------------------------------
-
-class TestAtgeoVersion:
-    def test_atgeo_version_is_1(self):
-        """ATGEO_VERSION is the integer 1, the single source of truth for both
-        the tile payload and the manifest (per the envelope decisions)."""
-        _check_envelope()
-        assert envelope.ATGEO_VERSION == 1
-        assert isinstance(envelope.ATGEO_VERSION, int)
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +178,8 @@ class TestWrapRecord:
 
 class TestBuildTilePayload:
     _COLLECTION = "org.atgeo.places.foursquare"
-    _ATTRIBUTION = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
+    _SOURCE_URL = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
+    _LICENSE_URL = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
     _GENERATED_AT = "2026-07-09T18:00:00Z"
 
     def _wrapped(self, rkey="fsq001", name="Test"):
@@ -204,43 +188,36 @@ class TestBuildTilePayload:
         return envelope.wrap_record(uri, record_json) if envelope else None
 
     def test_build_tile_payload_top_level_keys_exact(self):
-        """Tile top-level == exactly {atgeo, collection, attribution,
+        """Tile top-level == exactly {collection, source, license,
         generated_at, records} (§6 item 6; per the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT,
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
             [self._wrapped()],
         )
         assert isinstance(payload, bytes), f"build_tile_payload must return bytes; got {type(payload)}"
         parsed = json.loads(payload)
-        assert set(parsed.keys()) == {"atgeo", "collection", "attribution", "generated_at", "records"}, (
-            f"tile top-level must be exactly {{atgeo, collection, attribution, generated_at, records}}; "
+        assert set(parsed.keys()) == {"collection", "source", "license", "generated_at", "records"}, (
+            f"tile top-level must be exactly {{collection, source, license, generated_at, records}}; "
             f"got {list(parsed)}"
         )
-
-    def test_build_tile_payload_atgeo_is_1(self):
-        _check_envelope()
-        payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, [self._wrapped()],
-        )
-        parsed = json.loads(payload)
-        assert parsed["atgeo"] == 1
 
     def test_build_tile_payload_fields_match_inputs(self):
         _check_envelope()
         payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, [self._wrapped()],
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT, [self._wrapped()],
         )
         parsed = json.loads(payload)
         assert parsed["collection"] == self._COLLECTION
-        assert parsed["attribution"] == self._ATTRIBUTION
+        assert parsed["source"] == self._SOURCE_URL
+        assert parsed["license"] == self._LICENSE_URL
         assert parsed["generated_at"] == self._GENERATED_AT
 
     def test_build_tile_payload_records_each_exactly_three_keys(self):
         """Each record == exactly {uri, cid, value} with cid is None (§6 item 6)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT,
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
             [self._wrapped("fsq001", "A"), self._wrapped("fsq002", "B")],
         )
         parsed = json.loads(payload)
@@ -255,7 +232,7 @@ class TestBuildTilePayload:
         """uri's trailing rkey segment matches value.rkey for sampled records (§6 item 6)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT,
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
             [self._wrapped("fsq001", "A")],
         )
         parsed = json.loads(payload)
@@ -270,7 +247,8 @@ class TestBuildTilePayload:
         record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "node:12345", "name": "Cafe"})
         wrapped = envelope.wrap_record(uri, record_json)
         payload = envelope.build_tile_payload(
-            collection, "https://www.openstreetmap.org/copyright", self._GENERATED_AT, [wrapped],
+            collection, "https://www.openstreetmap.org/",
+            "https://opendatacommons.org/licenses/odbl/1-0/", self._GENERATED_AT, [wrapped],
         )
         parsed = json.loads(payload)
         rec = parsed["records"][0]
@@ -281,113 +259,18 @@ class TestBuildTilePayload:
         """A tile with zero records still has the full envelope with records == []."""
         _check_envelope()
         payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, [],
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT, [],
         )
         parsed = json.loads(payload)
         assert parsed["records"] == []
-        assert parsed["atgeo"] == 1
 
     def test_build_tile_payload_gzip_roundtrip(self):
         """Payload bytes gzip-compress and decompress back to the same JSON
         (sanity check for the flush_tile integration point, per the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
-            self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, [self._wrapped()],
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT, [self._wrapped()],
         )
         compressed = gzip.compress(payload, mtime=0)
         decompressed = gzip.decompress(compressed)
         assert json.loads(decompressed) == json.loads(payload)
-
-
-# ---------------------------------------------------------------------------
-# build_manifest() (envelope decisions, see module docstring)
-# ---------------------------------------------------------------------------
-
-class TestBuildManifest:
-    _SOURCE = "foursquare"
-    _COLLECTION = "org.atgeo.places.foursquare"
-    _ATTRIBUTION = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
-    _GENERATED_AT = "2026-07-09T18:00:00Z"
-    _QUADKEYS = ["023130", "023131"]
-
-    def test_build_manifest_field_set_exact(self):
-        """manifest.json matches the manifest field set exactly (§6 item 9)."""
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION,
-            self._GENERATED_AT, self._QUADKEYS,
-        )
-        expected_keys = {
-            "atgeo", "source", "collection", "attribution", "generated_at",
-            "tile_url_template", "cache", "quadkeys",
-        }
-        assert set(manifest.keys()) == expected_keys, (
-            f"manifest must match the manifest field set exactly; got {sorted(manifest.keys())}, "
-            f"expected {sorted(expected_keys)}"
-        )
-
-    def test_build_manifest_atgeo_is_1(self):
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, self._QUADKEYS,
-        )
-        assert manifest["atgeo"] == 1
-
-    def test_build_manifest_scalar_fields(self):
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, self._QUADKEYS,
-        )
-        assert manifest["source"] == self._SOURCE
-        assert manifest["collection"] == self._COLLECTION
-        assert manifest["attribution"] == self._ATTRIBUTION
-        assert manifest["generated_at"] == self._GENERATED_AT
-
-    def test_build_manifest_quadkeys_sorted(self):
-        """quadkeys remain sorted (pre-existing invariant, per the envelope decisions)."""
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT,
-            ["023133", "023130", "023132"],
-        )
-        assert manifest["quadkeys"] == ["023130", "023132", "023133"]
-
-    def test_build_manifest_tile_url_template(self):
-        """tile_url_template ships in 2b, per the envelope decisions (protocol change, approved)."""
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, self._QUADKEYS,
-        )
-        assert manifest["tile_url_template"] == "{base}/{qk6}/{qk}.json.gz"
-
-    def test_build_manifest_cache_immutable_false(self):
-        """cache == {max_age: 86400, immutable: false} -- [protocol change P2],
-        APPROVED this session (per the envelope decisions). Deliberately contradicts §1.3's
-        example because the deployed slug route serves via `current`."""
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, self._QUADKEYS,
-        )
-        assert manifest["cache"] == {"max_age": 86400, "immutable": False}
-
-    def test_build_manifest_generated_at_rfc3339_z_form(self):
-        """generated_at is RFC 3339 UTC, seconds precision, Z suffix (per the envelope decisions).
-
-        build_manifest() does not reformat generated_at -- it is captured once
-        per run by the caller (stage_export) and passed through verbatim
-        (per the envelope decisions) -- so this asserts the passed-through value is preserved
-        exactly, not merely that a pre-formatted string round-trips.
-        """
-        _check_envelope()
-        manifest = envelope.build_manifest(
-            self._SOURCE, self._COLLECTION, self._ATTRIBUTION, self._GENERATED_AT, self._QUADKEYS,
-        )
-        assert manifest["generated_at"] == self._GENERATED_AT, (
-            f"generated_at must be preserved verbatim from the caller-supplied "
-            f"run timestamp; got {manifest.get('generated_at')!r}"
-        )
-        assert manifest["generated_at"].endswith("Z")
-        assert "+00:00" not in manifest["generated_at"]
-        assert "." not in manifest["generated_at"], (
-            "generated_at must be seconds precision, no microseconds"
-        )

@@ -112,7 +112,8 @@ class Server:
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
             "uri": self.record_uri(collection, record["rkey"]),
-            "attribution": source.attribution,
+            "source": source.source_url,
+            "license": source.license_url,
             **({"importance": record.pop("importance")} if "importance" in record else {}),
             "value": record,
             "_query": {

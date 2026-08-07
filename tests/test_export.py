@@ -464,8 +464,11 @@ class TestExportTiles:
         gz_files.sort()
         with _gzip.open(gz_files[0], "rt") as f:
             envelope = json.load(f)
-        assert "attribution" in envelope, (
-            f"Envelope missing 'attribution'; keys: {list(envelope)}"
+        assert "source" in envelope, (
+            f"Envelope missing 'source'; keys: {list(envelope)}"
+        )
+        assert "license" in envelope, (
+            f"Envelope missing 'license'; keys: {list(envelope)}"
         )
         assert "records" in envelope, (
             f"Envelope missing 'records'; keys: {list(envelope)}"
@@ -673,8 +676,8 @@ class TestExportTiles:
         for gz in gz_files:
             with gzip.open(gz, "rt") as f:
                 data = json.load(f)
-            assert data.get("atgeo") == 1, f"envelope must have atgeo == 1; got keys {list(data)}"
-            assert "attribution" in data
+            assert "source" in data
+            assert "license" in data
             assert "collection" in data
             assert "generated_at" in data
             assert "records" in data
@@ -686,8 +689,8 @@ class TestExportTiles:
                 assert rec["cid"] is None
                 assert "$type" in rec["value"]
 
-    def test_attribution_in_envelope(self, tmp_path):
-        """export_tiles writes attribution from SOURCES[source].attribution into the envelope."""
+    def test_source_and_license_in_envelope(self, tmp_path):
+        """export_tiles writes source/license from SOURCES[source] into the envelope."""
         from unittest.mock import MagicMock, patch
         from garganorn.quadtree import export_tiles, SOURCES
 
@@ -711,10 +714,15 @@ class TestExportTiles:
         with gzip.open(gz_files[0], "rt") as f:
             data = json.load(f)
 
-        assert "attribution" in data, f"Envelope missing 'attribution'; keys: {list(data)}"
-        assert data["attribution"] == SOURCES["foursquare"].attribution, (
-            f"attribution must be SOURCES['foursquare'].attribution = {SOURCES['foursquare'].attribution!r}; "
-            f"got {data['attribution']!r}"
+        assert "source" in data, f"Envelope missing 'source'; keys: {list(data)}"
+        assert data["source"] == SOURCES["foursquare"].source_url, (
+            f"source must be SOURCES['foursquare'].source_url = {SOURCES['foursquare'].source_url!r}; "
+            f"got {data['source']!r}"
+        )
+        assert "license" in data, f"Envelope missing 'license'; keys: {list(data)}"
+        assert data["license"] == SOURCES["foursquare"].license_url, (
+            f"license must be SOURCES['foursquare'].license_url = {SOURCES['foursquare'].license_url!r}; "
+            f"got {data['license']!r}"
         )
         assert "collection" in data, f"Envelope missing 'collection'; keys: {list(data)}"
         assert data["collection"] == SOURCES["foursquare"].collection, (
@@ -844,8 +852,11 @@ class TestExportTiles:
         for gz in gz_files:
             with _gzip.open(gz, "rt", encoding="utf-8") as f:
                 envelope = json.load(f)
-            assert "attribution" in envelope, (
-                f"Envelope missing 'attribution'; keys: {list(envelope)}"
+            assert "source" in envelope, (
+                f"Envelope missing 'source'; keys: {list(envelope)}"
+            )
+            assert "license" in envelope, (
+                f"Envelope missing 'license'; keys: {list(envelope)}"
             )
             assert "records" in envelope, (
                 f"Envelope missing 'records'; keys: {list(envelope)}"
@@ -2397,7 +2408,7 @@ class TestStageExportPhase2Body:
             run_dir = os.path.join(tiles_root, ts)
             os.makedirs(os.path.join(run_dir, "023130"))
             with open(os.path.join(run_dir, "manifest.json"), "w") as f:
-                json.dump({"source": "foursquare", "quadkeys": []}, f)
+                json.dump({}, f)
 
         t0 = time.monotonic()
 
