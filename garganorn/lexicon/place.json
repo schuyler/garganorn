@@ -61,7 +61,7 @@
                                 "community.lexicon.location.bbox"
                             ]
                         },
-                        "description": "The geographic location of the place, in any available representation."
+                        "description": "Geographic encodings of the place (geo, hthree, address, or bbox). Dataset-specific place identifiers (e.g. Foursquare fsq_place_id) belong in attributes, not as a location encoding."
                     },
                     "name": {
                         "type": "string",
@@ -77,7 +77,7 @@
                     },
                     "attributes": {
                         "type": "unknown",
-                        "description": "Additional, source-dependent attributes of the place."
+                        "description": "Source-dependent fields, including dataset ids such as Foursquare place ids. See collection docs for per-source keys. Upstream community.lexicon.location.fsq may be deprecated as a location type."
                     },
                     "published_at": {
                         "type": "string",
@@ -135,7 +135,7 @@
                             "community.lexicon.location.bbox"
                         ]
                     },
-                    "description": "The geographic location of the place, in any available representation."
+                    "description": "Geographic encodings of the place (geo, hthree, address, or bbox). Dataset-specific place identifiers (e.g. Foursquare fsq_place_id) belong in attributes, not as a location encoding."
                 },
                 "name": {
                     "type": "string",
@@ -143,7 +143,7 @@
                 },
                 "attributes": {
                     "type": "unknown",
-                    "description": "Additional attributes, included for durability or convenience."
+                    "description": "Source-dependent fields, including dataset ids such as Foursquare place ids; included for durability or convenience. See collection docs for per-source keys. Upstream community.lexicon.location.fsq may be deprecated as a location type."
                 },
                 "published_at": {
                     "type": "string",
