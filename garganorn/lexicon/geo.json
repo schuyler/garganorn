@@ -11,13 +11,16 @@
             ],
             "properties": {
                 "latitude": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "WGS84 latitude in decimal degrees as a string (AT Proto has no floats). South of the equator is negative. Do not use DMS."
                 },
                 "longitude": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "WGS84 longitude in decimal degrees as a string. West of the prime meridian is negative."
                 },
                 "altitude": {
-                    "type": "string"
+                    "type": "string",
+                    "description": "Optional altitude in meters above mean sea level, as a string."
                 },
                 "name": {
                     "type": "string",
