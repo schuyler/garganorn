@@ -152,13 +152,13 @@ Result:
       "$type": "org.atgeo.searchRecords#record",
       "distance_m": 0,
       "uri": "https://places.atgeo.org/org.atgeo.places.foursquare/4460d38bf964a5200a331fe3",
+      "attribution": "https://docs.foursquare.com/data-products/docs/access-fsq-os-places",
       "value": {
         "$type": "org.atgeo.place",
         "collection": "org.atgeo.places.foursquare",
         "rkey": "4460d38bf964a5200a331fe3",
-        "names": [
-          {"text": "Alamo Square", "priority": 0}
-        ],
+        "name": "Alamo Square",
+        "variants": [],
         "locations": [
           {
             "$type": "community.lexicon.location.geo",
@@ -214,9 +214,8 @@ Result:
     "$type": "org.atgeo.place",
     "collection": "org.atgeo.places.foursquare",
     "rkey": "4460d38bf964a5200a331fe3",
-    "names": [
-      {"text": "Alamo Square", "priority": 0}
-    ],
+    "name": "Alamo Square",
+    "variants": [],
     "locations": [
       {
         "$type": "community.lexicon.location.geo",
@@ -258,8 +257,11 @@ Result:
 
 * [`org.atgeo.place`](garganorn/lexicon/place.json)
 * [`org.atgeo.searchRecords`](garganorn/lexicon/searchRecords.json)
+* [`org.atgeo.getCoverage`](garganorn/lexicon/getCoverage.json)
 * [`community.lexicon.location.geo`](garganorn/lexicon/geo.json)
 * [`community.lexicon.location.address`](garganorn/lexicon/address.json)
+* [`community.lexicon.location.bbox`](garganorn/lexicon/bbox.json)
+* [`community.lexicon.location.hthree`](garganorn/lexicon/hthree.json)
 
 **NOTE**: These schemas are only *proposed*, and have not been adopted by the Lexicon community.
 
