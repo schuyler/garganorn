@@ -1,5 +1,11 @@
 # Garganorn Documentation Index
 
+## Start here
+
+| Document | Description |
+|----------|-------------|
+| [cleanup-punchlist.md](cleanup-punchlist.md) | What is left to bring code, lexicons, and docs into line with the project's decisions. Deleted when finished. |
+
 ## Pipeline
 
 | Document | Description |
