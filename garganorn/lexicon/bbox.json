@@ -27,8 +27,8 @@
                 "east": {
                     "type": "string",
                     "description": "The eastern longitude boundary of the bounding box."
-                }
-,                "name": {
+                },
+                "name": {
                     "type": "string",
                     "description": "The name of the bounding box, if any."
                 }
