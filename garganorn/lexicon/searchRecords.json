@@ -82,6 +82,10 @@
                 "attribution": { "type": "string", "format": "uri" },
                 "cid": { "type": "string", "format": "cid" },
                 "distance_m": { "type": "integer" },
+                "importance": {
+                    "type": "integer",
+                    "description": "Optional ranking signal used by gazetteer search and tile serving; higher is more important."
+                },
                 "value": {
                     "type": "union", 
                     "refs": [
