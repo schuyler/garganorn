@@ -1084,10 +1084,10 @@ class TestOvertureExportTiles:
 # "OQ-P2-2 — containment level vocabulary").
 _SF_WITHIN_JSON = json.dumps({
     "within": [
-        {"rkey": "org.atgeo.places.overture.division:div_continent_na"},
-        {"rkey": "org.atgeo.places.overture.division:div_country_us"},
-        {"rkey": "org.atgeo.places.overture.division:div_region_ca"},
-        {"rkey": "org.atgeo.places.overture.division:div_locality_sf"},
+        {"collection": "org.atgeo.places.overture.division", "rkey": "div_continent_na"},
+        {"collection": "org.atgeo.places.overture.division", "rkey": "div_country_us"},
+        {"collection": "org.atgeo.places.overture.division", "rkey": "div_region_ca"},
+        {"collection": "org.atgeo.places.overture.division", "rkey": "div_locality_sf"},
     ]
 })
 
@@ -1172,11 +1172,12 @@ class TestContainmentInExport:
             f"relations.within must have 4 entries (NA, US, CA, SF); got {len(within)}: {within}"
         )
         for entry in within:
+            assert "collection" in entry, f"within entry missing 'collection': {entry}"
             assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey must have division prefix; got {entry['rkey']!r}"
-            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+            assert entry["collection"] == "org.atgeo.places.overture.division", \
+                f"unexpected collection; got {entry['collection']!r}"
+            assert "name" not in entry, f"'name' key must not appear in collection+rkey output: {entry}"
+            assert "level" not in entry, f"'level' key must not appear in collection+rkey output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 2: FSQ export produces empty relations when containment table is empty
@@ -1270,11 +1271,12 @@ class TestContainmentInExport:
             f"relations.within must have 4 entries; got {len(within)}: {within}"
         )
         for entry in within:
+            assert "collection" in entry, f"within entry missing 'collection': {entry}"
             assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey must have division prefix; got {entry['rkey']!r}"
-            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+            assert entry["collection"] == "org.atgeo.places.overture.division", \
+                f"unexpected collection; got {entry['collection']!r}"
+            assert "name" not in entry, f"'name' key must not appear in collection+rkey output: {entry}"
+            assert "level" not in entry, f"'level' key must not appear in collection+rkey output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 4: OSM export includes relations.within when containment present
@@ -1339,11 +1341,12 @@ class TestContainmentInExport:
             f"relations.within must have 4 entries; got {len(within)}: {within}"
         )
         for entry in within:
+            assert "collection" in entry, f"within entry missing 'collection': {entry}"
             assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey must have division prefix; got {entry['rkey']!r}"
-            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+            assert entry["collection"] == "org.atgeo.places.overture.division", \
+                f"unexpected collection; got {entry['collection']!r}"
+            assert "name" not in entry, f"'name' key must not appear in collection+rkey output: {entry}"
+            assert "level" not in entry, f"'level' key must not appear in collection+rkey output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 5: compute_containment import
@@ -1460,11 +1463,12 @@ class TestContainmentInExport:
             assert isinstance(within, list), f"within must be a list for {place_id}; got {type(within)}"
             assert len(within) >= 1, f"SF coordinates should be contained by at least 1 boundary"
             for entry in within:
+                assert "collection" in entry, f"within entry missing 'collection': {entry}"
                 assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-                assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                    f"rkey must be collection-qualified; got {entry['rkey']!r}"
-                assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-                assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+                assert entry["collection"] == "org.atgeo.places.overture.division", \
+                    f"unexpected collection; got {entry['collection']!r}"
+                assert "name" not in entry, f"'name' key must not appear in collection+rkey output: {entry}"
+                assert "level" not in entry, f"'level' key must not appear in collection+rkey output: {entry}"
 
     # ------------------------------------------------------------------
     # Test 6b: compute_containment bbox pre-filter regression guard
@@ -1566,10 +1570,10 @@ class TestContainmentInExport:
         # If a bbox pre-filter incorrectly excludes any of these 4 boundaries,
         # this assertion will catch it.
         expected_rkeys = {
-            "org.atgeo.places.overture.division:div_continent_na",
-            "org.atgeo.places.overture.division:div_country_us",
-            "org.atgeo.places.overture.division:div_region_ca",
-            "org.atgeo.places.overture.division:div_locality_sf",
+            "div_continent_na",
+            "div_country_us",
+            "div_region_ca",
+            "div_locality_sf",
         }
         actual_rkeys = {entry["rkey"] for entry in within}
         assert actual_rkeys == expected_rkeys, (
@@ -1878,10 +1882,10 @@ class TestContainmentInExport:
         in_within = json.loads(in_rows[0][0])["within"]
         in_rkeys = {e["rkey"] for e in in_within}
         expected_in_rkeys = {
-            "org.atgeo.places.overture.division:div_continent_na",
-            "org.atgeo.places.overture.division:div_country_us",
-            "org.atgeo.places.overture.division:div_region_ca",
-            "org.atgeo.places.overture.division:div_locality_sf",
+            "div_continent_na",
+            "div_country_us",
+            "div_region_ca",
+            "div_locality_sf",
         }
         assert in_rkeys == expected_in_rkeys, (
             f"edge_in should be in 4 boundaries; got {sorted(in_rkeys)}"
@@ -1897,9 +1901,9 @@ class TestContainmentInExport:
         out_within = json.loads(out_rows[0][0])["within"]
         out_rkeys = {e["rkey"] for e in out_within}
         expected_out_rkeys = {
-            "org.atgeo.places.overture.division:div_continent_na",
-            "org.atgeo.places.overture.division:div_country_us",
-            "org.atgeo.places.overture.division:div_region_ca",
+            "div_continent_na",
+            "div_country_us",
+            "div_region_ca",
         }
         assert out_rkeys == expected_out_rkeys, (
             f"edge_out should be in 3 boundaries (not SF); got {sorted(out_rkeys)}"

@@ -98,32 +98,33 @@ class TestBoundaryLookupCollection:
 
 class TestDivisionContainment:
     def test_containment_returns_rkey_only(self, division_lookup):
-        """containment() dicts must have 'rkey' only -- no 'name', no 'level'."""
+        """containment() dicts must have collection+rkey only -- no 'name', no 'level'."""
         result = division_lookup.containment(37.7749, -122.4194)
         assert len(result) > 0, "Expected at least one containing boundary"
         for entry in result:
+            assert "collection" in entry
             assert "rkey" in entry
             assert "name" not in entry, f"'name' key must not appear in containment output: {entry}"
             assert "level" not in entry, f"'level' key must not appear in containment output: {entry}"
 
     def test_containment_rkeys_have_division_prefix(self, division_lookup):
-        """Each rkey must start with 'org.atgeo.places.overture.division:'."""
+        """Each entry must have collection org.atgeo.places.overture.division."""
         result = division_lookup.containment(37.7749, -122.4194)
         assert len(result) > 0
         for entry in result:
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey missing division prefix: {entry['rkey']}"
+            assert entry["collection"] == "org.atgeo.places.overture.division", \
+                f"unexpected collection: {entry['collection']}"
 
     def test_containment_returns_expected_ids(self, division_lookup):
         """Point in SF should match continent, country, region, and locality."""
         result = division_lookup.containment(37.7749, -122.4194)
         rkeys = [r["rkey"] for r in result]
-        assert "org.atgeo.places.overture.division:div_continent_na" in rkeys
-        assert "org.atgeo.places.overture.division:div_country_us" in rkeys
-        assert "org.atgeo.places.overture.division:div_region_ca" in rkeys
-        assert "org.atgeo.places.overture.division:div_locality_sf" in rkeys
+        assert "div_continent_na" in rkeys
+        assert "div_country_us" in rkeys
+        assert "div_region_ca" in rkeys
+        assert "div_locality_sf" in rkeys
         # Manhattan should not be included
-        assert "org.atgeo.places.overture.division:div_borough_manhattan" not in rkeys
+        assert "div_borough_manhattan" not in rkeys
 
 
 # ---------------------------------------------------------------------------

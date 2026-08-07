@@ -305,7 +305,7 @@ def compute_containment(
         lon_expr: SQL expression for the longitude column in places parquet.
         lat_expr: SQL expression for the latitude column in places parquet.
         containment_dir: Directory to write containment parquet files and _meta.json.
-        collection_prefix: NSID prefix for rkey values.
+        collection_prefix: Collection NSID emitted alongside bare rkeys.
         covering_dir: Directory containing covering parquet files (from stage_covering).
         memory_limit: DuckDB memory_limit string.
         temp_directory: DuckDB temp_directory for spill (optional).

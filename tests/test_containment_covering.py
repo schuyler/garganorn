@@ -181,7 +181,7 @@ class TestContainmentBehaviorPorts:
         )
 
     def test_rkey_only_relations_sf_point(self, simple_boundaries_db, tmp_path):
-        """SF point: place_containment relations have only 'rkey' keys, division prefix."""
+        """SF point: place_containment relations have collection+rkey keys."""
         places_parquet = _make_parquet_places(
             tmp_path, [("p_sf", -122.4194, 37.7749)], "rkeys_places.parquet"
         )
@@ -215,11 +215,11 @@ class TestContainmentBehaviorPorts:
             within = data.get("within", [])
             assert len(within) > 0
             for entry in within:
-                assert set(entry.keys()) == {"rkey"}, (
-                    f"Relation must have only 'rkey', got {set(entry.keys())}: {entry}"
+                assert set(entry.keys()) == {"collection", "rkey"}, (
+                    f"Relation must have only 'collection' and 'rkey', got {set(entry.keys())}: {entry}"
                 )
-                assert entry["rkey"].startswith(_COLLECTION_PREFIX + ":"), (
-                    f"rkey missing division prefix: {entry['rkey']}"
+                assert entry["collection"] == _COLLECTION_PREFIX, (
+                    f"unexpected collection: {entry['collection']}"
                 )
 
     def test_sf_point_expected_boundary_ids(self, simple_boundaries_db, tmp_path):
@@ -255,11 +255,11 @@ class TestContainmentBehaviorPorts:
             for _, rel_json in rows
             for e in json.loads(rel_json)["within"]
         }
-        assert f"{_COLLECTION_PREFIX}:div_continent_na" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_country_us" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_region_ca" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_locality_sf" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_borough_manhattan" not in rkeys
+        assert "div_continent_na" in rkeys
+        assert "div_country_us" in rkeys
+        assert "div_region_ca" in rkeys
+        assert "div_locality_sf" in rkeys
+        assert "div_borough_manhattan" not in rkeys
 
 
 # ---------------------------------------------------------------------------
@@ -323,10 +323,10 @@ class TestContainmentOrdering:
             assert len(within) > 1, "SF point should be in multiple boundaries"
             rkeys = [e["rkey"] for e in within]
             continent_idx = next(
-                (i for i, r in enumerate(rkeys) if r.endswith(":div_continent_na")), None
+                (i for i, r in enumerate(rkeys) if r == "div_continent_na"), None
             )
             locality_idx = next(
-                (i for i, r in enumerate(rkeys) if r.endswith(":div_locality_sf")), None
+                (i for i, r in enumerate(rkeys) if r == "div_locality_sf"), None
             )
             assert continent_idx is not None, "div_continent_na not in within"
             assert locality_idx is not None, "div_locality_sf not in within"
@@ -413,8 +413,8 @@ class TestContainmentOrdering:
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
             rkeys = [e["rkey"] for e in within]
-            named_idx = next((i for i, r in enumerate(rkeys) if r.endswith(":r_named")), None)
-            null_idx = next((i for i, r in enumerate(rkeys) if r.endswith(":r_null")), None)
+            named_idx = next((i for i, r in enumerate(rkeys) if r == "r_named"), None)
+            null_idx = next((i for i, r in enumerate(rkeys) if r == "r_null"), None)
             if named_idx is not None and null_idx is not None:
                 assert named_idx < null_idx, (
                     "Non-NULL level boundary should appear before NULL level boundary in within"
@@ -531,7 +531,7 @@ class TestBruteForceOracle:
                 [parquet_files],
             ).fetchall():
                 for entry in json.loads(rel_json)["within"]:
-                    boundary_id = entry["rkey"].split(":", 1)[1]
+                    boundary_id = entry["rkey"]
                     cc_pairs.add((place_id, boundary_id))
 
         # brute-force oracle via ST_Contains
@@ -1238,8 +1238,8 @@ class TestAntimeridianEdgeArm:
                 for e in json.loads(rel_json)["within"]:
                     rkeys.add(e["rkey"])
             check_con.close()
-        ami_rkey = f"{_COLLECTION_PREFIX}:ami_boundary"
-        gap_rkey = f"{_COLLECTION_PREFIX}:gap_boundary"
+        ami_rkey = "ami_boundary"
+        gap_rkey = "gap_boundary"
         assert ami_rkey not in rkeys, (
             f"Gap place (lon=0) must NOT appear under ami_boundary (antimeridian CASE "
             f"must exclude it); rkeys found: {rkeys}"
@@ -1303,8 +1303,8 @@ class TestAntimeridianEdgeArm:
             force=True,
         )
 
-        ami_rkey = f"{_COLLECTION_PREFIX}:ami_boundary"
-        gap_rkey = f"{_COLLECTION_PREFIX}:gap_boundary"
+        ami_rkey = "ami_boundary"
+        gap_rkey = "gap_boundary"
 
         parquet_files = [
             os.path.join(containment_dir, f)

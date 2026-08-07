@@ -14,7 +14,7 @@ class BoundaryLookup:
     the division export schema.
     """
 
-    # Collection used to qualify rkeys in containment output.
+    # Collection NSID emitted alongside bare rkeys in containment output.
     # Matches the overture_division pipeline collection name.
     COLLECTION = "org.atgeo.places.overture.division"
 
@@ -38,12 +38,13 @@ class BoundaryLookup:
         Returns a list of dicts ordered by level ascending (most general
         first, most specific last), ties broken by id ascending for
         determinism, each containing:
-            rkey: collection-qualified rkey (org.atgeo.places.overture.division:<id>)
+            collection: NSID of the related place's collection
+            rkey: record key within that collection (bare id, not qualified)
 
-        Only rkey is returned. Name, level, and other division metadata are
-        available from the division tile for that rkey; clients resolve them
-        from the admin tile layer rather than duplicating them in every
-        containment relation.
+        Only collection and rkey are returned. Name, level, and other division
+        metadata are available from the division tile for that rkey; clients
+        resolve them from the admin tile layer rather than duplicating them in
+        every containment relation.
         """
         conn = self.connect()
         rows = conn.execute("""
@@ -51,7 +52,7 @@ class BoundaryLookup:
             WHERE ST_Contains(geometry, ST_Point($lon, $lat))
             ORDER BY level ASC, id ASC
         """, {"lat": lat, "lon": lon}).fetchall()
-        return [{"rkey": f"{self.COLLECTION}:{r[0]}"} for r in rows]
+        return [{"collection": self.COLLECTION, "rkey": r[0]} for r in rows]
 
     def close(self):
         if self.conn:
