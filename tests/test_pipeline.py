@@ -428,10 +428,10 @@ class TestQuadtreeMainCLI:
         max_per_tile = ca.kwargs.get("max_per_tile") if "max_per_tile" in ca.kwargs else (ca.args[5] if len(ca.args) > 5 else None)
 
         assert memory_limit == "16GB", (
-            f"Config tiles.memory_limit '16GB' must be used when CLI flag absent; got {memory_limit!r}"
+            f"Config pipeline.memory_limit '16GB' must be used when CLI flag absent; got {memory_limit!r}"
         )
         assert max_per_tile == 250, (
-            f"Config tiles.max_per_tile 250 must be used when CLI flag absent; got {max_per_tile!r}"
+            f"Config pipeline.max_per_tile 250 must be used when CLI flag absent; got {max_per_tile!r}"
         )
 
     # ------------------------------------------------------------------

@@ -41,7 +41,7 @@ produces the boundary data the others' containment reads).
   between artifact rename and meta write reads as stale). Editing a stage's
   SQL text does **not** invalidate its artifact — SQL is neither an input
   nor hashed; `--force` is the remedy after SQL edits.
-- **`--force` invalidates by deleting outputs, nothing else** (spec §4).
+- **`--force` invalidates by deleting outputs, nothing else.**
   The `force=True` kwarg (tests only) bypasses the gate without deleting.
 
 ## Background: boundary-containment performance

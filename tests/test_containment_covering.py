@@ -1598,13 +1598,12 @@ class TestContainmentDirSwapAtomicity:
 
 
 # ---------------------------------------------------------------------------
-# Q3 export relations: {} + idempotency (ported from test_checkpoint.py)
+# Q3 export relations: {} + idempotency
 # ---------------------------------------------------------------------------
 
 class TestContainmentQ3ExportAndIdempotency:
     """Q3 empty containment → relations:{} in export; idempotency.
 
-    Ported from TestComputeContainmentIdempotency in test_checkpoint.py.
     Uses Phase 2 signature.  All tests fail RED with TypeError.
     """
 

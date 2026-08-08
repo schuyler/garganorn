@@ -186,10 +186,18 @@ Forces a full re-export. Land P1 and P2 first.
 - [ ] Write reference material for the pipeline artifacts — what each stage
       writes, the schemas, the sort orders — from the code rather than from
       the deleted design document
-- [ ] Repoint or remove the ~212 `§N` cross-references in `garganorn/` (18)
+- [x] Repoint or remove the ~212 `§N` cross-references in `garganorn/` (18)
       and `tests/` (194) across 28 files. They point into `atgeo-spec.md` and
       the deleted `pipeline-restructure-design.md`, neither of which has
-      numbered sections any more
+      numbered sections any more. Shipped across two passes: ~197 refs in
+      `garganorn/`+`tests/` (tranche 3, `a495fa9`), then the three remaining
+      doc-level ones — a false `wof-boundaries-design.md` pointer in
+      `explored-and-discarded.md`, a dead provenance comment in
+      `test_containment_covering.py`, and a `(spec §4)` citation in
+      `pipeline-implementation-decisions.md`, all resolved by deletion (none
+      load-bearing). What's left lives in `atgeo-appview-sdk-design.md` and
+      `name-variants-design.md`, both already tracked as their own blocked
+      items below
 - [ ] Find every place in the code that references a non-authoritative design
       document and remove the reference
 - [x] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
@@ -246,8 +254,11 @@ as aspirational.
 - [x] Remove the dead `tiles.max_per_tile` config key
 - [x] Remove `print()` calls from production paths (already zero; nothing to
       do)
-- [ ] Assert the division-import Hilbert sort is actually applied
-      (`ST_Hilbert` in `stages.py`); nothing tests it today. See D2
+- [x] Assert the division-import Hilbert sort is actually applied
+      (`ST_Hilbert` in `stages.py`); nothing tests it today. See D2.
+      Shipped: `test_boundaries_duckdb_places_hilbert_sorted` in
+      `tests/test_overture_division.py`, mutation-tested (fails when the
+      `ORDER BY ST_Hilbert(...)` clause is removed)
 - [x] Preflight the configured source globs before a build runs. `config.yaml`
       globs `db/cache/overture/*/part-*.parquet`; when the cache holds only
       divisions the glob matches nothing and the pipeline produces an empty
@@ -279,10 +290,11 @@ as aspirational.
       `TestInlineIdfOsmMode`) that reference nonexistent
       `build-density.sh`/`build-idf.sh` scripts and test hand-copied SQL
       disconnected from production code
-- [ ] `tests/test_pipeline.py`'s assertion failure messages (around lines
+- [x] `tests/test_pipeline.py`'s assertion failure messages (around lines
       434, 437) say `tiles.memory_limit`/`tiles.max_per_tile`, but the test
       itself correctly exercises the live `pipeline:` config section — just
-      wrong strings in the error text, not a test-correctness bug
+      wrong strings in the error text, not a test-correctness bug. Fixed to
+      say `pipeline.memory_limit`/`pipeline.max_per_tile`
 - [ ] Evaluate once the removals above are done: should maritime divisions
       keep being dropped by the `is_land=true` filter, which excludes bays,
       straits, and seas? It is a completeness question, not a logging one

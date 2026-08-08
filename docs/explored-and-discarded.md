@@ -95,4 +95,4 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: WoF venue data overlaps with Foursquare OSP and Overture Places but adds limited value. The data is stale (2011 origin), unevenly covered (heavily US-skewed), and has no bulk download format. WoF admin boundaries are more useful for gazetteering.
 
-**Successor**: WoF admin boundaries only — see `wof-boundaries-design.md`. Venues deferred pending multi-source deduplication strategy.
+**Successor**: WoF admin boundaries only. Venues deferred pending multi-source deduplication strategy.

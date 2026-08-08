@@ -404,6 +404,25 @@ class TestDivisionImportArtifactPhase2:
             f"boundaries.duckdb must have R-tree index; found index names: {index_names}"
         )
 
+    def test_boundaries_duckdb_places_hilbert_sorted(self, division_parquet, tmp_path):
+        """bnd.places must be physically sorted by ST_Hilbert(geometry) over the
+        world BOX_2D (design-constraints.md D2: zone maps require sorted columns)."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        boundaries = str(tmp_path / "boundaries.duckdb")
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
+        rows = [r[0] for r in con.execute("""
+            SELECT ST_Hilbert(geometry,
+                {'min_x': -180.0, 'min_y': -90.0,
+                 'max_x': 180.0, 'max_y': 90.0}::BOX_2D)
+            FROM bnd.places
+        """).fetchall()]
+        con.close()
+        assert len(rows) >= 3, f"expected fixture divisions in bnd.places; got {len(rows)} rows"
+        assert rows == sorted(rows), "bnd.places must be sorted by ST_Hilbert(geometry)"
+
     def test_places_parquet_no_geometry_column(self, division_parquet, tmp_path):
         """division places.parquet must not contain 'geometry' column."""
         output = str(tmp_path / "places.parquet")
