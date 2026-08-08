@@ -116,6 +116,31 @@ and can consume substantial memory on large multi-part divisions.
 **Why it matters**: it is a place to look first when the division import
 runs out of memory, alongside the CTAS sort in D4.
 
+### D10: DuckDB sizes join memory off the source relation, not the filtered one
+
+A query that filters a large TEMP TABLE inline (`WHERE ... = '${prefix}'`)
+and then joins the result against a relation with expensive per-row cost
+(e.g. a GEOS-backed spatial predicate against a complex multi-vertex
+geometry) can blow up memory 100x+ even when the filtered row count is tiny.
+DuckDB's join planner appears to size against the source relation's full
+cardinality, not the true post-filter selectivity.
+
+**Applies to**: `garganorn/stages.py:compute_containment()`, where `p` is
+materialized as its own `CREATE TEMP TABLE` (not left as a CTE over
+`places_slim`) for exactly this reason before joining to boundary geometries
+in the `edge` arm; hit by Canada/Nunavut's 200k-vertex Arctic Archipelago
+coastlines at global scale, not by any data defect
+
+**Why it matters**: rewriting the filter for zone-map pruning or reducing
+thread count does not help — only materializing the filtered relation into
+its own `CREATE TEMP TABLE` before the join does, same pattern as the `cov`
+CTE materialization this codebase already uses elsewhere. Any new query that
+filters a large relation and then joins it against expensive-per-row
+predicates needs the same treatment. Two open upstream
+DuckDB issues make this plausible as an engine limitation rather than a bug
+here: [duckdb/duckdb#14087](https://github.com/duckdb/duckdb/issues/14087),
+[duckdb/duckdb#18330](https://github.com/duckdb/duckdb/issues/18330).
+
 ---
 
 ## Pipeline Architecture Constraints

@@ -1,14 +1,14 @@
-"""Red tests for §7.1 — artifact_fresh / finalize_artifact helpers (Phase 2).
+"""Red tests for artifact_fresh / finalize_artifact helpers (Phase 2).
 
 Tests in TestArtifactFresh and TestFinalizeArtifact fail with
 AttributeError until artifact_fresh and finalize_artifact are implemented
 in garganorn/stages.py.
 
-§7.1 item mapping:
+Item mapping:
   1. artifact_fresh truth table        → TestArtifactFresh
   2. finalize_artifact behavior        → TestFinalizeArtifact
   3. Stale-.tmp clobber                → TestStaleTmpClobber
-  4. Directory-artifact recovery       → covered by existing covering tests; §3.7 adds containment
+  4. Directory-artifact recovery       → covered by existing covering tests
   5. DuckDB construct pinning          → TestDuckDBConstructPinning (passes immediately)
   6. Sort pins                         → TestDensitySortPin, TestIdfSortPin
 """
@@ -24,7 +24,7 @@ import garganorn.stages as _stages
 
 
 # ---------------------------------------------------------------------------
-# §7.1.1 artifact_fresh truth table
+# artifact_fresh truth table
 # ---------------------------------------------------------------------------
 
 class TestArtifactFresh:
@@ -161,7 +161,7 @@ class TestArtifactFresh:
 
 
 # ---------------------------------------------------------------------------
-# §7.1.2 finalize_artifact behavior
+# finalize_artifact behavior
 # ---------------------------------------------------------------------------
 
 class TestFinalizeArtifact:
@@ -227,7 +227,7 @@ class TestFinalizeArtifact:
 
 
 # ---------------------------------------------------------------------------
-# §7.1.3 Stale-.tmp clobber
+# Stale-.tmp clobber
 # ---------------------------------------------------------------------------
 
 class TestStaleTmpClobber:
@@ -251,7 +251,7 @@ class TestStaleTmpClobber:
 
 
 # ---------------------------------------------------------------------------
-# §7.1.5 DuckDB construct pinning (these tests pass immediately)
+# DuckDB construct pinning (these tests pass immediately)
 # ---------------------------------------------------------------------------
 
 class TestDuckDBConstructPinning:

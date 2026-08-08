@@ -4,12 +4,12 @@ pipeline-implementation-decisions.md ("OQ-P2-2 — containment level vocabulary"
 garganorn/levels.py does not exist yet, so
 every test in this module that imports LEVEL_VOCAB fails at collection/setup
 with ImportError until it is implemented -- that failure IS the RED signal for
-this feature (§6 acceptance item 1). Tests are structured so the ImportError
+this feature (acceptance item 1). Tests are structured so the ImportError
 is legible: a module-level try/except records it and _check_levels() surfaces
 it as a clear pytest.fail rather than an opaque collection error, mirroring
 the pattern tests/test_covering.py uses for garganorn.covering.
 
-Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.md
+Covers the combined acceptance checklist (pipeline-implementation-decisions.md
 "OQ-P2-2 — containment level vocabulary") items 1, 3, 5:
   1. Vocabulary correctness -- LEVEL_VOCAB covers exactly the 9 observed
      subtypes + borough; fail-loud raises on an injected unknown subtype.
@@ -20,8 +20,8 @@ Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.
 (Item 2, ordering ascending by level with ties broken by id, is covered by
 tests/test_containment_covering.py::TestContainmentOrdering against the
 current containment implementation. Item 4, cross-artifact tile/boundaries.duckdb
-agreement, belongs to the record-envelope ("OQ-P2-1") combined fixture per §6
-preamble and is out of scope for this level-vocabulary ("OQ-P2-2")-only test
+agreement, belongs to the record-envelope ("OQ-P2-1") combined fixture and
+is out of scope for this level-vocabulary ("OQ-P2-2")-only test
 module.)
 """
 import inspect
@@ -47,7 +47,7 @@ def _check_levels():
 
 
 # ---------------------------------------------------------------------------
-# §6 item 1 — vocabulary correctness
+# Acceptance checklist item 1 — vocabulary correctness
 # ---------------------------------------------------------------------------
 
 class TestLevelVocabCorrectness:
@@ -83,8 +83,8 @@ class TestLevelVocabCorrectness:
         (pipeline-implementation-decisions.md "OQ-P2-2 — containment level
         vocabulary", global, zero NULLs): locality, neighborhood, microhood, macrohood,
         county, localadmin, region, country, dependency. Plus borough (normative
-        in atgeo-spec.md §7 though absent from current Overture data; per the
-        level-vocabulary decisions above).
+        in atgeo-spec.md, "Containment levels", though absent from current
+        Overture data; per the level-vocabulary decisions above).
         """
         _check_levels()
         assert set(LEVEL_VOCAB.keys()) == self._EXPECTED_SUBTYPES, (
@@ -123,7 +123,7 @@ class TestLevelVocabCorrectness:
 
 
 # ---------------------------------------------------------------------------
-# §6 item 1 (continued) — fail-loud enforcement (pipeline-implementation-decisions.md
+# Acceptance checklist item 1 (continued) — fail-loud enforcement (pipeline-implementation-decisions.md
 # "OQ-P2-2 — containment level vocabulary")
 # ---------------------------------------------------------------------------
 
@@ -228,7 +228,7 @@ class TestFailLoudUnmappedSubtype:
 
 
 # ---------------------------------------------------------------------------
-# §6 item 3 — filter delta: localadmin + admin_level=3 counties included, hoods excluded
+# Acceptance checklist item 3 — filter delta: localadmin + admin_level=3 counties included, hoods excluded
 # ---------------------------------------------------------------------------
 
 class TestBoundaryFilterDelta:
@@ -367,7 +367,7 @@ class TestBoundaryFilterDelta:
 
 
 # ---------------------------------------------------------------------------
-# §6 item 5 — no NULL levels in places (import-time, covers the
+# Acceptance checklist item 5 — no NULL levels in places (import-time, covers the
 # level-vocabulary decisions directly)
 #
 # Note: tests/test_containment_covering.py::TestNoNullLevels covers the same

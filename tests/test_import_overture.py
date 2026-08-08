@@ -167,11 +167,11 @@ class TestOvertureImport:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 Phase 2 import artifact tests (RED — overture_place)
+# Phase 2 import artifact tests (RED — overture_place)
 # ---------------------------------------------------------------------------
 
 class TestOvertureImportArtifactPhase2:
-    """§7.2: stage_import must write places.parquet without 'geometry' column.
+    """stage_import must write places.parquet without 'geometry' column.
 
     All tests fail in Red phase because stage_import still takes 'con'
     as its first positional argument.
@@ -193,7 +193,7 @@ class TestOvertureImportArtifactPhase2:
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_places_parquet_no_geometry_column(self, overture_parquet, tmp_path):
-        """places.parquet must not contain the 'geometry' column (§3.2 EXCLUDE)."""
+        """places.parquet must not contain the 'geometry' column."""
         output = str(tmp_path / "places.parquet")
         _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
         con = duckdb.connect()

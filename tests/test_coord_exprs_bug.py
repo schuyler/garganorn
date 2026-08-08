@@ -141,7 +141,8 @@ class TestComputeContainmentOverture:
         compute_containment interpolation sites.
 
         Fixture provides a valid 17-char qk17, tile_assignments, and covering_dir
-        (§3.2 preconditions; no fallbacks in the fixed code).
+        (preconditions the fixed code does not fall back to building itself;
+        see design-constraints.md P4).
         """
         division_path = str(tmp_path / "division.duckdb")
         _make_division_db(division_path)
@@ -154,7 +155,7 @@ class TestComputeContainmentOverture:
         ).fetchone()[0]
         _tmp_con.close()
 
-        # Build covering from the division DB (§4: orchestrator responsibility).
+        # Build covering from the division DB (orchestrator responsibility; see design-constraints.md P4).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering")
         stage_covering(division_path, covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -175,7 +176,7 @@ class TestComputeContainmentOverture:
             [qk17],
         )
 
-        # Pre-create tile_assignments (§3.2 precondition; no fallback in fixed code).
+        # Pre-create tile_assignments (precondition; no fallback in fixed code, see design-constraints.md P4).
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         con.execute("INSERT INTO tile_assignments VALUES ('ovr001', ?)", [qk17[:6]])
 
@@ -221,7 +222,7 @@ class TestComputeContainmentOverture:
         ).fetchone()[0]
         _tmp_con.close()
 
-        # Build covering from the division DB (§4: orchestrator responsibility).
+        # Build covering from the division DB (orchestrator responsibility; see design-constraints.md P4).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering")
         stage_covering(division_path, covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -241,7 +242,7 @@ class TestComputeContainmentOverture:
             [qk17],
         )
 
-        # Pre-create tile_assignments (§3.2 precondition; no fallback in fixed code).
+        # Pre-create tile_assignments (precondition; no fallback in fixed code, see design-constraints.md P4).
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         con.execute("INSERT INTO tile_assignments VALUES ('ovr002', ?)", [qk17[:6]])
 

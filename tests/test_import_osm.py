@@ -306,14 +306,15 @@ class TestOsmImportCharacterization:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 Phase 2 import artifact tests (RED — osm)
+# Phase 2 import artifact tests (RED — osm)
 # ---------------------------------------------------------------------------
 
 class TestOsmImportArtifactPhase2:
-    """§7.2: stage_import must write places.parquet for OSM without 'geom' column.
+    """stage_import must write places.parquet for OSM without 'geom' column.
 
     Fails in Red phase because stage_import still takes 'con' as first arg.
-    OSM-specific: DELETE WHERE geom IS NULL runs before EXCLUDE (§3.2).
+    OSM-specific: DELETE WHERE geom IS NULL runs before EXCLUDE (see
+    pipeline-implementation-decisions.md "Phase 2 — parquet artifacts + orchestrator").
     """
 
     _BBOX = (-122.55, 37.60, -122.30, 37.85)
@@ -333,7 +334,7 @@ class TestOsmImportArtifactPhase2:
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_places_parquet_no_geom_column(self, osm_parquet, tmp_path):
-        """places.parquet must not contain the 'geom' column (§3.2 EXCLUDE)."""
+        """places.parquet must not contain the 'geom' column."""
         output = str(tmp_path / "places.parquet")
         parquet = (osm_parquet["node"], osm_parquet["way"])
         _stages.stage_import("osm", parquet, self._BBOX, output)

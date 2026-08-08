@@ -7,7 +7,7 @@ collection/setup with ImportError until it is implemented -- that failure IS
 the RED signal for this feature. Mirrors the import-guard pattern used by
 tests/test_levels.py for garganorn.levels.
 
-Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.md
+Covers the combined acceptance checklist (pipeline-implementation-decisions.md
 "OQ-P2-1 — record envelope adoption") items 6 and 9,
 plus the module-level contract from those same decisions:
   - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}"
@@ -189,7 +189,7 @@ class TestBuildTilePayload:
 
     def test_build_tile_payload_top_level_keys_exact(self):
         """Tile top-level == exactly {collection, source, license,
-        generated_at, records} (§6 item 6; per the envelope decisions)."""
+        generated_at, records} (item 6 of the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
@@ -214,7 +214,7 @@ class TestBuildTilePayload:
         assert parsed["generated_at"] == self._GENERATED_AT
 
     def test_build_tile_payload_records_each_exactly_three_keys(self):
-        """Each record == exactly {uri, cid, value} with cid is None (§6 item 6)."""
+        """Each record == exactly {uri, cid, value} with cid is None (item 6 of the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
@@ -229,7 +229,7 @@ class TestBuildTilePayload:
             assert rec["cid"] is None
 
     def test_build_tile_payload_record_uri_rkey_matches_value_rkey(self):
-        """uri's trailing rkey segment matches value.rkey for sampled records (§6 item 6)."""
+        """uri's trailing rkey segment matches value.rkey for sampled records (item 6 of the envelope decisions)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
@@ -240,7 +240,7 @@ class TestBuildTilePayload:
         assert rec["uri"].rsplit("/", 1)[-1] == rec["value"]["rkey"]
 
     def test_build_tile_payload_osm_rkey_form_in_uri(self):
-        """OSM node:/way:/relation: rkey form appears verbatim in the record uri (§6 item 6)."""
+        """OSM node:/way:/relation: rkey form appears verbatim in the record uri (item 6 of the envelope decisions)."""
         _check_envelope()
         collection = "org.atgeo.places.osm"
         uri = f"https://places.atgeo.org/{collection}/node:12345"

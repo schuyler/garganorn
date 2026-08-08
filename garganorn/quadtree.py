@@ -39,7 +39,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
     os.makedirs(source_dir, exist_ok=True)
 
-    # Force deletion (§4): delete Phase 2 artifacts before stages rebuild them.
+    # Force deletion: delete Phase 2 artifacts before stages rebuild them.
     # Never touches tiles/ history.
     if force:
         for fname in [

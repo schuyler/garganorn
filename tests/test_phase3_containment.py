@@ -30,7 +30,7 @@ class TestComputeContainmentSignature:
 #     in tests/test_containment_covering.py (called without covering_dir, which
 #     the new implementation treats as Q3 graceful degradation → empty result).
 #   - TestComputeContainmentAdaptive: asserted max_boundaries/max_zoom on the
-#     deleted recursion; behavior superseded by TestBruteForceOracle (§7.2.3).
+#     deleted recursion; behavior superseded by TestBruteForceOracle.
 # ---------------------------------------------------------------------------
 
 

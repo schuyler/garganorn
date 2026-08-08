@@ -1101,7 +1101,7 @@ class TestContainmentInExport:
             "INSERT INTO places VALUES ('exp002', 37.7694, -122.4862, ST_QuadKey(-122.4862, 37.7694, 17))"
         )
 
-        # tile_assignments is a §3.2 precondition (no fallback in fixed code).
+        # tile_assignments must already exist (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
@@ -1113,7 +1113,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
+        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
+        # see design-constraints.md P4).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_produces")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1225,7 +1226,7 @@ class TestContainmentInExport:
             "INSERT INTO places VALUES ('sf001', 37.7749, -122.4194, ST_QuadKey(-122.4194, 37.7749, 17))"
         )
 
-        # tile_assignments is a §3.2 precondition (no fallback in fixed code).
+        # tile_assignments must already exist (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
@@ -1237,7 +1238,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
+        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
+        # see design-constraints.md P4).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_bbox")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1454,7 +1456,7 @@ class TestContainmentInExport:
             "ST_QuadKey(0.0, 0.0, 17))"
         )
 
-        # tile_assignments is a §3.2 precondition (no fallback in fixed code).
+        # tile_assignments must already exist (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
@@ -1466,7 +1468,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
+        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
+        # see design-constraints.md P4).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_ocean")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1544,7 +1547,7 @@ class TestContainmentInExport:
             "ST_QuadKey(-122.56, 37.59, 17))"
         )
 
-        # tile_assignments is a §3.2 precondition (no fallback in fixed code).
+        # tile_assignments must already exist (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
@@ -1556,7 +1559,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (§4: orchestrator responsibility, not compute_containment's).
+        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
+        # see design-constraints.md P4).
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_edge")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1615,14 +1619,14 @@ class TestContainmentInExport:
 
 
 # ---------------------------------------------------------------------------
-# §3.8 — Record JSON byte-identical per source (Phase 2 export)
+# Record JSON byte-identical per source (Phase 2 export)
 # ---------------------------------------------------------------------------
 
 class TestExportRecordParityPhase2:
-    """§3.8: Stage 2 export from parquet artifacts must produce byte-identical
+    """Stage 2 export from parquet artifacts must produce byte-identical
     record JSON per source, compared to the Phase 1 view-based output.
 
-    §3.8: Two forced exports from the same artifacts must produce
+    Two forced exports from the same artifacts must produce
     gunzip-byte-identical tile files (pins the ORDER BY tile_qk, place_id invariant).
 
     Both fail RED because stage_export does not yet accept parquet artifact paths.
@@ -1639,7 +1643,7 @@ class TestExportRecordParityPhase2:
         sig = inspect.signature(stage_export)
         params = list(sig.parameters.keys())
         assert params[0] != "con", (
-            f"stage_export must not take 'con' as first param (Phase 2 §3.8); "
+            f"stage_export must not take 'con' as first param (Phase 2); "
             f"got {params[0]!r} — fails RED because Phase 2 signature not yet implemented"
         )
         assert "places_parquet" in params, (
@@ -1651,7 +1655,7 @@ class TestExportRecordParityPhase2:
         self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """Two forced exports from the same overture artifacts must produce
-        gunzip-byte-identical tile files (§3.8 determinism: ORDER BY tile_qk, place_id).
+        gunzip-byte-identical tile files (determinism: ORDER BY tile_qk, place_id).
 
         Two details make this assertion mean what it says:
 
@@ -1717,11 +1721,11 @@ class TestExportRecordParityPhase2:
 
 
 # ---------------------------------------------------------------------------
-# §3.8 — write_manifest_db from tile_assignments.parquet (Phase 2)
+# write_manifest_db from tile_assignments.parquet (Phase 2)
 # ---------------------------------------------------------------------------
 
 class TestWriteManifestDbPhase2:
-    """§3.8: write_manifest_db must read tile_assignments from parquet (Phase 2),
+    """write_manifest_db must read tile_assignments from parquet (Phase 2),
     produce the same rkey/tile_qk rows as the current implementation, and
     preserve the OSM rkey transform (n12345 → node:12345).
 
@@ -1738,7 +1742,7 @@ class TestWriteManifestDbPhase2:
         sig = inspect.signature(write_manifest_db)
         params = list(sig.parameters.keys())
         assert params[0] != "con", (
-            f"write_manifest_db must not take 'con' first (Phase 2 §3.8); "
+            f"write_manifest_db must not take 'con' first (Phase 2); "
             f"got {params[0]!r} — fails RED because Phase 2 signature not yet implemented"
         )
         assert "tile_assignments_parquet" in params or "parquet" in params[0].lower(), (
@@ -1794,11 +1798,11 @@ class TestWriteManifestDbPhase2:
 
 
 # ---------------------------------------------------------------------------
-# §3.8 Gate #13 Finding #1 — stage_export Phase 2 body (tests 1a–1d)
+# stage_export Phase 2 body (tests 1a–1d)
 # ---------------------------------------------------------------------------
 
 class TestStageExportPhase2Body:
-    """§3.8 tests for the body of stage_export (Phase 2 export from parquet artifacts).
+    """Tests for the body of stage_export (Phase 2 export from parquet artifacts).
 
     All tests fail RED because stage_export currently raises NotImplementedError
     ('stage_export Phase 2 body not yet wired; call _transitional_export_phase1 …').
@@ -1807,8 +1811,7 @@ class TestStageExportPhase2Body:
         stage_export(source, places_parquet, tile_assignments_parquet,
                      containment_dir, tiles_root, t0, export_workers=None)
 
-    The `t0` positional parameter is intentional (matches how run_pipeline calls it);
-    it is not in the §3.8 prose but IS in the current function signature.
+    The `t0` positional parameter is intentional (matches how run_pipeline calls it).
     """
 
     # ------------------------------------------------------------------
@@ -1835,7 +1838,7 @@ class TestStageExportPhase2Body:
     def _build_containment_dir(self, tmp_path, name="containment"):
         """Build a containment_dir with only _meta.json (no *.parquet files).
 
-        Represents the Q3-degradation / empty-containment case (spec §3.7).
+        Represents the Q3-degradation / empty-containment case.
         When no *.parquet exists in containment_dir, stage_export must use:
             (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
         instead of read_parquet on an empty glob (which errors on DuckDB 1.2.1).
@@ -1848,15 +1851,15 @@ class TestStageExportPhase2Body:
         return cd
 
     # ------------------------------------------------------------------
-    # Test 1a: Record-JSON parity (§3.8)
+    # Test 1a: Record-JSON parity
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
-    # Test 1b: Empty-containment substitution (§3.8)
+    # Test 1b: Empty-containment substitution
     # ------------------------------------------------------------------
 
     def test_empty_containment_gives_empty_relations(self, tmp_path):
-        """§3.8: containment_dir with only _meta.json (no *.parquet) → relations=={}.
+        """containment_dir with only _meta.json (no *.parquet) → relations=={}.
 
         The implementation must substitute the empty-containment subquery:
             (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
@@ -1898,16 +1901,15 @@ class TestStageExportPhase2Body:
                 )
 
     # ------------------------------------------------------------------
-    # Test 1c: Determinism (§3.8)
+    # Test 1c: Determinism
     # ------------------------------------------------------------------
 
     def test_determinism_two_exports_byte_identical(self, tmp_path):
-        """§3.8 / §6 item 7 (pipeline-implementation-decisions.md
-        "OQ-P2-1 — record envelope adoption"): two exports from identical
-        artifacts, with an injected fixed timestamp, produce byte-identical
-        .json.gz files.
+        """Two exports from identical artifacts, with an injected fixed timestamp,
+        produce byte-identical .json.gz files (record envelope: see
+        pipeline-implementation-decisions.md, "OQ-P2-1 — record envelope adoption").
 
-        Pins the ORDER BY tile_qk, place_id invariant (spec §3.6 + §3.8 step 3).
+        Pins the ORDER BY tile_qk, place_id invariant.
         gzip mtime=0 is already set by the existing export_tiles implementation.
 
         Post-2b, tiles carry a run-scoped `generated_at` (per the envelope
@@ -1974,13 +1976,13 @@ class TestStageExportPhase2Body:
             )
 
     # ------------------------------------------------------------------
-    # Tests 1d: Run-dir lifecycle (§3.8 / spec §2 / §3.8 step 2+5)
+    # Tests 1d: Run-dir lifecycle
     # ------------------------------------------------------------------
 
     def test_run_dir_leftover_incomplete_deleted(self, tmp_path):
-        """§3.8: a tiles/<ts>/ lacking manifest.json is deleted at next export.
+        """A tiles/<ts>/ lacking manifest.json is deleted at next export.
 
-        Spec §2: a run dir is complete iff manifest.json exists (written last).
+        A run dir is complete iff manifest.json exists (written last).
         Stage must scan tiles/ at step 2 and delete any incomplete dirs (no manifest.json,
         not the current symlink target) before creating the new run.
 
@@ -2012,13 +2014,13 @@ class TestStageExportPhase2Body:
         leftover_run_dir = os.path.join(tiles_root, leftover_ts)
         assert not os.path.exists(leftover_run_dir), (
             f"Incomplete run dir {leftover_run_dir!r} must be deleted by stage_export "
-            "(spec §2 / §3.8 step 2)"
+            "(run-dir completeness sweep)"
         )
 
     def test_manifest_json_written_after_manifest_duckdb(self, tmp_path):
-        """§3.8: manifest.json mtime must be >= manifest.duckdb mtime.
+        """manifest.json mtime must be >= manifest.duckdb mtime.
 
-        manifest.json is written LAST as the run-dir completeness marker (spec §3.8 step 5).
+        manifest.json is written LAST as the run-dir completeness marker.
         After implementation, manifest.duckdb is written first, then manifest.json.
 
         Fails RED because stage_export raises NotImplementedError.
@@ -2046,11 +2048,11 @@ class TestStageExportPhase2Body:
         assert os.path.exists(manifest_duckdb), f"manifest.duckdb must be written to {run_dir}"
         assert os.path.getmtime(manifest_json) >= os.path.getmtime(manifest_duckdb), (
             "manifest.json mtime must be >= manifest.duckdb mtime "
-            "(manifest.json is the completeness marker; it must land last, spec §3.8 step 5)"
+            "(manifest.json is the completeness marker; it must land last)"
         )
 
     def test_tiles_current_symlink_points_at_new_run(self, tmp_path):
-        """§3.8: tiles/current symlink is updated to the new timestamp dir.
+        """tiles/current symlink is updated to the new timestamp dir.
 
         The symlink must target a valid, existing timestamp dir containing manifest.json.
 
@@ -2080,11 +2082,11 @@ class TestStageExportPhase2Body:
             f"Symlink target {target!r} must be an existing directory"
         )
         assert os.path.exists(os.path.join(run_dir, "manifest.json")), (
-            f"Run dir {target!r} must contain manifest.json (completeness marker, spec §3.8)"
+            f"Run dir {target!r} must contain manifest.json (completeness marker)"
         )
 
     def test_keep_2_sweep_retains_only_complete_dirs(self, tmp_path):
-        """§3.8: keep-2 sweep retains only the 2 newest COMPLETE run dirs.
+        """keep-2 sweep retains only the 2 newest COMPLETE run dirs.
 
         Complete = has manifest.json. Incomplete dirs are already deleted at step 2.
         Keep-2 sweep at step 5 removes complete run dirs older than the newest 2.

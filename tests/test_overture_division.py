@@ -331,11 +331,11 @@ class TestExportStripJsonNulls:
 
 
 # ---------------------------------------------------------------------------
-# §7.2.5 Phase 2 division import artifact tests (RED)
+# Phase 2 division import artifact tests (RED)
 # ---------------------------------------------------------------------------
 
 class TestDivisionImportArtifactPhase2:
-    """§7.2.5: stage_import for overture_division must write both places.parquet
+    """stage_import for overture_division must write both places.parquet
     and boundaries.duckdb with unchanged schema.
 
     Fails in Red phase because stage_import still takes 'con' as first arg.

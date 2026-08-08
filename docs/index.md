@@ -35,7 +35,6 @@
 |----------|-------------|
 | [name-variants-design.md](name-variants-design.md) | Multilingual and variant name storage/retrieval |
 | [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (planned) |
-| [lexicon-discovery-plan.md](lexicon-discovery-plan.md) | AT Protocol lexicon discovery via DID/WebFinger (evaluated, not adopted — see explored-and-discarded.md) |
 
 ## Reference Queries
 

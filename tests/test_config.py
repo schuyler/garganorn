@@ -94,13 +94,12 @@ _SLUG_CONFIG = {
 
 
 def test_slug_base_url_consistency(tmp_path):
-    """Each collection's base_url must end with '/<slug>' (OQ-P2-5 Change B).
+    """Each collection's base_url must end with '/<slug>'.
 
-    Asserts the config schema invariant that the design doc requires (design
-    doc §Change A): base_url.rstrip('/').endswith('/' + slug). This test uses
-    the synthetic config directly without touching config.yaml, so it encodes
-    the schema contract — enforcement of the invariant lives in create_app,
-    not load_config.
+    Asserts the config schema invariant: base_url.rstrip('/').endswith('/' +
+    slug). This test uses the synthetic config directly without touching
+    config.yaml, so it encodes the schema contract — enforcement of the
+    invariant lives in create_app, not load_config.
     """
     config_path = _write_config(tmp_path, _SLUG_CONFIG)
     _, tiles_config = load_config(config_path)

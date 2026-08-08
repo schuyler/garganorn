@@ -6,10 +6,10 @@ Tests are organized by stage function:
 - TestStageExport: tests for stage_export()
 - TestStageManifest: tests for write_manifest() and write_manifest_db()
 - TestStageDensityExtractMtime: mtime-based caching tests for stage_density_extract()
-- TestEnvelopeShape: §6 item 6 -- new atgeo v1 envelope shape on the real
+- TestEnvelopeShape: new atgeo v1 envelope shape on the real
   stage_export production path (pipeline-implementation-decisions.md
   "OQ-P2-1 — record envelope adoption").
-- TestGeneratedAtCoherence: §6 items 7/8 -- fixed-timestamp injection seam,
+- TestGeneratedAtCoherence: fixed-timestamp injection seam,
   determinism, and run-dir/tile/manifest/manifest.duckdb generated_at
   agreement (pipeline-implementation-decisions.md
   "OQ-P2-1 — record envelope adoption").
@@ -197,7 +197,7 @@ class TestStageManifest:
 
 
 # ---------------------------------------------------------------------------
-# pipeline-implementation-decisions.md ("OQ-P2-1 — record envelope adoption") — §6 items 6, 7, 8, 9
+# pipeline-implementation-decisions.md ("OQ-P2-1 — record envelope adoption")
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the REAL stage_export production path (via
@@ -215,7 +215,7 @@ def _read_one_tile(tiles_current: Path) -> dict:
 
 
 class TestEnvelopeShape:
-    """§6 item 6 — envelope shape on the real stage_export production path."""
+    """Envelope shape on the real stage_export production path."""
 
     def test_tile_top_level_keys_exact(self, overture_parquet, density_parquet, tmp_path):
         """Tile top-level == exactly {collection, source, license,
@@ -248,7 +248,7 @@ class TestEnvelopeShape:
 
     def test_tile_record_uri_form_and_rkey_agreement(self, overture_parquet, density_parquet, tmp_path):
         """uri == https://{repo}/{collection}/{rkey}; uri's rkey segment ==
-        value.rkey == record_tiles.rkey for sampled records (per the envelope decisions above, §6 item 6)."""
+        value.rkey == record_tiles.rkey for sampled records (per the envelope decisions above)."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -272,7 +272,7 @@ class TestEnvelopeShape:
             )
 
     def test_manifest_json_field_set(self, overture_parquet, density_parquet, tmp_path):
-        """manifest.json matches the manifest-shape field set (per the envelope decisions above, §6 item 9)."""
+        """manifest.json matches the manifest-shape field set (per the envelope decisions above)."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -285,7 +285,7 @@ class TestEnvelopeShape:
         )
 
     def test_manifest_duckdb_metadata_has_collection(self, overture_parquet, density_parquet, tmp_path):
-        """manifest.duckdb metadata has a collection column (per the envelope decisions above, §6 item 9)."""
+        """manifest.duckdb metadata has a collection column (per the envelope decisions above)."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -303,7 +303,7 @@ class TestEnvelopeShape:
 
 
 class TestGeneratedAtDeterminismAndCoherence:
-    """§6 items 7, 8 — fixed-timestamp injection, determinism, coherence.
+    """Fixed-timestamp injection, determinism, coherence.
 
     Seam under test: stage_export accepts an optional `now: datetime` keyword
     argument (aware, UTC). When provided, it is used BOTH to name the run
@@ -420,7 +420,7 @@ class TestGeneratedAtDeterminismAndCoherence:
     def test_two_runs_with_identical_injected_now_are_byte_identical(
         self, overture_parquet, density_parquet, tmp_path
     ):
-        """§6 item 7 — two stage_export runs over identical inputs with an
+        """Two stage_export runs over identical inputs with an
         injected fixed timestamp are byte-identical tile-for-tile."""
         places_a, ta_a, cont_a = self._build_export_inputs(
             overture_parquet, density_parquet, tmp_path, "inputs_d1"

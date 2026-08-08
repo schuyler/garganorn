@@ -118,7 +118,7 @@ def stage_covering(
     Freshness: skips when covering_dir/_meta.json is newer than boundaries_db
     AND the recorded zoom parameters match. force=True always rebuilds.
 
-    Atomicity (§2.5): builds under covering_dir+'.tmp', then swaps.  At build
+    Atomicity: builds under covering_dir+'.tmp', then swaps.  At build
     start, any pre-existing .tmp, .old, and .spill dirs are removed (crash
     leftovers).
 
@@ -164,7 +164,7 @@ def stage_covering(
     tmp_dir = covering_dir + ".tmp"
     old_dir = covering_dir + ".old"
 
-    # Build start: unconditionally remove crash leftovers (§2.5 step 1)
+    # Build start: unconditionally remove crash leftovers
     for d in [tmp_dir, old_dir, owned_spill_dir]:
         if os.path.exists(d):
             shutil.rmtree(d, ignore_errors=True)
@@ -317,7 +317,7 @@ def stage_covering(
     finally:
         con.close()
 
-    # Atomic swap (§2.5 step 2)
+    # Atomic swap
     if os.path.exists(covering_dir):
         os.rename(covering_dir, old_dir)
     os.rename(tmp_dir, covering_dir)

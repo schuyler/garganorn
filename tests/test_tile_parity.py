@@ -1,6 +1,6 @@
 """Unit + integration tests for scripts/tile_parity.py.
 
-The "New envelope" section below (§6 item 7; pipeline-implementation-decisions.md
+The "New envelope" section below (pipeline-implementation-decisions.md
 "OQ-P2-1 — record envelope adoption")
 covers the canonicalizer update required for the atgeo v1 envelope: tiles now
 carry a top-level `generated_at` (not just manifest.json), and records are
@@ -197,7 +197,7 @@ def test_cli_diff_difference_exits_nonzero(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# New envelope (§6 item 7; pipeline-implementation-decisions.md
+# New envelope (pipeline-implementation-decisions.md
 # "OQ-P2-1 — record envelope adoption")
 #
 # atgeo v1 tiles carry {collection, source, license, generated_at, records}
@@ -262,7 +262,7 @@ class TestCanonicalTileNewEnvelope:
         b = _write_envelope_tile(str(tmp_path / "b"), "023130",
                                  [_wrapped("r2", "two"), _wrapped("r1", "one")])
         assert tile_parity.canonical_tile(a) == tile_parity.canonical_tile(b), (
-            "canonical_tile must sort wrapped records by value.rkey (§6 item 7)"
+            "canonical_tile must sort wrapped records by value.rkey"
         )
 
     def test_canonical_tile_still_differs_on_value_change(self, tmp_path):

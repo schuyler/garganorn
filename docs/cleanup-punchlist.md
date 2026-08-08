@@ -190,19 +190,31 @@ Forces a full re-export. Land P1 and P2 first.
       numbered sections any more
 - [ ] Find every place in the code that references a non-authoritative design
       document and remove the reference
-- [ ] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
+- [x] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
       claims they "fail visibly when a statement stops being true," but two were
       found stale by inspection. Either check them in CI or stop claiming they
-      self-verify
-- [ ] Delete `lexicon-discovery-plan.md`, after correcting its
+      self-verify. Moot: the `atgeo-spec.md` redraft (`a540ae9`) already
+      dropped both the citations and the self-verifying claim (Schuyler's
+      gated requirement was "no `file.py:line` citations"). Ordinary citation
+      rot remains in `design-constraints.md`/`explored-and-discarded.md`,
+      but neither claims to self-verify
+- [x] Delete `lexicon-discovery-plan.md`, after correcting its
       `explored-and-discarded.md` entry, which says "not yet adopted" but the
       lexicon-schema serving in `getRecord` shipped and the `listRecords` half
-      is being reverted
-- [ ] Strip the dead `Explored in` pointers from
+      is being reverted. Corrected: the entry now says "partially adopted"
+      — the DID document route and `getRecord`'s lexicon-schema serving both
+      shipped as ambient AT Protocol plumbing; DNS TXT discovery and
+      `listRecords` did not. Deleted the plan doc and its `index.md` entry
+- [x] Strip the dead `Explored in` pointers from
       `explored-and-discarded.md` and drop the field; the summaries are
       self-contained
-- [ ] Assess `compute-containment-oom-fix.md` — likely a completed-work
-      artifact in the same category
+- [x] Assess `compute-containment-oom-fix.md` — likely a completed-work
+      artifact in the same category. Confirmed and dissolved: its root-cause
+      lesson was already captured as D6 in `design-constraints.md`; a second,
+      distinct DuckDB gotcha from the doc's "Second OOM" section was missing
+      and added as D10; the still-open "data-quality half" (overlap
+      detection) is now tracked in P8 below. The rest — narrative process,
+      validation steps, file/line inventory — was deleted with the doc
 - [ ] Reconcile `atgeo-appview-sdk-design.md` §1.2 and §1.3 with the shipped
       envelope and manifest: no `atgeo` version field or version-rejection
       rule, `source`/`license` in place of `attribution`, a `generated_at`-only
@@ -255,6 +267,17 @@ as aspirational.
 - [ ] Evaluate once the removals above are done: should maritime divisions
       keep being dropped by the `is_land=true` filter, which excludes bays,
       straits, and seas? It is a completeness question, not a logging one
+- [ ] Detect overlapping same-level boundary polygons (the actual pathology
+      behind the compute_containment OOM, distinct from ordinary admin
+      granularity like France's ~35,000 communes). `stage_covering`
+      (`garganorn/covering.py` ~line 250) already produces a per-tile
+      inverted index of boundaries; `SELECT tile_qk, level, count(DISTINCT
+      boundary_id) AS n FROM covering_out GROUP BY 1, 2 HAVING n > threshold`
+      measures same-level overlap directly. Run as a diagnostic first to see
+      the real distribution before picking a threshold. Recommended
+      placement: `stage_division_import`, alongside the existing subtype
+      validator — flag loudly rather than silently drop, matching this
+      codebase's "never default or guess on bad source data" convention
 - [x] Evaluate once the removals above are done: does `IDF ln(N/0)` survive
       the trigram removal, or was it only reachable through the search path?
       It survives: `stage_idf` computes IDF from live place data via

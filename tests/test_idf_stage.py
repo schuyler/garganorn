@@ -578,13 +578,12 @@ class TestStageIdfUnsupportedSource:
 
 
 # ---------------------------------------------------------------------------
-# §7.1.6 Sort pin — idf.parquet must be non-decreasing on category
+# Sort pin (design-constraints.md D2) — idf.parquet must be non-decreasing on category
 # ---------------------------------------------------------------------------
 
 class TestIdfSortPin:
-    """§7.1.6: idf.parquet must be non-decreasing on 'category'.
-
-    Phase 2 spec §3.2 makes ORDER BY category explicit.  If the current
+    """idf.parquet must be non-decreasing on 'category' (design-constraints.md D2:
+    zone maps require sorted columns for prefix-filter pushdown). If the current
     implementation produces an unsorted parquet, this test fails in Red phase.
     """
 
@@ -604,7 +603,7 @@ class TestIdfSortPin:
 
 
 # ---------------------------------------------------------------------------
-# §RED: TestStageIdfMetaSidecar — crash-safety via finalize_artifact
+# RED: TestStageIdfMetaSidecar — crash-safety via finalize_artifact
 # ---------------------------------------------------------------------------
 
 

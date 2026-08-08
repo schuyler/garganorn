@@ -9,7 +9,7 @@ implementation they fail with TypeError.  Tests that also need garganorn.coverin
 to build a real covering directory import it inside the test body and fail with
 ModuleNotFoundError.
 
-§7.2 item mapping:
+Test class mapping:
   1. Ports of surviving behavior tests      → TestContainmentBehaviorPorts
   2. Ordering (within by level ASC)         → TestContainmentOrdering
   3. Brute-force oracle parity              → TestBruteForceOracle
@@ -139,11 +139,11 @@ def _make_places_con(places, tile_qk_map=None):
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 1 — ports of surviving behavior tests
+# Ports of surviving behavior tests
 # ---------------------------------------------------------------------------
 
 class TestContainmentBehaviorPorts:
-    """§7.2 item 1: rkey-only relations, division prefix, SF point expected IDs,
+    """Rkey-only relations, division prefix, SF point expected IDs,
     collection_prefix kwarg.  All fail TypeError with old compute_containment signature.
     """
 
@@ -263,20 +263,20 @@ class TestContainmentBehaviorPorts:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 2 — ordering: within by level ASC (Phase 2 sig).
+# Ordering: within by level ASC (Phase 2 sig).
 #
 # pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
 # vocabulary"): the level vocabulary is total by construction
 # (garganorn.levels.LEVEL_VOCAB covers every subtype the fail-loud guard
 # admits), so "NULL levels sort last" is no longer a live case -- there are no
-# NULL levels to sort. See TestNoNullLevels below (§6 acceptance item 5),
-# which replaces the old NULL-levels-last test.
+# NULL levels to sort. See TestNoNullLevels below, which replaces the old
+# NULL-levels-last test.
 # ---------------------------------------------------------------------------
 
 class TestContainmentOrdering:
-    """§7.2 item 2: within list ordered by level ASC, ties broken by id.
+    """Within list ordered by level ASC, ties broken by id.
 
-    Ported to Phase 2 signature per §3.7.  Fails RED with TypeError.
+    Ported to Phase 2 signature.  Fails RED with TypeError.
     """
 
     def test_within_ordered_by_level_asc(self, simple_boundaries_db, tmp_path):
@@ -339,7 +339,7 @@ class TestContainmentOrdering:
 
         pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
         vocabulary"): "NULL levels sort last" is void because level
-        is total by construction (§6 acceptance item 5, `count(*) WHERE level IS
+        is total by construction (`count(*) WHERE level IS
         NULL = 0` in `places`). A boundaries DB built directly (bypassing the
         import CTAS + fail-loud guard) could still contain a NULL level if
         hand-constructed, as this one deliberately does, to prove downstream
@@ -422,7 +422,7 @@ class TestContainmentOrdering:
 
 
 class TestNoNullLevels:
-    """§6 acceptance item 5 (combined checklist): count(*) WHERE level IS NULL = 0 in places.
+    """count(*) WHERE level IS NULL = 0 in places.
 
     Exercises the real overture_division import pipeline (division_parquet fixture,
     tests/conftest.py) end to end: LEVEL_VOCAB maps every observed subtype
@@ -452,14 +452,14 @@ class TestNoNullLevels:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 3 — brute-force oracle parity (Phase 2 signature)
+# Brute-force oracle parity (Phase 2 signature)
 # ---------------------------------------------------------------------------
 
 class TestBruteForceOracle:
-    """§7.2 item 3: compute_containment pair set == brute-force ST_Contains.
+    """compute_containment pair set == brute-force ST_Contains.
 
     Ported to Phase 2 signature: compute_containment(places_parquet,
-    tile_assignments_parquet, ...) per §3.7.  Fails RED because the current
+    tile_assignments_parquet, ...).  Fails RED because the current
     implementation still takes 'con' as its first argument.
     """
 
@@ -607,13 +607,13 @@ class TestBruteForceOracle:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 4 — containment artifact layout (Phase 2 signature)
+# Containment artifact layout (Phase 2 signature)
 # ---------------------------------------------------------------------------
 
 class TestContainmentArtifacts:
-    """§7.2 item 4: containment/<qk4>.parquet written, schema and sort correct.
+    """containment/<qk4>.parquet written, schema and sort correct.
 
-    Ported to Phase 2 signature per §3.7.  Fails RED with TypeError.
+    Ported to Phase 2 signature.  Fails RED with TypeError.
     """
 
     def test_containment_parquets_written(self, simple_boundaries_db, tmp_path):
@@ -794,11 +794,11 @@ class TestContainmentArtifacts:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 5 — Q3 graceful degradation
+# Q3 graceful degradation
 # ---------------------------------------------------------------------------
 
 class TestQ3Degradation:
-    """§7.2 item 5: boundaries_db=None, missing/empty covering_dir → empty place_containment."""
+    """boundaries_db=None, missing/empty covering_dir → empty place_containment."""
 
     def test_boundaries_db_none_gives_empty_containment(self, tmp_path):
         """boundaries_db=None → containment is created empty (Q3 preserved)."""
@@ -919,11 +919,11 @@ class TestQ3Degradation:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 6 — end-to-end export integration
+# End-to-end export integration
 # ---------------------------------------------------------------------------
 
 class TestExportIntegration:
-    """§7.2 item 6: mini end-to-end run_pipeline producing tile JSON with relations."""
+    """Mini end-to-end run_pipeline producing tile JSON with relations."""
 
     def test_run_pipeline_with_covering_builds_covering_dir(
         self, simple_boundaries_db, overture_parquet, density_parquet, tmp_path
@@ -1017,11 +1017,11 @@ class TestExportIntegration:
 
 
 # ---------------------------------------------------------------------------
-# §7.2 item 7 — edge-arm antimeridian D7
+# Edge-arm antimeridian D7
 # ---------------------------------------------------------------------------
 
 class TestAntimeridianEdgeArm:
-    """§7.2 item 7: D7 antimeridian edge-arm tests.
+    """D7 antimeridian edge-arm tests.
 
     What these tests pin:
 
@@ -1038,7 +1038,7 @@ class TestAntimeridianEdgeArm:
         assertions in test_all_three_places_via_compute_containment): these are
         end-to-end sanity checks.  The gap place (lon=0) must NOT appear under
         ami_boundary's rkey — this is guaranteed structurally, not by the D7 CASE
-        branch.  The covering seed SQL (§2, constraint D7) uses the same D7 OR-condition on the
+        branch.  The covering seed SQL (design-constraints.md D7) uses the same D7 OR-condition on the
         boundary's bbox; gap tiles (xmax < 170 AND xmin > -170) never pass it, so
         ami_boundary contributes no covering tiles in the gap region and no
         (gap_place, ami_boundary) row can enter the edge arm join.  Even if such a
@@ -1337,7 +1337,7 @@ class TestAntimeridianEdgeArm:
 
 
 # ---------------------------------------------------------------------------
-# §3.7 Phase 2 containment relocation tests (RED)
+# Phase 2 containment relocation tests (RED)
 # ---------------------------------------------------------------------------
 
 def _make_parquet_places(tmp_path, places, filename="places.parquet"):
@@ -1375,7 +1375,7 @@ def _make_parquet_tile_assignments(tmp_path, assignments, filename="tile_assignm
 
 
 class TestContainmentRelocationPhase2:
-    """§3.7: compute_containment must use parquet inputs and write to <src>/containment/.
+    """compute_containment must use parquet inputs and write to <src>/containment/.
 
     All tests fail in Red phase because compute_containment still takes 'con'
     as its first parameter.
@@ -1481,13 +1481,13 @@ class TestContainmentRelocationPhase2:
 
 
 # ---------------------------------------------------------------------------
-# §3.7 Dir-swap atomicity matrix (mirrors §3.5 covering tests)
+# Dir-swap atomicity matrix (mirrors covering atomicity tests)
 # ---------------------------------------------------------------------------
 
 class TestContainmentDirSwapAtomicity:
-    """§3.7: dir-swap atomicity matrix for containment.
+    """Dir-swap atomicity matrix for containment.
 
-    Mirrors the covering §3.5 atomicity tests:
+    Mirrors tests/test_covering.py::TestFreshnessAtomicity:
       1. Leftover .tmp before build → clobbered, correct output
       2. Leftover .old with dir missing → cleared, correct output
       3. Partial .tmp (no _meta.json) from crash → next build correct
@@ -1598,13 +1598,13 @@ class TestContainmentDirSwapAtomicity:
 
 
 # ---------------------------------------------------------------------------
-# §3.7 Q3 export relations: {} + idempotency (ported from test_checkpoint.py)
+# Q3 export relations: {} + idempotency (ported from test_checkpoint.py)
 # ---------------------------------------------------------------------------
 
 class TestContainmentQ3ExportAndIdempotency:
-    """§3.7: Q3 empty containment → relations:{} in export; idempotency.
+    """Q3 empty containment → relations:{} in export; idempotency.
 
-    Ported from TestComputeContainmentIdempotency in test_checkpoint.py (§6/§3.7).
+    Ported from TestComputeContainmentIdempotency in test_checkpoint.py.
     Uses Phase 2 signature.  All tests fail RED with TypeError.
     """
 

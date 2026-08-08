@@ -193,7 +193,7 @@ class TestComputeTileAssignments:
 
 
 # ---------------------------------------------------------------------------
-# §7.3 Phase 2 tile-assignment artifact tests (RED)
+# Phase 2 tile-assignment artifact tests (RED)
 # ---------------------------------------------------------------------------
 
 def _make_places_parquet(tmp_path, places):
@@ -216,7 +216,7 @@ def _make_places_parquet(tmp_path, places):
 
 
 class TestTileAssignmentArtifactPhase2:
-    """§7.3: stage_tile_assignment must read places.parquet and write sorted artifact.
+    """stage_tile_assignment must read places.parquet and write sorted artifact.
 
     Fails in Red phase because stage_tile_assignment still takes 'con' as first arg.
     """
@@ -293,11 +293,11 @@ class TestTileAssignmentArtifactPhase2:
 
 
 # ---------------------------------------------------------------------------
-# §7.3.2 — (place_id, tile_qk) parity vs old SQL on same fixture
+# (place_id, tile_qk) parity vs old SQL on same fixture
 # ---------------------------------------------------------------------------
 
 class TestTileAssignmentParity:
-    """§7.3.2: stage_tile_assignment must produce the same (place_id, tile_qk) pairs
+    """stage_tile_assignment must produce the same (place_id, tile_qk) pairs
     as compute_tile_assignments.sql against the same fixture data.
 
     Fails RED because stage_tile_assignment still takes 'con' as its first parameter,
@@ -348,11 +348,11 @@ class TestTileAssignmentParity:
 
 
 # ---------------------------------------------------------------------------
-# §7.3.4 — Dropped/duplicate diagnostics via caplog
+# Dropped/duplicate diagnostics via caplog
 # ---------------------------------------------------------------------------
 
 class TestTileAssignmentDiagnostics:
-    """§7.3.4: EXPORT-6 dropped-place warning and EXPORT-7 duplicate-place warning
+    """EXPORT-6 dropped-place warning and EXPORT-7 duplicate-place warning
     must still be emitted (as log messages) from stage_tile_assignment in Phase 2.
 
     Fails RED because stage_tile_assignment does not yet accept places_parquet.

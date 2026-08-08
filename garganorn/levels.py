@@ -17,8 +17,9 @@ Two consumers derive from this dict so SQL and Python cannot drift:
 
 Values follow a uniform stride-5 (per the level-vocabulary decision above):
 borough=55, macrohood=60, neighborhood=65, microhood=70. This is a protocol
-change from the narrower atgeo-spec.md §7 table (which only defined levels
-through neighborhood=60) — macrohood and microhood are additions, and
+change from the narrower table in atgeo-spec.md's "Containment levels"
+section (which only defined levels through neighborhood=60) — macrohood
+and microhood are additions, and
 neighborhood moves from 60 to 65.
 
 Level 0 (continent) has no producer entry: continents are never emitted as

@@ -111,7 +111,7 @@ def covering_test_db(tmp_path_factory):
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 1 — qk_env SQL macro agrees with quadkey_to_bbox Python (10k keys)
+# qk_env SQL macro agrees with quadkey_to_bbox Python (10k keys)
 # ---------------------------------------------------------------------------
 
 _QK_ENV_SQL_PATH = os.path.join(
@@ -130,7 +130,7 @@ def _load_qk_env_macro(con):
 
 
 class TestQkEnvMacro:
-    """§7.1 item 1: qk_env DuckDB macro agrees with quadkey_to_bbox (10,000 quadkeys, 1e-9)."""
+    """qk_env DuckDB macro agrees with quadkey_to_bbox (10,000 quadkeys, 1e-9)."""
 
     def test_qk_env_agrees_with_python_10k_quadkeys(self):
         """All four envelope coordinates agree to 1e-9 for 10,000 random quadkeys."""
@@ -187,11 +187,11 @@ class TestQkEnvMacro:
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 2 — bbox_to_quadkeys / lonlat_to_tile
+# bbox_to_quadkeys / lonlat_to_tile
 # ---------------------------------------------------------------------------
 
 class TestBboxToQuadkeys:
-    """§7.1 item 2: known bboxes, world=256 tiles, lat clamping, antimeridian D7."""
+    """Known bboxes, world=256 tiles, lat clamping, antimeridian (design-constraints.md D7)."""
 
     def test_whole_world_z4_is_256_tiles(self):
         """bbox_to_quadkeys for the whole world at z4 returns exactly 256 tiles."""
@@ -269,11 +269,11 @@ class TestBboxToQuadkeys:
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 3 — stage_covering output schema / sort / kind invariants
+# stage_covering output schema / sort / kind invariants
 # ---------------------------------------------------------------------------
 
 class TestStageCoveringSchema:
-    """§7.1 item 3: parquet schema, sort, kind='edge' only at max zoom, _meta.json."""
+    """Parquet schema, sort, kind='edge' only at max zoom, _meta.json."""
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
@@ -412,11 +412,11 @@ class TestStageCoveringSchema:
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 4 — semantic interior/edge invariants
+# Semantic interior/edge invariants
 # ---------------------------------------------------------------------------
 
 class TestCoveringSemanticInvariants:
-    """§7.1 item 4: interior tiles contained; edge tiles intersect; no prefix chains."""
+    """Interior tiles contained; edge tiles intersect; no prefix chains."""
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
@@ -509,11 +509,11 @@ class TestCoveringSemanticInvariants:
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 5 — point classification property
+# Point classification property
 # ---------------------------------------------------------------------------
 
 class TestPointClassification:
-    """§7.1 item 5: covering interior/edge arms ⟺ direct ST_Contains(boundary, point)."""
+    """Covering interior/edge arms ⟺ direct ST_Contains(boundary, point)."""
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
@@ -641,11 +641,11 @@ class TestPointClassification:
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 6 — zoom parameter overrides
+# Zoom parameter overrides
 # ---------------------------------------------------------------------------
 
 class TestZoomParameters:
-    """§7.1 item 6: cover_min_zoom / cover_max_zoom overrides honored."""
+    """cover_min_zoom / cover_max_zoom overrides honored."""
 
     def test_cover_max_zoom_7_limits_depth(self, covering_test_db, tmp_path):
         _check_covering()
@@ -699,11 +699,11 @@ class TestZoomParameters:
 
 
 # ---------------------------------------------------------------------------
-# §7.1 item 7 — freshness and atomicity
+# Freshness and atomicity
 # ---------------------------------------------------------------------------
 
 class TestFreshnessAtomicity:
-    """§7.1 item 7: freshness gate (no-op), force=True, param change, crash recovery."""
+    """Freshness gate (no-op), force=True, param change, crash recovery."""
 
     def test_second_call_is_noop(self, covering_test_db, tmp_path):
         """Second stage_covering call with same params is a no-op (no mtime change)."""
