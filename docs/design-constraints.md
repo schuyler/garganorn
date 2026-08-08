@@ -14,7 +14,7 @@ R-tree spatial indexes are not used in JOIN ON conditions or subqueries.
 Workaround: materialize filtered results to a temp table via a top-level
 WHERE clause, then join against the temp table.
 
-**Applies to**: `sql/covering_seed.sql:31` (containment pre-filter)
+**Applies to**: `sql/covering_seed.sql` (containment pre-filter)
 
 **Why it matters**: Without this workaround, spatial queries degrade to
 full-table scans against large geometry columns, causing 100x+ latency.
@@ -59,7 +59,7 @@ When unnesting a NULL or empty array, the row disappears from the result
 set entirely — no error, no NULL output row. This is correct SQL semantics
 but can cause unexpected row count changes.
 
-**Applies to**: `overture_place_import.sql:38-55` (name variant unnesting)
+**Applies to**: `overture_place_import.sql` (name variant unnesting)
 
 **Why it matters**: Places with NULL category arrays get no IDF score
 (defaults to 0 via coalesce). This is intentional but should be documented.
@@ -84,7 +84,7 @@ Where a bbox filter is derived from a geometry's min/max longitude,
 `BETWEEN` drops it. The correct filter is `(lon >= min OR lon <= max)`, or a
 tile-seed set built as the union of the two lobes.
 
-**Applies to**: `covering.py:68-78` (two-lobe split) and `stages.py:725-752`
+**Applies to**: `covering.py` (two-lobe split) and `stages.py`
 (`bboxes_intersect` wrap branches) implement this but have no test coverage.
 The import-side bbox filter does not, so features crossing ±180° are dropped
 there.
@@ -111,7 +111,8 @@ that lands rather than hardening the workaround.
 `ST_Union_Agg` merges a division's multiple geometry rows into one geometry
 and can consume substantial memory on large multi-part divisions.
 
-**Applies to**: `sql/overture_division_import.sql:52`
+**Applies to**: `sql/overture_division_import.sql` (`ST_Union_Agg` in the
+`merged_areas` CTE)
 
 **Why it matters**: it is a place to look first when the division import
 runs out of memory, alongside the CTAS sort in D4.
@@ -165,8 +166,8 @@ spatial keys from lon/lat coordinates.
 - **Non-locality divisions**: `40% population` only
   - Formula: `round(40 * least(ln(1+population)/pop_norm, 1.0))`
 
-**Applies to**: `overture_place_import.sql:78`,
-`osm_import.sql:139-142`, `overture_division_import.sql:94-100`
+**Applies to**: `overture_place_import.sql`,
+`osm_import.sql`, `overture_division_import.sql`
 
 ### P3: Density tiles use bbox-overlap join
 
@@ -174,7 +175,7 @@ The density spatial join for division localities uses bbox-overlap-bbox
 rather than centroid-in-bbox. A density tile contributes to a locality's
 score if the tile bbox intersects the locality bbox.
 
-**Applies to**: `overture_division_import.sql:96-100`
+**Applies to**: `overture_division_import.sql` (`division_density` CTE)
 
 **Why it matters**: Centroid-based joins systematically under-scored small
 localities, which may contain no tile centroid at all and so scored zero.
@@ -189,7 +190,7 @@ few percent of noise moves rankings very little.
 ### P4: Five independent, freshness-gated CLI subcommands (no fixed stage order)
 
 There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes five
-subcommands (`quadtree.py:355-475`): `density`, `idf`, `covering`, `run`
+subcommands (`quadtree.py`): `density`, `idf`, `covering`, `run`
 (one source), `all` (every source). Each stage is independently gated by
 artifact freshness (mtime + params, see `pipeline-implementation-decisions.md`
 "One caching mechanism"), so there's no shared ordered pipeline object —
@@ -197,7 +198,7 @@ artifact freshness (mtime + params, see `pipeline-implementation-decisions.md`
 but `run`/individual subcommands can be invoked in any order and simply
 no-op if their inputs aren't ready.
 
-**Applies to**: `quadtree.py:355-475`
+**Applies to**: `quadtree.py`
 
 ### P5: IDF is computed from source parquet, not imported places table
 
@@ -205,7 +206,7 @@ IDF computation reads raw parquet directly (ephemeral DuckDB connection),
 not the imported `places` table. This avoids an ephemeral import step and
 makes IDF cacheable per-dataset.
 
-**Applies to**: `stages.py:1070` (`stage_idf`), `*_idf.sql`
+**Applies to**: `stages.py` (`stage_idf`), `*_idf.sql`
 
 ### P6: Containment is a precomputed covering joined by quadkey prefix
 
@@ -215,17 +216,18 @@ threshold to z14) with a two-artifact approach in the Phase 1 pipeline
 restructure. Full reasoning and decisions: `pipeline-implementation-decisions.md`
 ("Phase 1 — covering + containment rewrite").
 
-1. **Covering** (`covering.py:106` `stage_covering`, `COVER_MIN_ZOOM=4`,
+1. **Covering** (`covering.py` `stage_covering`, `COVER_MIN_ZOOM=4`,
    `COVER_MAX_ZOOM=12`): level-by-level descent z4→z12 precomputes which
    tiles each boundary fully contains (`interior`, emitted at every level)
    vs. merely overlaps (`edge`, only at z12), clipping geometry to each
    tile's own envelope as it descends.
-2. **Containment join** (`stages.py:180` `compute_containment`): two arms,
+2. **Containment join** (`stages.py` `compute_containment`): two arms,
    `UNION ALL`. *Interior arm* — an equi-join of a place's qk17 prefix
    against interior covering tiles, no geometry test. *Edge arm* — for z12
    edge tiles only, a bbox-prefiltered full-geometry `ST_Contains`.
 
-**Applies to**: `covering.py:106`, `stages.py:180`
+**Applies to**: `covering.py` (`stage_covering`), `stages.py`
+(`compute_containment`)
 
 **Correctness invariant**: interior and edge tile sets are disjoint by
 construction, so a place matches each boundary at most once (no `DISTINCT`
