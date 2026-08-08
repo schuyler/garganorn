@@ -245,10 +245,22 @@ as aspirational.
 
 ## P8 — Validation and small cleanups
 
-- [ ] Light validation of the global build: per-collection record counts
+- [x] Light validation of the global build: per-collection record counts
       against source parquet; tile count and total gzipped size per source;
       `getCoverage` + fetch in scattered regions with a plausibility check; and
-      confirmation that every URL `getCoverage` returns resolves
+      confirmation that every URL `getCoverage` returns resolves. Run
+      2026-08-08 against garganorn-1's live build (`overture_place`
+      20260808T051317, `osm` 20260808T072257). `overture_place` output
+      (74,223,561) matched source parquet exactly; `osm` output (27,295,425)
+      sat below the ~28.5M named-node upper bound, explained by the
+      category-tag whitelist, not an unexplained cliff. 222,008 tiles/13.7GB
+      gzipped (overture_place), 78,203 tiles/1.5GB gzipped (osm) — plausible.
+      4 scattered regions (Lisbon, NYC, rural Mongolia, outback Australia)
+      showed the adaptive quadtree correctly sizing tiles to density and
+      `BboxTooLarge` correctly guarding dense Overture/NYC; sample tile
+      content carried the live P6 envelope and populated
+      `relations.within`. 100/100 sampled `getCoverage` URLs resolved 200.
+      No findings
 - [x] Remove the compatibility shim at `tile_reader.py:41-49` — its stated
       removal condition (first re-export after the envelope deploy) is met
 - [x] Remove the dead `tiles.max_per_tile` config key
@@ -298,17 +310,15 @@ as aspirational.
 - [ ] Evaluate once the removals above are done: should maritime divisions
       keep being dropped by the `is_land=true` filter, which excludes bays,
       straits, and seas? It is a completeness question, not a logging one
-- [ ] Detect overlapping same-level boundary polygons (the actual pathology
-      behind the compute_containment OOM, distinct from ordinary admin
-      granularity like France's ~35,000 communes). `stage_covering`
-      (`garganorn/covering.py` ~line 250) already produces a per-tile
-      inverted index of boundaries; `SELECT tile_qk, level, count(DISTINCT
-      boundary_id) AS n FROM covering_out GROUP BY 1, 2 HAVING n > threshold`
-      measures same-level overlap directly. Run as a diagnostic first to see
-      the real distribution before picking a threshold. Recommended
-      placement: `stage_division_import`, alongside the existing subtype
-      validator — flag loudly rather than silently drop, matching this
-      codebase's "never default or guess on bad source data" convention
+- [x] ~~Detect overlapping same-level boundary polygons~~ — superseded.
+      This was scoped as a data-quality flag, but Schuyler clarified this
+      project reports source data as-is; overlapping same-level boundaries
+      that genuinely disagree are not a bug to detect or fix (see
+      `feedback_data_quality_not_our_job` in Claude's memory). The
+      performance angle of the same phenomenon was investigated separately
+      and closed as a non-issue for the `compute_containment` slow cells in
+      `performance-improvements.md` P9.2; P9.3 tracks the one real byproduct
+      (literal duplicate boundary records) as its own unscoped item
 - [x] Evaluate once the removals above are done: does `IDF ln(N/0)` survive
       the trigram removal, or was it only reachable through the search path?
       It survives: `stage_idf` computes IDF from live place data via
