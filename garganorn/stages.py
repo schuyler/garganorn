@@ -897,6 +897,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
 
         # Step 1: Create division_all TEMP TABLE (geometry included for boundaries export)
         log.info("[overture_division] import: starting")
@@ -1127,6 +1128,7 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
             con.execute(f"SET temp_directory = '{temp_directory}'")
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute("SET enable_progress_bar = false")
 
         # Load the lookup tables as a standalone step, ahead of the import
         # SQL, so their join key uniqueness can be asserted before any join
@@ -1255,6 +1257,7 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
         if memory_limit:
             con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
         con.execute("INSTALL spatial; LOAD spatial")
         _load_qk_env_macros(con)
         con.execute(sql)
@@ -1341,6 +1344,7 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
         if memory_limit:
             con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
         con.execute(sql)
         con.execute(
             f"COPY (SELECT * FROM idf_scores ORDER BY category) TO '{_tmp}' (FORMAT PARQUET)"
