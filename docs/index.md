@@ -14,6 +14,7 @@
 | [design-constraints.md](design-constraints.md) | DuckDB behaviors, pipeline invariants, tradeoffs, normalization constants |
 | [pipeline-implementation-decisions.md](pipeline-implementation-decisions.md) | Condensed design decisions behind the shipped pipeline (covering/containment, artifact restructure, envelope, level vocabulary, serving-path) |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
+| [performance-improvements.md](performance-improvements.md) | Proposed performance work on already-correct code (planned, not started) |
 
 ## atgeo Protocol
 

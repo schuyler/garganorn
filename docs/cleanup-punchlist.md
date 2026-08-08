@@ -96,12 +96,14 @@ step at all.
 - [x] Add a test asserting `getRecord`'s output validates against
       `getRecord.json`'s schema, so an `at-uri`-style regression fails the
       suite
-- [ ] The tile-payload header shape (`collection`, `source`, `license`,
+- [x] The tile-payload header shape (`collection`, `source`, `license`,
       `generated_at`, from `envelope.py:build_tile_payload`) has no lexicon
       or schema covering it. `collection` was mistakenly folded into the
       `place.json` item above during scoping — it's a tile-payload field,
-      never a record field, so `place.json` is the wrong place for it. Real
-      gap, deferred; not a spec edit
+      never a record field, so `place.json` is the wrong place for it.
+      Shipped: `garganorn/lexicon/tilePayload.json` (`org.atgeo.tilePayload`),
+      validated against `build_tile_payload`'s actual output in
+      `tests/test_envelope.py`
 
 `published_at` stays declared though nothing produces it — a deliberate
 exception, not an oversight. `same_as` and `relation.name` stay declared for
@@ -215,10 +217,13 @@ Forces a full re-export. Land P1 and P2 first.
       and added as D10; the still-open "data-quality half" (overlap
       detection) is now tracked in P8 below. The rest — narrative process,
       validation steps, file/line inventory — was deleted with the doc
-- [ ] Reconcile `atgeo-appview-sdk-design.md` §1.2 and §1.3 with the shipped
-      envelope and manifest: no `atgeo` version field or version-rejection
-      rule, `source`/`license` in place of `attribution`, a `generated_at`-only
-      manifest that is not served over HTTP, and stamped tile URLs
+- [ ] `atgeo-appview-sdk-design.md` needs a full overhaul, not a §1.2/§1.3
+      patch (envelope/manifest reconciliation — no `atgeo` version field or
+      version-rejection rule, `source`/`license` in place of `attribution`,
+      a `generated_at`-only manifest not served over HTTP, stamped tile
+      URLs — was the original narrower scope). Blocked on Schuyler, same as
+      the `atgeo-spec.md` review above: no piecemeal edits until he's
+      scoped the overhaul
 - [ ] `name-variants-design.md` (listed as a live implementation spec in
       `index.md`) is stale beyond a quick patch: it names both
       `scripts/import-osm.sh` and `scripts/import-overture-extract.sh` (§3.1,
@@ -243,14 +248,28 @@ as aspirational.
       do)
 - [ ] Assert the division-import Hilbert sort is actually applied
       (`ST_Hilbert` in `stages.py`); nothing tests it today. See D2
-- [ ] Preflight the configured source globs before a build runs. `config.yaml`
+- [x] Preflight the configured source globs before a build runs. `config.yaml`
       globs `db/cache/overture/*/part-*.parquet`; when the cache holds only
       divisions the glob matches nothing and the pipeline produces an empty
       collection with no error. `download-overture.sh` verifies per file
       against the S3 manifest, so the gap is not in downloading — nothing
-      checks that what the config asks for exists before building on it
-- [ ] Filter empty and whitespace-only names at import; they currently reach
-      tiles as blank-named records
+      checks that what the config asks for exists before building on it.
+      Shipped: `_resolve_glob_paths(..., required=True)` in
+      `garganorn/stages.py` now raises `RuntimeError` on an empty configured
+      glob at all four stages that consume a primary source glob —
+      `stage_import`, `stage_division_import`, `stage_density_extract`, and
+      `stage_idf` — naming the pattern in the error
+- [x] Filter empty and whitespace-only names at import; they currently reach
+      tiles as blank-named records. The requirement is no blank-appearing
+      name reaching a tile, not literally just empty-string/whitespace — a
+      NULL name is the same symptom. Shipped for both sources: OSM already
+      excluded NULL and now also excludes empty/whitespace; Overture had no
+      name filter at all before this and now excludes NULL, empty, and
+      whitespace-only names in the same clause
+      (`garganorn/sql/overture_place_import.sql`). Fixture callers that used
+      NULL name as a don't-care placeholder (`write_minimal_overture_parquet`
+      in `tests/quadtree_helpers.py`, `ov003`/`ov004`/`ov005` in
+      `tests/conftest.py`) were given real placeholder names instead
 - [ ] Sweep the suite for tests that enforce nothing — ones asserting against
       their own fixtures, or exercising code that no longer exists. Find them
       by mutating the source and seeing what stays green. Known instances:
@@ -284,9 +303,13 @@ as aspirational.
       `GROUP BY category`, which can't produce `n_places=0`, and it feeds the
       production importance formula, wholly independent of the deleted
       search/trigram path. No code change needed.
-- [ ] Strip orphaned audit finding IDs (`SCORE-n`, `SPATIAL-n`, `DATA-n`,
+- [x] Strip orphaned audit finding IDs (`SCORE-n`, `SPATIAL-n`, `DATA-n`,
       `EXPORT-n`) from source comments, test names, and `docs/` as those files
-      are touched — nothing defines them any more
+      are touched — nothing defines them any more. Stripped from
+      `tests/test_audit_*.py`, `test_export11.py`, `test_antimeridian_bbox.py`,
+      `test_tile_assignment.py`, and `garganorn/stages.py`/`garganorn/sql/*.sql`
+      comments; substantive descriptions kept, only the dead ID citations
+      removed. `docs/` had no occurrences
 - [x] Delete `scripts/import-osm.sh` and `scripts/import-overture-extract.sh`
       — dead. `stages.py`'s `stage_import` calls `garganorn/sql/osm_import.sql`
       and `overture_place_import.sql` directly and never shells out to
@@ -302,11 +325,18 @@ as aspirational.
       removal. Delete them (only `overture_db_path` is still used, by
       `test_database.py`)
 - [x] Remove the outmoded docker support
-- [ ] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
+- [x] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
       pinning the operator's terminal for the duration and losing the run on a
       dropped connection. This is why the role keeps getting routed around by
       ad-hoc scripts. Use `poll: 0` with a separate status-check play, or drive
-      Ansible from the box
+      Ansible from the box. Shipped in `atgeo-server-config`:
+      `roles/garganorn/tasks/tiles.yml` gained a `pgrep`-based guard that
+      skips launching a new build if one's already running, keeping
+      `poll: 60`/`notify: restart garganorn` unchanged; `run-tile-build.sh`
+      detaches the whole `ansible-playbook` invocation via nohup so a
+      dropped connection doesn't kill it, and tails the remote log to report
+      one of three honest outcomes (launched / already running / status
+      unknown) instead of always claiming success
 
 ---
 
