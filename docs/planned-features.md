@@ -34,6 +34,79 @@ front of Caddy benefit from a properly negotiated `Content-Encoding` in a
 way they don't today; whether this is worth doing before the project has
 real traffic to negotiate for.
 
+## Collection and service metadata
+
+Status: proposed, not started. No design has been reviewed.
+
+There is no way to ask a gazetteer what it serves. `atgeo-spec.md` puts it
+plainly — "Ask `getCoverage`; a collection it doesn't recognize is a
+collection the deployment doesn't serve" — which is discovery by guessing an
+NSID and reading an error. And there is no way to ask what a collection *is*:
+`source` and `license` arrive in every tile header, so a client learns them
+only by fetching a tile in a region it already knows about, and everything
+else about a collection is undocumented at runtime.
+
+Two pieces, probably:
+
+**Collection metadata.** What a client needs before it can decide whether a
+collection is usable: source and license without fetching a tile; the
+attribute and category vocabulary, which is the source's own and differs
+between collections; which members of the location union the collection
+actually emits; which containment levels its records carry; spatial extent,
+record count, and when it was last built.
+
+**Service metadata.** The list of collections a deployment serves, so a
+client can enumerate instead of guess. `org.atgeo.tiles.service.json`, the
+draft lexicon sitting in this directory, sketches an adjacent version of this
+as announcement records in an operator's repo; whether that or a plain XRPC
+method is the right shape is part of what needs designing.
+
+Worth being clear about what this does *not* solve. Place categories and
+attribute shapes are not standardized across sources, and describing two
+incompatible vocabularies does not reconcile them. An application that does
+anything with attributes will still pick one collection and stay there.
+Metadata makes that choice informed; it doesn't make it unnecessary.
+
+Open questions: whether this is one XRPC method or two; whether it rides on
+the existing lexicon-serving route (`GET /{nsid}`) rather than being new
+surface; how a category vocabulary gets described in a way a client can act
+on rather than merely display; and whether any of it is worth building before
+a second gazetteer deployment exists to be discovered.
+
+## Two introductory tutorials, in both directions
+
+Status: proposed, not started. No design has been reviewed.
+
+Two audiences will show up at this project, and each finds a different half
+of it baffling. Neither is served by the existing documentation, which is
+written for people who already accept both sets of premises.
+
+**Geospatial developers arriving at AT Protocol** need to know why the data
+looks the way it does. The worked example: coordinates are decimal strings,
+not JSON numbers, and every geospatial developer's first instinct is that
+this is a mistake. It isn't — AT Protocol's data model has no float type at
+all, because records are content-addressed and floats do not reliably
+round-trip to identical bytes across architectures, so a re-encoded record
+would hash differently and break its own CID. The spec's recommended
+workaround for anything that needs a float is exactly what the location
+lexicons do: encode it as a string. That one answer opens onto the rest —
+what a lexicon is, why records have URIs instead of IDs, what an NSID and a
+DID are, and why there is no `/search` endpoint to call.
+
+**AT Protocol developers arriving at geospatial** need the opposite. Why a
+bounding box and not a radius; what a quadkey is and why tiles come at mixed
+zooms; why longitude comes before latitude; that Web Mercator clamps latitude
+at ±85.05 and the poles simply aren't there; that the antimeridian is a real
+place where naive coordinate comparisons break; what `importance` means and
+why it isn't comparable across collections; and the difference between "near
+me" and "inside this thing," which is distance versus containment and wants
+different data.
+
+Open questions: whether these are documents in this repo, posts on
+atgeo.org, or the READMEs of the SDK and a demo app; how much can be carried
+by a worked example instead of prose; and whether the AT Protocol half is
+better contributed upstream, since none of it is specific to this gazetteer.
+
 ## Summary tiles for region-less search
 
 Status: proposed, not started. No design has been reviewed.

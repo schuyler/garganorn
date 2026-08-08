@@ -71,6 +71,15 @@ are not equivalently important, they are scored against different corpora
 with different category vocabularies. An SDK that merged them would be
 inventing a comparison the data does not support.
 
+The same gap decides it at the application layer regardless of what the SDK
+allows. `attributes` is the source's own vocabulary passed through rather
+than homogenized, so an OSM record's category lives in a tag map and an
+Overture record's lives in Overture's category tree, and nothing translates
+between them. An app that renders a category icon, filters to restaurants, or
+does anything at all with attributes has to write against one shape. Picking
+a collection and staying there is what apps will do in practice; the
+invariant just declines to pretend otherwise.
+
 ### Precision is the SDK's job, not the developer's
 
 `getCoverage` rejects any coordinate with more than two decimal places
@@ -233,6 +242,13 @@ exists — the served `did.json` advertises only
 **Version negotiation.** There is no version field in the tile envelope and
 no version to reject. Ignore keys you don't recognise; that is the whole
 forward-compatibility story.
+
+**Anything that describes a collection.** There is no way to ask what a
+collection contains, what its attributes look like, or which collections a
+gazetteer serves — the only discovery mechanism is guessing an NSID and
+seeing whether `getCoverage` returns `CollectionNotFound`. The SDK will want
+to surface both once they exist; see
+[planned-features.md](planned-features.md#collection-and-service-metadata).
 
 ## Conformance fixtures
 

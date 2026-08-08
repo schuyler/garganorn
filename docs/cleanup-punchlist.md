@@ -373,7 +373,7 @@ cannot use. They are coupled: containment names fix the common case, correct
 tile assignment fixes the collection. Forces a re-export.
 
 - [ ] **Divisions are assigned to tiles by bounding-box midpoint.**
-      `sql/overture_division_import.sql:74-78` comments "qk17 placed at the
+      `sql/overture_division_import.sql` comments "qk17 placed at the
       geometry centroid" and then computes the midpoint of the bbox, which
       is not the centroid and for anything crescent-shaped, multipart, or
       with overseas territories is not inside the division at all — Norway,
@@ -406,7 +406,7 @@ tile assignment fixes the collection. Forces a re-export.
       an N+1 that tells the server exactly which records a user is looking
       at, which is the surveillance surface `getCoverage` exists to avoid.
       The field is already declared in `place.json`. It is built in
-      `sql/compute_containment.sql:56-59`; `bnd.places` already carries
+      `sql/compute_containment.sql`; `bnd.places` already carries
       `names` and `level` alongside `id`, so this is a projection of
       `(id, names)` into a temp table joined once at the final SELECT
       (materialize before joining — see D10). Gzip absorbs the size: a tile
@@ -417,7 +417,7 @@ tile assignment fixes the collection. Forces a re-export.
       for a client that wants just the city. One integer, and the object is
       already being touched. Spec edit if yes
 - [ ] Note in `atgeo-spec.md` that containment stops at locality.
-      `stages.py:963-970` builds `bnd.places` with `WHERE level <= 50`, so
+      `stage_division_import` builds `bnd.places` with `WHERE level <= 50`, so
       `relations.within` never contains a borough, macrohood, neighborhood,
       or microhood — those exist in the division tileset but in no place
       record's containment. Currently undocumented, and it is the difference
