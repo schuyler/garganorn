@@ -180,10 +180,16 @@ class TestModuleImports:
         assert OpenStreetMap is not None
         assert OvertureDivisions is not None
 
-    def test_config_imports_new_classes(self):
-        """config.py should import correctly."""
+    def test_config_module_load_config_works(self, tmp_path):
+        """garganorn.config.load_config should parse repo and tiles config."""
         import garganorn.config
-        assert True
+
+        cfg_path = tmp_path / "config.yaml"
+        cfg_path.write_text("repo: test.example.org\ntiles:\n  overture_place: {}\n")
+
+        repo, tiles = garganorn.config.load_config(str(cfg_path))
+        assert repo == "test.example.org"
+        assert tiles == {"overture_place": {}}
 
 
 class TestQuadtreeSourceKeys:
@@ -208,15 +214,45 @@ class TestQuadtreeSourceKeys:
         assert "longitude" == lon and "latitude" == lat, \
             "_coord_exprs('osm') should return longitude/latitude columns"
 
-    def test_export_tiles_uses_new_source_keys(self):
-        """export_tiles should use the current source key for SQL file lookup."""
-        sql_dir = REPO_ROOT / "garganorn" / "sql"
-        assert (sql_dir / "overture_place_export_tiles.sql").exists(), \
-            "export_tiles('overture_place') should find overture_place_export_tiles.sql"
+    def test_export_tiles_uses_new_source_keys(self, division_parquet, tmp_path):
+        """export_tiles resolves 'overture_division' to overture_division_export_tiles.sql.
+
+        overture_place and osm are already exercised end-to-end elsewhere
+        (test_pipeline.py); overture_division is not, so this runs the real
+        pipeline for it and checks it actually finds and executes the right
+        SQL file rather than just checking the file exists on disk.
+        """
+        from garganorn.quadtree import run_pipeline
+
+        div_parquet, div_area_parquet = division_parquet
+        output_dir = tmp_path / "division_export_out"
+        output_dir.mkdir()
+
+        run_pipeline(
+            "overture_division",
+            (div_parquet, div_area_parquet),
+            (-122.55, 37.60, -122.30, 37.85),
+            str(output_dir),
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+        current_dir = output_dir / "overture_division" / "tiles" / "current"
+        gz_files = list(current_dir.rglob("*.json.gz")) if current_dir.exists() else []
+        assert gz_files, (
+            f"run_pipeline('overture_division', ...) must write at least one "
+            f".json.gz under {current_dir}; export_tiles must be resolving "
+            f"overture_division_export_tiles.sql correctly"
+        )
 
     def test_run_pipeline_uses_new_source_keys(self):
-        """run_pipeline should accept the current source keys."""
+        """run_pipeline dispatches via garganorn.quadtree.SOURCES, which must
+        list exactly the current live source keys."""
         import garganorn.quadtree
 
-        assert garganorn.quadtree.run_pipeline is not None, \
-            "run_pipeline function should exist"
+        assert set(garganorn.quadtree.SOURCES.keys()) == {
+            "overture_place", "osm", "overture_division",
+        }, (
+            f"SOURCES registry should list exactly the current source keys; "
+            f"got {sorted(garganorn.quadtree.SOURCES.keys())}"
+        )

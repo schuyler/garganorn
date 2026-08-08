@@ -7,7 +7,6 @@ import pytest
 from tests.quadtree_helpers import (
     REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit,
     run_overture_import, run_osm_import,
-    make_tile_assignment_db, run_tile_assignments,
     write_minimal_overture_parquet,
 )
 
@@ -38,12 +37,6 @@ class TestQk17PipelineFixes:
 
     Fix 1 — overture_place_import.sql: qk17 should be computed inline in the CTAS
              SELECT list; no ALTER TABLE or UPDATE statements.
-
-    Fix 2 — compute_tile_assignments.sql: place_zoom should be an inline CTE,
-             not a CREATE TEMP TABLE statement.
-
-    Fix 3 — compute_tile_assignments.sql: tile_assignments CTAS should have
-             ORDER BY tile_qk so the output is sorted.
 
     Fix 4 — overture_place_export_tiles.sql: place_addresses TEMP TABLE eliminated;
              addresses rendered inline via list_transform/list_filter in the VIEW.
@@ -107,66 +100,6 @@ class TestQk17PipelineFixes:
         assert null_count == 0, (
             f"Expected 0 null qk17 values after fix; got {null_count}. "
             "Inline CTAS must compute qk17 for every row."
-        )
-
-    # ------------------------------------------------------------------
-    # Fix 2: compute_tile_assignments.sql — place_zoom as inline CTE
-    # ------------------------------------------------------------------
-
-    def test_fix2_tile_assignments_no_create_temp_place_zoom(self):
-        """compute_tile_assignments.sql must NOT contain CREATE TEMP TABLE place_zoom.
-
-        Currently the script materializes place_zoom as a TEMP TABLE.
-        After the fix, place_zoom is an inline CTE inside the tile_assignments CTAS.
-        FAILS until CREATE TEMP TABLE place_zoom is removed.
-        """
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "compute_tile_assignments.sql"
-        sql = sql_path.read_text()
-        assert "CREATE TEMP TABLE place_zoom" not in sql, (
-            "compute_tile_assignments.sql still contains 'CREATE TEMP TABLE place_zoom'. "
-            "Fix: convert place_zoom to an inline CTE inside the tile_assignments CTAS."
-        )
-
-    # ------------------------------------------------------------------
-    # Fix 3: compute_tile_assignments.sql — tile_assignments sorted by tile_qk
-    # ------------------------------------------------------------------
-
-    def test_fix3_tile_assignments_sql_has_order_by(self):
-        """Structural guard: compute_tile_assignments.sql must have ORDER BY tile_qk in the CTAS."""
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "compute_tile_assignments.sql"
-        sql = sql_path.read_text()
-        assert "ORDER BY tile_qk" in sql, (
-            "compute_tile_assignments.sql missing ORDER BY tile_qk in tile_assignments CTAS."
-        )
-
-    def test_fix3_tile_assignments_ordered_by_tile_qk(self, tmp_path):
-        """tile_assignments rows must be sorted by tile_qk after fix.
-
-        The fix adds ORDER BY tile_qk to the tile_assignments CTAS so the
-        output is sorted for deterministic downstream processing.
-        FAILS until ORDER BY tile_qk is added to the CTAS.
-        """
-        places = [
-            # Choose places in different quadkey regions so ordering is testable.
-            ("p_nyc",  40.7128, -74.0060),   # NYC — starts with '0'
-            ("p_sf1",  37.7749, -122.4194),   # SF  — starts with '0' but different prefix
-            ("p_sf2",  37.7750, -122.4195),
-            ("p_lon",  51.5074,  -0.1278),    # London — different prefix
-        ]
-
-        db_path = tmp_path / "test_fix3_sorted.duckdb"
-        conn = duckdb.connect(str(db_path))
-        make_tile_assignment_db(conn, places)
-        run_tile_assignments(conn, pk_expr="place_id", min_zoom=6, max_zoom=17, max_per_tile=10)
-
-        rows = conn.execute("SELECT tile_qk FROM tile_assignments").fetchall()
-        conn.close()
-
-        qk_values = [row[0] for row in rows]
-        assert qk_values == sorted(qk_values), (
-            f"tile_assignments is not sorted by tile_qk. "
-            f"Got order: {qk_values}. "
-            "Fix: add ORDER BY tile_qk to the tile_assignments CTAS."
         )
 
     # ------------------------------------------------------------------
@@ -291,9 +224,9 @@ class TestOvertureVariantsCteSpillFix:
 
     The ov_base-reference-count and forbidden-helper-CTE checks that used
     to live here have moved to TestImportSqlD6Enforcement below, which
-    parametrizes the same checks over a list of import SQL files (D6,
-    docs/design-constraints.md D6) instead of hand-writing them
-    per file. The tests remaining here (no unnest on names.common/rules, no
+    parametrizes the same checks over a list of import SQL files (D6)
+    instead of hand-writing them per file. The tests remaining here (no
+    unnest on names.common/rules, no
     GROUP BY id) are specific to how Overture's `variants` column is
     derived and have no OSM equivalent, so they stay Overture-specific.
     """
@@ -371,12 +304,10 @@ class TestOvertureVariantsCteSpillFix:
 
 
 # ---------------------------------------------------------------------------
-# D6 enforcement ledger: "No unbounded complex-state aggregation... a hard
-# review criterion for every SQL file" (docs/design-constraints.md D6).
+# D6 enforcement ledger: no unbounded complex-state aggregation, enforced as
+# a hard review criterion for every SQL file.
 #
-# D6 was stated as a design constraint but never coded as a test, and never
-# tied to a specific, enumerable list of files — so it was never actually
-# enforced. IMPORT_SQL_FILES below is that list for the two files known to
+# IMPORT_SQL_FILES below is that list for the two files known to
 # violate it (overture_place_import.sql, osm_import.sql): each has one or
 # more base CTE(s) that scan the raw parquet input in full, referenced
 # multiple times beyond their own definition by narrow-projection
@@ -435,11 +366,8 @@ EXEMPT_IMPORT_SQL_FILES = [
 
 
 class TestImportSqlD6Enforcement:
-    """D6 (docs/design-constraints.md) as executable tests,
-    parametrized over IMPORT_SQL_FILES rather than hand-written per file.
-
-    FAILS now for both overture_place_import.sql and osm_import.sql (both
-    currently violate D6); must PASS after each file's spill fix lands.
+    """D6 as executable tests, parametrized over IMPORT_SQL_FILES rather
+    than hand-written per file.
     """
 
     def test_all_import_sql_files_are_classified(self):

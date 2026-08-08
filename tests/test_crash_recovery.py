@@ -37,8 +37,7 @@ def _canonical_tile(gz_path):
     """Read a .json.gz tile, sort records, strip the run-scoped generated_at,
     return canonical JSON string.
 
-    Post-2b (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
-    adoption"), tiles carry a top-level `generated_at`
+    Tiles carry a top-level `generated_at`
     that is run-scoped (derived from the export run's timestamp) and legitimately
     differs between the control run and a recovery run executed at a different
     wall-clock time -- it is not a crash-recovery correctness signal, so it must
@@ -247,8 +246,7 @@ class TestCrashStateMatrix:
     ):
         """Stale boundaries.duckdb.tmp + genuine .wal must be explicitly deleted before ATTACH.
 
-        Per pipeline-implementation-decisions.md "Phase 2 — parquet artifacts +
-        orchestrator" (crash recovery patterns): phase 2 deletes both .tmp and
+        The pipeline deletes both .tmp and
         .wal at stage start so DuckDB does not replay a stale WAL against a
         fresh empty DB (which would fail with "table already exists" because
         the WAL records the old CREATE TABLE).

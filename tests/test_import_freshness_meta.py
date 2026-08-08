@@ -1,6 +1,6 @@
 """Tests for stage_import() freshness-meta contract (density/idf inputs+params).
 
-Design contract (see docs/pipeline-implementation-decisions.md, "Phase 2" — freshness via meta sidecars):
+Freshness-via-meta-sidecars contract:
 
     | `<src>/places.parquet` | `bbox, density_norm, idf_norm` | source parquet, density, idf |
 

@@ -6,13 +6,13 @@ Tests are organized by stage function:
 - TestStageExport: tests for stage_export()
 - TestStageManifest: tests for write_manifest() and write_manifest_db()
 - TestStageDensityExtractMtime: mtime-based caching tests for stage_density_extract()
-- TestEnvelopeShape: new atgeo v1 envelope shape on the real
-  stage_export production path (pipeline-implementation-decisions.md
-  "OQ-P2-1 — record envelope adoption").
+- TestEnvelopeShape: atgeo v1 envelope shape on the real stage_export
+  production path. Tile top-level is exactly {collection, source, license,
+  generated_at, records}; each record is exactly {uri, cid, value}-wrapped
+  with cid always null.
 - TestGeneratedAtCoherence: fixed-timestamp injection seam,
   determinism, and run-dir/tile/manifest/manifest.duckdb generated_at
-  agreement (pipeline-implementation-decisions.md
-  "OQ-P2-1 — record envelope adoption").
+  agreement.
 """
 import argparse
 import time
@@ -199,13 +199,15 @@ class TestStageManifest:
 
 
 # ---------------------------------------------------------------------------
-# pipeline-implementation-decisions.md ("OQ-P2-1 — record envelope adoption")
+# atgeo v1 record envelope: tile top-level is exactly {collection, source,
+# license, generated_at, records}; each record is {uri, cid, value}-wrapped
+# with cid always null.
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the REAL stage_export production path (via
 # run_pipeline, and directly for the fixed-timestamp seam) rather than
-# hand-built fixtures, so they exercise the full Python wrapping integration
-# (per the envelope decisions above), not just envelope.py's pure functions (covered in isolation by
+# hand-built fixtures, so they exercise the full Python wrapping integration,
+# not just envelope.py's pure functions (covered in isolation by
 # tests/test_envelope.py).
 
 def _read_one_tile(tiles_current: Path) -> dict:
@@ -221,7 +223,7 @@ class TestEnvelopeShape:
 
     def test_tile_top_level_keys_exact(self, overture_parquet, density_parquet, tmp_path):
         """Tile top-level == exactly {collection, source, license,
-        generated_at, records} (per the envelope decisions above)."""
+        generated_at, records}."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -234,7 +236,7 @@ class TestEnvelopeShape:
         )
 
     def test_tile_records_are_uri_cid_value_wrapped(self, overture_parquet, density_parquet, tmp_path):
-        """Each record == exactly {uri, cid, value} with cid is None (per the envelope decisions above)."""
+        """Each record == exactly {uri, cid, value} with cid is None."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -250,7 +252,7 @@ class TestEnvelopeShape:
 
     def test_tile_record_uri_form_and_rkey_agreement(self, overture_parquet, density_parquet, tmp_path):
         """uri == https://{repo}/{collection}/{rkey}; uri's rkey segment ==
-        value.rkey == record_tiles.rkey for sampled records (per the envelope decisions above)."""
+        value.rkey == record_tiles.rkey for sampled records."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -274,7 +276,7 @@ class TestEnvelopeShape:
             )
 
     def test_manifest_json_field_set(self, overture_parquet, density_parquet, tmp_path):
-        """manifest.json matches the manifest-shape field set (per the envelope decisions above)."""
+        """manifest.json matches the manifest-shape field set."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -287,7 +289,7 @@ class TestEnvelopeShape:
         )
 
     def test_manifest_duckdb_metadata_has_collection(self, overture_parquet, density_parquet, tmp_path):
-        """manifest.duckdb metadata has a collection column (per the envelope decisions above)."""
+        """manifest.duckdb metadata has a collection column."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
@@ -312,13 +314,12 @@ class TestGeneratedAtDeterminismAndCoherence:
     directory (`now.strftime("%Y%m%dT%H%M%S")`, replacing the internal
     `datetime.now(timezone.utc)` call at stages.py:1278) AND to derive the
     shared `generated_at` RFC 3339 Z string stamped into every tile,
-    manifest.json, and manifest.duckdb metadata (per the envelope decisions above). When omitted,
-    stage_export defaults to the current wall-clock time as it does today.
-    This is the minimal seam consistent with the design's own description:
-    "one timestamp per export run, derived from the run-dir name ... already
-    produces %Y%m%dT%H%M%S UTC" (per the envelope decisions above) — injecting `now` and deriving both
-    the dir name and generated_at from the SAME value is what makes two runs
-    with an identical injected `now` byte-identical tile-for-tile.
+    manifest.json, and manifest.duckdb metadata. When omitted, stage_export
+    defaults to the current wall-clock time. One timestamp covers an entire
+    export run, derived from the run-dir name (which already produces
+    %Y%m%dT%H%M%S UTC) — injecting `now` and deriving both the dir name and
+    generated_at from the SAME value is what makes two runs with an
+    identical injected `now` byte-identical tile-for-tile.
     """
 
     def _build_export_inputs(self, overture_parquet, density_parquet, tmp_path, subdir):
@@ -368,7 +369,7 @@ class TestGeneratedAtDeterminismAndCoherence:
 
     def test_generated_at_derived_from_injected_now(self, overture_parquet, density_parquet, tmp_path):
         """generated_at (tile + manifest.json + manifest.duckdb metadata) ==
-        RFC 3339 Z rendering of the injected now (per the envelope decisions above)."""
+        RFC 3339 Z rendering of the injected now."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
             overture_parquet, density_parquet, tmp_path, "inputs_b"
         )
@@ -397,8 +398,7 @@ class TestGeneratedAtDeterminismAndCoherence:
         assert os.path.basename(str(run_dir)) == "20260709T180000"
 
     def test_every_tile_shares_the_same_generated_at(self, overture_parquet, density_parquet, tmp_path):
-        """Every tile in a multi-tile run carries the identical generated_at (per
-        the envelope decisions above: 'identical across all tiles of a run')."""
+        """Every tile in a multi-tile run carries the identical generated_at."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
             overture_parquet, density_parquet, tmp_path, "inputs_c"
         )

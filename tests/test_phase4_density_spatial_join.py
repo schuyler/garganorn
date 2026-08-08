@@ -133,11 +133,12 @@ class TestDivisionDensityJoin:
     def test_small_locality_gets_density(self, small_density_parquet, division_parquet, division_area_parquet, tmp_path):
         """Small localities (bbox smaller than z15 tile) receive non-zero density score.
 
-        This test FAILS because the density join still uses centroid-point-in-bbox,
-        which misses small localities.
-
-        After Phase 4, using bbox-overlap join ensures that any locality whose
-        bbox intersects a density tile gets that tile's density score.
+        Asserts on places.importance (the production column the density join
+        feeds into), not a query-side reimplementation of the join — the fixture's
+        single locality has population=1000, density_norm=10.0, pop_norm=20.0, and
+        the density tile's density_score=5.0, so importance must reflect the
+        density contribution: round(60*min(5/10,1) + 40*min(ln(1001)/20,1)) == 44.
+        Without the bbox-overlap join (avg_density=0), importance would be 14.
         """
         # Import divisions with small density parquet
         work_db = tmp_path / "test_work.duckdb"
@@ -167,31 +168,15 @@ class TestDivisionDensityJoin:
 
         con.execute(division_import_sql)
 
-        # Re-create density temp table for verification (import SQL drops it)
-        con.execute(f"CREATE TEMP TABLE density_tiles AS SELECT * FROM read_parquet('{small_density_parquet}')")
-
-        # Check that at least one locality has non-zero avg_density
-        result = con.execute("""
-            SELECT COUNT(*)
-            FROM places
-            WHERE subtype = 'locality'
-              AND EXISTS (
-                  SELECT 1 FROM (
-                      SELECT id, coalesce(avg(density_score), 0) AS avg_density
-                      FROM places p2
-                      LEFT JOIN density_tiles d
-                          ON d.tile_xmin <= p2.max_longitude
-                         AND d.tile_xmax >= p2.min_longitude
-                         AND d.tile_ymin <= p2.max_latitude
-                         AND d.tile_ymax >= p2.min_latitude
-                      WHERE p2.subtype = 'locality'
-                      GROUP BY p2.id
-                  ) WHERE id = places.id AND avg_density > 0
-              )
-        """).fetchone()
-
-        assert result[0] > 0, "At least one small locality should have non-zero density score"
+        importance = con.execute(
+            "SELECT importance FROM places WHERE id = 'div1'"
+        ).fetchone()[0]
         con.close()
+
+        assert importance == 44, (
+            f"expected importance=44 (density-driven component included) for "
+            f"div1, got {importance}; a bbox-overlap join failure would yield 14"
+        )
 
     def test_division_import_no_centroid_references(self):
         """overture_division_import.sql must NOT reference centroid_lon or centroid_lat.

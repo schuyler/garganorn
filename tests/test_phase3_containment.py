@@ -42,10 +42,9 @@ class TestBoundaryExportFilter:
     def test_run_pipeline_has_boundary_filter(self):
         """export_boundaries_db CTAS should include a level-vocabulary filter.
 
-        pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
-        vocabulary"): the OLD invariant (admin_level BETWEEN 0 AND 2
-        OR subtype = 'locality') is replaced by the level-vocabulary threshold
-        `level <= 50` (country..locality; per the decisions above). The filter is expressed via the
+        The filter is the level-vocabulary threshold
+        `level <= 50` (country..locality), not admin_level BETWEEN 0 AND 2
+        OR subtype = 'locality'. The filter is expressed via the
         LEVEL_VOCAB constant so it can't drift from the vocabulary, but the
         source text still contains the literal comparison against 50
         (LEVEL_VOCAB['locality']) since that's what the CASE/threshold compiles

@@ -1306,10 +1306,10 @@ class TestRunPipelineMtime:
 # ---------------------------------------------------------------------------
 
 class TestExportPhase2:
-    """Phase 2 export layout — tiles under <src>/tiles/current/, manifests written last
-    (see pipeline-implementation-decisions.md "Phase 2 — parquet artifacts + orchestrator":
-    run-dir lifecycle — tiles relocate to <src>/tiles/, manifest.json written last,
-    symlink swap, keep-2).
+    """Phase 2 export layout — tiles under <src>/tiles/current/, manifests written last.
+
+    Run-dir lifecycle: tiles relocate to <src>/tiles/, manifest.json written last,
+    symlink swap, keep-2.
 
     Fails in Red phase because run_pipeline still writes tiles under
     <src>/<timestamp>/ (Phase 1 layout) instead of <src>/tiles/<timestamp>/.

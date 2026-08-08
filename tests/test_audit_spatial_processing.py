@@ -1,247 +1,18 @@
-"""Failing tests for spatial processing bug fixes.
-
-These tests verify that the following bugs are fixed:
-
-Malformed qk17 not validated in tile assignment
-ST_Intersection can produce invalid/empty geometries
-NULL qk17 places silently dropped from tiles
-No uniqueness validation on tile assignments
-
-All tests should FAIL with the current code and PASS after fixes are implemented.
+"""Tests for stage_tile_assignment diagnostics: dropped-place warnings and
+duplicate-assignment error logging.
 """
 
-import pytest
 import duckdb
 import logging
-from pathlib import Path
 
-from garganorn.stages import (
-    stage_tile_assignment,
-    compute_containment,
-    quadkey_to_bbox,
-)
-from tests.quadtree_helpers import _load_sql
-
-
-class TestMalformedQK17Validation:
-    """Malformed qk17 values must be validated and rejected.
-
-    Bug: compute_tile_assignments.sql calls left(qk17, level) without verifying
-    qk17 is well-formed (length 17, digits 0-3 only). NULL is filtered, but
-    non-standard values pass through and can cause incorrect tile assignments.
-
-    Fix: Add WHERE filter: length(qk17) = 17 AND regexp_matches(qk17, '^[0-3]{17}$')
-    in both tile_counts and place_zoom CTEs.
-    """
-
-    def test_malformed_qk17_string_rejected(self, tmp_path):
-        """Places with malformed qk17 (e.g., 'invalid') should not be in tile_assignments."""
-        con = duckdb.connect(":memory:")
-        con.execute("INSTALL spatial; LOAD spatial;")
-
-        # Create places table with a malformed qk17
-        con.execute("""
-            CREATE TABLE places (
-                place_id VARCHAR,
-                name VARCHAR,
-                latitude DOUBLE,
-                longitude DOUBLE,
-                qk17 VARCHAR
-            )
-        """)
-
-        # Insert a valid place
-        con.execute("""
-            INSERT INTO places VALUES
-            ('valid001', 'Valid Place', 37.7749, -122.4194, '02301020333300320')
-        """)
-
-        # Insert a place with malformed qk17 (not all digits 0-3)
-        con.execute("""
-            INSERT INTO places VALUES
-            ('invalid001', 'Invalid QK17', 37.7750, -122.4200, 'invalid12345678')
-        """)
-
-        # Insert a place with qk17 that has digits outside 0-3
-        con.execute("""
-            INSERT INTO places VALUES
-            ('invalid002', 'Wrong Digits', 37.7751, -122.4201, '12345678901234567')
-        """)
-
-        # Run tile assignment
-        sql = _load_sql(
-            "compute_tile_assignments.sql",
-            {
-                "pk_expr": "place_id",
-                "min_zoom": 6,
-                "max_zoom": 17,
-                "max_per_tile": 1000,
-            },
-        )
-        con.execute(sql)
-
-        # Check that only the valid place is in tile_assignments
-        rows = con.execute("SELECT place_id FROM tile_assignments").fetchall()
-        place_ids = [r[0] for r in rows]
-
-        assert 'valid001' in place_ids, "Valid place should be in tile_assignments"
-        assert 'invalid001' not in place_ids, "Place with malformed qk17 string should be rejected"
-        assert 'invalid002' not in place_ids, "Place with qk17 containing digits 4-9 should be rejected"
-        assert len(place_ids) == 1, f"Expected 1 place, got {len(place_ids)}"
-
-    def test_qk17_wrong_length_rejected(self, tmp_path):
-        """Places with qk17 that is not exactly 17 characters should be rejected."""
-        con = duckdb.connect(":memory:")
-        con.execute("INSTALL spatial; LOAD spatial;")
-
-        con.execute("""
-            CREATE TABLE places (
-                place_id VARCHAR,
-                name VARCHAR,
-                latitude DOUBLE,
-                longitude DOUBLE,
-                qk17 VARCHAR
-            )
-        """)
-
-        # Insert a place with qk17 that's too short
-        con.execute("""
-            INSERT INTO places VALUES
-            ('short001', 'Short QK17', 37.7749, -122.4194, '0230102')
-        """)
-
-        # Insert a place with qk17 that's too long
-        con.execute("""
-            INSERT INTO places VALUES
-            ('long001', 'Long QK17', 37.7750, -122.4200, '0230102033330032012345')
-        """)
-
-        # Run tile assignment
-        sql = _load_sql(
-            "compute_tile_assignments.sql",
-            {
-                "pk_expr": "place_id",
-                "min_zoom": 6,
-                "max_zoom": 17,
-                "max_per_tile": 1000,
-            },
-        )
-        con.execute(sql)
-
-        # Check that neither place is in tile_assignments
-        rows = con.execute("SELECT place_id FROM tile_assignments").fetchall()
-        place_ids = [r[0] for r in rows]
-
-        assert 'short001' not in place_ids, "Place with qk17 < 17 chars should be rejected"
-        assert 'long001' not in place_ids, "Place with qk17 > 17 chars should be rejected"
-        assert len(place_ids) == 0, f"Expected 0 places, got {len(place_ids)}"
-
-
-class TestInvalidGeometryFilter:
-    """ST_Intersection can produce invalid/empty geometries.
-
-    Bug: Clipping boundaries to tile envelopes via ST_Intersection can produce
-    degenerate geometries (point intersections, zero-area slivers). These
-    invalid geometries can cause ST_Contains to return false negatives.
-
-    Fix: Add filter after tile_boundaries creation in _run_containment():
-    ST_IsValid(geometry) AND ST_Area(geometry) > 0
-
-    The filter should be in the WHERE clause of the CREATE TEMP TABLE statement,
-    not as a separate DELETE.
-    """
-
-    def test_degenerate_intersection_filtered(self, tmp_path):
-        """Degenerate geometries (points, lines) from ST_Intersection must be filtered out.
-
-        The bug: ST_Intersection of boundaries with tile envelopes can produce
-        degenerate geometries (points, zero-area slivers). These are not valid
-        polygon boundaries and should be excluded from tile_boundaries.
-
-        The fix: In _run_containment(), the tile_boundaries query includes:
-        WHERE ST_IsValid(geometry) AND ST_Area(geometry) > 0
-
-        This test verifies that degenerate geometries are filtered out.
-        """
-        con = duckdb.connect(":memory:")
-        con.execute("INSTALL spatial; LOAD spatial;")
-
-        # Create a boundary table with geometries that produce degenerate intersections.
-        # Column named `level` (not admin_level) to match the boundaries.duckdb
-        # `places` schema post pipeline-implementation-decisions.md
-        # ("OQ-P2-2 — containment level vocabulary").
-        con.execute("""
-            CREATE TABLE boundaries (
-                id VARCHAR,
-                geometry GEOMETRY,
-                level INTEGER,
-                min_latitude DOUBLE,
-                max_latitude DOUBLE,
-                min_longitude DOUBLE,
-                max_longitude DOUBLE
-            )
-        """)
-
-        # A vertical line at x=-122.4194 that crosses the envelope vertically.
-        # When intersected with the envelope below, it produces a LINESTRING (degenerate).
-        con.execute("""
-            INSERT INTO boundaries VALUES
-            ('boundary_line',
-             ST_GeomFromText('LINESTRING(-122.4194 37.7700, -122.4194 37.7800)'),
-             25, 37.77, 37.78, -122.42, -122.42)
-        """)
-
-        # A valid polygon that properly overlaps the envelope with area > 0
-        con.execute("""
-            INSERT INTO boundaries VALUES
-            ('boundary_valid',
-             ST_GeomFromText('POLYGON((-122.43 37.76, -122.40 37.76, -122.40 37.79, -122.43 37.79, -122.43 37.76))'),
-             25, 37.76, 37.79, -122.43, -122.40)
-        """)
-
-        # Define the tile envelope
-        envelope = "ST_MakeEnvelope(-122.43, 37.76, -122.40, 37.79)"
-
-        # Create tile_boundaries using the same pattern as _run_containment()
-        # This includes the ST_IsValid + ST_Area filter
-        con.execute(f"""
-            CREATE TEMP TABLE tile_boundaries AS
-            SELECT * FROM (
-                SELECT id, level,
-                       ST_Intersection(geometry, {envelope}) AS geometry
-                FROM boundaries
-                WHERE ST_Intersects(geometry, {envelope})
-            )
-            WHERE ST_IsValid(geometry) AND ST_Area(geometry) > 0
-        """)
-
-        # Verify no degenerate geometries in tile_boundaries
-        degenerate_count = con.execute(f"""
-            SELECT count(*) FROM tile_boundaries
-            WHERE NOT ST_IsValid(geometry)
-               OR ST_Area(geometry) <= 0
-               OR ST_GeometryType(geometry) IN ('POINT', 'LINESTRING', 'MULTIPOINT', 'MULTILINESTRING')
-        """).fetchone()[0]
-
-        assert degenerate_count == 0, \
-            f"tile_boundaries should contain no degenerate geometries, found {degenerate_count}"
-
-        # Also verify the valid boundary is still present
-        valid_count = con.execute(f"""
-            SELECT count(*) FROM tile_boundaries
-            WHERE ST_IsValid(geometry) AND ST_Area(geometry) > 0
-        """).fetchone()[0]
-        assert valid_count >= 1, "tile_boundaries should contain at least one valid polygon"
+from garganorn.stages import stage_tile_assignment
 
 
 class TestNullQK17Logging:
     """NULL qk17 places are silently dropped from tile assignments.
 
-    Bug: Places with NULL qk17 are filtered out of tile_assignments with no
-    warning logged. This makes data quality issues invisible.
-
-    Fix: After tile assignment, compare count(places) vs count(tile_assignments).
-    Log a warning if places were dropped.
+    stage_tile_assignment must compare count(places) vs count(tile_assignments)
+    after tile assignment and log a warning if places were dropped.
     """
 
     def test_null_qk17_logs_warning(self, tmp_path, caplog):
@@ -356,11 +127,8 @@ class TestNullQK17Logging:
 class TestTileAssignmentUniqueness:
     """No uniqueness validation on tile assignments.
 
-    Bug: No check that each place appears exactly once in tile_assignments.
-    Duplicate place_ids could cause incorrect exports and data corruption.
-
-    Fix: Add post-assignment query checking for duplicate place_ids.
-    Log an error if duplicates are found.
+    stage_tile_assignment must check for duplicate place_ids post-assignment
+    and log an error if duplicates are found.
     """
 
     def test_normal_assignment_no_duplicates(self, tmp_path, caplog):

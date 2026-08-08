@@ -364,13 +364,10 @@ class TestDivisionImportArtifactPhase2:
         assert boundaries.exists(), f"boundaries.duckdb not written alongside places.parquet"
 
     def test_boundaries_duckdb_schema_replaces_admin_level_with_level(self, division_parquet, tmp_path):
-        """boundaries.duckdb must have a level column, not admin_level
-        (pipeline-implementation-decisions.md "OQ-P2-2 — containment level vocabulary").
+        """boundaries.duckdb must have a level column, not admin_level.
 
-        OLD invariant (schema unchanged, admin_level present) is inverted: the
-        level-vocabulary decision above replaces the raw Overture admin_level
-        integer with the atgeo level vocabulary throughout the boundaries.duckdb
-        export.
+        The atgeo level vocabulary replaces the raw Overture admin_level
+        integer throughout the boundaries.duckdb export.
         """
         output = str(tmp_path / "places.parquet")
         _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
@@ -406,7 +403,7 @@ class TestDivisionImportArtifactPhase2:
 
     def test_boundaries_duckdb_places_hilbert_sorted(self, division_parquet, tmp_path):
         """bnd.places must be physically sorted by ST_Hilbert(geometry) over the
-        world BOX_2D (design-constraints.md D2: zone maps require sorted columns)."""
+        world BOX_2D (zone maps require sorted columns)."""
         output = str(tmp_path / "places.parquet")
         _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
         boundaries = str(tmp_path / "boundaries.duckdb")

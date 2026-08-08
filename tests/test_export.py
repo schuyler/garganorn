@@ -212,9 +212,9 @@ class TestExportTiles:
         from garganorn.quadtree import export_tiles
 
         # Build two synthetic tile rows that a real cursor would return.
-        # record_json is the FLAT record shape (as tile_export SQL views emit
-        # it, per docs/pipeline-implementation-decisions.md, "OQ-P2-1 — record
-        # envelope adoption"); export_tiles wraps each with envelope.wrap_record.
+        # record_json is the FLAT record shape emitted by the tile_export SQL
+        # views; export_tiles wraps each with envelope.wrap_record into the
+        # {uri, cid, value} envelope.
         tile_qk_a = "023130" + "0" * 11  # 17-char quadkey
         tile_qk_b = "023130" + "1" * 11
         record_a = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"})
@@ -427,14 +427,10 @@ class TestExportTiles:
     def test_python_groups_records_by_tile_qk(self, tmp_path):
         """export_tiles groups per-record rows by tile_qk into separate .json.gz files.
 
-        Retargeted onto the atgeo v1 envelope (pipeline-implementation-decisions.md
-        "OQ-P2-1 — record envelope adoption": legacy
-        export_tiles() is retargeted onto the same envelope.py helpers as
-        stage_export in this change set, not deleted). The mock cursor now
-        yields a third `rkey` column (per the envelope decisions above: all
-        four export SQL views gain an rkey output column), and each written
-        record must be
-        {uri, cid, value}-wrapped, not flat.
+        export_tiles() uses the same envelope.py helpers as stage_export. Each
+        export SQL view outputs an `rkey` column alongside tile_qk and
+        record_json, and each written record must be {uri, cid, value}-wrapped,
+        not flat.
         """
         from unittest.mock import MagicMock, patch
         from garganorn.quadtree import export_tiles
@@ -882,9 +878,8 @@ class TestOvertureExportTiles:
 # ---------------------------------------------------------------------------
 
 # The four division boundaries that contain SF places (lat ~37.77, lon ~-122.42),
-# ordered by level ascending (continent first — matches ORDER BY level ASC;
-# garganorn.levels.LEVEL_VOCAB, pipeline-implementation-decisions.md
-# "OQ-P2-2 — containment level vocabulary").
+# ordered by level ascending (continent first — matches ORDER BY level ASC
+# over garganorn.levels.LEVEL_VOCAB).
 _SF_WITHIN_JSON = json.dumps({
     "within": [
         {"rkey": "org.atgeo.places.overture.division:div_continent_na"},
@@ -1113,8 +1108,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
-        # see design-constraints.md P4).
+        # Build covering explicitly: it's the orchestrator's responsibility,
+        # not compute_containment's.
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_produces")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1238,8 +1233,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
-        # see design-constraints.md P4).
+        # Build covering explicitly: it's the orchestrator's responsibility,
+        # not compute_containment's.
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_bbox")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1468,8 +1463,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
-        # see design-constraints.md P4).
+        # Build covering explicitly: it's the orchestrator's responsibility,
+        # not compute_containment's.
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_ocean")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1559,8 +1554,8 @@ class TestContainmentInExport:
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
 
-        # Build covering explicitly (orchestrator responsibility, not compute_containment's;
-        # see design-constraints.md P4).
+        # Build covering explicitly: it's the orchestrator's responsibility,
+        # not compute_containment's.
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "covering_edge")
         stage_covering(str(division_db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1865,11 +1860,8 @@ class TestStageExportPhase2Body:
             (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
         NOT a read_parquet glob, which errors on DuckDB 1.2.1 when the glob matches nothing.
 
-        Records are {uri, cid, value}-wrapped (docs/pipeline-implementation-decisions.md,
-        "OQ-P2-1 — record envelope adoption"); relations lives on
-        value, not on the wrapper -- this FAILS against the current envelope
-        (records are still flat) because parsed.get("relations") reads the
-        wrapper (which has no 'relations' key) instead of value.
+        Records are {uri, cid, value}-wrapped; relations lives on value, not
+        on the wrapper.
         """
         import os, time
         from pathlib import Path
@@ -1906,19 +1898,17 @@ class TestStageExportPhase2Body:
 
     def test_determinism_two_exports_byte_identical(self, tmp_path):
         """Two exports from identical artifacts, with an injected fixed timestamp,
-        produce byte-identical .json.gz files (record envelope: see
-        pipeline-implementation-decisions.md, "OQ-P2-1 — record envelope adoption").
+        produce byte-identical .json.gz files.
 
         Pins the ORDER BY tile_qk, place_id invariant.
         gzip mtime=0 is already set by the existing export_tiles implementation.
 
-        Post-2b, tiles carry a run-scoped `generated_at` (per the envelope
-        decisions above); without
-        injecting the same `now` into both calls, two exports run at different
-        wall-clock seconds would legitimately differ in that one field, which
-        would make this test fail for a reason unrelated to the
-        ORDER BY/determinism property it exists to pin. Injecting `now` keeps
-        the test measuring the invariant it's named for.
+        Tiles carry a run-scoped `generated_at`; without injecting the same
+        `now` into both calls, two exports run at different wall-clock
+        seconds would legitimately differ in that one field, which would
+        make this test fail for a reason unrelated to the ORDER
+        BY/determinism property it exists to pin. Injecting `now` keeps the
+        test measuring the invariant it's named for.
         """
         import os, time
         from datetime import datetime, timezone

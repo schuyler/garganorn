@@ -1,27 +1,26 @@
-"""RED tests: garganorn.envelope — the atgeo v1 tile/record envelope module.
+"""Tests for garganorn.envelope, the atgeo v1 tile/record envelope module.
 
-pipeline-implementation-decisions.md ("OQ-P2-1 — record envelope adoption").
-garganorn/envelope.py does not exist yet
-(per those decisions), so every test in this module that imports from it fails at
-collection/setup with ImportError until it is implemented -- that failure IS
-the RED signal for this feature. Mirrors the import-guard pattern used by
+Import is guarded so that if garganorn.envelope is ever missing, every test
+fails at collection/setup with a clear ImportError message instead of an
+opaque collection error. Mirrors the import-guard pattern used by
 tests/test_levels.py for garganorn.levels.
 
-Covers the combined acceptance checklist (pipeline-implementation-decisions.md
-"OQ-P2-1 — record envelope adoption") items 6 and 9,
-plus the module-level contract from those same decisions:
-  - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}"
-  - wrap_record(uri, record_json) -> '{"uri":...,"cid":null,"value":...}' string,
-    cid is literally null, never computed
+Envelope contract exercised here:
+  - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}",
+    never at://; for OSM, rkey is the node:/way:/relation: form, not the raw
+    place_id, and its colon is not percent-encoded.
+  - wrap_record(uri, record_json) -> a JSON string parsing to exactly
+    {uri, cid, value}; cid is literally null, never computed; record_json is
+    embedded verbatim (string composition, not a json.loads/json.dumps round
+    trip), so UTF-8 output and unusual formatting survive unchanged.
   - build_tile_payload(collection, source_url, license_url, generated_at,
-    wrapped_records) -> bytes; top-level == exactly {collection, source,
-    license, generated_at, records}
+    wrapped_records) -> bytes whose top-level parses to exactly {collection,
+    source, license, generated_at, records}.
 
-Item 7 (determinism), item 8 (timestamp coherence), and item 10 (server
-round-trip) are covered end-to-end against the real stage_export/tile_reader
-production path in tests/test_stages.py, tests/test_integration_quadtree.py,
-and tests/test_tile_reader.py -- this module is unit-level only, exercising
-envelope.py's pure functions in isolation.
+Determinism, timestamp coherence, and server round-trip are covered
+end-to-end against the real stage_export/tile_reader production path in
+tests/test_stages.py and tests/test_tile_reader.py -- this module is
+unit-level only, exercising envelope.py's pure functions in isolation.
 """
 import gzip
 import json
@@ -49,12 +48,12 @@ def _check_envelope():
 
 
 # ---------------------------------------------------------------------------
-# record_uri() (envelope decisions, see module docstring)
+# record_uri()
 # ---------------------------------------------------------------------------
 
 class TestRecordUri:
     def test_record_uri_form(self):
-        """record_uri(repo, collection, rkey) == https://{repo}/{collection}/{rkey} (per the envelope decisions)."""
+        """record_uri(repo, collection, rkey) == https://{repo}/{collection}/{rkey}."""
         _check_envelope()
         uri = envelope.record_uri(
             "places.atgeo.org", "org.atgeo.places.overture.place", "ov001"
@@ -63,15 +62,14 @@ class TestRecordUri:
 
     def test_record_uri_osm_node_rkey(self):
         """OSM rkey is the node:/way:/relation: transformed form, not the raw
-        place_id -- per the envelope decisions: 'for OSM that is the node:|way:|relation: form
-        ... not the raw place_id'. Colons are legal in a URI path segment
-        (RFC 3986); no encoding needed."""
+        place_id. Colons are legal in a URI path segment (RFC 3986); no
+        encoding needed."""
         _check_envelope()
         uri = envelope.record_uri(
             "places.atgeo.org", "org.atgeo.places.osm", "node:12345"
         )
         assert uri == "https://places.atgeo.org/org.atgeo.places.osm/node:12345"
-        assert "%3A" not in uri, "colon must not be percent-encoded (per the envelope decisions)"
+        assert "%3A" not in uri, "colon must not be percent-encoded"
 
     def test_record_uri_osm_way_and_relation(self):
         """way: and relation: rkeys form URIs analogously to node:."""
@@ -86,8 +84,8 @@ class TestRecordUri:
         assert rel_uri == "https://places.atgeo.org/org.atgeo.places.osm/relation:11111"
 
     def test_record_uri_not_at_protocol(self):
-        """URIs are https://, never at:// -- the envelope decisions are emphatic that gazetteer
-        records are not repository data and must not mint at:// URIs."""
+        """URIs are https://, never at:// -- gazetteer records are not
+        repository data and must not mint at:// URIs."""
         _check_envelope()
         uri = envelope.record_uri("places.atgeo.org", "org.atgeo.places.overture.place", "ov001")
         assert uri.startswith("https://"), f"URI must be https://, got {uri!r}"
@@ -101,7 +99,7 @@ class TestRecordUri:
 class TestWrapRecord:
     def test_wrap_record_produces_exactly_three_keys(self):
         """wrap_record(uri, record_json) -> a JSON string whose parsed object
-        has exactly {uri, cid, value} -- three keys, always present (per the envelope decisions)."""
+        has exactly {uri, cid, value} -- three keys, always present."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "ov001", "name": "Test"})
@@ -112,7 +110,7 @@ class TestWrapRecord:
         )
 
     def test_wrap_record_cid_is_none(self):
-        """cid is literally null -- never computed, per the APPROVED envelope decision."""
+        """cid is literally null -- never computed."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "ov001"})
@@ -128,7 +126,7 @@ class TestWrapRecord:
         assert parsed["uri"] == uri
 
     def test_wrap_record_value_is_the_record(self):
-        """value is byte-for-byte today's record JSON, parsed back losslessly (per the envelope decisions)."""
+        """value is byte-for-byte today's record JSON, parsed back losslessly."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         record = {
@@ -142,14 +140,13 @@ class TestWrapRecord:
         assert parsed["value"] == record
 
     def test_wrap_record_no_json_loads_per_record(self):
-        """Per the envelope decisions: wrap_record is string composition, not json.loads + json.dumps,
-        to avoid a per-record parse/reserialize round trip. Verify by checking
+        """wrap_record is string composition, not json.loads + json.dumps, to
+        avoid a per-record parse/reserialize round trip. Verify by checking
         that malformed-but-well-formed-looking JSON text is passed through
         verbatim rather than being re-serialized (e.g. key order / spacing
         would change under a round trip through json.loads->json.dumps with
-        default separators). This is a white-box characterization of the
-        envelope decisions: wrap_record must not alter the byte content of
-        record_json, only wrap it.
+        default separators). This is a white-box check that wrap_record does
+        not alter the byte content of record_json, only wraps it.
         """
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
@@ -159,12 +156,12 @@ class TestWrapRecord:
         wrapped = envelope.wrap_record(uri, record_json)
         assert record_json in wrapped, (
             "wrap_record must embed record_json verbatim (string composition, "
-            "not a json.loads/json.dumps round trip) -- per the envelope decisions"
+            "not a json.loads/json.dumps round trip)"
         )
 
     def test_wrap_record_utf8_not_ascii_escaped(self):
-        """Per the envelope decisions (review note): DuckDB's UTF-8 output is preserved verbatim
-        instead of being ensure_ascii-escaped."""
+        """DuckDB's UTF-8 output is preserved verbatim instead of being
+        ensure_ascii-escaped."""
         _check_envelope()
         uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         record_json = json.dumps({"name": "Café"}, ensure_ascii=False)
@@ -176,7 +173,7 @@ class TestWrapRecord:
 
 
 # ---------------------------------------------------------------------------
-# build_tile_payload() (envelope decisions, see module docstring)
+# build_tile_payload()
 # ---------------------------------------------------------------------------
 
 class TestBuildTilePayload:
@@ -192,7 +189,7 @@ class TestBuildTilePayload:
 
     def test_build_tile_payload_top_level_keys_exact(self):
         """Tile top-level == exactly {collection, source, license,
-        generated_at, records} (item 6 of the envelope decisions)."""
+        generated_at, records}."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
@@ -217,7 +214,7 @@ class TestBuildTilePayload:
         assert parsed["generated_at"] == self._GENERATED_AT
 
     def test_build_tile_payload_records_each_exactly_three_keys(self):
-        """Each record == exactly {uri, cid, value} with cid is None (item 6 of the envelope decisions)."""
+        """Each record == exactly {uri, cid, value} with cid is None."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
@@ -232,7 +229,7 @@ class TestBuildTilePayload:
             assert rec["cid"] is None
 
     def test_build_tile_payload_record_uri_rkey_matches_value_rkey(self):
-        """uri's trailing rkey segment matches value.rkey for sampled records (item 6 of the envelope decisions)."""
+        """uri's trailing rkey segment matches value.rkey for sampled records."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
@@ -243,7 +240,7 @@ class TestBuildTilePayload:
         assert rec["uri"].rsplit("/", 1)[-1] == rec["value"]["rkey"]
 
     def test_build_tile_payload_osm_rkey_form_in_uri(self):
-        """OSM node:/way:/relation: rkey form appears verbatim in the record uri (item 6 of the envelope decisions)."""
+        """OSM node:/way:/relation: rkey form appears verbatim in the record uri."""
         _check_envelope()
         collection = "org.atgeo.places.osm"
         uri = f"https://places.atgeo.org/{collection}/node:12345"
@@ -269,7 +266,7 @@ class TestBuildTilePayload:
 
     def test_build_tile_payload_gzip_roundtrip(self):
         """Payload bytes gzip-compress and decompress back to the same JSON
-        (sanity check for the flush_tile integration point, per the envelope decisions)."""
+        (sanity check for the flush_tile integration point)."""
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT, [self._wrapped()],

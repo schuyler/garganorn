@@ -361,8 +361,7 @@ class TestOsmImportArtifactPhase2:
     """stage_import must write places.parquet for OSM without 'geom' column.
 
     Fails in Red phase because stage_import still takes 'con' as first arg.
-    OSM-specific: DELETE WHERE geom IS NULL runs before EXCLUDE (see
-    pipeline-implementation-decisions.md "Phase 2 — parquet artifacts + orchestrator").
+    OSM-specific: DELETE WHERE geom IS NULL runs before EXCLUDE.
     """
 
     _BBOX = (-122.55, 37.60, -122.30, 37.85)

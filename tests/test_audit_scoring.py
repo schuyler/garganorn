@@ -1,9 +1,4 @@
-"""Tests for scoring behavior.
-
-TestNegativePopulationClamping tests genuine domain behavior. It
-uses _transitional_import_phase1 (the legacy con-based interface) until the
-division import is fully ported in Phase 2b.
-"""
+"""Tests for scoring behavior."""
 
 import os
 import tempfile

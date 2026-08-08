@@ -161,10 +161,9 @@ def _make_manifest_db(path, entries=(("r1", "012301"),)):
 def _make_manifest_json(manifest_db_path):
     """Write a sibling manifest.json completeness marker next to manifest.duckdb.
 
-    A2 (A1 in oq-p2-5-deploy-execution.md): the build writes manifest.duckdb
-    first, then manifest.json LAST as the completeness marker. Content is
-    irrelevant to the guard -- only presence matters -- but keep it minimal
-    and valid JSON.
+    The build writes manifest.duckdb first, then manifest.json LAST as the
+    completeness marker. Content is irrelevant to the guard -- only presence
+    matters -- but keep it minimal and valid JSON.
     """
     manifest_json_path = os.path.join(
         os.path.dirname(str(manifest_db_path)), "manifest.json"

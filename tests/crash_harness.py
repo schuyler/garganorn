@@ -1,5 +1,4 @@
-"""Crash harness for kill-9 tests (see pipeline-implementation-decisions.md
-"Phase 2 acceptance").
+"""Crash harness for kill-9 tests.
 
 This script is invoked via subprocess by test_crash_recovery.py.
 It reads GARGANORN_CRASH_POINT from the environment and either:

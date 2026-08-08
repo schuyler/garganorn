@@ -1,7 +1,6 @@
 """Red tests: compute_containment covering rewrite + Phase 2 relocation.
 
-Contains existing Phase-1 red tests and Phase-2 containment relocation tests
-(see docs/pipeline-implementation-decisions.md, "Phase 1" and "Phase 2").
+Contains existing Phase-1 red tests and Phase-2 containment relocation tests.
 
 Tests call compute_containment with the new Phase-1 signature (covering_dir,
 containment_dir instead of max_boundaries, max_zoom).  Against the current
@@ -41,8 +40,7 @@ _COLLECTION_PREFIX = "org.atgeo.places.overture.division"
 # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
 # country=10, region=25, locality=50. div_continent_na and div_borough_manhattan
 # have no vocabulary entry among this fixture's modeled subtypes (continent has no
-# producer entry per docs/pipeline-implementation-decisions.md, "OQ-P2-2 —
-# containment level vocabulary"; this fixture's "borough" is a locality-shaped
+# producer entry in the containment level vocabulary; this fixture's "borough" is a locality-shaped
 # boundary used only to test partial containment, not vocabulary mapping) -- 0 and 50
 # respectively are chosen to preserve pre-existing ascending/partial-containment
 # behavior without asserting a specific subtype mapping for them.
@@ -265,8 +263,7 @@ class TestContainmentBehaviorPorts:
 # ---------------------------------------------------------------------------
 # Ordering: within by level ASC (Phase 2 sig).
 #
-# pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
-# vocabulary"): the level vocabulary is total by construction
+# The containment level vocabulary is total by construction
 # (garganorn.levels.LEVEL_VOCAB covers every subtype the fail-loud guard
 # admits), so "NULL levels sort last" is no longer a live case -- there are no
 # NULL levels to sort. See TestNoNullLevels below, which replaces the old
@@ -337,8 +334,7 @@ class TestContainmentOrdering:
     def test_no_null_levels_in_boundaries_db(self, tmp_path):
         """No boundary ever has a NULL level (repurposed from the old NULL-levels-last test).
 
-        pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
-        vocabulary"): "NULL levels sort last" is void because level
+        "NULL levels sort last" is void because level
         is total by construction (`count(*) WHERE level IS
         NULL = 0` in `places`). A boundaries DB built directly (bypassing the
         import CTAS + fail-loud guard) could still contain a NULL level if
@@ -1038,7 +1034,7 @@ class TestAntimeridianEdgeArm:
         assertions in test_all_three_places_via_compute_containment): these are
         end-to-end sanity checks.  The gap place (lon=0) must NOT appear under
         ami_boundary's rkey — this is guaranteed structurally, not by the D7 CASE
-        branch.  The covering seed SQL (design-constraints.md D7) uses the same D7 OR-condition on the
+        branch.  The covering seed SQL uses the same D7 OR-condition on the
         boundary's bbox; gap tiles (xmax < 170 AND xmin > -170) never pass it, so
         ami_boundary contributes no covering tiles in the gap region and no
         (gap_place, ami_boundary) row can enter the edge arm join.  Even if such a
@@ -1747,7 +1743,6 @@ class TestContainmentQ3ExportAndIdempotency:
 
 # ---------------------------------------------------------------------------
 # compute_containment OOM fix: partition_zoom kwarg
-# (see docs/compute-containment-oom-fix.md)
 # ---------------------------------------------------------------------------
 
 class TestContainmentPartitionZoom:

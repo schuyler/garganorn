@@ -1,15 +1,9 @@
 """Unit + integration tests for scripts/tile_parity.py.
 
-The "New envelope" section below (pipeline-implementation-decisions.md
-"OQ-P2-1 — record envelope adoption")
-covers the canonicalizer update required for the atgeo v1 envelope: tiles now
-carry a top-level `generated_at` (not just manifest.json), and records are
-`{uri, cid, value}`-wrapped so the record sort/dedup key moves from top-level
-`rkey` to `value.rkey`. These tests FAIL against the current
-canonical_tile()/canonical_manifest(), which only strip manifest-level
-`generated_at` and sort/key records by top-level `rkey` — that is the RED
-signal for this feature; the fix belongs to scripts/tile_parity.py
-(production code, out of scope for this test-only change)."""
+atgeo v1 tiles carry a top-level `generated_at` (not just manifest.json),
+and records are `{uri, cid, value}`-wrapped, so canonical_tile() strips the
+tile-level `generated_at` and sorts/keys records by `value.rkey` rather than
+a top-level `rkey`."""
 import gzip
 import json
 import os
@@ -197,9 +191,6 @@ def test_cli_diff_difference_exits_nonzero(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# New envelope (pipeline-implementation-decisions.md
-# "OQ-P2-1 — record envelope adoption")
-#
 # atgeo v1 tiles carry {collection, source, license, generated_at, records}
 # with records wrapped as {uri, cid, value}. canonical_tile() must (a) strip
 # the tile-level generated_at (not just the manifest's) and (b) sort/key
