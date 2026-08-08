@@ -163,12 +163,17 @@ Forces a full re-export. Land P1 and P2 first.
 
 ## P7 — Documentation
 
-- [ ] Schuyler reviews `atgeo-spec.md` intensively, including re-deriving the
-      `importance` formula now that its citation (`foursquare_import.sql`)
-      is dead. No piecemeal edits to it until he has
-- [ ] State the user-safety principle once, prominently, and reference it
-      rather than re-deriving it at each error condition. Blocked on the spec
-      review above
+- [ ] Schuyler reviews `atgeo-spec.md` intensively. Still pending, and it is
+      his to discharge — but the edit freeze that came with it is lifted:
+      changes are made in conversation with him rather than deferred. The
+      `importance` sub-task is done, its dead `foursquare_import.sql`
+      citation replaced by all three formulas re-derived from the live
+      pipeline, matching P2 in `design-constraints.md` term for term
+- [x] State the user-safety principle once, prominently, and reference it
+      rather than re-deriving it at each error condition. Shipped in the
+      spec's redraft: "The safety principle" is its own section near the top,
+      and `BboxTooPrecise` links back to it instead of re-arguing the case.
+      Subject to the review above, like everything else in that document
 - [x] Rewrite the README: no searchRecords, no Foursquare, worked examples
       actually run against overture/osm, `getCoverage` + tile fetch as the
       interface, remove the dead `docs/s2_duckdb_design.md` link, and state
