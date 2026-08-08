@@ -48,7 +48,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: Full-string JW scoring is simpler and performs as well. The token-level blend (JW_TOKEN_ALPHA = 0.5) is still used, but the implementation is streamlined. Length penalties added complexity without measurable quality improvement.
 
-**Successor**: Simplified 50/50 blend of full-name JW and token-level JW (JW_TOKEN_ALPHA) — itself since removed with the rest of the Jaro-Winkler machinery in P4, when server-side search was deleted.
+**Successor**: Simplified 50/50 blend of full-name JW and token-level JW (JW_TOKEN_ALPHA) — itself since removed with the rest of the Jaro-Winkler machinery when server-side search was deleted.
 
 ## ART Index for Trigram Column
 

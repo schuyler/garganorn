@@ -1,10 +1,9 @@
 # Planned features
 
-Tracked separately from `cleanup-punchlist.md` (converges to empty — every
-item there brings already-decided code/docs into line) and
-`performance-improvements.md` (optimizes code that already works correctly).
-This document holds new feature ideas that haven't been designed or scoped
-yet. Add new sections here rather than starting another file.
+Tracked separately from `performance-improvements.md` (which optimizes
+code that already works correctly). This document holds new feature ideas
+that haven't been designed or scoped yet. Add new sections here rather
+than starting another file.
 
 Each section below is its own proposal with its own status. Nothing in this
 document is scoped for implementation until its section says so.
@@ -192,6 +191,19 @@ where it lives, given there is no manifest and no discovery mechanism; and
 whether the coarse tier's ranking can reuse the ordinary matching rules
 unchanged or needs its own, since resolving a name to a region is a different
 question from ranking results within one.
+
+## Maritime divisions
+
+Status: proposed, not started. No design has been reviewed.
+
+`sql/overture_division_import.sql`'s division import filters on
+`is_land=true`, which drops bays, straits, and seas from the division
+collection entirely. This is a completeness question, not a data-quality
+one — those are real Overture divisions, just not land ones — and it was
+deliberately left open rather than decided: is a body of water a useful
+containment answer for a client, and if so, does it change tile
+assignment or containment-name derivation (see the division tile
+assignment section of `performance-improvements.md`)?
 
 ## Audit OSM's Map Features against the import tag whitelist
 
