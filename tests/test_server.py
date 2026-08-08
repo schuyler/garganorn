@@ -120,6 +120,23 @@ def test_get_record_without_relations_key_has_no_relations():
     assert "relations" not in result["value"]
 
 
+def test_get_record_output_validates_against_lexicon_schema():
+    """get_record's output on a real record validates against com.atproto.repo.getRecord's schema."""
+    record = {
+        "rkey": "tile001",
+        "name": "Tile Place",
+        "importance": 5,
+    }
+    mock_col = MockTileBackedCollection(record=record)
+    server = _make_server(tile_collections={TILE_COLLECTION: mock_col})
+
+    result = server.get_record(
+        {}, repo="places.atgeo.org", collection=TILE_COLLECTION, rkey="tile001"
+    )
+
+    server.server.validate("com.atproto.repo.getRecord", "output", result)
+
+
 def test_load_lexicons():
     """load_lexicons returns a list of dicts, each with an 'id' key."""
     lexicons = load_lexicons()

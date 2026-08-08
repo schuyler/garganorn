@@ -35,10 +35,24 @@
         "encoding": "application/json",
         "schema": {
           "type": "object",
-          "required": ["uri", "value"],
+          "required": ["uri", "source", "license", "value"],
           "properties": {
-            "uri": { "type": "string", "format": "at-uri" },
+            "uri": { "type": "string", "format": "uri" },
             "cid": { "type": "string", "format": "cid" },
+            "source": {
+              "type": "string",
+              "format": "uri",
+              "description": "URL of the record's source dataset."
+            },
+            "license": {
+              "type": "string",
+              "format": "uri",
+              "description": "URL of the source dataset's license."
+            },
+            "importance": {
+              "type": "integer",
+              "description": "The record's relative importance rank, when it has one."
+            },
             "value": { "type": "unknown" }
           }
         }

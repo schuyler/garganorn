@@ -45,6 +45,10 @@
                 "type": "object",
                 "required": ["name"],
                 "properties": {
+                    "$type": {
+                        "type": "string",
+                        "description": "The record's lexicon type, always \"org.atgeo.place\"."
+                    },
                     "rkey": {
                         "type": "string",
                         "description": "A globally unique identifier for this place record.",
@@ -84,6 +88,10 @@
                         "description": "The date when the place record was last updated",
                         "format": "datetime"
                     },
+                    "importance": {
+                        "type": "integer",
+                        "description": "Relative importance rank among places from the same source."
+                    },
                     "relations": {
                         "type": "object",
                         "description": "Related records, keyed by relation type.",
@@ -106,49 +114,6 @@
                             }
                         }
                     }
-                }
-            }
-        },
-        "ref": {
-            "type": "object",
-            "description": "A reference to a geographic place defined elsewhere.",
-            "required": ["id"],
-            "properties": {
-                "cid": {
-                    "type": "string",
-                    "description": "An optional reference to a specific version of the place definition.",
-                    "format": "cid"
-                },
-                "id": {
-                    "type": "string",
-                    "description": "A globally unique identifier for the place.",
-                    "format": "record-key"
-                },
-                "locations": {
-                    "type": "array",
-                    "items": {
-                        "type": "union",
-                        "refs": [
-                            "community.lexicon.location.geo",
-                            "community.lexicon.location.hthree",
-                            "community.lexicon.location.address",
-                            "community.lexicon.location.bbox"
-                        ]
-                    },
-                    "description": "The geographic location of the place, in any available representation."
-                },
-                "name": {
-                    "type": "string",
-                    "description": "The primary display name of the place."
-                },
-                "attributes": {
-                    "type": "unknown",
-                    "description": "Additional attributes, included for durability or convenience."
-                },
-                "published_at": {
-                    "type": "string",
-                    "description": "The date when the place record was last updated",
-                    "format": "datetime"
                 }
             }
         }

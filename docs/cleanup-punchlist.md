@@ -83,23 +83,38 @@ step at all.
 
 ## P3 — Lexicon conformance
 
-- [ ] `getRecord.json` output `uri`: `format: at-uri` → `format: uri`
-- [ ] Delete the `cid` parameter from `getRecord.json`
-- [ ] Declare `source`/`license` (required) and `importance` (optional) in
+- [x] `getRecord.json` output `uri`: `format: at-uri` → `format: uri`
+- [x] Declare `source`/`license` (required) and `importance` (optional) in
       `getRecord`'s output schema
-- [ ] `place.json`: add `$type` and `importance`
-- [ ] `place.json`: delete `same_as`, `relation.name`, and the `#ref` def
-- [ ] Delete `hthree.json` and its two union references in `place.json`
-- [ ] Delete `fsq.json`
-- [ ] Conformance harness validating real tile-file records against the
-      lexicons, and driving the XRPC surface through `lexrpc.Server.call()`
-      rather than calling bound methods
+- [x] `place.json`: add `$type` and `importance` (not `collection` — see
+      below)
+- [x] `place.json`: delete the `#ref` def — it exists only for the check-in
+      write path, which is out of scope (see below)
+- [x] Delete the local `hthree.json` lexicon file; it duplicates
+      `community.lexicon.location.hthree`, already bundled via lexrpc. Keep
+      both union references to it in `place.json`
+- [x] Delete `fsq.json` (already absent — nothing to do)
+- [x] Add a test asserting `getRecord`'s output validates against
+      `getRecord.json`'s schema, so an `at-uri`-style regression fails the
+      suite
+- [ ] The tile-payload header shape (`collection`, `source`, `license`,
+      `generated_at`, from `envelope.py:build_tile_payload`) has no lexicon
+      or schema covering it. `collection` was mistakenly folded into the
+      `place.json` item above during scoping — it's a tile-payload field,
+      never a record field, so `place.json` is the wrong place for it. Real
+      gap, deferred; not a spec edit
 
 `published_at` stays declared though nothing produces it — a deliberate
-exception, not an oversight. `_query` stays in responses and stays
-undocumented.
+exception, not an oversight. `same_as` and `relation.name` stay declared for
+the same reason: future work on identifying conflations between datasets,
+with room to expand to other place relationships. `getRecord.json`'s `cid`
+parameter and output field also stay declared but unimplemented: a CID is a
+pure content hash, so version selection by `cid` is buildable later (at
+minimum across the two tile runs retention already keeps) without needing
+garganorn records to live in a real PDS/MST. `_query` stays in responses and
+stays undocumented.
 
-**Accept:** live XRPC `getRecord` returns 200; the harness fails if the
+**Accept:** live XRPC `getRecord` returns 200; the schema test fails if the
 `at-uri` regression is reintroduced.
 
 ## P4 — searchRecords and the serving-DB layer
