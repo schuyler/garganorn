@@ -6,9 +6,9 @@ matching, ranking, caching — happens inside those two calls and is not the
 developer's problem.
 
 Nothing here is built yet. This document is the design the first
-implementation should follow, and supersedes §3 of
-[atgeo-appview-sdk-design.md](atgeo-appview-sdk-design.md), which was written
-against a client-side manifest that the gazetteer does not distribute.
+implementation should follow. It replaces an earlier SDK design that assumed
+clients hold the tile manifest and compute coverage locally; the gazetteer
+does not distribute one, which invalidated most of that surface.
 
 The wire format this describes is in [atgeo-spec.md](atgeo-spec.md), which is
 normative for anything on the network. Where the two disagree, the spec wins.
@@ -234,10 +234,10 @@ a separate package; the read SDK should not carry a write path shaped around
 a guess.
 
 **Discovery.** `Atgeo.discover(didOrHandle)` needs the DID service entry and
-`org.atgeo.tiles.service` announcement records from
-[atgeo-appview-sdk-design.md](atgeo-appview-sdk-design.md) §1.4. Neither
-exists — the served `did.json` advertises only
-`AtprotoPersonalDataServer`. The constructor takes a host.
+`org.atgeo.tiles.service` announcement records described under Discovery in
+[atgeo-appview-design.md](atgeo-appview-design.md). Neither exists — the
+served `did.json` advertises only `AtprotoPersonalDataServer`. The
+constructor takes a host.
 
 **Version negotiation.** There is no version field in the tile envelope and
 no version to reject. Ignore keys you don't recognise; that is the whole

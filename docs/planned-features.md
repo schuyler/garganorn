@@ -128,8 +128,8 @@ and no new privacy surface: the coarse tier is a static asset every client
 holds identically, so fetching it reveals nothing about what the user is
 looking for.
 
-`atgeo-appview-sdk-design.md` §3.2 proposed something adjacent — prefetch the
-whole division tileset and run a locality tier over it — which does not work,
+An earlier SDK design proposed something adjacent — prefetch the whole
+division tileset and run a locality tier over it — which does not work,
 because enumerating a tileset requires the manifest and the gazetteer does
 not distribute one. A purpose-built summary tileset is the same idea without
 that dependency, and much smaller: the division tileset is every division on

@@ -196,9 +196,9 @@ Forces a full re-export. Land P1 and P2 first.
       `explored-and-discarded.md`, a dead provenance comment in
       `test_containment_covering.py`, and a `(spec §4)` citation in
       `pipeline-implementation-decisions.md`, all resolved by deletion (none
-      load-bearing). What's left lives in `atgeo-appview-sdk-design.md` and
-      `name-variants-design.md`, both already tracked as their own blocked
-      items below
+      load-bearing). The `atgeo-appview-sdk-design.md` remainder went with
+      that document's overhaul below; what's left lives in
+      `name-variants-design.md`, tracked as its own item
 - [ ] Find every place in the code that references a non-authoritative design
       document and remove the reference
 - [x] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
@@ -226,18 +226,25 @@ Forces a full re-export. Land P1 and P2 first.
       and added as D10; the still-open "data-quality half" (overlap
       detection) is now tracked in P8 below. The rest — narrative process,
       validation steps, file/line inventory — was deleted with the doc
-- [ ] `atgeo-appview-sdk-design.md` needs a full overhaul, not a §1.2/§1.3
+- [x] `atgeo-appview-sdk-design.md` needs a full overhaul, not a §1.2/§1.3
       patch (envelope/manifest reconciliation — no `atgeo` version field or
       version-rejection rule, `source`/`license` in place of `attribution`,
       a `generated_at`-only manifest not served over HTTP, stamped tile
-      URLs — was the original narrower scope). **Partly done**: Schuyler
-      scoped the SDK half, and it is extracted to `atgeo-client-sdk.md` — a
-      two-method surface (`searchPlaces`, `getPlace`), one collection per
-      call, SDK-side coordinate snapping, region-less search deferred to
-      summary tiles. §3 of the old doc now carries a superseded pointer.
-      What remains blocked is the AppView half: §1's protocol restatement
-      (which duplicates and contradicts `atgeo-spec.md`, now the only
-      normative wire document) and §2's sidecar design
+      URLs — was the original narrower scope). Done by dissolving it. The
+      document braided three things together and only the sidecar was still
+      live: the SDK half became `atgeo-client-sdk.md`, the sidecar half
+      became `atgeo-appview-design.md`, and the protocol restatement was
+      deleted because `atgeo-spec.md` is now the normative wire document and
+      the restatement contradicted it in every particular listed above. Also
+      absorbed elsewhere and dropped: the containment vocabulary (in the
+      spec), the `https`-versus-`at://` provenance argument (in the spec),
+      the read-path precision rule (in `tile-privacy-design.md` and the SDK
+      doc), and the conformance-vector plan (in the SDK doc, minus the two
+      files that client-side quadkey removal retired). Section numbering is
+      gone from both successors, so there are no `§N` targets left to rot.
+      One substantive change rather than a trim, flagged in the new document
+      as unreviewed: the sidecar must serve `getCoverage` rather than a
+      manifest, or no ATGeo client could talk to it
 - [ ] `name-variants-design.md` (listed as a live implementation spec in
       `index.md`) is stale beyond a quick patch: it names both
       `scripts/import-osm.sh` and `scripts/import-overture-extract.sh` (§3.1,
@@ -246,8 +253,8 @@ Forces a full re-export. Land P1 and P2 first.
       and FSQ as a source. Needs a full reconciliation pass, not a rename of
       the two script references
 
-`atgeo-appview-sdk-design.md` and `org.atgeo.tiles.service.json` stay, framed
-as aspirational.
+`atgeo-appview-design.md`, `atgeo-client-sdk.md`, and
+`org.atgeo.tiles.service.json` stay, framed as aspirational.
 
 ## P8 — Validation and small cleanups
 
