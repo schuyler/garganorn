@@ -189,9 +189,10 @@ Forces a full re-export. Land P1 and P2 first.
       doc; the attribution mechanism itself is already stated in
       `atgeo-spec.md`
 - [x] Delete `pipeline-restructure-design.md`
-- [ ] Write reference material for the pipeline artifacts — what each stage
+- [x] Write reference material for the pipeline artifacts — what each stage
       writes, the schemas, the sort orders — from the code rather than from
-      the deleted design document
+      the deleted design document. Shipped as `docs/pipeline-artifacts.md`,
+      one section per stage with Writes / Schema / Sort / Shape
 - [x] Repoint or remove the ~212 `§N` cross-references in `garganorn/` (18)
       and `tests/` (194) across 28 files. They point into `atgeo-spec.md` and
       the deleted `pipeline-restructure-design.md`, neither of which has
@@ -204,8 +205,13 @@ Forces a full re-export. Land P1 and P2 first.
       load-bearing). The remaining two documents' `§N` references went with
       the documents: `atgeo-appview-sdk-design.md` in its overhaul below,
       `name-variants-design.md` when it was dissolved. None are left
-- [ ] Find every place in the code that references a non-authoritative design
-      document and remove the reference
+- [x] Find every place in the code that references a non-authoritative design
+      document and remove the reference. None remain: `garganorn/`, `tests/`,
+      and `scripts/` between them cite exactly three documents —
+      `tile-privacy-design.md`, `pipeline-implementation-decisions.md`, and
+      `atgeo-spec.md` — all of which exist and are authoritative. The earlier
+      citation sweeps cleared the rest as the documents they pointed at were
+      deleted
 - [x] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
       claims they "fail visibly when a statement stops being true," but two were
       found stale by inspection. Either check them in CI or stop claiming they
