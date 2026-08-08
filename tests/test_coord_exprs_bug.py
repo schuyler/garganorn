@@ -58,8 +58,8 @@ class TestCoordExprsAlias:
 
     def test_non_overture_alias_prefixes_columns(self):
         """For non-struct sources, alias is applied as a table prefix."""
-        lon_no_alias, lat_no_alias = _coord_exprs("foursquare")
-        lon_alias, lat_alias = _coord_exprs("foursquare", alias="p")
+        lon_no_alias, lat_no_alias = _coord_exprs("osm")
+        lon_alias, lat_alias = _coord_exprs("osm", alias="p")
         assert lon_no_alias == "longitude"
         assert lat_no_alias == "latitude"
         assert lon_alias == "p.longitude"

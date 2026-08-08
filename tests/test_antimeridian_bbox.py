@@ -13,7 +13,6 @@ Test cases:
 import pytest
 import math
 from garganorn.server import Server
-from garganorn.database import Database
 from garganorn.stages import bboxes_intersect
 
 
@@ -349,53 +348,6 @@ class TestQuerySplitBehavior:
 
         # Should query as-is, no split
         # This test documents the expected behavior
-
-
-# ---------------------------------------------------------------------------
-# Integration test: search_records with antimeridian bbox
-# ---------------------------------------------------------------------------
-
-class TestSearchRecordsAntimeridian:
-    """Integration tests for search_records with antimeridian bbox.
-
-    These tests require a database with antimeridian-crossing features.
-    For now, they document the expected behavior and will fail until
-    the fix is implemented.
-    """
-
-    def test_search_records_antimeridian_bbox_should_not_raise(self):
-        """search_records with antimeridian bbox should not raise InvalidBbox.
-
-        Current behavior: raises InvalidBbox
-        Expected behavior: accepts bbox and returns results
-        """
-        from unittest.mock import MagicMock
-        from garganorn.server import Server
-        import logging
-
-        # Create a mock database
-        mock_db = MagicMock(spec=Database)
-        mock_db.collection = "org.atgeo.places.foursquare"
-        mock_db.attribution = "https://example.com/attribution"
-        mock_db.source_url = "https://example.com/source"
-        mock_db.license_url = "https://example.com/license"
-        mock_db.nearest.return_value = []
-
-        logger = logging.getLogger("test")
-        server = Server("places.atgeo.org", [mock_db], logger)
-
-        # This should NOT raise InvalidBbox
-        result = server.search_records(
-            {}, collection="org.atgeo.places.foursquare", bbox="170,-20,-170,-10"
-        )
-
-        # Verify nearest was called with the antimeridian bbox
-        mock_db.nearest.assert_called_once()
-        call_kwargs = mock_db.nearest.call_args.kwargs
-        assert "bbox" in call_kwargs
-        assert call_kwargs["bbox"] == (170, -20, -170, -10)
-
-        assert "records" in result
 
 
 # ---------------------------------------------------------------------------

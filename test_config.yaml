@@ -1,8 +1,0 @@
-
-repo: places.atgeo.org
-databases:
-  - type: foursquare
-    path: tests/fixtures/test_foursquare.duckdb
-  - type: overture_place
-    path: tests/fixtures/test_overture.duckdb
-boundaries: /nonexistent/boundaries.duckdb

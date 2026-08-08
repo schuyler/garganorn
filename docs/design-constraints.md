@@ -14,8 +14,7 @@ R-tree spatial indexes are not used in JOIN ON conditions or subqueries.
 Workaround: materialize filtered results to a temp table via a top-level
 WHERE clause, then join against the temp table.
 
-**Applies to**: `sql/covering_seed.sql:31` (containment pre-filter), `boundaries.py:48`
-(point-in-polygon query)
+**Applies to**: `sql/covering_seed.sql:31` (containment pre-filter)
 
 **Why it matters**: Without this workaround, spatial queries degrade to
 full-table scans against large geometry columns, causing 100x+ latency.
@@ -60,9 +59,7 @@ When unnesting a NULL or empty array, the row disappears from the result
 set entirely — no error, no NULL output row. This is correct SQL semantics
 but can cause unexpected row count changes.
 
-**Applies to**: `foursquare_import.sql:38` (category unnesting),
-`foursquare_idf.sql:12` (same), `overture_place_import.sql:38-55`
-(name variant unnesting)
+**Applies to**: `overture_place_import.sql:38-55` (name variant unnesting)
 
 **Why it matters**: Places with NULL category arrays get no IDF score
 (defaults to 0 via coalesce). This is intentional but should be documented.
@@ -103,8 +100,7 @@ The custom `strip_json_nulls()` helper may fail on JSON keys containing `{`,
 `}`, `"`, or `,`. No failures observed in practice.
 
 **Applies to**: `sql/overture_place_export_tiles.sql`,
-`sql/overture_division_export_tiles.sql`,
-`sql/foursquare_export_tiles.sql`
+`sql/overture_division_export_tiles.sql`
 
 **Why it matters**: it exists only because DuckDB has no native
 `json_strip_nulls()` (PR #21748). Replace it with the native function when
@@ -135,7 +131,7 @@ spatial keys from lon/lat coordinates.
 
 ### P2: Importance scoring varies by entity type
 
-- **Places (FSQ, Overture, OSM)**: `60% density + 40% IDF`
+- **Places (Overture, OSM)**: `60% density + 40% IDF`
   - Formula: `round(60 * least(density/density_norm, 1.0) + 40 * least(idf/idf_norm, 1.0))`
   - Defaults: `density_norm=10.0`, `idf_norm=18.0`
 - **Localities (Overture divisions, subtype=locality)**: `60% density + 40% population`
@@ -144,7 +140,7 @@ spatial keys from lon/lat coordinates.
 - **Non-locality divisions**: `40% population` only
   - Formula: `round(40 * least(ln(1+population)/pop_norm, 1.0))`
 
-**Applies to**: `foursquare_import.sql:46`, `overture_place_import.sql:78`,
+**Applies to**: `overture_place_import.sql:78`,
 `osm_import.sql:139-142`, `overture_division_import.sql:94-100`
 
 ### P3: Density tiles use bbox-overlap join
@@ -214,43 +210,13 @@ production, so no valid baseline existed to compare against).
 
 ---
 
-## Query Path Constraints
-
-### Q1: JW scoring blends field-level and token-level similarity
-
-`JW_TOKEN_ALPHA = 0.5` — 50/50 blend of full-name JW score and
-token-level JW score. Token matching splits query and name on spaces,
-matches tokens greedily by highest JW score, and averages match scores.
-
-**Applies to**: `database.py:45-46`, JW scoring functions in Database subclasses
-
-### Q2: Importance floor scales with search area
-
-`compute_importance_floor(area_km2)` returns `min(4 * ln(1 + area_km2/K), 50)`
-where `K=1000`. This prevents low-importance results from dominating
-large-area searches. Applied only when a text query is present.
-
-**Applies to**: `database.py:14-22`, `database.py:262`
-
-### Q3: Containment gracefully degrades
-
-If boundary lookup fails for any reason, the place is served without
-`within` relations. The exception is caught and logged, not propagated.
-
-**Applies to**: `server.py:88-105`
-
----
-
 ## Normalization Constants
 
 | Constant | Default | Used by |
 |----------|---------|---------|
 | `density_norm` | 10.0 | Importance density component (all place sources) |
-| `idf_norm` | 18.0 | Importance IDF component (FSQ, Overture, OSM) |
+| `idf_norm` | 18.0 | Importance IDF component (Overture, OSM) |
 | `pop_norm` | 20.0 | Importance population component (Overture divisions) |
-| `IMPORTANCE_FLOOR_K` | 1000 | Importance floor scaling for search area |
-| `JW_THRESHOLD` | 0.6 | Minimum JW score for name matching |
-| `JW_TOKEN_ALPHA` | 0.5 | Field/token blending weight |
 | `COVER_MIN_ZOOM` | 4 | Covering descent start level (P6) |
 | `COVER_MAX_ZOOM` | 12 | Covering descent end level; edge tiles emitted here (P6) |
 | `max_per_tile` | 1000 | Maximum records per export tile |

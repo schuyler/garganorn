@@ -4,7 +4,7 @@ Design contract (see docs/pipeline-implementation-decisions.md, "Phase 2" — fr
 
     | `<src>/places.parquet` | `bbox, density_norm, idf_norm` | source parquet, density, idf |
 
-For a non-division source (fsq/overture_place/osm), stage_import's places.parquet
+For a non-division source (overture_place/osm), stage_import's places.parquet
 .meta.json must record:
   - inputs: source parquet paths + resolved density_parquet path + resolved
     idf_parquet path (when those are provided)
@@ -14,7 +14,7 @@ stage_division_import already does this correctly (garganorn/stages.py ~656-668)
 and is the reference shape. stage_import (~891-898) currently only records
 input_files = source parquet glob and params = {"source", "bbox"}, omitting
 density_parquet/idf_parquet entirely. This means rebuilding density_tiles.parquet
-(which feeds importance scoring for ALL sources, including fsq/osm which don't
+(which feeds importance scoring for ALL sources, including osm which doesn't
 own it) does not invalidate a source's places.parquet: artifact_fresh() returns
 True and stale importance scores are silently reused.
 
@@ -31,45 +31,25 @@ import duckdb
 import pytest
 
 import garganorn.stages as _stages
+from tests.quadtree_helpers import write_minimal_overture_parquet
 
 _BBOX = (-122.55, 37.60, -122.30, 37.85)
 
 
-def _make_fsq_parquet(tmp_path, name="fsq_data.parquet"):
-    """Minimal FSQ-schema parquet, private to a single test.
+def _make_overture_parquet(tmp_path, name="overture_data.parquet"):
+    """Minimal Overture-schema parquet, private to a single test.
 
-    Used (instead of the shared session-scoped `fsq_parquet` fixture) in the
-    mtime-invalidation tests below, so os.utime() manipulation of the source
-    parquet's mtime — needed to isolate the density/idf-specific invalidation
-    path from the source-parquet invalidation path, which is already
-    correctly tracked even by the buggy code — cannot leak into other tests
-    that also depend on the shared fsq_parquet fixture.
+    Used (instead of the shared session-scoped `overture_parquet` fixture) in
+    the mtime-invalidation tests below, so os.utime() manipulation of the
+    source parquet's mtime — needed to isolate the density/idf-specific
+    invalidation path from the source-parquet invalidation path, which is
+    already correctly tracked even by the buggy code — cannot leak into
+    other tests that also depend on the shared overture_parquet fixture.
     """
     path = tmp_path / name
-    conn = duckdb.connect(":memory:")
-    conn.execute("""
-        CREATE TABLE tmp_fsq (
-            fsq_place_id VARCHAR, name VARCHAR, latitude DOUBLE, longitude DOUBLE,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            geom VARCHAR, date_refreshed DATE, date_closed DATE, date_created DATE,
-            address VARCHAR, locality VARCHAR, region VARCHAR, postcode VARCHAR,
-            country VARCHAR, admin_region VARCHAR, post_town VARCHAR, po_box VARCHAR,
-            tel VARCHAR, website VARCHAR, email VARCHAR, facebook_id VARCHAR,
-            instagram VARCHAR, twitter VARCHAR, fsq_category_ids VARCHAR[],
-            fsq_category_labels VARCHAR[], placemaker_url VARCHAR
-        )
-    """)
-    conn.execute("""
-        INSERT INTO tmp_fsq VALUES (
-            'fsqfresh001', 'Freshness Test Place', 37.7749, -122.4194,
-            {'xmin': -122.4204, 'ymin': 37.7739, 'xmax': -122.4184, 'ymax': 37.7759},
-            'POINT(-122.4194 37.7749)', '2024-06-01', NULL, NULL,
-            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-            NULL, NULL, ['coffee_shop']::VARCHAR[], NULL::VARCHAR[], NULL
-        )
-    """)
-    conn.execute(f"COPY tmp_fsq TO '{path}' (FORMAT PARQUET)")
-    conn.close()
+    write_minimal_overture_parquet(path, [
+        ("ovfresh001", -122.4194, 37.7749, "coffee_shop"),
+    ])
     return str(path)
 
 
@@ -123,11 +103,9 @@ def _make_idf_parquet(tmp_path, name="idf_scores.parquet"):
     return str(path)
 
 
-def _source_parquet_and_glob(source, fsq_parquet, overture_parquet, osm_parquet):
+def _source_parquet_and_glob(source, overture_parquet, osm_parquet):
     """Return (parquet_glob_arg_for_stage_import, list_of_source_parquet_paths)."""
-    if source == "foursquare":
-        return fsq_parquet, [fsq_parquet]
-    elif source == "overture_place":
+    if source == "overture_place":
         return overture_parquet, [overture_parquet]
     else:  # osm
         node_glob, way_glob = osm_parquet["node"], osm_parquet["way"]
@@ -148,15 +126,15 @@ class TestStageImportFreshnessMetaShape:
     for density_parquet AND idf_parquet, per the design doc freshness table.
     """
 
-    @pytest.mark.parametrize("source", ["foursquare", "overture_place", "osm"])
+    @pytest.mark.parametrize("source", ["overture_place", "osm"])
     def test_meta_inputs_include_density_and_idf_paths(
-        self, source, fsq_parquet, overture_parquet, osm_parquet,
+        self, source, overture_parquet, osm_parquet,
         density_parquet, tmp_path,
     ):
         """meta['inputs'] must include the resolved density and idf paths."""
         idf_parquet = _make_idf_parquet(tmp_path, name=f"{source}_idf.parquet")
         parquet_glob, _source_paths = _source_parquet_and_glob(
-            source, fsq_parquet, overture_parquet, osm_parquet
+            source, overture_parquet, osm_parquet
         )
         output = str(tmp_path / f"{source}_places.parquet")
 
@@ -178,15 +156,15 @@ class TestStageImportFreshnessMetaShape:
             f"({idf_parquet!r}); got inputs={inputs!r}."
         )
 
-    @pytest.mark.parametrize("source", ["foursquare", "overture_place", "osm"])
+    @pytest.mark.parametrize("source", ["overture_place", "osm"])
     def test_meta_params_include_density_norm_and_idf_norm(
-        self, source, fsq_parquet, overture_parquet, osm_parquet,
+        self, source, overture_parquet, osm_parquet,
         density_parquet, tmp_path,
     ):
         """meta['params'] must include density_norm and idf_norm with the passed values."""
         idf_parquet = _make_idf_parquet(tmp_path, name=f"{source}_idf.parquet")
         parquet_glob, _ = _source_parquet_and_glob(
-            source, fsq_parquet, overture_parquet, osm_parquet
+            source, overture_parquet, osm_parquet
         )
         output = str(tmp_path / f"{source}_places.parquet")
 
@@ -238,14 +216,14 @@ class TestStageImportFreshnessInvalidation:
     def test_newer_density_parquet_triggers_rebuild(self, tmp_path, caplog):
         # Private (non-session-shared) source/idf parquets: os.utime() below
         # must not leak mtime changes into fixtures other tests depend on.
-        fsq_parquet = _make_fsq_parquet(tmp_path)
+        overture_parquet = _make_overture_parquet(tmp_path)
         density_parquet = _make_density_parquet(tmp_path)
         idf_parquet = _make_idf_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
         meta_path = output + ".meta.json"
 
         _stages.stage_import(
-            "foursquare", fsq_parquet, _BBOX, output,
+            "overture_place", overture_parquet, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
         )
         assert os.path.exists(output)
@@ -257,7 +235,7 @@ class TestStageImportFreshnessInvalidation:
         past_time = time.time() - 3600
         os.utime(output, (past_time, past_time))
         os.utime(meta_path, (past_time, past_time))
-        os.utime(fsq_parquet, (past_time - 1, past_time - 1))
+        os.utime(overture_parquet, (past_time - 1, past_time - 1))
         os.utime(idf_parquet, (past_time - 1, past_time - 1))
         # Explicitly bump density_parquet to "now" (newer than meta) —
         # mind second-granularity mtimes, set explicitly rather than relying
@@ -268,7 +246,7 @@ class TestStageImportFreshnessInvalidation:
         caplog.clear()
         with caplog.at_level(logging.INFO):
             _stages.stage_import(
-                "foursquare", fsq_parquet, _BBOX, output,
+                "overture_place", overture_parquet, _BBOX, output,
                 density_parquet=density_parquet, idf_parquet=idf_parquet,
             )
 
@@ -284,14 +262,14 @@ class TestStageImportFreshnessInvalidation:
         )
 
     def test_newer_idf_parquet_triggers_rebuild(self, tmp_path, caplog):
-        fsq_parquet = _make_fsq_parquet(tmp_path)
+        overture_parquet = _make_overture_parquet(tmp_path)
         density_parquet = _make_density_parquet(tmp_path)
         idf_parquet = _make_idf_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
         meta_path = output + ".meta.json"
 
         _stages.stage_import(
-            "foursquare", fsq_parquet, _BBOX, output,
+            "overture_place", overture_parquet, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
         )
         assert os.path.exists(output)
@@ -303,7 +281,7 @@ class TestStageImportFreshnessInvalidation:
         past_time = time.time() - 3600
         os.utime(output, (past_time, past_time))
         os.utime(meta_path, (past_time, past_time))
-        os.utime(fsq_parquet, (past_time - 1, past_time - 1))
+        os.utime(overture_parquet, (past_time - 1, past_time - 1))
         os.utime(density_parquet, (past_time - 1, past_time - 1))
         now = time.time()
         os.utime(idf_parquet, (now, now))
@@ -311,7 +289,7 @@ class TestStageImportFreshnessInvalidation:
         caplog.clear()
         with caplog.at_level(logging.INFO):
             _stages.stage_import(
-                "foursquare", fsq_parquet, _BBOX, output,
+                "overture_place", overture_parquet, _BBOX, output,
                 density_parquet=density_parquet, idf_parquet=idf_parquet,
             )
 
@@ -325,7 +303,7 @@ class TestStageImportFreshnessInvalidation:
         )
 
     def test_unchanged_density_and_idf_still_skips(
-        self, fsq_parquet, density_parquet, tmp_path, caplog,
+        self, overture_parquet, density_parquet, tmp_path, caplog,
     ):
         """Sanity/control: with density+idf tracked but genuinely unchanged, a
         second call must still skip (guards against an overcorrection that
@@ -336,7 +314,7 @@ class TestStageImportFreshnessInvalidation:
         meta_path = output + ".meta.json"
 
         _stages.stage_import(
-            "foursquare", fsq_parquet, _BBOX, output,
+            "overture_place", overture_parquet, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
         )
         assert os.path.exists(output)
@@ -351,7 +329,7 @@ class TestStageImportFreshnessInvalidation:
         caplog.clear()
         with caplog.at_level(logging.INFO):
             _stages.stage_import(
-                "foursquare", fsq_parquet, _BBOX, output,
+                "overture_place", overture_parquet, _BBOX, output,
                 density_parquet=density_parquet, idf_parquet=idf_parquet,
             )
 
@@ -372,11 +350,11 @@ class TestStageImportFreshnessMetaNoDensityIdf:
     """
 
     def test_no_phantom_density_idf_inputs_when_not_provided(
-        self, fsq_parquet, tmp_path,
+        self, overture_parquet, tmp_path,
     ):
         output = str(tmp_path / "places.parquet")
 
-        _stages.stage_import("foursquare", fsq_parquet, _BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, _BBOX, output)
 
         assert pathlib.Path(output).exists(), (
             "stage_import must still succeed with density_parquet/idf_parquet "
@@ -403,7 +381,7 @@ class TestStageImportFreshnessMetaNoDensityIdf:
                 )
 
     def test_meta_params_no_density_idf_path_keys_when_not_provided(
-        self, fsq_parquet, tmp_path,
+        self, overture_parquet, tmp_path,
     ):
         """params must not contain a 'density_parquet'/'idf_parquet' path key at all
         (paths belong in inputs, not params — matching stage_division_import's
@@ -411,7 +389,7 @@ class TestStageImportFreshnessMetaNoDensityIdf:
         """
         output = str(tmp_path / "places.parquet")
 
-        _stages.stage_import("foursquare", fsq_parquet, _BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, _BBOX, output)
 
         meta = json.loads(pathlib.Path(output + ".meta.json").read_text())
         params = meta.get("params", {})

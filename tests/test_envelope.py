@@ -54,9 +54,9 @@ class TestRecordUri:
         """record_uri(repo, collection, rkey) == https://{repo}/{collection}/{rkey} (per the envelope decisions)."""
         _check_envelope()
         uri = envelope.record_uri(
-            "places.atgeo.org", "org.atgeo.places.foursquare", "fsq001"
+            "places.atgeo.org", "org.atgeo.places.overture.place", "ov001"
         )
-        assert uri == "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
+        assert uri == "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
 
     def test_record_uri_osm_node_rkey(self):
         """OSM rkey is the node:/way:/relation: transformed form, not the raw
@@ -86,7 +86,7 @@ class TestRecordUri:
         """URIs are https://, never at:// -- the envelope decisions are emphatic that gazetteer
         records are not repository data and must not mint at:// URIs."""
         _check_envelope()
-        uri = envelope.record_uri("places.atgeo.org", "org.atgeo.places.foursquare", "fsq001")
+        uri = envelope.record_uri("places.atgeo.org", "org.atgeo.places.overture.place", "ov001")
         assert uri.startswith("https://"), f"URI must be https://, got {uri!r}"
         assert not uri.startswith("at://")
 
@@ -100,8 +100,8 @@ class TestWrapRecord:
         """wrap_record(uri, record_json) -> a JSON string whose parsed object
         has exactly {uri, cid, value} -- three keys, always present (per the envelope decisions)."""
         _check_envelope()
-        uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
-        record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test"})
+        uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
+        record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "ov001", "name": "Test"})
         wrapped = envelope.wrap_record(uri, record_json)
         parsed = json.loads(wrapped)
         assert set(parsed.keys()) == {"uri", "cid", "value"}, (
@@ -111,8 +111,8 @@ class TestWrapRecord:
     def test_wrap_record_cid_is_none(self):
         """cid is literally null -- never computed, per the APPROVED envelope decision."""
         _check_envelope()
-        uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
-        record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001"})
+        uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
+        record_json = json.dumps({"$type": "org.atgeo.place", "rkey": "ov001"})
         parsed = json.loads(envelope.wrap_record(uri, record_json))
         assert parsed["cid"] is None
 
@@ -127,9 +127,9 @@ class TestWrapRecord:
     def test_wrap_record_value_is_the_record(self):
         """value is byte-for-byte today's record JSON, parsed back losslessly (per the envelope decisions)."""
         _check_envelope()
-        uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
+        uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         record = {
-            "$type": "org.atgeo.place", "rkey": "fsq001", "name": "Blue Bottle Coffee",
+            "$type": "org.atgeo.place", "rkey": "ov001", "name": "Blue Bottle Coffee",
             "importance": 72, "locations": [{"$type": "community.lexicon.location.geo",
                                               "latitude": "37.774900", "longitude": "-122.419400"}],
             "variants": [], "attributes": {"tel": None}, "relations": {},
@@ -149,10 +149,10 @@ class TestWrapRecord:
         record_json, only wrap it.
         """
         _check_envelope()
-        uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
+        uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         # Deliberately unusual spacing/ordering that json.dumps(json.loads(...))
         # with default args would normalize away.
-        record_json = '{"$type":"org.atgeo.place","rkey":"fsq001","name":"Café"}'
+        record_json = '{"$type":"org.atgeo.place","rkey":"ov001","name":"Café"}'
         wrapped = envelope.wrap_record(uri, record_json)
         assert record_json in wrapped, (
             "wrap_record must embed record_json verbatim (string composition, "
@@ -163,7 +163,7 @@ class TestWrapRecord:
         """Per the envelope decisions (review note): DuckDB's UTF-8 output is preserved verbatim
         instead of being ensure_ascii-escaped."""
         _check_envelope()
-        uri = "https://places.atgeo.org/org.atgeo.places.foursquare/fsq001"
+        uri = "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
         record_json = json.dumps({"name": "Café"}, ensure_ascii=False)
         wrapped = envelope.wrap_record(uri, record_json)
         assert "Café" in wrapped, (
@@ -177,12 +177,12 @@ class TestWrapRecord:
 # ---------------------------------------------------------------------------
 
 class TestBuildTilePayload:
-    _COLLECTION = "org.atgeo.places.foursquare"
-    _SOURCE_URL = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
-    _LICENSE_URL = "https://docs.foursquare.com/data-products/docs/access-fsq-os-places"
+    _COLLECTION = "org.atgeo.places.overture.place"
+    _SOURCE_URL = "https://overturemaps.org/"
+    _LICENSE_URL = "https://docs.overturemaps.org/attribution/"
     _GENERATED_AT = "2026-07-09T18:00:00Z"
 
-    def _wrapped(self, rkey="fsq001", name="Test"):
+    def _wrapped(self, rkey="ov001", name="Test"):
         uri = f"https://places.atgeo.org/{self._COLLECTION}/{rkey}"
         record_json = json.dumps({"$type": "org.atgeo.place", "rkey": rkey, "name": name})
         return envelope.wrap_record(uri, record_json) if envelope else None
@@ -218,7 +218,7 @@ class TestBuildTilePayload:
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
-            [self._wrapped("fsq001", "A"), self._wrapped("fsq002", "B")],
+            [self._wrapped("ov001", "A"), self._wrapped("ov002", "B")],
         )
         parsed = json.loads(payload)
         assert len(parsed["records"]) == 2
@@ -233,7 +233,7 @@ class TestBuildTilePayload:
         _check_envelope()
         payload = envelope.build_tile_payload(
             self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
-            [self._wrapped("fsq001", "A")],
+            [self._wrapped("ov001", "A")],
         )
         parsed = json.loads(payload)
         rec = parsed["records"][0]

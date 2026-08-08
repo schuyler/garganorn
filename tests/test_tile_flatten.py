@@ -80,57 +80,6 @@ def _strip_memory_limit(sql: str) -> str:
 # ---------------------------------------------------------------------------
 
 _EXPORT_CONFIGS = {
-    "foursquare": {
-        "sql_file": "foursquare_export_tiles.sql",
-        "places_rows": [
-            ("exp001", "Blue Bottle Coffee", 37.7749, -122.4194, 72, "US"),
-            ("exp002", "Golden Gate Park", 37.7694, -122.4862, 85, "US"),
-            ("exp003", "Tartine Bakery", 37.7617, -122.4243, 68, "US"),
-            ("exp004", "Mystery Spot", 37.7800, -122.4300, 40, None),
-        ],
-        "pk_col": "fsq_place_id",
-        "create_table": """
-            CREATE TABLE places (
-                fsq_place_id        VARCHAR,
-                name                VARCHAR,
-                latitude            DOUBLE,
-                longitude           DOUBLE,
-                importance          INTEGER,
-                address             VARCHAR,
-                locality            VARCHAR,
-                region              VARCHAR,
-                postcode            VARCHAR,
-                country             VARCHAR,
-                admin_region        VARCHAR,
-                post_town           VARCHAR,
-                po_box              VARCHAR,
-                date_created        DATE,
-                date_refreshed      DATE,
-                tel                 VARCHAR,
-                website             VARCHAR,
-                email               VARCHAR,
-                facebook_id         VARCHAR,
-                instagram           VARCHAR,
-                twitter             VARCHAR,
-                fsq_category_ids    VARCHAR[],
-                fsq_category_labels VARCHAR[],
-                placemaker_url      VARCHAR,
-                variants            STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-                qk17                VARCHAR
-            )
-        """,
-        "insert_template": """
-            INSERT INTO places
-            SELECT
-                '{pk}', '{name}', {lat}, {lon}, {imp},
-                NULL, NULL, NULL, NULL, {country_val},
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                ARRAY['13065143'], ARRAY['Food & Drink'],
-                NULL,
-                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-                ST_QuadKey({lon}, {lat}, 17)
-        """,
-    },
     "osm": {
         "sql_file": "osm_export_tiles.sql",
         "places_rows": [
@@ -278,7 +227,7 @@ def _make_export_db(conn, source, places_rows=None):
 
     Args:
         conn: DuckDB connection
-        source: Source key (foursquare, osm, overture_place, overture_division)
+        source: Source key (osm, overture_place, overture_division)
         places_rows: Optional custom rows (uses config default if None)
     """
     config = _EXPORT_CONFIGS[source]
@@ -289,13 +238,7 @@ def _make_export_db(conn, source, places_rows=None):
     conn.execute(config["create_table"])
 
     # Insert rows based on source-specific logic
-    if source == "foursquare":
-        for pk, name, lat, lon, imp, country in places_rows:
-            country_val = f"'{country}'" if country is not None else "NULL"
-            conn.execute(config["insert_template"].format(
-                pk=pk, name=name, lat=lat, lon=lon, imp=imp, country_val=country_val
-            ))
-    elif source == "osm":
+    if source == "osm":
         for osm_type, osm_id, rkey, name, lat, lon, imp, primary_category, tags in places_rows:
             if tags:
                 map_entries = ", ".join(f"'{k}': '{v}'" for k, v in tags.items())
@@ -330,9 +273,7 @@ def _make_export_db(conn, source, places_rows=None):
     # Extract primary key values for tile_assignments
     pk_col = config["pk_col"]
     for row in places_rows:
-        if source == "foursquare":
-            pk_val = row[0]
-        elif source == "osm":
+        if source == "osm":
             pk_val = row[2]  # rkey
         elif source in ("overture_place", "overture_division"):
             pk_val = row[0]
@@ -371,14 +312,14 @@ def _assert_flat_record(parsed):
     )
 
 
-@pytest.mark.parametrize("source", ["foursquare", "osm", "overture_place", "overture_division"])
+@pytest.mark.parametrize("source", ["osm", "overture_place", "overture_division"])
 def test_export_no_uri_value_wrapper(tmp_path, source):
     """Export SQL must produce flat records without uri/value wrapper.
 
     This test FAILS against current code because the export SQL files
     still produce the nested uri/value structure.
 
-    Parametrized to test all four sources: foursquare, osm, overture_place, overture_division.
+    Parametrized to test all three sources: osm, overture_place, overture_division.
     """
     config = _EXPORT_CONFIGS[source]
     db_path = tmp_path / f"test_{source}_flat.duckdb"
@@ -479,17 +420,17 @@ class TestTileEnvelopeHasCollectionField:
         """
         from garganorn.quadtree import export_tiles
 
-        # Create a minimal FSQ database
+        # Create a minimal Overture places database
         db_path = tmp_path / "test_tile_env.duckdb"
         conn = duckdb.connect(str(db_path))
-        _make_export_db(conn, "foursquare")
+        _make_export_db(conn, "overture_place")
 
         # Prepare tile_assignments for export
         conn.execute("SET enable_progress_bar = false")
 
         # Run export_tiles to generate tile files
         output_dir = str(tmp_path / "tiles")
-        export_tiles(conn, output_dir, "foursquare", max_workers=1)
+        export_tiles(conn, output_dir, "overture_place", max_workers=1)
         conn.close()
 
         # Read the generated tile file
@@ -503,10 +444,10 @@ class TestTileEnvelopeHasCollectionField:
         assert "collection" in envelope, (
             f"Tile envelope must have 'collection' field. "
             f"Current envelope has keys: {list(envelope)}. "
-            f"Expected 'collection' to be present with value like 'org.atgeo.places.foursquare'"
+            f"Expected 'collection' to be present with value like 'org.atgeo.places.overture.place'"
         )
-        assert envelope["collection"] == "org.atgeo.places.foursquare", (
-            f"collection field should be 'org.atgeo.places.foursquare', "
+        assert envelope["collection"] == "org.atgeo.places.overture.place", (
+            f"collection field should be 'org.atgeo.places.overture.place', "
             f"got {envelope.get('collection')!r}"
         )
         assert "source" in envelope, "envelope must still have 'source' field"

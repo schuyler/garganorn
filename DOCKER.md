@@ -15,11 +15,7 @@ docker build -t garganorn .
 Before running the Docker container, you need to have DuckDB databases available. You can create them using the provided scripts:
 
 ```bash
-# For Overture Maps data
 ./scripts/import-overture-extract.sh -122.5137 37.7099 -122.3785 37.8101
-
-# Or for Foursquare OSP data
-./scripts/import-fsq-extract.sh -122.5137 37.7099 -122.3785 37.8101
 ```
 
 ### Running with Docker Compose (Recommended)
@@ -105,7 +101,6 @@ docker run -it \
 The container expects DuckDB database files to be mounted at `/app/db`. The following database files should be present:
 
 - `overture-maps.duckdb` (for Overture Maps data)
-- `fsq-osp.duckdb` (for Foursquare OSP data)
 
 The application opens databases in read-only mode and uses temporary directories for DuckDB's working files. DuckDB temporary files are managed by the application in the container's writable filesystem.
 

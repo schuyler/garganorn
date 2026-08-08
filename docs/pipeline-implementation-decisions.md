@@ -17,7 +17,7 @@ quadkey conventions referenced throughout, see `docs/design-constraints.md`.
 The pipeline produces, per source, a chain of mtime-tracked parquet/DB
 artifacts (`places.parquet` → `tile_assignments.parquet` → `containment/`
 → `tiles/`), driven by an orchestrator with per-stage freshness. Sources:
-`foursquare`, `overture_place`, `osm`, `overture_division` (the last also
+`overture_place`, `osm`, `overture_division` (the last also
 produces the boundary data the others' containment reads).
 
 ## Cross-cutting decisions
@@ -167,7 +167,7 @@ self-gating producer of a stable, mtime-tracked artifact.
   deterministic run-to-run. This is a new invariant Phase 1 lacked.
 - **Geometry column dropped from `places.parquet`** (`EXCLUDE geometry`/
   `geom`). Verified nothing downstream reads it: export builds points from
-  bbox midpoints (overture) or scalar lat/lon (fsq/osm), tile assignment
+  bbox midpoints (overture) or scalar lat/lon (osm), tile assignment
   uses only qk17. For OSM the `DELETE ... WHERE geom IS NULL` filter runs
   *before* the EXCLUDE, so dropping the column doesn't change the row set.
 - **Rows with NULL/invalid qk17 are kept** (sorted last) and filtered at

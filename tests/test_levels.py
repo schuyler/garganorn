@@ -10,18 +10,19 @@ it as a clear pytest.fail rather than an opaque collection error, mirroring
 the pattern tests/test_covering.py uses for garganorn.covering.
 
 Covers the §6 combined acceptance checklist (pipeline-implementation-decisions.md
-"OQ-P2-2 — containment level vocabulary") items 1, 2, 3, 5:
+"OQ-P2-2 — containment level vocabulary") items 1, 3, 5:
   1. Vocabulary correctness -- LEVEL_VOCAB covers exactly the 9 observed
      subtypes + borough; fail-loud raises on an injected unknown subtype.
-  2. Ordering -- containment query returning multiple levels is ordered
-     ascending by level, ties broken by id.
   3. Filter delta -- boundaries.duckdb now includes localadmin and
      admin_level=3 counties; hoods excluded.
   5. No NULL levels -- count(*) WHERE level IS NULL = 0 in places.
 
-(Item 4, cross-artifact tile/boundaries.duckdb agreement, belongs to the
-record-envelope ("OQ-P2-1") combined fixture per §6 preamble and is out of
-scope for this level-vocabulary ("OQ-P2-2")-only test module.)
+(Item 2, ordering ascending by level with ties broken by id, is covered by
+tests/test_containment_covering.py::TestContainmentOrdering against the
+current containment implementation. Item 4, cross-artifact tile/boundaries.duckdb
+agreement, belongs to the record-envelope ("OQ-P2-1") combined fixture per §6
+preamble and is out of scope for this level-vocabulary ("OQ-P2-2")-only test
+module.)
 """
 import inspect
 
@@ -223,74 +224,6 @@ class TestFailLoudUnmappedSubtype:
             stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
         assert not pathlib.Path(output).exists(), (
             "places.parquet must not be written when the fail-loud guard raises"
-        )
-
-
-# ---------------------------------------------------------------------------
-# §6 item 2 — ordering: ascending by level, ties broken by id
-# ---------------------------------------------------------------------------
-
-class TestBoundaryLookupOrderingByLevel:
-    """BoundaryLookup.containment() orders ascending by level, ties broken by id.
-
-    pipeline-implementation-decisions.md ("OQ-P2-2 — containment level
-    vocabulary"): boundaries.py line 49 `ORDER BY admin_level ASC`
-    becomes `ORDER BY level ASC, id ASC`. Uses a hand-built boundaries.duckdb
-    (not the conftest fixture) with two same-level boundaries at different ids
-    to exercise the tie-break specifically.
-    """
-
-    @pytest.fixture
-    def tied_level_db(self, tmp_path):
-        from garganorn.boundaries import BoundaryLookup
-
-        db_path = tmp_path / "tied_level.duckdb"
-        conn = duckdb.connect(str(db_path))
-        conn.execute("INSTALL spatial; LOAD spatial;")
-        conn.execute("""
-            CREATE TABLE places (
-                id VARCHAR,
-                geometry GEOMETRY,
-                level INTEGER,
-                min_latitude DOUBLE,
-                max_latitude DOUBLE,
-                min_longitude DOUBLE,
-                max_longitude DOUBLE
-            )
-        """)
-        # Two overlapping boundaries at the SAME level (25 = region), different ids.
-        # Point (0,0) falls inside both -- the tie-break (id ASC) determines order.
-        rows = [
-            ("region_b", 25, "POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))"),
-            ("region_a", 25, "POLYGON((-5 -5, -5 5, 5 5, 5 -5, -5 -5))"),
-            ("country_z", 10, "POLYGON((-20 -20, -20 20, 20 20, 20 -20, -20 -20))"),
-        ]
-        for bid, level, wkt in rows:
-            conn.execute(
-                "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, -20.0, 20.0, -20.0, 20.0)",
-                [bid, wkt, level],
-            )
-        conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
-        conn.close()
-
-        bl = BoundaryLookup(db_path)
-        bl.connect()
-        yield bl
-        bl.close()
-
-    def test_ascending_by_level(self, tied_level_db):
-        """country_z (level 10) sorts before the two level-25 regions."""
-        result = tied_level_db.containment(0.0, 0.0)
-        ids = [r["rkey"].split(":")[-1] for r in result]
-        assert ids[0] == "country_z", f"expected country_z first, got {ids}"
-
-    def test_ties_broken_by_id_ascending(self, tied_level_db):
-        """Two boundaries at the same level (25) are ordered by id ASC: region_a before region_b."""
-        result = tied_level_db.containment(0.0, 0.0)
-        ids = [r["rkey"].split(":")[-1] for r in result]
-        region_ids = [i for i in ids if i.startswith("region_")]
-        assert region_ids == ["region_a", "region_b"], (
-            f"same-level boundaries must tie-break by id ASC; got {region_ids}"
         )
 
 

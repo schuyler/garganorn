@@ -157,7 +157,7 @@ class TestQk17PipelineFixes:
         db_path = tmp_path / "test_fix3_sorted.duckdb"
         conn = duckdb.connect(str(db_path))
         make_tile_assignment_db(conn, places)
-        run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=10)
+        run_tile_assignments(conn, pk_expr="place_id", min_zoom=6, max_zoom=17, max_per_tile=10)
 
         rows = conn.execute("SELECT tile_qk FROM tile_assignments").fetchall()
         conn.close()
@@ -420,16 +420,6 @@ IMPORT_SQL_FILES = [
 ]
 
 EXEMPT_IMPORT_SQL_FILES = [
-    {
-        "filename": "foursquare_import.sql",
-        "reason": (
-            "fsq_base is referenced 4x (fsq_density, fsq_idf via an unnest "
-            "lateral over fsq_category_ids, and the final SELECT) — the "
-            "same ov_base/filtered/way_base defect. Deliberately deferred: "
-            "Foursquare OSP is a defunct/deprecated data source, so fixing "
-            "the spill here is not worth the effort."
-        ),
-    },
     {
         "filename": "overture_division_import.sql",
         "reason": (

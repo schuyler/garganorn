@@ -1,12 +1,8 @@
 """Tests for scoring behavior (SCORE-5).
 
-TestNormConstantValidation was deleted in Phase 2 cleanup — norm constant
-validation (SCORE-1/2/3/4) is now covered by TestImportNormValidation in
-tests/test_import_fsq.py using the Phase 2 stage_import signature.
-
-This file retains TestNegativePopulationClamping (SCORE-5), which tests
-genuine domain behavior. It uses _transitional_import_phase1 (the legacy
-con-based interface) until the division import is fully ported in Phase 2b.
+TestNegativePopulationClamping (SCORE-5) tests genuine domain behavior. It
+uses _transitional_import_phase1 (the legacy con-based interface) until the
+division import is fully ported in Phase 2b.
 """
 
 import os

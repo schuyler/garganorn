@@ -35,22 +35,22 @@ from garganorn.stages import (
     write_manifest_db,
     _coord_exprs,
 )
-from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
+from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
 from garganorn.quadtree import run_pipeline, SOURCES
 
 
 class TestStageTileAssignment:
     """Tests for stage_tile_assignment function."""
 
-    def test_creates_tile_assignments(self, fsq_parquet, density_parquet, tmp_path):
+    def test_creates_tile_assignments(self, overture_parquet, density_parquet, tmp_path):
         """stage_tile_assignment creates tile_assignments after stage_import."""
         places_parquet = str(tmp_path / "places.parquet")
         ta_parquet = str(tmp_path / "tile_assignments.parquet")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True)
 
-        stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
         con = duckdb.connect()
@@ -62,19 +62,19 @@ class TestStageTileAssignment:
 class TestStageContainment:
     """Tests for compute_containment function."""
 
-    def test_creates_place_containment(self, fsq_parquet, density_parquet, division_db_path, tmp_path):
+    def test_creates_place_containment(self, overture_parquet, density_parquet, division_db_path, tmp_path):
         """compute_containment creates containment when boundaries_db is provided."""
         places_parquet = str(tmp_path / "places.parquet")
         ta_parquet = str(tmp_path / "tile_assignments.parquet")
         containment_dir = str(tmp_path / "containment")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True)
-        stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
-        pk_expr = SOURCES["foursquare"].source_pk
-        lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+        pk_expr = SOURCES["overture_place"].source_pk
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         compute_containment(places_parquet, ta_parquet, str(division_db_path),
                             pk_expr, lon_expr, lat_expr, containment_dir,
                             memory_limit="4GB", force=True)
@@ -92,19 +92,19 @@ class TestStageContainment:
         assert places_parquet in meta["inputs"]
         assert ta_parquet in meta["inputs"]
 
-    def test_no_boundaries_creates_empty_table(self, fsq_parquet, density_parquet, tmp_path):
+    def test_no_boundaries_creates_empty_table(self, overture_parquet, density_parquet, tmp_path):
         """compute_containment with boundaries_db=None creates empty containment dir."""
         places_parquet = str(tmp_path / "places.parquet")
         ta_parquet = str(tmp_path / "tile_assignments.parquet")
         containment_dir = str(tmp_path / "containment")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True)
-        stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
-        pk_expr = SOURCES["foursquare"].source_pk
-        lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+        pk_expr = SOURCES["overture_place"].source_pk
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         compute_containment(places_parquet, ta_parquet, None,
                             pk_expr, lon_expr, lat_expr, containment_dir,
                             memory_limit="4GB", force=True)
@@ -114,7 +114,7 @@ class TestStageContainment:
         meta = json.loads(open(meta_path).read())
         assert meta.get("empty") is True, "meta should have empty=True when no boundaries"
 
-    def test_logs_per_batch_progress(self, fsq_parquet, density_parquet, division_db_path,
+    def test_logs_per_batch_progress(self, overture_parquet, density_parquet, division_db_path,
                                       tmp_path, caplog):
         """compute_containment logs per-batch start/done progress (not DuckDB's progress bar)."""
         from garganorn.covering import stage_covering
@@ -124,15 +124,15 @@ class TestStageContainment:
         covering_dir = str(tmp_path / "covering")
         containment_dir = str(tmp_path / "containment")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True)
-        stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         stage_covering(str(division_db_path), covering_dir,
                        cover_min_zoom=4, cover_max_zoom=12, force=True)
 
-        pk_expr = SOURCES["foursquare"].source_pk
-        lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+        pk_expr = SOURCES["overture_place"].source_pk
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         with caplog.at_level(logging.INFO):
             compute_containment(places_parquet, ta_parquet, str(division_db_path),
                                 pk_expr, lon_expr, lat_expr, containment_dir,
@@ -149,14 +149,14 @@ class TestStageContainment:
 class TestStageExport:
     """Tests for stage_export function."""
 
-    def test_writes_gzipped_tiles(self, fsq_parquet, density_parquet, tmp_path):
+    def test_writes_gzipped_tiles(self, overture_parquet, density_parquet, tmp_path):
         """stage_export writes gzipped JSON tile files."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
 
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         gz_files = list(tiles_current.rglob("*.json.gz"))
         assert len(gz_files) > 0, "at least one .json.gz file should be written"
 
@@ -164,14 +164,14 @@ class TestStageExport:
 class TestStageManifest:
     """Tests for write_manifest and write_manifest_db functions."""
 
-    def test_writes_manifest_json(self, fsq_parquet, density_parquet, tmp_path):
+    def test_writes_manifest_json(self, overture_parquet, density_parquet, tmp_path):
         """stage_export writes manifest.json."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
 
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_path = tiles_current / "manifest.json"
         assert manifest_path.exists()
 
@@ -179,14 +179,14 @@ class TestStageManifest:
             data = json.load(f)
         assert "generated_at" in data
 
-    def test_writes_manifest_duckdb(self, fsq_parquet, density_parquet, tmp_path):
+    def test_writes_manifest_duckdb(self, overture_parquet, density_parquet, tmp_path):
         """stage_export writes manifest.duckdb."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
 
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_db = tiles_current / "manifest.duckdb"
         assert manifest_db.exists()
 
@@ -217,27 +217,27 @@ def _read_one_tile(tiles_current: Path) -> dict:
 class TestEnvelopeShape:
     """§6 item 6 — envelope shape on the real stage_export production path."""
 
-    def test_tile_top_level_keys_exact(self, fsq_parquet, density_parquet, tmp_path):
+    def test_tile_top_level_keys_exact(self, overture_parquet, density_parquet, tmp_path):
         """Tile top-level == exactly {collection, source, license,
         generated_at, records} (per the envelope decisions above)."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
         assert set(tile.keys()) == {"collection", "source", "license", "generated_at", "records"}, (
             f"tile top-level must be exactly {{collection, source, license, generated_at, "
             f"records}}; got {list(tile)}"
         )
 
-    def test_tile_records_are_uri_cid_value_wrapped(self, fsq_parquet, density_parquet, tmp_path):
+    def test_tile_records_are_uri_cid_value_wrapped(self, overture_parquet, density_parquet, tmp_path):
         """Each record == exactly {uri, cid, value} with cid is None (per the envelope decisions above)."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
         assert tile["records"], "tile must have at least one record"
         for rec in tile["records"]:
@@ -246,14 +246,14 @@ class TestEnvelopeShape:
             )
             assert rec["cid"] is None
 
-    def test_tile_record_uri_form_and_rkey_agreement(self, fsq_parquet, density_parquet, tmp_path):
+    def test_tile_record_uri_form_and_rkey_agreement(self, overture_parquet, density_parquet, tmp_path):
         """uri == https://{repo}/{collection}/{rkey}; uri's rkey segment ==
         value.rkey == record_tiles.rkey for sampled records (per the envelope decisions above, §6 item 6)."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
 
         manifest_db = tiles_current / "manifest.duckdb"
@@ -266,31 +266,31 @@ class TestEnvelopeShape:
             assert uri_rkey == rec["value"]["rkey"], (
                 f"uri rkey segment {uri_rkey!r} must equal value.rkey {rec['value']['rkey']!r}"
             )
-            assert rec["uri"] == f"https://places.atgeo.org/org.atgeo.places.foursquare/{uri_rkey}"
+            assert rec["uri"] == f"https://places.atgeo.org/org.atgeo.places.overture.place/{uri_rkey}"
             assert uri_rkey in manifest_rkeys, (
                 f"uri rkey {uri_rkey!r} must appear in manifest.duckdb record_tiles.rkey"
             )
 
-    def test_manifest_json_field_set(self, fsq_parquet, density_parquet, tmp_path):
+    def test_manifest_json_field_set(self, overture_parquet, density_parquet, tmp_path):
         """manifest.json matches the manifest-shape field set (per the envelope decisions above, §6 item 9)."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         with open(tiles_current / "manifest.json") as f:
             manifest = json.load(f)
         assert set(manifest.keys()) == {"generated_at"}, (
             f"manifest.json must match the manifest-shape field set; got {sorted(manifest.keys())}"
         )
 
-    def test_manifest_duckdb_metadata_has_collection(self, fsq_parquet, density_parquet, tmp_path):
+    def test_manifest_duckdb_metadata_has_collection(self, overture_parquet, density_parquet, tmp_path):
         """manifest.duckdb metadata has a collection column (per the envelope decisions above, §6 item 9)."""
-        run_pipeline("foursquare", fsq_parquet,
+        run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
                      density_parquet=density_parquet)
-        tiles_current = tmp_path / "foursquare" / "tiles" / "current"
+        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         con = duckdb.connect(str(tiles_current / "manifest.duckdb"), read_only=True)
         cols = {row[1] for row in con.execute("PRAGMA table_info('metadata')").fetchall()}
         row = con.execute("SELECT collection, source, generated_at FROM metadata").fetchone()
@@ -299,7 +299,7 @@ class TestEnvelopeShape:
             f"manifest.duckdb metadata must have a collection column; got {cols}"
         )
         collection, source, generated_at = row
-        assert collection == "org.atgeo.places.foursquare"
+        assert collection == "org.atgeo.places.overture.place"
 
 
 class TestGeneratedAtDeterminismAndCoherence:
@@ -319,7 +319,7 @@ class TestGeneratedAtDeterminismAndCoherence:
     with an identical injected `now` byte-identical tile-for-tile.
     """
 
-    def _build_export_inputs(self, fsq_parquet, density_parquet, tmp_path, subdir):
+    def _build_export_inputs(self, overture_parquet, density_parquet, tmp_path, subdir):
         """Run stage_import/stage_tile_assignment/compute_containment; return
         (places_parquet, ta_parquet, containment_dir) for a direct stage_export call."""
         base = tmp_path / subdir
@@ -328,18 +328,18 @@ class TestGeneratedAtDeterminismAndCoherence:
         ta_parquet = str(base / "tile_assignments.parquet")
         containment_dir = str(base / "containment")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True)
-        stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
-        pk_expr = SOURCES["foursquare"].source_pk
-        lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+        pk_expr = SOURCES["overture_place"].source_pk
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
         compute_containment(places_parquet, ta_parquet, None,
                             pk_expr, lon_expr, lat_expr, containment_dir,
                             memory_limit="4GB", force=True)
         return places_parquet, ta_parquet, containment_dir
 
-    def test_stage_export_accepts_now_kwarg(self, fsq_parquet, density_parquet, tmp_path):
+    def test_stage_export_accepts_now_kwarg(self, overture_parquet, density_parquet, tmp_path):
         """stage_export(..., now=<aware UTC datetime>) is accepted (the injection seam)."""
         import inspect
         sig = inspect.signature(stage_export)
@@ -348,15 +348,15 @@ class TestGeneratedAtDeterminismAndCoherence:
             f"(per the envelope determinism seam above); got params: {list(sig.parameters)}"
         )
 
-    def test_run_dir_name_matches_injected_now(self, fsq_parquet, density_parquet, tmp_path):
+    def test_run_dir_name_matches_injected_now(self, overture_parquet, density_parquet, tmp_path):
         """The run dir created under tiles_root is named now.strftime('%Y%m%dT%H%M%S')."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
-            fsq_parquet, density_parquet, tmp_path, "inputs_a"
+            overture_parquet, density_parquet, tmp_path, "inputs_a"
         )
         tiles_root = str(tmp_path / "tiles_a")
         fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
 
-        run_dir = stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
                                force=True, now=fixed_now)
 
@@ -364,17 +364,17 @@ class TestGeneratedAtDeterminismAndCoherence:
             f"run dir must be named from the injected now; got {run_dir}"
         )
 
-    def test_generated_at_derived_from_injected_now(self, fsq_parquet, density_parquet, tmp_path):
+    def test_generated_at_derived_from_injected_now(self, overture_parquet, density_parquet, tmp_path):
         """generated_at (tile + manifest.json + manifest.duckdb metadata) ==
         RFC 3339 Z rendering of the injected now (per the envelope decisions above)."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
-            fsq_parquet, density_parquet, tmp_path, "inputs_b"
+            overture_parquet, density_parquet, tmp_path, "inputs_b"
         )
         tiles_root = str(tmp_path / "tiles_b")
         fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
         expected_ts = "2026-07-09T18:00:00Z"
 
-        run_dir = stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
                                force=True, now=fixed_now)
         run_dir = Path(run_dir)
@@ -394,16 +394,16 @@ class TestGeneratedAtDeterminismAndCoherence:
         # Coherence: run-dir name, tile, manifest.json, and manifest.duckdb all agree.
         assert os.path.basename(str(run_dir)) == "20260709T180000"
 
-    def test_every_tile_shares_the_same_generated_at(self, fsq_parquet, density_parquet, tmp_path):
+    def test_every_tile_shares_the_same_generated_at(self, overture_parquet, density_parquet, tmp_path):
         """Every tile in a multi-tile run carries the identical generated_at (per
         the envelope decisions above: 'identical across all tiles of a run')."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
-            fsq_parquet, density_parquet, tmp_path, "inputs_c"
+            overture_parquet, density_parquet, tmp_path, "inputs_c"
         )
         tiles_root = str(tmp_path / "tiles_c")
         fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
 
-        run_dir = Path(stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        run_dir = Path(stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                     tiles_root, time.monotonic(), memory_limit="4GB",
                                     force=True, now=fixed_now))
 
@@ -418,22 +418,22 @@ class TestGeneratedAtDeterminismAndCoherence:
         )
 
     def test_two_runs_with_identical_injected_now_are_byte_identical(
-        self, fsq_parquet, density_parquet, tmp_path
+        self, overture_parquet, density_parquet, tmp_path
     ):
         """§6 item 7 — two stage_export runs over identical inputs with an
         injected fixed timestamp are byte-identical tile-for-tile."""
         places_a, ta_a, cont_a = self._build_export_inputs(
-            fsq_parquet, density_parquet, tmp_path, "inputs_d1"
+            overture_parquet, density_parquet, tmp_path, "inputs_d1"
         )
         places_b, ta_b, cont_b = self._build_export_inputs(
-            fsq_parquet, density_parquet, tmp_path, "inputs_d2"
+            overture_parquet, density_parquet, tmp_path, "inputs_d2"
         )
         fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
 
-        run_dir_a = Path(stage_export("foursquare", places_a, ta_a, cont_a,
+        run_dir_a = Path(stage_export("overture_place", places_a, ta_a, cont_a,
                                       str(tmp_path / "tiles_d1"), time.monotonic(),
                                       memory_limit="4GB", force=True, now=fixed_now))
-        run_dir_b = Path(stage_export("foursquare", places_b, ta_b, cont_b,
+        run_dir_b = Path(stage_export("overture_place", places_b, ta_b, cont_b,
                                       str(tmp_path / "tiles_d2"), time.monotonic(),
                                       memory_limit="4GB", force=True, now=fixed_now))
 
@@ -645,26 +645,26 @@ class TestStageExportTempDirectory:
     supplied, spill happens under the caller's chosen volume instead of the
     tiles volume."""
 
-    def _build_export_inputs(self, fsq_parquet, tmp_path, subdir):
-        return _build_export_inputs(fsq_parquet, tmp_path, subdir)
+    def _build_export_inputs(self, overture_parquet, tmp_path, subdir):
+        return _build_export_inputs(overture_parquet, tmp_path, subdir)
 
-    def test_accepts_temp_directory_kwarg(self, fsq_parquet, tmp_path):
+    def test_accepts_temp_directory_kwarg(self, overture_parquet, tmp_path):
         """stage_export(..., temp_directory=<dir>) must be accepted, mirroring
         every sibling stage's temp_directory parameter."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_td1"
+            overture_parquet, tmp_path, "inputs_td1"
         )
         tiles_root = str(tmp_path / "tiles_td1")
         scratch = tmp_path / "scratch_td1"
         scratch.mkdir()
 
         # Must not raise TypeError for an unexpected keyword argument.
-        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
                      force=True, temp_directory=str(scratch))
 
     def test_honors_temp_directory_for_spill_location(
-        self, fsq_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """When temp_directory is supplied, stage_export's DuckDB connection
         must SET temp_directory under the caller's chosen volume, not under
@@ -672,7 +672,7 @@ class TestStageExportTempDirectory:
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_td2"
+            overture_parquet, tmp_path, "inputs_td2"
         )
         tiles_root = str(tmp_path / "tiles_td2")
         scratch = tmp_path / "scratch_td2"
@@ -697,7 +697,7 @@ class TestStageExportTempDirectory:
 
         monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
 
-        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
                      force=True, temp_directory=str(scratch))
 
@@ -717,7 +717,7 @@ class TestStageExportTempDirectory:
         assert scratch.exists(), "caller-supplied temp_directory must not be removed"
 
     def test_default_spill_location_preserved_when_temp_directory_omitted(
-        self, fsq_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """When temp_directory is omitted, spill must still land at
         run_dir + '.spill' (existing behavior, preserved for callers that
@@ -725,7 +725,7 @@ class TestStageExportTempDirectory:
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_td3"
+            overture_parquet, tmp_path, "inputs_td3"
         )
         tiles_root = str(tmp_path / "tiles_td3")
 
@@ -748,7 +748,7 @@ class TestStageExportTempDirectory:
 
         monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
 
-        run_dir = stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
                                force=True)
 
@@ -766,7 +766,7 @@ class TestRunPipelineTempDirectoryThreading:
     compute_containment)."""
 
     def test_run_pipeline_passes_temp_directory_to_stage_export(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         import garganorn.quadtree as quadtree_mod
 
@@ -782,7 +782,7 @@ class TestRunPipelineTempDirectoryThreading:
         scratch.mkdir()
 
         quadtree_mod.run_pipeline(
-            "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
             str(tmp_path / "output_rp"), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, temp_directory=str(scratch),
         )
@@ -796,7 +796,7 @@ class TestRunPipelineTempDirectoryThreading:
 
 # ---------------------------------------------------------------------------
 # stage_import applies its temp_directory parameter to its own ephemeral
-# connection for the foursquare/overture_place/osm branches, and forwards it
+# connection for the overture_place/osm branches, and forwards it
 # to stage_division_import for the overture_division dispatch, matching
 # stage_division_import's own `if temp_directory: con.execute(f"SET
 # temp_directory = '{temp_directory}'")` precedent.
@@ -812,12 +812,12 @@ class TestRunPipelineTempDirectoryThreading:
 
 class TestStageImportTempDirectory:
     """stage_import must apply its temp_directory parameter to its own
-    DuckDB connection (foursquare/overture_place/osm branches), matching
+    DuckDB connection (overture_place/osm branches), matching
     stage_division_import's precedent (stages.py:766-767) and every other
     stage."""
 
     def test_honors_temp_directory_on_its_own_connection(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         import garganorn.stages as stages_mod
 
@@ -844,7 +844,7 @@ class TestStageImportTempDirectory:
 
         monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      density_parquet=density_parquet, temp_directory=str(scratch))
 
@@ -861,7 +861,7 @@ class TestStageImportTempDirectory:
         )
 
     def test_omitted_temp_directory_does_not_set_it(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """Preserve existing behavior when temp_directory is None: no SET
         temp_directory statement at all (DuckDB's own default applies), same
@@ -889,7 +889,7 @@ class TestStageImportTempDirectory:
 
         monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      density_parquet=density_parquet)
 
@@ -943,9 +943,9 @@ def _write_null_key_idf_parquet(path):
     """Write an idf_scores-shaped parquet with a single NULL category key
     and no duplicates among the non-NULL keys.
 
-    Mirrors production reachability: foursquare_idf.sql derives category
-    from fsq_category_ids, and a NULL inside that array survives as a NULL
-    category group. Must not trip the uniqueness guard (see
+    Mirrors production reachability: overture_place_idf.sql derives category
+    from categories.primary, and a NULL there survives as a NULL category
+    group. Must not trip the uniqueness guard (see
     _write_null_key_density_parquet's docstring for why).
     """
     conn = duckdb.connect(":memory:")
@@ -970,13 +970,13 @@ class TestStageImportLookupKeyUniqueness:
     a silently-multiplied join. NULL keys are exempt (NULL = NULL is never
     true, so a NULL key cannot fan out the LEFT JOIN)."""
 
-    def test_duplicate_density_tile_qk15_raises(self, fsq_parquet, tmp_path):
+    def test_duplicate_density_tile_qk15_raises(self, overture_parquet, tmp_path):
         density_path = tmp_path / "dup_density.parquet"
         _write_duplicate_density_parquet(density_path)
         places_parquet = str(tmp_path / "places_dup_density.parquet")
 
         with pytest.raises(ValueError) as excinfo:
-            stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
                          density_parquet=str(density_path))
 
@@ -992,10 +992,10 @@ class TestStageImportLookupKeyUniqueness:
         )
 
     @pytest.mark.parametrize(
-        "source", ["foursquare", "overture_place", "osm", "overture_division"]
+        "source", ["overture_place", "osm", "overture_division"]
     )
     def test_duplicate_density_tile_qk15_raises_for_every_density_parquet_consumer(
-        self, source, fsq_parquet, overture_parquet, osm_parquet, division_parquet, tmp_path
+        self, source, overture_parquet, osm_parquet, division_parquet, tmp_path
     ):
         """stage_import dispatches to stage_division_import for
         overture_division and RETURNS before its own _assert_unique_key call
@@ -1004,7 +1004,7 @@ class TestStageImportLookupKeyUniqueness:
         a duplicated tile_qk15 in --density-parquet silently corrupts
         importance for division rows too (division_density's
         avg(density_score) double-counts the duplicate), rather than
-        raising. Parametrized over all four sources that can receive
+        raising. Parametrized over every source that can receive
         --density-parquet through stage_import so a fix covering only the
         non-division path can't pass silently."""
         density_path = tmp_path / f"dup_density_{source}.parquet"
@@ -1012,7 +1012,6 @@ class TestStageImportLookupKeyUniqueness:
         places_parquet = str(tmp_path / f"places_dup_density_{source}.parquet")
 
         parquet_glob = {
-            "foursquare": fsq_parquet,
             "overture_place": overture_parquet,
             "osm": (osm_parquet["node"], osm_parquet["way"]),
             "overture_division": division_parquet,
@@ -1074,13 +1073,13 @@ class TestStageImportLookupKeyUniqueness:
             f"uniqueness check fails; got {len(calls)} call(s)"
         )
 
-    def test_duplicate_idf_category_raises(self, fsq_parquet, tmp_path):
+    def test_duplicate_idf_category_raises(self, overture_parquet, tmp_path):
         idf_path = tmp_path / "dup_idf.parquet"
         _write_duplicate_idf_parquet(idf_path)
         places_parquet = str(tmp_path / "places_dup_idf.parquet")
 
         with pytest.raises(ValueError) as excinfo:
-            stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
                          idf_parquet=str(idf_path))
 
@@ -1095,7 +1094,7 @@ class TestStageImportLookupKeyUniqueness:
             "stage_import must fail before writing any output artifact"
         )
 
-    def test_null_density_tile_qk15_does_not_raise(self, fsq_parquet, tmp_path):
+    def test_null_density_tile_qk15_does_not_raise(self, overture_parquet, tmp_path):
         """A single NULL tile_qk15 key (and zero duplicates among the
         non-NULL keys) must not trip the uniqueness guard -- this is exactly
         the production shape density_extract.sql produces for a NULL-bbox
@@ -1104,28 +1103,28 @@ class TestStageImportLookupKeyUniqueness:
         _write_null_key_density_parquet(density_path)
         places_parquet = str(tmp_path / "places_null_density.parquet")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      density_parquet=str(density_path))
         assert os.path.exists(places_parquet)
 
-    def test_null_idf_category_does_not_raise(self, fsq_parquet, tmp_path):
+    def test_null_idf_category_does_not_raise(self, overture_parquet, tmp_path):
         """A single NULL category key (and zero duplicates among the
         non-NULL keys) must not trip the uniqueness guard."""
         idf_path = tmp_path / "null_idf.parquet"
         _write_null_key_idf_parquet(idf_path)
         places_parquet = str(tmp_path / "places_null_idf.parquet")
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      idf_parquet=str(idf_path))
         assert os.path.exists(places_parquet)
 
     def test_uniqueness_check_runs_before_expensive_import_sql(
-        self, fsq_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """_assert_unique_key must raise BEFORE osm_import.sql/
-        overture_place_import.sql/foursquare_import.sql runs -- that
+        overture_place_import.sql runs -- that
         ordering is the entire point of the guard (fail fast, before hours
         of downstream work). Spy on stages._run_sql (the function that runs
         the import SQL) to prove it is never called when the density lookup
@@ -1147,7 +1146,7 @@ class TestStageImportLookupKeyUniqueness:
 
         with pytest.raises(ValueError):
             stages_mod.stage_import(
-                "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+                "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                 places_parquet, memory_limit="4GB", force=True,
                 density_parquet=str(density_path),
             )
@@ -1157,14 +1156,14 @@ class TestStageImportLookupKeyUniqueness:
             f"the uniqueness check fails; got {len(calls)} call(s)"
         )
 
-    def test_unique_keys_do_not_raise(self, fsq_parquet, density_parquet, tmp_path):
+    def test_unique_keys_do_not_raise(self, overture_parquet, density_parquet, tmp_path):
         """Sanity check: clean lookup tables (the production contract,
         guaranteed unique by density_extract.sql's GROUP BY) must not trip
         the uniqueness guard, and the density lookup must actually have been
         used -- an implementation that silently loaded density_tiles empty
         would also pass a bare os.path.exists() check."""
         places_parquet = str(tmp_path / "places_clean.parquet")
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      density_parquet=density_parquet)
         assert os.path.exists(places_parquet)
@@ -1181,7 +1180,7 @@ class TestStageImportLookupKeyUniqueness:
         )
 
     def test_does_not_materialize_the_parquet(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """The uniqueness count must query read_parquet(density_parquet)
         directly so DuckDB streams the single column it needs via
@@ -1190,7 +1189,7 @@ class TestStageImportLookupKeyUniqueness:
         import garganorn.stages as stages_mod
 
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_stream.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet)
 
@@ -1205,7 +1204,7 @@ class TestStageImportLookupKeyUniqueness:
         )
 
     def test_memory_limit_set_before_any_query(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """memory_limit must be set on the uniqueness-check's own connection
         before any query runs on it, so the count itself is bounded rather
@@ -1213,7 +1212,7 @@ class TestStageImportLookupKeyUniqueness:
         import garganorn.stages as stages_mod
 
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_memlimit.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet)
 
@@ -1268,7 +1267,7 @@ def _max_temp_stmts(statements):
     return [s for s in statements if "SET max_temp_directory_size" in s]
 
 
-def _build_export_inputs(fsq_parquet, tmp_path, subdir):
+def _build_export_inputs(overture_parquet, tmp_path, subdir):
     """Run stage_import/stage_tile_assignment/compute_containment; return
     (places_parquet, ta_parquet, containment_dir) for a direct stage_export call."""
     base = tmp_path / subdir
@@ -1277,12 +1276,12 @@ def _build_export_inputs(fsq_parquet, tmp_path, subdir):
     ta_parquet = str(base / "tile_assignments.parquet")
     containment_dir = str(base / "containment")
 
-    stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+    stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                  places_parquet, memory_limit="4GB", force=True)
-    stage_tile_assignment(places_parquet, ta_parquet, "foursquare",
+    stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                           max_per_tile=100, memory_limit="4GB", force=True)
-    pk_expr = SOURCES["foursquare"].source_pk
-    lon_expr, lat_expr = _coord_exprs("foursquare", alias="p")
+    pk_expr = SOURCES["overture_place"].source_pk
+    lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
     compute_containment(places_parquet, ta_parquet, None,
                         pk_expr, lon_expr, lat_expr, containment_dir,
                         memory_limit="4GB", force=True)
@@ -1309,7 +1308,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         return statements[:create_idx]
 
     def test_applies_caller_supplied_value(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         import garganorn.stages as stages_mod
 
@@ -1317,7 +1316,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         scratch = tmp_path / "scratch_adpu"
         scratch.mkdir()
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
                      temp_directory=str(scratch), max_temp_directory_size="8GB")
@@ -1335,7 +1334,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         )
 
     def test_bound_applied_when_temp_directory_omitted(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """max_temp_directory_size is an independent DuckDB setting: it must
         bound spill even when temp_directory is never redirected, since spill
@@ -1345,7 +1344,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
 
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu_notd.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet)
 
@@ -1366,7 +1365,7 @@ class TestStageImportMaxTempDirectorySize:
     spill (stages.py:1006-1009)."""
 
     def test_applies_caller_supplied_value(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         import garganorn.stages as stages_mod
 
@@ -1374,7 +1373,7 @@ class TestStageImportMaxTempDirectorySize:
         scratch = tmp_path / "scratch_mtds"
         scratch.mkdir()
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
                      temp_directory=str(scratch), max_temp_directory_size="7GB")
@@ -1389,7 +1388,7 @@ class TestStageImportMaxTempDirectorySize:
         )
 
     def test_applies_default_when_not_specified(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """The default is a real bound, not None -- an unbounded default would
         make the setting opt-in and leave every existing caller exposed."""
@@ -1399,7 +1398,7 @@ class TestStageImportMaxTempDirectorySize:
         scratch = tmp_path / "scratch_mtds_def"
         scratch.mkdir()
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_def.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
                      temp_directory=str(scratch))
@@ -1412,7 +1411,7 @@ class TestStageImportMaxTempDirectorySize:
         )
 
     def test_explicit_none_disables_the_bound(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """`if max_temp_directory_size:` lets a caller opt out deliberately."""
         import garganorn.stages as stages_mod
@@ -1421,7 +1420,7 @@ class TestStageImportMaxTempDirectorySize:
         scratch = tmp_path / "scratch_mtds_none"
         scratch.mkdir()
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_none.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
                      temp_directory=str(scratch), max_temp_directory_size=None)
@@ -1432,7 +1431,7 @@ class TestStageImportMaxTempDirectorySize:
         )
 
     def test_bound_applied_when_temp_directory_omitted(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """max_temp_directory_size must bound spill independently of
         temp_directory: a caller that never redirects spill still gets the
@@ -1444,7 +1443,7 @@ class TestStageImportMaxTempDirectorySize:
 
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        stage_import("foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_notd.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet)
 
@@ -1463,18 +1462,18 @@ class TestStageExportMaxTempDirectorySize:
     """stage_export always owns a spill dir, so it always bounds it."""
 
     def test_bounds_spill_even_without_temp_directory(
-        self, fsq_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """Unlike stage_import, stage_export redirects spill unconditionally
         (to run_dir + '.spill'), so it must bound it unconditionally too."""
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_mtds1"
+            overture_parquet, tmp_path, "inputs_mtds1"
         )
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds1"), time.monotonic(),
                      memory_limit="4GB", force=True)
 
@@ -1486,18 +1485,18 @@ class TestStageExportMaxTempDirectorySize:
         assert "250GB" in stmts[0], f"expected the 250GB default; got: {stmts[0]!r}"
 
     def test_applies_caller_supplied_value(
-        self, fsq_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_mtds2"
+            overture_parquet, tmp_path, "inputs_mtds2"
         )
         scratch = tmp_path / "scratch_export_mtds"
         scratch.mkdir()
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds2"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
                      max_temp_directory_size="9GB")
@@ -1516,11 +1515,11 @@ class TestWriteManifestDbMaxTempDirectorySize:
     apply the same temp_directory/max_temp_directory_size contract as
     stage_import (bound only applied when temp_directory is supplied)."""
 
-    def test_applies_caller_supplied_value(self, fsq_parquet, tmp_path, monkeypatch):
+    def test_applies_caller_supplied_value(self, overture_parquet, tmp_path, monkeypatch):
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_wmdb1"
+            overture_parquet, tmp_path, "inputs_wmdb1"
         )
         scratch = tmp_path / "scratch_wmdb1"
         scratch.mkdir()
@@ -1528,7 +1527,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         out_dir.mkdir()
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        write_manifest_db(ta_parquet, str(out_dir), "foursquare",
+        write_manifest_db(ta_parquet, str(out_dir), "overture_place",
                           temp_directory=str(scratch), max_temp_directory_size="6GB")
 
         stmts = _max_temp_stmts(statements)
@@ -1541,11 +1540,11 @@ class TestWriteManifestDbMaxTempDirectorySize:
             f"must apply the caller-supplied bound (6GB); got: {stmts[0]!r}"
         )
 
-    def test_applies_default_when_not_specified(self, fsq_parquet, tmp_path, monkeypatch):
+    def test_applies_default_when_not_specified(self, overture_parquet, tmp_path, monkeypatch):
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_wmdb2"
+            overture_parquet, tmp_path, "inputs_wmdb2"
         )
         scratch = tmp_path / "scratch_wmdb2"
         scratch.mkdir()
@@ -1553,7 +1552,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         out_dir.mkdir()
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        write_manifest_db(ta_parquet, str(out_dir), "foursquare",
+        write_manifest_db(ta_parquet, str(out_dir), "overture_place",
                           temp_directory=str(scratch))
 
         stmts = _max_temp_stmts(statements)
@@ -1563,11 +1562,11 @@ class TestWriteManifestDbMaxTempDirectorySize:
             f"signature; got: {stmts[0]!r}"
         )
 
-    def test_explicit_none_disables_the_bound(self, fsq_parquet, tmp_path, monkeypatch):
+    def test_explicit_none_disables_the_bound(self, overture_parquet, tmp_path, monkeypatch):
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_wmdb3"
+            overture_parquet, tmp_path, "inputs_wmdb3"
         )
         scratch = tmp_path / "scratch_wmdb3"
         scratch.mkdir()
@@ -1575,7 +1574,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         out_dir.mkdir()
         statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
 
-        write_manifest_db(ta_parquet, str(out_dir), "foursquare",
+        write_manifest_db(ta_parquet, str(out_dir), "overture_place",
                           temp_directory=str(scratch), max_temp_directory_size=None)
 
         assert not _max_temp_stmts(statements), (
@@ -1584,7 +1583,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         )
 
     def test_stage_export_threads_its_own_values_to_write_manifest_db(
-        self, fsq_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """stage_export must pass its own temp_directory/max_temp_directory_size
         through to write_manifest_db so the manifest step spills where the
@@ -1592,7 +1591,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
-            fsq_parquet, tmp_path, "inputs_wmdb4"
+            overture_parquet, tmp_path, "inputs_wmdb4"
         )
         scratch = tmp_path / "scratch_wmdb4"
         scratch.mkdir()
@@ -1606,7 +1605,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
 
         monkeypatch.setattr(stages_mod, "write_manifest_db", spy_write_manifest_db)
 
-        stage_export("foursquare", places_parquet, ta_parquet, containment_dir,
+        stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_wmdb4"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
                      max_temp_directory_size="12GB")
@@ -1628,7 +1627,7 @@ class TestMaxTempDirectorySizeThreading:
     file, and the CLI flags."""
 
     def test_run_pipeline_threads_it_to_stage_export(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         import garganorn.quadtree as quadtree_mod
 
@@ -1639,7 +1638,7 @@ class TestMaxTempDirectorySizeThreading:
         )
 
         quadtree_mod.run_pipeline(
-            "foursquare", fsq_parquet, (-122.55, 37.60, -122.30, 37.85),
+            "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
             str(tmp_path / "output_mtds"), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, max_temp_directory_size="11GB",
         )
@@ -1686,7 +1685,7 @@ class TestMaxTempDirectorySizeThreading:
             "  memory_limit: 4GB\n"
             "  max_temp_directory_size: 17GB\n"
             "  sources:\n"
-            "    foursquare:\n"
+            "    overture_place:\n"
             "      parquet: /nonexistent/*.parquet\n"
         )
 
@@ -1716,7 +1715,7 @@ class TestMaxTempDirectorySizeThreading:
             f"  output: {tmp_path / 'out2'}\n"
             "  memory_limit: 4GB\n"
             "  sources:\n"
-            "    foursquare:\n"
+            "    overture_place:\n"
             "      parquet: /nonexistent/*.parquet\n"
         )
 
@@ -1738,10 +1737,10 @@ class TestMaxTempDirectorySizeThreading:
 
     @staticmethod
     def _cmd_run_args(**overrides):
-        """Minimal argparse.Namespace for _cmd_run with a foursquare source,
+        """Minimal argparse.Namespace for _cmd_run with an overture_place source,
         matching what the `run` subparser would produce."""
         defaults = dict(
-            source="foursquare", parquet="/nonexistent/*.parquet",
+            source="overture_place", parquet="/nonexistent/*.parquet",
             parquet_dir=None, division_parquet=None, division_area_parquet=None,
             output="/nonexistent/out", bbox=None, config=None,
             memory_limit=None, max_per_tile=None, boundaries=None,

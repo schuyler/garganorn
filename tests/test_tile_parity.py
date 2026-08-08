@@ -43,7 +43,7 @@ def _write_tile(tiles_dir, qk, records, attribution="attr", collection="col"):
     return path
 
 
-def _write_manifest(d, source="foursquare", generated_at="2026-01-01T00:00:00+00:00",
+def _write_manifest(d, source="overture_place", generated_at="2026-01-01T00:00:00+00:00",
                     quadkeys=("023130",)):
     path = os.path.join(d, "manifest.json")
     with open(path, "w") as f:
@@ -52,7 +52,7 @@ def _write_manifest(d, source="foursquare", generated_at="2026-01-01T00:00:00+00
     return path
 
 
-def _write_manifest_db(d, rows, source="foursquare",
+def _write_manifest_db(d, rows, source="overture_place",
                        generated_at="2026-01-01T00:00:00+00:00"):
     """rows: list of (rkey, tile_qk)."""
     path = os.path.join(d, "manifest.duckdb")

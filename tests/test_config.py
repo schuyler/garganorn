@@ -3,7 +3,6 @@ import pytest
 import yaml
 
 from garganorn.config import load_config
-from garganorn.database import FoursquareOSP, OverturePlaces, OvertureDivisions
 
 
 def _write_config(tmp_path, data):
@@ -21,153 +20,57 @@ def test_missing_file_raises_file_not_found(tmp_path):
 
 def test_missing_repo_key_defaults_to_places_atgeo_org(tmp_path):
     """Config without 'repo' key defaults to 'places.atgeo.org'."""
-    config_path = _write_config(tmp_path, {"databases": []})
-    repo, dbs, *_ = load_config(config_path)
+    config_path = _write_config(tmp_path, {})
+    repo, tiles = load_config(config_path)
     assert repo == "places.atgeo.org"
-    assert dbs == []
 
 
 def test_explicit_repo_key_is_used(tmp_path):
     """Explicit 'repo' key in config is returned."""
-    config_path = _write_config(tmp_path, {"repo": "myserver.example.com", "databases": []})
-    repo, dbs, *_ = load_config(config_path)
+    config_path = _write_config(tmp_path, {"repo": "myserver.example.com"})
+    repo, tiles = load_config(config_path)
     assert repo == "myserver.example.com"
 
 
-def test_unknown_db_type_raises_value_error(tmp_path, tmp_path_factory):
-    """Unknown database type raises ValueError."""
-    fake_db = tmp_path / "fake.duckdb"
-    fake_db.touch()
-    config_path = _write_config(tmp_path, {
-        "databases": [{"type": "unknown_type", "path": str(fake_db)}]
-    })
-    with pytest.raises(ValueError, match="Unknown database type"):
-        load_config(config_path)
-
-
-def test_foursquare_type_creates_foursquare_osp(tmp_path):
-    """'foursquare' type creates a FoursquareOSP instance."""
-    fake_db = tmp_path / "fsq.duckdb"
-    fake_db.touch()
-    config_path = _write_config(tmp_path, {
-        "databases": [{"type": "foursquare", "path": str(fake_db)}]
-    })
-    repo, dbs, *_ = load_config(config_path)
-    assert len(dbs) == 1
-    assert isinstance(dbs[0], FoursquareOSP)
-
-
-def test_overture_place_type_creates_overture_places(tmp_path):
-    """'overture_place' type creates an OverturePlaces instance."""
-    fake_db = tmp_path / "ovr.duckdb"
-    fake_db.touch()
-    config_path = _write_config(tmp_path, {
-        "databases": [{"type": "overture_place", "path": str(fake_db)}]
-    })
-    repo, dbs, *_ = load_config(config_path)
-    assert len(dbs) == 1
-    assert isinstance(dbs[0], OverturePlaces)
-
-
-def test_boundaries_path_from_config(tmp_path):
-    """Config with 'boundaries' key returns the path as third element."""
-    config_path = _write_config(tmp_path, {
-        "boundaries": "db/wof-boundaries.duckdb",
-        "databases": []
-    })
-    repo, dbs, boundaries_path, *_ = load_config(config_path)
-    assert boundaries_path == "db/wof-boundaries.duckdb"
-
-
-def test_config_without_boundaries(tmp_path):
-    """Config without 'boundaries' key returns None."""
-    config_path = _write_config(tmp_path, {"databases": []})
-    repo, dbs, boundaries_path, *_ = load_config(config_path)
-    assert boundaries_path is None
-
-
-
 # ---------------------------------------------------------------------------
-# Tiles config tests (Red phase: load_config returns 3-tuple, not 4-tuple yet)
+# Tiles config tests
 # ---------------------------------------------------------------------------
 
-def test_tiles_section_returns_4tuple(tmp_path):
-    """Config with 'tiles:' section → load_config returns a 4-tuple."""
+def test_tiles_section_returned_as_second_element(tmp_path):
+    """Config with 'tiles:' section is returned as the 2nd element."""
     config_path = _write_config(tmp_path, {
-        "databases": [],
         "tiles": {
             "collections": {
-                "org.atgeo.places.foursquare": {
-                    "manifest": "tiles/fsq/manifest.json",
-                    "base_url": "https://tiles.example.com/fsq",
+                "org.atgeo.places.osm": {
+                    "manifest": "tiles/osm/manifest.json",
+                    "base_url": "https://tiles.example.com/osm",
                 }
             },
             "max_coverage_tiles": 50,
         },
     })
-    result = load_config(config_path)
-    assert len(result) == 4, f"load_config must return 4-tuple; got {len(result)}-tuple"
-
-
-def test_tiles_config_dict_returned_as_fourth_element(tmp_path):
-    """The tiles dict from config is returned as the 4th element."""
-    config_path = _write_config(tmp_path, {
-        "databases": [],
-        "tiles": {
-            "collections": {
-                "org.atgeo.places.foursquare": {
-                    "manifest": "tiles/fsq/manifest.json",
-                    "base_url": "https://tiles.example.com/fsq",
-                }
-            }
-        },
-    })
-    result = load_config(config_path)
-    tiles = result[3]
+    repo, tiles = load_config(config_path)
     assert isinstance(tiles, dict)
     assert "collections" in tiles
-    assert "org.atgeo.places.foursquare" in tiles["collections"]
+    assert "org.atgeo.places.osm" in tiles["collections"]
 
 
-def test_config_without_tiles_returns_4tuple_with_none(tmp_path):
-    """Config without 'tiles:' → 4-tuple with None as 4th element."""
-    config_path = _write_config(tmp_path, {"databases": []})
-    result = load_config(config_path)
-    assert len(result) == 4, f"load_config must always return 4-tuple; got {len(result)}-tuple"
-    assert result[3] is None
-
-
-def test_overture_division_type_creates_overture_divisions(tmp_path):
-    """'overture_division' database type creates an OvertureDivisions instance."""
-    fake_db = tmp_path / "boundaries.duckdb"
-    fake_db.touch()
-    config_path = _write_config(tmp_path, {
-        "databases": [{"type": "overture_division", "path": str(fake_db)}]
-    })
-    repo, dbs, boundaries_path, *_ = load_config(config_path)
-    assert len(dbs) == 1
-    assert isinstance(dbs[0], OvertureDivisions)
+def test_config_without_tiles_returns_none(tmp_path):
+    """Config without 'tiles:' key returns None as the 2nd element."""
+    config_path = _write_config(tmp_path, {})
+    repo, tiles = load_config(config_path)
+    assert tiles is None
 
 
 # ---------------------------------------------------------------------------
-# OQ-P2-5 Red tests — new slug/path/URL-contract schema (failing until Change B
-# lands in config.yaml and Change A lands in __main__.py).
+# OQ-P2-5 slug/path/URL-contract schema
 # ---------------------------------------------------------------------------
 
 _SLUG_CONFIG = {
-    "databases": [],
     "tiles": {
         "max_per_tile": 1000,
         "memory_limit": "48GB",
         "collections": {
-            "org.atgeo.places.foursquare": {
-                "slug": "foursquare",
-                "manifest": "tiles/foursquare/tiles/current/manifest.duckdb",
-                "tiles_dir": "tiles/foursquare/tiles/current",
-                "base_url": "https://places.atgeo.org/tiles/foursquare",
-                "source": "https://docs.foursquare.com/",
-                "license": "https://docs.foursquare.com/",
-            },
             "org.atgeo.places.overture.place": {
                 "slug": "overture-place",
                 "manifest": "tiles/overture_place/tiles/current/manifest.duckdb",
@@ -193,21 +96,18 @@ _SLUG_CONFIG = {
 def test_slug_base_url_consistency(tmp_path):
     """Each collection's base_url must end with '/<slug>' (OQ-P2-5 Change B).
 
-    Asserts the new config schema invariant that the design doc requires
-    (design doc §Change A): base_url.rstrip('/').endswith('/' + slug).
-    This test uses the synthetic config directly without touching config.yaml,
-    so it encodes the new schema contract and will pass once the config is
-    updated — but we are asserting that the *config values themselves* satisfy
-    this invariant (not that load_config enforces it; that enforcement lives in
-    create_app). Fails now if slug is absent from the loaded dict.
+    Asserts the config schema invariant that the design doc requires (design
+    doc §Change A): base_url.rstrip('/').endswith('/' + slug). This test uses
+    the synthetic config directly without touching config.yaml, so it encodes
+    the schema contract — enforcement of the invariant lives in create_app,
+    not load_config.
     """
     config_path = _write_config(tmp_path, _SLUG_CONFIG)
-    _, _, _, tiles_config = load_config(config_path)
+    _, tiles_config = load_config(config_path)
     collections = tiles_config["collections"]
     for nsid, coll_cfg in collections.items():
         slug = coll_cfg.get("slug")
         base_url = coll_cfg.get("base_url")
-        # These will fail if slug key is absent (which it is in the pre-P2-5 schema)
         assert slug is not None, f"{nsid}: missing 'slug' key in collection config"
         assert base_url is not None, f"{nsid}: missing 'base_url' key"
         assert base_url.rstrip("/").endswith("/" + slug), (
@@ -226,11 +126,10 @@ def test_phase2_tiles_dir_and_manifest_path_doubling(tmp_path):
     contain the segment 'tiles/current'.
     """
     config_path = _write_config(tmp_path, _SLUG_CONFIG)
-    _, _, _, tiles_config = load_config(config_path)
+    _, tiles_config = load_config(config_path)
     collections = tiles_config["collections"]
 
     expected_patterns = {
-        "org.atgeo.places.foursquare": "foursquare/tiles/current",
         "org.atgeo.places.overture.place": "overture_place/tiles/current",
         "org.atgeo.places.osm": "osm/tiles/current",
     }
@@ -248,14 +147,14 @@ def test_phase2_tiles_dir_and_manifest_path_doubling(tmp_path):
 
 
 def test_url_contract_base_url_slug_and_tile_path_shape():
-    """URL-contract guard: getCoverage URL shape matches the new /tiles/<slug>/... route.
+    """URL-contract guard: getCoverage URL shape matches the /tiles/<slug>/... route.
 
     TileManifest.get_tiles_for_bbox emits:
         f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
 
     For a kebab-case base_url ending in the slug, the emitted URL must have the
     form  <base_url>/<qk6>/<qk>.json.gz  and — stripping base_url — the
-    remainder must be  <qk6>/<qk>.json.gz, consistent with the new Flask route
+    remainder must be  <qk6>/<qk>.json.gz, consistent with the Flask route
     /tiles/<slug>/<qk6>/<qk>.json.gz  (i.e. the suffix after the slug prefix
     in the URL matches what the route captures as <path:tile_path>).
 

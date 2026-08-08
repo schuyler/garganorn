@@ -83,19 +83,19 @@ def _find_tiles_current(output_dir, source):
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
-def control_run(fsq_parquet, density_parquet, tmp_path_factory):
+def control_run(overture_parquet, density_parquet, tmp_path_factory):
     """Run a clean reference pipeline and return (tiles_current, canonical_tiles)."""
     out = tmp_path_factory.mktemp("control")
     run_pipeline(
-        "foursquare",
-        fsq_parquet,
+        "overture_place",
+        overture_parquet,
         (-122.55, 37.60, -122.30, 37.85),
         str(out),
         memory_limit="4GB",
         max_per_tile=100,
         density_parquet=density_parquet,
     )
-    tiles_current = _find_tiles_current(out, "foursquare")
+    tiles_current = _find_tiles_current(out, "overture_place")
     canonical = _collect_tiles(str(tiles_current))
     return (tiles_current, canonical)
 
@@ -117,33 +117,33 @@ class TestCrashStateMatrix:
     tiles at <src>/tiles/current/ (Phase 2 layout).
     """
 
-    def _run_and_collect(self, fsq_parquet, density_parquet, output_dir):
+    def _run_and_collect(self, overture_parquet, density_parquet, output_dir):
         run_pipeline(
-            "foursquare",
-            fsq_parquet,
+            "overture_place",
+            overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
         )
-        tiles_current = _find_tiles_current(output_dir, "foursquare")
+        tiles_current = _find_tiles_current(output_dir, "overture_place")
         return _collect_tiles(str(tiles_current))
 
     def test_stale_places_tmp_cleared_on_rerun(
-        self, fsq_parquet, density_parquet, control_run, tmp_path
+        self, overture_parquet, density_parquet, control_run, tmp_path
     ):
         """A stale places.parquet.tmp must be cleaned up and a correct result produced."""
         _, control_tiles = control_run
         output_dir = tmp_path / "out"
         output_dir.mkdir()
         # Simulate crash: plant garbage .tmp where places.parquet.tmp would be
-        fsq_dir = output_dir / "foursquare"
-        fsq_dir.mkdir()
-        stale_tmp = fsq_dir / "places.parquet.tmp"
+        ov_dir = output_dir / "overture_place"
+        ov_dir.mkdir()
+        stale_tmp = ov_dir / "places.parquet.tmp"
         stale_tmp.write_bytes(b"garbage-crash-leftover")
         # Rerun must recover
-        result_tiles = self._run_and_collect(fsq_parquet, density_parquet, output_dir)
+        result_tiles = self._run_and_collect(overture_parquet, density_parquet, output_dir)
         assert result_tiles == control_tiles, (
             f"After stale .tmp cleanup, tiles must match control run. "
             f"Differences: {set(result_tiles) ^ set(control_tiles)}"
@@ -151,7 +151,7 @@ class TestCrashStateMatrix:
         assert not stale_tmp.exists(), "stale .tmp must be deleted before rebuild"
 
     def test_incomplete_export_dir_deleted_on_rerun(
-        self, fsq_parquet, density_parquet, control_run, tmp_path
+        self, overture_parquet, density_parquet, control_run, tmp_path
     ):
         """A run dir without manifest.json (crash leftover) must be deleted on next export."""
         _, control_tiles = control_run
@@ -159,12 +159,12 @@ class TestCrashStateMatrix:
         output_dir.mkdir()
         # First run — produces good output
         run_pipeline(
-            "foursquare", fsq_parquet,
+            "overture_place", overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet,
         )
-        tiles_root = output_dir / "foursquare" / "tiles"
+        tiles_root = output_dir / "overture_place" / "tiles"
         # Plant a fake incomplete run dir (has tile files but no manifest.json)
         fake_run = tiles_root / "20260101T000000"
         fake_run.mkdir(parents=True, exist_ok=True)
@@ -174,7 +174,7 @@ class TestCrashStateMatrix:
         # Second run must delete the incomplete dir before/during export
         time.sleep(0.02)
         run_pipeline(
-            "foursquare", fsq_parquet,
+            "overture_place", overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, force=True,
@@ -184,7 +184,7 @@ class TestCrashStateMatrix:
         )
 
     def test_crash_between_import_rename_and_meta_write(
-        self, fsq_parquet, density_parquet, control_run, tmp_path
+        self, overture_parquet, density_parquet, control_run, tmp_path
     ):
         """Simulate crash after places.parquet rename but before meta write → stage stale."""
         _, control_tiles = control_run
@@ -192,20 +192,20 @@ class TestCrashStateMatrix:
         output_dir.mkdir()
         # Run once to create artifact
         run_pipeline(
-            "foursquare", fsq_parquet,
+            "overture_place", overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet,
         )
-        fsq_dir = output_dir / "foursquare"
-        places = fsq_dir / "places.parquet"
-        meta = fsq_dir / "places.parquet.meta.json"
+        ov_dir = output_dir / "overture_place"
+        places = ov_dir / "places.parquet"
+        meta = ov_dir / "places.parquet.meta.json"
         assert places.exists(), "places.parquet must exist after first run"
         # Simulate crash: artifact is newer than meta (meta was written first, then crash)
         if meta.exists():
             meta.unlink()
         # Without meta, stage_import must see artifact as stale and rebuild
-        result_tiles = self._run_and_collect(fsq_parquet, density_parquet, output_dir)
+        result_tiles = self._run_and_collect(overture_parquet, density_parquet, output_dir)
         # Meta must have been re-created
         assert meta.exists(), "places.parquet.meta.json must be recreated after recovery"
         assert result_tiles == control_tiles, (
@@ -327,7 +327,7 @@ class TestKillNineAcceptance:
     """
 
     def test_kill_during_import_mid_copy_and_recover(
-        self, fsq_parquet, density_parquet, control_run, tmp_path
+        self, overture_parquet, density_parquet, control_run, tmp_path
     ):
         """SIGKILL during import:mid-copy must leave recoverable state."""
         _, control_tiles = control_run
@@ -338,8 +338,8 @@ class TestKillNineAcceptance:
         env["GARGANORN_CRASH_POINT"] = "import:mid-copy"
         result = subprocess.run(
             [sys.executable, str(harness),
-             "--source", "foursquare",
-             "--parquet", fsq_parquet,
+             "--source", "overture_place",
+             "--parquet", overture_parquet,
              "--output", str(output_dir),
              "--bbox", "-122.55", "37.60", "-122.30", "37.85"],
             env=env,
@@ -351,23 +351,20 @@ class TestKillNineAcceptance:
             f"Expected returncode {expected_returncode} (SIGKILL); "
             f"got {result.returncode}. Crash harness may not have killed the process."
         )
-        # Phase 2 pre-check: control_run must produce tiles at tiles/current layout.
-        # Fails RED because run_pipeline still uses Phase 1 layout (no tiles/current).
         assert control_tiles, (
-            "Control run must produce tiles at <src>/tiles/current (Phase 2 §2 layout). "
-            "Fails RED: run_pipeline uses Phase 1 layout and does not write to tiles/current."
+            "Control run must produce tiles at <src>/tiles/current (Phase 2 §2 layout)."
         )
         # Rerun in-process — must recover and produce correct output
         run_pipeline(
-            "foursquare",
-            fsq_parquet,
+            "overture_place",
+            overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
         )
-        tiles_current = _find_tiles_current(output_dir, "foursquare")
+        tiles_current = _find_tiles_current(output_dir, "overture_place")
         recovered_tiles = _collect_tiles(str(tiles_current))
         assert recovered_tiles == control_tiles, (
             "After kill-9 during import:mid-copy and recovery, tiles must match control"

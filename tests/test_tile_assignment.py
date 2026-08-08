@@ -53,7 +53,7 @@ class TestComputeTileAssignments:
         db_path = tmp_path / "test_tile_main.duckdb"
         conn = duckdb.connect(str(db_path))
         make_tile_assignment_db(conn, places)
-        run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
+        run_tile_assignments(conn, pk_expr="place_id", min_zoom=6, max_zoom=17, max_per_tile=max_per_tile)
 
         # tile_assignments table must exist
         tables = {row[0] for row in conn.execute("SHOW TABLES").fetchall()}
@@ -134,7 +134,7 @@ class TestComputeTileAssignments:
         db_path = tmp_path / "test_tile_z17.duckdb"
         conn = duckdb.connect(str(db_path))
         make_tile_assignment_db(conn, places)
-        run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=1)
+        run_tile_assignments(conn, pk_expr="place_id", min_zoom=6, max_zoom=17, max_per_tile=1)
 
         rows = conn.execute(
             "SELECT place_id, tile_qk FROM tile_assignments ORDER BY place_id"
@@ -172,10 +172,10 @@ class TestComputeTileAssignments:
         conn = duckdb.connect()
         make_tile_assignment_db(conn, places)
         conn.execute(
-            "INSERT INTO places (fsq_place_id, name, latitude, longitude, qk17) "
+            "INSERT INTO places (place_id, name, latitude, longitude, qk17) "
             "VALUES ('null001', 'Null Place', 37.77, -122.42, NULL)"
         )
-        run_tile_assignments(conn, pk_expr='fsq_place_id', max_per_tile=10)
+        run_tile_assignments(conn, pk_expr='place_id', max_per_tile=10)
 
         null_rows = conn.execute(
             "SELECT place_id FROM tile_assignments WHERE place_id = 'null001'"
@@ -207,8 +207,8 @@ def _make_places_parquet(tmp_path, places):
     )
     con.execute(f"""
         COPY (
-            SELECT fsq_place_id, qk17
-            FROM (VALUES {rows_sql}) t(fsq_place_id, qk17)
+            SELECT id, qk17
+            FROM (VALUES {rows_sql}) t(id, qk17)
         ) TO '{parquet_path}' (FORMAT PARQUET)
     """)
     con.close()
@@ -246,14 +246,14 @@ class TestTileAssignmentArtifactPhase2:
         """stage_tile_assignment must write tile_assignments.parquet to output_path."""
         places_parquet = _make_places_parquet(tmp_path, self._PLACES)
         output = str(tmp_path / "tile_assignments.parquet")
-        _stages.stage_tile_assignment(places_parquet, output, "foursquare")
+        _stages.stage_tile_assignment(places_parquet, output, "overture_place")
         assert pathlib.Path(output).exists(), f"tile_assignments.parquet not written to {output}"
 
     def test_tile_assignments_sorted_tile_qk_place_id(self, tmp_path):
         """tile_assignments.parquet must be sorted by (tile_qk, place_id)."""
         places_parquet = _make_places_parquet(tmp_path, self._PLACES)
         output = str(tmp_path / "tile_assignments.parquet")
-        _stages.stage_tile_assignment(places_parquet, output, "foursquare")
+        _stages.stage_tile_assignment(places_parquet, output, "overture_place")
         con = duckdb.connect()
         rows = con.execute(
             f"SELECT tile_qk, place_id FROM read_parquet('{output}')"
@@ -268,7 +268,7 @@ class TestTileAssignmentArtifactPhase2:
         """tile_assignments.parquet must have (place_id VARCHAR, tile_qk VARCHAR) schema."""
         places_parquet = _make_places_parquet(tmp_path, self._PLACES)
         output = str(tmp_path / "tile_assignments.parquet")
-        _stages.stage_tile_assignment(places_parquet, output, "foursquare")
+        _stages.stage_tile_assignment(places_parquet, output, "overture_place")
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
             f"DESCRIBE SELECT * FROM read_parquet('{output}')"
@@ -282,10 +282,10 @@ class TestTileAssignmentArtifactPhase2:
         """Changing max_per_tile with fresh mtimes must trigger a rebuild."""
         places_parquet = _make_places_parquet(tmp_path, self._PLACES)
         output = str(tmp_path / "tile_assignments.parquet")
-        _stages.stage_tile_assignment(places_parquet, output, "foursquare", max_per_tile=1000)
+        _stages.stage_tile_assignment(places_parquet, output, "overture_place", max_per_tile=1000)
         mtime1 = os.path.getmtime(output)
         time.sleep(0.05)
-        _stages.stage_tile_assignment(places_parquet, output, "foursquare", max_per_tile=500)
+        _stages.stage_tile_assignment(places_parquet, output, "overture_place", max_per_tile=500)
         mtime2 = os.path.getmtime(output)
         assert mtime2 > mtime1, (
             "Changing max_per_tile must rebuild tile_assignments.parquet"
@@ -320,7 +320,7 @@ class TestTileAssignmentParity:
         from tests.quadtree_helpers import run_tile_assignments, make_tile_assignment_db
         ref_conn = duckdb.connect()
         make_tile_assignment_db(ref_conn, self._PLACES)
-        run_tile_assignments(ref_conn, pk_expr="fsq_place_id", max_per_tile=100, min_zoom=6, max_zoom=17)
+        run_tile_assignments(ref_conn, pk_expr="place_id", max_per_tile=100, min_zoom=6, max_zoom=17)
         ref_pairs = {
             (row[0], row[1])
             for row in ref_conn.execute(
@@ -332,7 +332,7 @@ class TestTileAssignmentParity:
         places_parquet = _make_places_parquet(tmp_path, self._PLACES)
         output = str(tmp_path / "ta_parity.parquet")
         # Fails RED: current stage_tile_assignment takes 'con' as first arg
-        _stages.stage_tile_assignment(places_parquet, output, "foursquare",
+        _stages.stage_tile_assignment(places_parquet, output, "overture_place",
                                       max_per_tile=100, min_zoom=6, max_zoom=17)
 
         new_pairs = set(
@@ -369,9 +369,9 @@ class TestTileAssignmentDiagnostics:
         con = duckdb.connect()
         con.execute(f"""
             COPY (
-                SELECT fsq_place_id, qk17
+                SELECT id, qk17
                 FROM (VALUES ('good001', '02301020333300320'), ('null001', NULL))
-                     t(fsq_place_id, qk17)
+                     t(id, qk17)
             ) TO '{parquet_path}' (FORMAT PARQUET)
         """)
         con.close()
@@ -379,7 +379,7 @@ class TestTileAssignmentDiagnostics:
         output = str(tmp_path / "ta_dropped.parquet")
         with caplog.at_level(logging.WARNING):
             # Fails RED: wrong signature
-            _stages.stage_tile_assignment(parquet_path, output, "foursquare", max_per_tile=100)
+            _stages.stage_tile_assignment(parquet_path, output, "overture_place", max_per_tile=100)
 
         # EXPORT-6 diagnostic: must log a warning about dropped places
         dropped_warnings = [
@@ -410,7 +410,7 @@ class TestTileAssignmentDiagnostics:
         output = str(tmp_path / "ta_dupes.parquet")
         with caplog.at_level(logging.WARNING):
             # Fails RED: wrong signature
-            _stages.stage_tile_assignment(places_parquet, output, "foursquare", max_per_tile=1)
+            _stages.stage_tile_assignment(places_parquet, output, "overture_place", max_per_tile=1)
         # Test merely verifies stage_tile_assignment runs the diagnostic query;
         # the exact message content is checked in GREEN when the implementation exists.
         assert output  # Stage must produce the output artifact

@@ -926,7 +926,7 @@ class TestExportIntegration:
     """§7.2 item 6: mini end-to-end run_pipeline producing tile JSON with relations."""
 
     def test_run_pipeline_with_covering_builds_covering_dir(
-        self, simple_boundaries_db, fsq_parquet, density_parquet, tmp_path
+        self, simple_boundaries_db, overture_parquet, density_parquet, tmp_path
     ):
         """run_pipeline with boundaries_db must build a covering directory next to boundaries.duckdb.
 
@@ -940,8 +940,8 @@ class TestExportIntegration:
         os.makedirs(output_dir)
 
         run_pipeline(
-            "foursquare",
-            fsq_parquet,
+            "overture_place",
+            overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             output_dir,
             memory_limit="4GB",

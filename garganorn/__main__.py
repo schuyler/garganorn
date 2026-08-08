@@ -5,17 +5,15 @@ from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
 from garganorn import Server
 from garganorn.config import load_config
-from garganorn.boundaries import BoundaryLookup
 
 DEFAULT_CONFIG = "config.yaml"
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
-    repo, dbs, boundaries_path, tiles_config = load_config(config_path)
+    repo, tiles_config = load_config(config_path)
 
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
-    boundaries = BoundaryLookup(boundaries_path) if boundaries_path else None
     tile_manifests = {}
     tile_collections = {}
     max_coverage_tiles = 50
@@ -70,7 +68,7 @@ def create_app():
                             collection,
                         )
         max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
-    gazetteer = Server(repo, dbs, app.logger, boundaries=boundaries,
+    gazetteer = Server(repo, app.logger,
                        tile_manifests=tile_manifests, tile_collections=tile_collections,
                        max_coverage_tiles=max_coverage_tiles)
     init_flask(gazetteer.server, app)

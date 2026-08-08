@@ -28,14 +28,14 @@ from pathlib import Path
 import duckdb
 
 from garganorn import envelope
-from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
+from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
 from garganorn.levels import LEVEL_VOCAB, level_case_sql
 
 log = logging.getLogger(__name__)
 
 _SOURCES = {
     cls.source_key: cls
-    for cls in [FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions]
+    for cls in [OverturePlaces, OpenStreetMap, OvertureDivisions]
 }
 
 REPO = "places.atgeo.org"
@@ -170,7 +170,7 @@ def _assert_unique_key(con, table, key_col, source_path):
 
     stage_import LEFT JOINs density_tiles on tile_qk15 and idf_scores on
     category; a duplicate key multiplies the matching place's row through
-    the join at every join site (foursquare/overture_place/osm import SQL).
+    the join at every join site (overture_place/osm import SQL).
     Production data is clean today (uniqueness is guaranteed by the
     producing stage's GROUP BY -- e.g. density_extract.sql), but
     --density-parquet/--idf-parquet accept arbitrary files, so the guarantee
@@ -203,20 +203,19 @@ def _assert_density_parquet_unique(density_parquet, *, temp_directory=None,
     """Check density_parquet's tile_qk15 key is unique, once, ahead of ANY
     stage_import dispatch.
 
-    stage_import has four destinations for density_parquet: foursquare,
-    overture_place, and osm build their own density_tiles TEMP TABLE
-    directly (and used to assert uniqueness there); overture_division
-    dispatches to stage_division_import and RETURNS before that point is
-    ever reached, so it was invisible to the guard even though it is on the
-    global run path and does receive density_parquet (quadtree.py
-    _cmd_all). A duplicate tile_qk15 there does not fan out any join row
-    count (division_density's avg(density_score) just double-counts the
-    duplicate), so it produces a silently wrong importance value rather
-    than an error -- exactly the failure mode _assert_unique_key exists to
-    turn loud.
+    stage_import has three destinations for density_parquet: overture_place
+    and osm build their own density_tiles TEMP TABLE directly (and used to
+    assert uniqueness there); overture_division dispatches to
+    stage_division_import and RETURNS before that point is ever reached, so
+    it was invisible to the guard even though it is on the global run path
+    and does receive density_parquet (quadtree.py _cmd_all). A duplicate
+    tile_qk15 there does not fan out any join row count (division_density's
+    avg(density_score) just double-counts the duplicate), so it produces a
+    silently wrong importance value rather than an error -- exactly the
+    failure mode _assert_unique_key exists to turn loud.
 
     Calling this once, here, ahead of the dispatch branch, is what keeps
-    all four consumers on one guard instead of two independently
+    all three consumers on one guard instead of two independently
     maintained copies of it.
 
     The uniqueness count runs directly against read_parquet(density_parquet)
@@ -627,7 +626,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
     Args:
         tile_assignments_parquet: Path to tile_assignments.parquet artifact.
         output_dir: Directory where manifest.duckdb will be written.
-        source: Source key (foursquare, overture_place, osm, overture_division).
+        source: Source key (overture_place, osm, overture_division).
         generated_at: RFC 3339 Z run-scoped timestamp shared with the tiles and
             manifest.json (pipeline-implementation-decisions.md
             "OQ-P2-1 — record envelope adoption"). Defaults to the current time if omitted
@@ -749,9 +748,8 @@ def bboxes_intersect(a, b):
 # Geometry column name per source, excluded from Phase 2 Parquet output.
 # overture_place is None: overture_place_import.sql drops geometry inside
 # ov_base (before any join/materialization), so `places` never carries it —
-# unlike foursquare/osm, there is no column left to EXCLUDE at COPY time.
+# unlike osm, there is no column left to EXCLUDE at COPY time.
 _GEOM_COL = {
-    "foursquare": "geom",
     "overture_place": None,
     "osm": "geom",
 }
@@ -1005,7 +1003,7 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     Skips rebuild when artifact_fresh() returns True (unless force=True).
 
     Args:
-        source: Source key — one of foursquare, overture_place, osm.
+        source: Source key — one of overture_place, osm.
                 (overture_division is handled by stage_division_import.)
         parquet_glob: Glob/path for source parquet file(s). For osm, a
                       (node_parquet, way_parquet) tuple.
@@ -1156,14 +1154,8 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
                      osm_category_case=osm_category_case,
                      density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
                      density_norm=density_norm, idf_norm=idf_norm)
-        elif source == "overture_place":
+        else:  # overture_place
             _run_sql(con, source, "import", "overture_place_import.sql", t0,
-                     memory_limit=memory_limit, parquet_glob=parquet_glob,
-                     xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
-                     density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
-                     density_norm=density_norm, idf_norm=idf_norm)
-        else:  # foursquare
-            _run_sql(con, source, "import", "foursquare_import.sql", t0,
                      memory_limit=memory_limit, parquet_glob=parquet_glob,
                      xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
                      density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
@@ -1290,8 +1282,8 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
     as a parquet file with columns (category, n_places, idf_score).
 
     Args:
-        source: Source key (foursquare, overture_place, osm).
-        parquet_glob: Parquet path(s). String for FSQ/Overture;
+        source: Source key (overture_place, osm).
+        parquet_glob: Parquet path(s). String for Overture;
             (node_glob, way_glob) tuple for OSM.
         output_path: Destination path for IDF parquet output.
         t0: Start time for logging (monotonic time).
@@ -1302,7 +1294,7 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
             bounding spill (default "250GB"), independently of whether
             temp_directory is also supplied.
     """
-    if source not in ("foursquare", "overture_place", "osm"):
+    if source not in ("overture_place", "osm"):
         raise ValueError(f"unsupported source for IDF: {source}")
 
     # Remove any stale .tmp from a previous interrupted run before building.
@@ -1378,7 +1370,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     Args:
         places_parquet: Path to input places.parquet file.
         output_path: Destination path for tile_assignments.parquet artifact.
-        source: Source key (foursquare, overture_place, osm, overture_division).
+        source: Source key (overture_place, osm, overture_division).
         max_per_tile: Maximum places per tile (triggers tile splitting). Default 1000.
         min_zoom: Minimum zoom level for tile assignment. Default 6.
         max_zoom: Maximum zoom level for tile assignment. Default 17.
@@ -1522,7 +1514,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     manifest.duckdb, and manifest.json. Updates tiles_root/current symlink.
 
     Args:
-        source: Source key (foursquare, overture_place, osm, overture_division).
+        source: Source key (overture_place, osm, overture_division).
         places_parquet: Path to places parquet artifact from import stage.
         tile_assignments_parquet: Path to tile_assignments parquet artifact.
         containment_dir: Directory containing containment *.parquet files and _meta.json.

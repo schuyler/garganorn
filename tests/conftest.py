@@ -2,60 +2,12 @@
 import pytest
 import duckdb
 
-from garganorn.database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
-from tests.quadtree_helpers import FSQ_ROWS
+from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
 
 
 # ---------------------------------------------------------------------------
 # San Francisco area test data
 # ---------------------------------------------------------------------------
-
-FSQ_PLACES = [
-    # fsq_place_id, name, latitude, longitude, address, locality, postcode, region, admin_region, post_town, po_box, country
-    ("fsq001", "Blue Bottle Coffee", 37.7749, -122.4194, "66 Mint St", "San Francisco", "94103", "CA", "CA", None, None, "US"),
-    ("fsq002", "Golden Gate Park", 37.7694, -122.4862, "501 Stanyan St", "San Francisco", "94117", "CA", "CA", None, None, "US"),
-    ("fsq003", "Ferry Building Marketplace", 37.7955, -122.3937, "1 Ferry Building", "San Francisco", "94111", "CA", "CA", None, None, "US"),
-    ("fsq004", "Tartine Bakery", 37.7612, -122.4242, "600 Guerrero St", "San Francisco", "94110", "CA", "CA", None, None, "US"),
-    ("fsq005", "Alcatraz Island", 37.8270, -122.4230, None, "San Francisco", "94133", "CA", "CA", None, None, "US"),
-    # Token-blending test fixtures:
-    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
-    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
-    ("fsq006", "Diner North End", 37.7749, -122.4350, "1 North End Ave", "San Francisco", "94129", "CA", "CA", None, None, "US"),
-    ("fsq007", "North End Pub", 37.7748, -122.4351, "2 North End Ave", "San Francisco", "94129", "CA", "CA", None, None, "US"),
-    # Multi-token scaling test fixtures (Strategy E):
-    # 5-token names for verifying blending at higher token counts
-    ("fsq008", "San Francisco International Airport Terminal", 37.6213, -122.3790, "International Terminal", "San Francisco", "94128", "CA", "CA", None, None, "US"),
-    ("fsq009", "University Medical Center", 37.7629, -122.4577, "505 Parnassus Ave", "San Francisco", "94143", "CA", "CA", None, None, "US"),
-    ("fsq010", "North Beach Community Garden Center", 37.8008, -122.4105, "1 Garden Ln", "San Francisco", "94133", "CA", "CA", None, None, "US"),
-    # Cutoff survival test fixtures (Strategy E):
-    # "Restaurant Park Avenue" has low full_jw but high token_jw for query "Park Avenue Restaurant".
-    # The 25 "Park Avenue ..." variants compete via full_jw; the reordered name must survive any top-N cutoff.
-    ("fsq011", "Restaurant Park Avenue", 37.7500, -122.4100, "1 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq012", "Park Avenue Cafe", 37.7501, -122.4101, "2 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq013", "Park Avenue Bar", 37.7502, -122.4102, "3 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq014", "Park Avenue Grill", 37.7503, -122.4103, "4 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq015", "Park Avenue Bistro", 37.7504, -122.4104, "5 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq016", "Park Avenue Bakery", 37.7505, -122.4105, "6 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq017", "Park Avenue Diner", 37.7506, -122.4106, "7 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq018", "Park Avenue Lounge", 37.7507, -122.4107, "8 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq019", "Park Avenue Tavern", 37.7508, -122.4108, "9 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq020", "Park Avenue Kitchen", 37.7509, -122.4109, "10 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq021", "Park Avenue Deli", 37.7510, -122.4110, "11 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq022", "Park Avenue Pizza", 37.7511, -122.4111, "12 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq023", "Park Avenue Sushi", 37.7512, -122.4112, "13 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq024", "Park Avenue Noodles", 37.7513, -122.4113, "14 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq025", "Park Avenue Burgers", 37.7514, -122.4114, "15 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq026", "Park Avenue Tacos", 37.7515, -122.4115, "16 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq027", "Park Avenue Steakhouse", 37.7516, -122.4116, "17 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq028", "Park Avenue Ramen", 37.7517, -122.4117, "18 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq029", "Park Avenue Tapas", 37.7518, -122.4118, "19 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq030", "Park Avenue Curry", 37.7519, -122.4119, "20 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq031", "Park Avenue Wok", 37.7520, -122.4120, "21 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq032", "Park Avenue Smokehouse", 37.7521, -122.4121, "22 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq033", "Park Avenue Seafood", 37.7522, -122.4122, "23 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq034", "Park Avenue Brunch", 37.7523, -122.4123, "24 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-    ("fsq035", "Park Avenue Patisserie", 37.7524, -122.4124, "25 Park Ave", "San Francisco", "94107", "CA", "CA", None, None, "US"),
-]
 
 OVERTURE_PLACES = [
     # id, name, latitude, longitude, address_freeform, locality, postcode, region, country
@@ -64,146 +16,13 @@ OVERTURE_PLACES = [
     ("ovr003", "Coit Tower", 37.8024, -122.4058, "1 Telegraph Hill Blvd", "San Francisco", "94133", "US-CA", "US"),
     ("ovr004", "Anchor Brewing", 37.7688, -122.4125, "1705 Mariposa St", "San Francisco", "94107", "US-CA", "US"),
     ("ovr005", "Lombard Street", 37.8021, -122.4187, "Lombard St", "San Francisco", "94133", "US-CA", "US"),
-    # Token-blending test fixtures:
-    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
-    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
     ("ovr006", "Diner North End", 37.7749, -122.4350, "1 North End Ave", "San Francisco", "94129", "US-CA", "US"),
     ("ovr007", "North End Pub", 37.7748, -122.4351, "2 North End Ave", "San Francisco", "94129", "US-CA", "US"),
 ]
 
 
-def _generate_trigrams(name):
-    """Generate distinct trigrams from a place name (lowercased full string)."""
-    s = name.lower()
-    trigrams = set()
-    for i in range(len(s) - 2):
-        trigrams.add(s[i:i+3])
-    return trigrams
-
-
-def _create_fsq_db(db_path):
-    """Create a FSQ DuckDB database with test data and trigram name_index."""
-    conn = duckdb.connect(str(db_path))
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE places (
-            fsq_place_id VARCHAR PRIMARY KEY,
-            name VARCHAR,
-            latitude DOUBLE,
-            longitude DOUBLE,
-            geom GEOMETRY,
-            address VARCHAR,
-            locality VARCHAR,
-            postcode VARCHAR,
-            region VARCHAR,
-            admin_region VARCHAR,
-            post_town VARCHAR,
-            po_box VARCHAR,
-            country VARCHAR,
-            date_created DATE,
-            date_refreshed DATE,
-            date_closed DATE,
-            tel VARCHAR,
-            website VARCHAR,
-            email VARCHAR,
-            facebook_id VARCHAR,
-            instagram VARCHAR,
-            twitter VARCHAR,
-            fsq_category_ids VARCHAR[],
-            fsq_category_labels VARCHAR[],
-            placemaker_url VARCHAR,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            importance INTEGER,
-            variants STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
-        )
-    """)
-
-    fsq_importance = {
-        "fsq001": 75,
-        "fsq002": 60,
-        "fsq003": 85,
-        "fsq004": 55,
-        "fsq005": 90,
-        "fsq006": 70,
-        "fsq007": 70,
-        # Multi-token scaling fixtures
-        "fsq008": 70,
-        "fsq009": 70,
-        "fsq010": 70,
-        # Cutoff survival fixtures
-        "fsq011": 70,
-        "fsq012": 70,
-        "fsq013": 70,
-        "fsq014": 70,
-        "fsq015": 70,
-        "fsq016": 70,
-        "fsq017": 70,
-        "fsq018": 70,
-        "fsq019": 70,
-        "fsq020": 70,
-        "fsq021": 70,
-        "fsq022": 70,
-        "fsq023": 70,
-        "fsq024": 70,
-        "fsq025": 70,
-        "fsq026": 70,
-        "fsq027": 70,
-        "fsq028": 70,
-        "fsq029": 70,
-        "fsq030": 70,
-        "fsq031": 70,
-        "fsq032": 70,
-        "fsq033": 70,
-        "fsq034": 70,
-        "fsq035": 70,
-    }
-
-    for row in FSQ_PLACES:
-        fsq_id, name, lat, lon, address, locality, postcode, region, admin_region, post_town, po_box, country = row
-        conn.execute("""
-            INSERT INTO places VALUES (
-                ?, ?, ?, ?,
-                ST_Point(?, ?),
-                ?, ?, ?, ?, ?, ?, ?,
-                ?,
-                '2021-01-01', '2022-01-01', NULL,
-                NULL, NULL, NULL, NULL, NULL, NULL,
-                ARRAY[]::VARCHAR[], ARRAY[]::VARCHAR[],
-                NULL,
-                {'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001},
-                ?,
-                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
-            )
-        """, [fsq_id, name, lat, lon, lon, lat,
-              address, locality, postcode, region, admin_region, post_town, po_box,
-              country,
-              lon, lat, lon, lat,
-              fsq_importance[fsq_id]])
-
-    conn.execute("""
-        CREATE TABLE name_index (
-            trigram VARCHAR,
-            fsq_place_id VARCHAR,
-            name VARCHAR,
-            norm_name VARCHAR,
-            importance INTEGER,
-            is_variant BOOLEAN DEFAULT FALSE
-        )
-    """)
-    for row in FSQ_PLACES:
-        fsq_id, name, lat, lon, address, locality, postcode, region, _, _, _, country = row
-        for trigram in _generate_trigrams(name):
-            conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
-            """, [trigram, fsq_id, name, FoursquareOSP._strip_accents(name.lower()),
-                  fsq_importance[fsq_id]])
-
-    conn.close()
-
-
 def _create_overture_db(db_path):
-    """Create an Overture DuckDB database with test data and trigram name_index."""
+    """Create an Overture DuckDB database with test data."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
 
@@ -282,48 +101,12 @@ def _create_overture_db(db_path):
     # uses bbox struct field comparisons, which do not require an explicit index.
     # RTREE is only used on the division boundaries table (ST_Contains queries).
 
-    conn.execute("""
-        CREATE TABLE name_index (
-            trigram VARCHAR,
-            id VARCHAR,
-            name VARCHAR,
-            norm_name VARCHAR,
-            importance INTEGER,
-            is_variant BOOLEAN DEFAULT FALSE
-        )
-    """)
-    for row in OVERTURE_PLACES:
-        ovr_id, name, lat, lon, freeform, locality, postcode, region, country = row
-        for trigram in _generate_trigrams(name):
-            conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
-            """, [trigram, ovr_id, name, OverturePlaces._strip_accents(name.lower()),
-                  ovr_importance[ovr_id]])
-
-    # Index variant names for Overture places
-    for ovr_id, variants in ovr_variants.items():
-        importance = ovr_importance[ovr_id]
-        for v in variants:
-            variant_name = v["name"]
-            norm_variant = OverturePlaces._strip_accents(variant_name.lower())
-            for trigram in _generate_trigrams(variant_name):
-                conn.execute("""
-                    INSERT INTO name_index VALUES (?, ?, ?, ?, ?, TRUE)
-                """, [trigram, ovr_id, variant_name, norm_variant, importance])
-
     conn.close()
 
 
 # ---------------------------------------------------------------------------
 # Session-scoped path fixtures
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def fsq_db_path(tmp_path_factory):
-    db_path = tmp_path_factory.mktemp("fsq") / "fsq.duckdb"
-    _create_fsq_db(db_path)
-    return db_path
-
 
 @pytest.fixture(scope="session")
 def overture_db_path(tmp_path_factory):
@@ -335,14 +118,6 @@ def overture_db_path(tmp_path_factory):
 # ---------------------------------------------------------------------------
 # Function-scoped DB instance fixtures
 # ---------------------------------------------------------------------------
-
-@pytest.fixture
-def fsq_db(fsq_db_path):
-    db = FoursquareOSP(fsq_db_path)
-    db.connect()
-    yield db
-    db.close()
-
 
 @pytest.fixture
 def overture_db(overture_db_path):
@@ -376,9 +151,6 @@ OSM_PLACES = [
     ("w", 88776655, "Caltrain Station", 37.7764, -122.3942,
      "railway=station",
      {}),
-    # Token-blending test fixtures:
-    # Query "North End Diner" → "Diner North End" should rank above "North End Pub"
-    # Full-string JW favors "North End Pub" (longer prefix match); token JW favors "Diner North End"
     ("n", 11110001, "Diner North End", 37.7749, -122.4350,
      "amenity=restaurant",
      {}),
@@ -399,7 +171,7 @@ OSM_IMPORTANCE = {
 
 
 def _create_osm_db(db_path):
-    """Create an OSM DuckDB database with test data and trigram name_index."""
+    """Create an OSM DuckDB database with test data."""
     conn = duckdb.connect(str(db_path))
     conn.execute("INSTALL spatial; LOAD spatial;")
 
@@ -462,37 +234,6 @@ def _create_osm_db(db_path):
               lon, lat, lon, lat,
               importance])
 
-    conn.execute("""
-        CREATE TABLE name_index (
-            trigram VARCHAR,
-            rkey VARCHAR,
-            name VARCHAR,
-            norm_name VARCHAR,
-            importance INTEGER,
-            is_variant BOOLEAN DEFAULT FALSE
-        )
-    """)
-    for row in OSM_PLACES:
-        osm_type, osm_id, name, lat, lon, primary_category, tags = row
-        rkey = osm_type + str(osm_id)
-        importance = OSM_IMPORTANCE[rkey]
-        for trigram in _generate_trigrams(name):
-            conn.execute("""
-                INSERT INTO name_index VALUES (?, ?, ?, ?, ?, FALSE)
-            """, [trigram, rkey, name, OpenStreetMap._strip_accents(name.lower()),
-                  importance])
-
-    # Index variant names for OSM places
-    for rkey, variants in osm_variants.items():
-        importance = OSM_IMPORTANCE[rkey]
-        for v in variants:
-            variant_name = v["name"]
-            norm_variant = OpenStreetMap._strip_accents(variant_name.lower())
-            for trigram in _generate_trigrams(variant_name):
-                conn.execute("""
-                    INSERT INTO name_index VALUES (?, ?, ?, ?, ?, TRUE)
-                """, [trigram, rkey, variant_name, norm_variant, importance])
-
     conn.close()
 
 
@@ -517,9 +258,6 @@ def osm_db(osm_db_path):
     db.connect()
     yield db
     db.close()
-
-
-from garganorn.boundaries import BoundaryLookup
 
 
 # ---------------------------------------------------------------------------
@@ -679,14 +417,6 @@ def division_db_path(tmp_path_factory):
 
 
 @pytest.fixture
-def boundary_lookup(division_db_path):
-    bl = BoundaryLookup(division_db_path)
-    bl.connect()
-    yield bl
-    bl.close()
-
-
-@pytest.fixture
 def division_db(division_db_path):
     db = OvertureDivisions(division_db_path)
     db.connect()
@@ -697,81 +427,6 @@ def division_db(division_db_path):
 # ---------------------------------------------------------------------------
 # Quadtree parquet fixtures (session-scoped)
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def fsq_parquet(tmp_path_factory):
-    """Write a single FSQ-schema parquet file and return a glob path for it."""
-
-    base = tmp_path_factory.mktemp("fsq_parquet")
-    parquet_path = base / "fsq_data.parquet"
-
-    conn = duckdb.connect(":memory:")
-    conn.execute("INSTALL spatial; LOAD spatial;")
-
-    conn.execute("""
-        CREATE TABLE tmp_fsq (
-            fsq_place_id        VARCHAR,
-            name                VARCHAR,
-            latitude            DOUBLE,
-            longitude           DOUBLE,
-            bbox                STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
-            geom                VARCHAR,
-            date_refreshed      DATE,
-            date_closed         DATE,
-            date_created        DATE,
-            address             VARCHAR,
-            locality            VARCHAR,
-            region              VARCHAR,
-            postcode            VARCHAR,
-            country             VARCHAR,
-            admin_region        VARCHAR,
-            post_town           VARCHAR,
-            po_box              VARCHAR,
-            tel                 VARCHAR,
-            website             VARCHAR,
-            email               VARCHAR,
-            facebook_id         VARCHAR,
-            instagram           VARCHAR,
-            twitter             VARCHAR,
-            fsq_category_ids    VARCHAR[],
-            fsq_category_labels VARCHAR[],
-            placemaker_url      VARCHAR
-        )
-    """)
-
-    for row in FSQ_ROWS:
-        fsq_id, name, lat, lon, date_ref, date_closed, geom_wkt, cat_ids, _ = row
-        bbox_xmin = lon - 0.001
-        bbox_xmax = lon + 0.001
-        bbox_ymin = lat - 0.001
-        bbox_ymax = lat + 0.001
-        cat_str = "[" + ", ".join(f"'{c}'" for c in cat_ids) + "]"
-
-        closed_val = f"'{date_closed}'" if date_closed else "NULL"
-        geom_val = f"'{geom_wkt}'" if geom_wkt else "NULL"
-
-        conn.execute(f"""
-            INSERT INTO tmp_fsq VALUES (
-                '{fsq_id}', '{name}', {lat}, {lon},
-                {{'xmin': {bbox_xmin}, 'ymin': {bbox_ymin},
-                  'xmax': {bbox_xmax}, 'ymax': {bbox_ymax}}},
-                {geom_val},
-                '{date_ref}',
-                {closed_val},
-                NULL,
-                NULL, NULL, NULL, NULL, NULL,
-                NULL, NULL, NULL, NULL, NULL,
-                NULL, NULL, NULL, NULL,
-                {cat_str}::VARCHAR[],
-                NULL::VARCHAR[], NULL
-            )
-        """)
-
-    conn.execute(f"COPY tmp_fsq TO '{parquet_path}' (FORMAT PARQUET)")
-    conn.close()
-
-    return str(base / "*.parquet")
-
 
 @pytest.fixture(scope="session")
 def overture_parquet(tmp_path_factory):

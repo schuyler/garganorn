@@ -18,7 +18,7 @@ GARGANORN_CRASH_POINT values (format: <stage>:<moment>):
 
 Usage (called by test_crash_recovery.py via subprocess.run):
   python tests/crash_harness.py \\
-      --source foursquare \\
+      --source overture_place \\
       --parquet <glob> \\
       --output <dir> \\
       [--bbox XMIN YMIN XMAX YMAX]

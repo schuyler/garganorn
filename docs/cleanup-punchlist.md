@@ -104,19 +104,19 @@ undocumented.
 
 ## P4 — searchRecords and the serving-DB layer
 
-- [ ] Delete `searchRecords`: method, registration, lexicon, tests
-- [ ] Delete `listRecords`: method and lexicon
-- [ ] Delete the trigram, Jaro-Winkler, `_strip_accents`, and `name_index`
+- [x] Delete `searchRecords`: method, registration, lexicon, tests
+- [x] Delete `listRecords`: method and lexicon
+- [x] Delete the trigram, Jaro-Winkler, `_strip_accents`, and `name_index`
       machinery from `database.py` and from the import SQL
-- [ ] Delete the serving half of `database.py` — `nearest()`,
+- [x] Delete the serving half of `database.py` — `nearest()`,
       `process_record`, `Database.get_record` — keeping what `stages.py:31` and
       `quadtree.py:9` import
-- [ ] Delete `garganorn/boundaries.py` and the serving-time relations
+- [x] Delete `garganorn/boundaries.py` and the serving-time relations
       computation at `server.py:88-110`, which overwrites the tile's
       precomputed `relations.within`
-- [ ] Remove `databases:` from config, `DATABASE_TYPES` from `config.py`, and
+- [x] Remove `databases:` from config, `DATABASE_TYPES` from `config.py`, and
       `self.db` from `Server`
-- [ ] Remove `design-constraints.md` entries Q1 and Q2, and the
+- [x] Remove `design-constraints.md` entries Q1 and Q2, and the
       `JW_THRESHOLD`, `JW_TOKEN_ALPHA`, and `IMPORTANCE_FLOOR_K` rows from its
       constants table
 
@@ -128,14 +128,11 @@ unmodified; no imports of removed symbols remain.
 
 ## P5 — Foursquare removal
 
-- [ ] Delete `FoursquareOSP`, `sql/foursquare_import.sql`,
+- [x] Delete `FoursquareOSP`, `sql/foursquare_import.sql`,
       `sql/foursquare_export_tiles.sql`, `scripts/import-fsq-extract.sh`, the
       `fsq` branch of `scripts/build-density.sh`, `docs/foursquare.md`, and the
-      foursquare config entries
-- [ ] Re-anchor the spec's `importance` formula citation, which points at
-      `foursquare_import.sql:45-48`
-- [ ] Verify the Overture and OSM importance formulas match whatever the spec
-      then claims
+      foursquare config entries. (`scripts/build-density.sh` does not exist in
+      this repo — nothing to remove there.)
 
 ## P6 — Envelope change
 
@@ -149,8 +146,9 @@ Forces a full re-export. Land P1 and P2 first.
 
 ## P7 — Documentation
 
-- [ ] Schuyler reviews `atgeo-spec.md` intensively. No piecemeal edits to it
-      until he has
+- [ ] Schuyler reviews `atgeo-spec.md` intensively, including re-deriving the
+      `importance` formula now that its citation (`foursquare_import.sql:45-48`)
+      is dead. No piecemeal edits to it until he has
 - [ ] State the user-safety principle once, prominently, and reference it
       rather than re-deriving it at each error condition. Blocked on the spec
       review above
@@ -231,6 +229,25 @@ as aspirational.
 - [ ] Strip orphaned audit finding IDs (`SCORE-n`, `SPATIAL-n`, `DATA-n`,
       `EXPORT-n`) from source comments, test names, and `docs/` as those files
       are touched — nothing defines them any more
+- [ ] Delete `scripts/import-osm.sh` and `scripts/import-overture-extract.sh`
+      — dead. `stages.py`'s `stage_import` calls `garganorn/sql/osm_import.sql`
+      and `overture_place_import.sql` directly and never shells out to
+      either script. Delete or rewrite the ~30 assertions in
+      `tests/test_import_pipeline.py` that pin their exact SQL contents
+      (including a trigram `name_index` build these scripts' non-existent
+      caller doesn't need), and fix the `README.md`/`DOCKER.md` usage
+      instructions, which currently document running them directly, to
+      point at the real pipeline
+- [ ] `tests/conftest.py`'s `overture_db`/`osm_db`/`osm_db_path` fixtures and
+      the `_create_osm_db`/`OSM_PLACES`/`OSM_IMPORTANCE` builder are unused —
+      confirmed by grep, nothing in the suite queries them since P4's serving-DB
+      removal. Delete them (only `overture_db_path` is still used, by
+      `test_database.py`)
+- [ ] Check whether Docker support is still viable. `DOCKER.md` documents
+      running `./scripts/import-overture-extract.sh` directly, which is
+      being deleted above; confirm whether the Docker path has a working
+      equivalent using the real `stages.py` pipeline or whether Docker
+      support itself should be dropped
 
 ---
 

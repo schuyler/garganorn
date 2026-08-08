@@ -36,16 +36,12 @@ LEXICON_SCHEMA_COLLECTION = "com.atproto.lexicon.schema"
 class Server:
     nsid = "org.atgeo"
     methods = {
-        f"{nsid}.searchRecords": "search_records",
         "com.atproto.repo.getRecord": "get_record",
-        "com.atproto.repo.listRecords": "list_records",
     }
 
-    def __init__(self, repo, dbs, logger, boundaries=None, tile_manifests=None,
+    def __init__(self, repo, logger, tile_manifests=None,
                  tile_collections=None, max_coverage_tiles=50):
         self.repo = repo
-        self.db = dict([(db.collection, db) for db in dbs])
-        self.boundaries = boundaries
         self.tile_manifests = tile_manifests or {}
         self.tile_collections = tile_collections or {}
         self.max_coverage_tiles = max_coverage_tiles
@@ -78,36 +74,10 @@ class Server:
         start_time = time.perf_counter()
         source = self.tile_collections.get(collection)
         if source is None:
-            source = self.db.get(collection)
-        if source is None:
             raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
         record = source.get_record(repo, collection, rkey)
         if record is None:
             raise XrpcError(f"Record {rkey} not found in collection {collection}", "RecordNotFound")
-
-        # Compute containment relations
-        relations = {}
-        if self.boundaries:
-            locations = record.get("locations", [])
-            for loc in locations:
-                if loc.get("$type") == "community.lexicon.location.geo":
-                    lat = float(loc["latitude"])
-                    lon = float(loc["longitude"])
-                    try:
-                        within = self.boundaries.containment(lat, lon)
-                    except Exception:
-                        self.logger.warning(
-                            "Boundary lookup failed for (%.6f, %.6f), returning record without relations",
-                            lat, lon, exc_info=True,
-                        )
-                        break
-                    if within:
-                        relations["within"] = within
-                    break
-
-        # Inject relations into the record value
-        if relations:
-            record["relations"] = relations
 
         run_time = int((time.perf_counter() - start_time) * 1000)
         return {
@@ -125,42 +95,6 @@ class Server:
                 "elapsed_ms": run_time
             }
         }
-
-    def list_records(self, _, repo: str, collection: str, limit: int = 50,
-                     cursor: str = "", reverse: bool = False):
-        if collection != LEXICON_SCHEMA_COLLECTION:
-            raise XrpcError(
-                f"Collection {collection} not found on server {self.repo}",
-                "CollectionNotFound",
-            )
-
-        # Sort lexicon NSIDs for stable pagination
-        nsids = sorted(self.lexicon_map.keys(), reverse=reverse)
-
-        # Apply cursor: skip past the cursor NSID
-        if cursor:
-            try:
-                idx = nsids.index(cursor) + 1
-            except ValueError:
-                idx = 0
-            nsids = nsids[idx:]
-
-        # Apply limit
-        page = nsids[:limit]
-        next_cursor = page[-1] if len(nsids) > limit else None
-
-        records = [
-            {
-                "uri": f"at://did:web:{self.repo}/{LEXICON_SCHEMA_COLLECTION}/{nsid}",
-                "value": self.lexicon_map[nsid],
-            }
-            for nsid in page
-        ]
-
-        result = {"records": records}
-        if next_cursor:
-            result["cursor"] = next_cursor
-        return result
 
     def _parse_bbox(self, bbox_str):
         """Parse and validate bbox string 'xmin,ymin,xmax,ymax'. Returns tuple or raises XrpcError."""
@@ -229,89 +163,3 @@ class Server:
         except BboxTooLarge as e:
             raise XrpcError(str(e), "BboxTooLarge") from e
         return {"tiles": sorted(tiles)}
-
-    def search_records(self, _, collection: str, latitude: str = "", longitude: str = "",
-                       q: str = "", limit: str = "50", bbox: str = ""):
-        self.logger.info(f"Searching records in {collection} with bbox={bbox}, latitude={latitude}, longitude={longitude}, q={q}, limit={limit}")
-        if collection not in self.db:
-            raise XrpcError(f"Collection {collection} not found on server {self.repo}", "CollectionNotFound")
-        parsed_bbox = None
-        if bbox:
-            parsed_bbox = self._parse_bbox(bbox)
-        elif latitude and longitude:
-            try:
-                lat = float(latitude)
-                lon = float(longitude)
-            except ValueError:
-                raise XrpcError("Latitude and longitude coordinates must be valid numbers", "InvalidCoordinates")
-            expand_m = 5000
-            expand_lat = expand_m / 111194.927
-            expand_lon = expand_lat / math.cos(lat * math.pi / 180) if abs(lat) < 90 else expand_lat
-            parsed_bbox = (
-                max(lon - expand_lon, -180),
-                max(lat - expand_lat, -90),
-                min(lon + expand_lon, 180),
-                min(lat + expand_lat, 90),
-            )
-        if parsed_bbox is None and not q:
-            raise XrpcError("Either q, bbox, or latitude/longitude must be provided", "InvalidQuery")
-        start_time = time.perf_counter()
-        result = self.db[collection].nearest(bbox=parsed_bbox, q=q or None, limit=int(limit))
-        run_time = int((time.perf_counter() - start_time) * 1000)
-        return {
-            "records": [
-                {
-                    "$type": f"{self.nsid}.searchRecords#record",
-                    "uri": self.record_uri(collection, r["rkey"]),
-                    "attribution": self.db[collection].attribution,
-                    "distance_m": r.pop("distance_m"),
-                    **({"score": round(r.pop("score"), 3)} if "score" in r else {}),
-                    **({"importance": r.pop("importance")} if "importance" in r else {}),
-                    "value": r,
-                } for r in result
-            ],
-            "_query": {
-                "parameters": {
-                    "repo": self.repo,
-                    "collection": collection,
-                    "bbox": bbox,
-                    "q": q,
-                    "latitude": latitude,
-                    "longitude": longitude,
-                    "limit": limit
-                },
-                "elapsed_ms": run_time
-            }
-        }
-        
-if __name__ == "__main__":
-    import sys
-    from database import OverturePlaces, FoursquareOSP
-
-    dbs = [
-        OverturePlaces("db/overture-maps.duckdb"),
-        FoursquareOSP("db/fsq-osp.duckdb"),  # Uncomment if you have the Foursquare database
-    ]
-    gazetteer = Server("places.atgeo.org", dbs, logging.getLogger())
-
-    collection = "org.atgeo.places.foursquare"
-    nsid = f"{gazetteer.nsid}.searchRecords"
-    params = gazetteer.server.decode_params(nsid, (
-        ("collection", collection),
-        ("latitude", "37.776145"),
-        ("longitude", "-122.433898"),
-        ("limit", "5")
-    ))
-    result = gazetteer.server.call(nsid, {}, **params) 
-    output = dict(result)   
-    json.dump(output, sys.stdout, indent=2)
-
-    nsid = f"com.atproto.repo.getRecord"
-    rkey = output["records"][0]["value"]["rkey"]
-    params = gazetteer.server.decode_params(nsid, (
-        ("repo", "places.atgeo.org"),
-        ("collection", collection),
-        ("rkey", rkey)
-    ))
-    output = gazetteer.server.call(nsid, {}, **params)
-    json.dump(output, sys.stdout, indent=2)

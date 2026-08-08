@@ -53,9 +53,8 @@ def _density_cte_sql(density_rows):
         matches (including deliberately duplicate tile_qk15 keys, to test
         for row fan-out through the join).
 
-    This is the single shared implementation used by run_fsq_import,
-    run_overture_import, and run_osm_import — do not copy this literal
-    per import helper.
+    This is the single shared implementation used by run_overture_import
+    and run_osm_import — do not copy this literal per import helper.
     """
     if density_rows is None:
         return (
@@ -85,9 +84,8 @@ def _idf_cte_sql(idf_rows):
         idf_scores with real rows (including deliberately duplicate
         category keys, to test for row fan-out through the join).
 
-    This is the single shared implementation used by run_fsq_import,
-    run_overture_import, and run_osm_import — do not copy this literal
-    per import helper.
+    This is the single shared implementation used by run_overture_import
+    and run_osm_import — do not copy this literal per import helper.
     """
     if idf_rows is None:
         return (
@@ -99,58 +97,6 @@ def _idf_cte_sql(idf_rows):
         "CREATE TEMP TABLE idf_scores (category VARCHAR, idf_score DOUBLE);\n"
         f"INSERT INTO idf_scores VALUES {values_sql};"
     )
-
-# (fsq_place_id, name, latitude, longitude, date_refreshed, date_closed, geom_wkt,
-#  fsq_category_ids, expected_in_result)
-FSQ_ROWS = [
-    # In-bbox, good quality — should survive
-    ("fsq001", "Blue Bottle Coffee",  37.7749, -122.4194, "2022-01-01", None,
-     "POINT(-122.4194 37.7749)", ["13065143"], True),
-    ("fsq002", "Golden Gate Park",    37.7694, -122.4862, "2021-06-15", None,
-     "POINT(-122.4862 37.7694)", ["16000178", "16000179"], True),
-    # Out of bbox (longitude < xmin)
-    ("fsq003", "Faraway Place",       37.7500, -123.0000, "2022-01-01", None,
-     "POINT(-123.0000 37.7500)", ["13065143"], False),
-    # date_closed is not null — should be excluded
-    ("fsq004", "Closed Cafe",         37.7600, -122.4000, "2022-01-01", "2023-01-01",
-     "POINT(-122.4000 37.7600)", ["13065143"], False),
-    # longitude == 0 — should be excluded
-    ("fsq005", "Zero Lon Place",      37.7600,   0.0000,  "2022-01-01", None,
-     "POINT(0.0 37.7600)", ["13065143"], False),
-    # geom IS NULL — should be excluded
-    ("fsq006", "Null Geom Place",     37.7700, -122.4100, "2022-01-01", None,
-     None, ["13065143"], False),
-    # date_refreshed too old — should be excluded
-    ("fsq007", "Stale Place",         37.7710, -122.4110, "2019-01-01", None,
-     "POINT(-122.4110 37.7710)", ["13065143"], False),
-    # A second good in-bbox place with multiple categories (higher diversity)
-    ("fsq008", "Diverse Venue",       37.7800, -122.4300, "2023-03-01", None,
-     "POINT(-122.4300 37.7800)",
-     ["13065143", "16000178", "10000001", "10000002"], True),
-]
-
-
-def run_fsq_import(conn, parquet_glob, bbox=None):
-    if bbox is None:
-        bbox = SF_BBOX
-    density_cte = _density_cte_sql(None)
-    idf_cte = _idf_cte_sql(None)
-    substitutions = {
-        "memory_limit": "4GB",
-        "parquet_glob": parquet_glob,
-        "xmin": bbox["xmin"],
-        "xmax": bbox["xmax"],
-        "ymin": bbox["ymin"],
-        "ymax": bbox["ymax"],
-        "density_cte": density_cte,
-        "idf_cte": idf_cte,
-        "density_norm": 10.0,
-        "idf_norm": 18.0,
-    }
-    raw_sql = _load_sql("foursquare_import.sql", substitutions)
-    sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-    conn.execute(sql)
-
 
 def run_overture_import(conn, parquet_glob, bbox=None, density_rows=None, idf_rows=None,
                          density_norm=10.0, idf_norm=18.0):
@@ -224,7 +170,7 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None,
     conn.execute(sql)
 
 
-def run_tile_assignments(conn, pk_expr="fsq_place_id", min_zoom=6, max_zoom=17, max_per_tile=1000):
+def run_tile_assignments(conn, pk_expr="place_id", min_zoom=6, max_zoom=17, max_per_tile=1000):
     sql = _load_sql(
         "compute_tile_assignments.sql",
         {
@@ -241,17 +187,17 @@ def make_tile_assignment_db(conn, places):
     conn.execute("INSTALL spatial; LOAD spatial;")
     conn.execute("""
         CREATE TABLE places (
-            fsq_place_id VARCHAR,
+            place_id     VARCHAR,
             name         VARCHAR,
             latitude     DOUBLE,
             longitude    DOUBLE,
             qk17         VARCHAR
         )
     """)
-    for fsq_id, lat, lon in places:
+    for place_id, lat, lon in places:
         conn.execute(
             "INSERT INTO places VALUES (?, ?, ?, ?, ST_QuadKey(?, ?, 17))",
-            [fsq_id, f"Place {fsq_id}", lat, lon, lon, lat],
+            [place_id, f"Place {place_id}", lat, lon, lon, lat],
         )
 
 

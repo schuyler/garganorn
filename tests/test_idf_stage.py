@@ -2,7 +2,6 @@
 
 Tests verify:
 - Correct output schema: (category, n_places, idf_score)
-- Multi-category unnesting (FSQ)
 - Named-elements filter (unnamed places excluded from category counts)
 - IDF scores are positive
 - Mtime-based caching behavior
@@ -23,46 +22,6 @@ from garganorn.stages import stage_idf
 # ---------------------------------------------------------------------------
 # Fixtures — minimal parquet files with known category distributions
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def fsq_idf_parquet(tmp_path):
-    """Minimal FSQ parquet with known category distribution.
-
-    Schema matches osm-pbf-parquet / foursquare OSP:
-        fsq_category_ids  VARCHAR[]
-        name              VARCHAR
-
-    Includes:
-    - 3 named places with single categories (cat_A: 2, cat_B: 1)
-    - 1 named place with multiple categories (cat_A + cat_C)
-    - 1 unnamed place with category cat_D (should be excluded)
-    """
-    parquet_path = tmp_path / "fsq_idf.parquet"
-
-    conn = duckdb.connect(":memory:")
-
-    conn.execute("""
-        CREATE TABLE tmp_fsq (
-            fsq_place_id    VARCHAR,
-            name            VARCHAR,
-            fsq_category_ids VARCHAR[]
-        )
-    """)
-
-    conn.execute("""
-        INSERT INTO tmp_fsq VALUES
-            ('fsq001', 'Coffee Shop',        ['cat_A']::VARCHAR[]),
-            ('fsq002', 'Another Coffee',      ['cat_A']::VARCHAR[]),
-            ('fsq003', 'Park',                ['cat_B']::VARCHAR[]),
-            ('fsq004', 'Multi Category Spot', ['cat_A', 'cat_C']::VARCHAR[]),
-            ('fsq005', NULL,                  ['cat_D']::VARCHAR[])
-    """)
-
-    conn.execute(f"COPY tmp_fsq TO '{parquet_path}' (FORMAT PARQUET)")
-    conn.close()
-
-    return str(parquet_path)
 
 
 @pytest.fixture
@@ -178,109 +137,6 @@ def osm_idf_parquets(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# TestStageIdfFoursquare
-# ---------------------------------------------------------------------------
-
-
-class TestStageIdfFoursquare:
-    """Tests for stage_idf with source='foursquare'."""
-
-    def test_produces_parquet(self, fsq_idf_parquet, tmp_path):
-        """stage_idf('foursquare', ...) produces a parquet with correct schema.
-
-        Output must have columns: category (VARCHAR), n_places (BIGINT),
-        idf_score (DOUBLE).
-        """
-        output_path = str(tmp_path / "fsq_idf_out.parquet")
-        t0 = time.monotonic()
-
-        stage_idf("foursquare", fsq_idf_parquet, output_path, t0)
-
-        assert os.path.exists(output_path), "Output parquet should be created"
-
-        con = duckdb.connect(":memory:")
-        con.execute(f"CREATE TABLE result AS SELECT * FROM read_parquet('{output_path}')")
-        schema = con.execute(
-            "SELECT column_name, data_type FROM information_schema.columns "
-            "WHERE table_name = 'result' ORDER BY ordinal_position"
-        ).fetchall()
-
-        col_names = [row[0] for row in schema]
-        assert "category" in col_names
-        assert "n_places" in col_names
-        assert "idf_score" in col_names
-        con.close()
-
-    def test_multi_category_unnest(self, fsq_idf_parquet, tmp_path):
-        """FSQ place with multiple categories contributes to each.
-
-        fsq004 has ['cat_A', 'cat_C']. cat_A should get contributions from
-        fsq001, fsq002, and fsq004 (3 named places). cat_C should get
-        1 contribution.
-        """
-        output_path = str(tmp_path / "fsq_idf_out.parquet")
-        t0 = time.monotonic()
-
-        stage_idf("foursquare", fsq_idf_parquet, output_path, t0)
-
-        con = duckdb.connect(":memory:")
-        rows = con.execute(
-            f"SELECT category, n_places FROM read_parquet('{output_path}') "
-            f"ORDER BY category"
-        ).fetchall()
-        con.close()
-
-        by_cat = {row[0]: row[1] for row in rows}
-
-        # cat_A: fsq001 + fsq002 + fsq004 = 3 named places
-        assert by_cat.get("cat_A") == 3, f"cat_A should have 3 places, got {by_cat.get('cat_A')}"
-        # cat_C: fsq004 = 1
-        assert by_cat.get("cat_C") == 1, f"cat_C should have 1 place, got {by_cat.get('cat_C')}"
-
-    def test_named_elements_filter(self, fsq_idf_parquet, tmp_path):
-        """Unnamed places (NULL name) are excluded from category counts.
-
-        fsq005 has name=NULL and category cat_D. cat_D should NOT appear
-        in the output.
-        """
-        output_path = str(tmp_path / "fsq_idf_out.parquet")
-        t0 = time.monotonic()
-
-        stage_idf("foursquare", fsq_idf_parquet, output_path, t0)
-
-        con = duckdb.connect(":memory:")
-        categories = con.execute(
-            f"SELECT category FROM read_parquet('{output_path}')"
-        ).fetchall()
-        con.close()
-
-        cat_list = [row[0] for row in categories]
-        assert "cat_D" not in cat_list, (
-            f"cat_D should not appear (unnamed place), got {cat_list}"
-        )
-
-    def test_idf_scores_positive(self, fsq_idf_parquet, tmp_path):
-        """All IDF scores must be > 0.
-
-        IDF = ln(N_total / n_places). Since N_total > n_places for any
-        non-trivial distribution, all scores should be positive.
-        """
-        output_path = str(tmp_path / "fsq_idf_out.parquet")
-        t0 = time.monotonic()
-
-        stage_idf("foursquare", fsq_idf_parquet, output_path, t0)
-
-        con = duckdb.connect(":memory:")
-        scores = con.execute(
-            f"SELECT idf_score FROM read_parquet('{output_path}')"
-        ).fetchall()
-        con.close()
-
-        for (score,) in scores:
-            assert score > 0, f"IDF score should be positive, got {score}"
-
-
-# ---------------------------------------------------------------------------
 # TestStageIdfOverture
 # ---------------------------------------------------------------------------
 
@@ -351,6 +207,26 @@ class TestStageIdfOverture:
 
         for (cat,) in categories:
             assert cat is not None, "NULL category should not appear in output"
+
+    def test_idf_scores_positive(self, overture_idf_parquet, tmp_path):
+        """All IDF scores must be > 0.
+
+        IDF = ln(N_total / n_places). Since N_total > n_places for any
+        non-trivial distribution, all scores should be positive.
+        """
+        output_path = str(tmp_path / "ov_idf_out.parquet")
+        t0 = time.monotonic()
+
+        stage_idf("overture_place", overture_idf_parquet, output_path, t0)
+
+        con = duckdb.connect(":memory:")
+        scores = con.execute(
+            f"SELECT idf_score FROM read_parquet('{output_path}')"
+        ).fetchall()
+        con.close()
+
+        for (score,) in scores:
+            assert score > 0, f"IDF score should be positive, got {score}"
 
 
 # ---------------------------------------------------------------------------
@@ -480,29 +356,29 @@ class TestStageIdfMtimeCaching:
     """
 
     @pytest.fixture
-    def small_fsq_parquet(self, tmp_path):
-        """Minimal FSQ parquet for mtime tests."""
-        parquet_path = tmp_path / "small_fsq.parquet"
+    def small_overture_parquet(self, tmp_path):
+        """Minimal Overture parquet for mtime tests."""
+        parquet_path = tmp_path / "small_overture.parquet"
 
         conn = duckdb.connect(":memory:")
         conn.execute("""
-            CREATE TABLE tmp_fsq (
-                fsq_place_id    VARCHAR,
-                name            VARCHAR,
-                fsq_category_ids VARCHAR[]
+            CREATE TABLE tmp_ov (
+                id          VARCHAR,
+                categories  STRUCT("primary" VARCHAR),
+                names       STRUCT("primary" VARCHAR)
             )
         """)
         conn.execute("""
-            INSERT INTO tmp_fsq VALUES
-                ('x001', 'Place A', ['cat1']::VARCHAR[]),
-                ('x002', 'Place B', ['cat2']::VARCHAR[])
+            INSERT INTO tmp_ov VALUES
+                ('x001', {'primary': 'cat1'}, {'primary': 'Place A'}),
+                ('x002', {'primary': 'cat2'}, {'primary': 'Place B'})
         """)
-        conn.execute(f"COPY tmp_fsq TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
         conn.close()
 
         return str(parquet_path)
 
-    def test_skips_when_output_fresh(self, small_fsq_parquet, tmp_path, caplog):
+    def test_skips_when_output_fresh(self, small_overture_parquet, tmp_path, caplog):
         """Second run skips when artifact+meta are present and both newer than input.
 
         Under the meta-driven contract, freshness is determined by artifact_fresh():
@@ -520,7 +396,7 @@ class TestStageIdfMtimeCaching:
         t0 = time.monotonic()
 
         # First run: create artifact + meta sidecar
-        stage_idf("foursquare", small_fsq_parquet, output_path, t0)
+        stage_idf("overture_place", small_overture_parquet, output_path, t0)
         assert os.path.exists(output_path), "First run must create artifact"
         assert os.path.exists(meta_path), "First run must create .meta.json"
 
@@ -533,13 +409,13 @@ class TestStageIdfMtimeCaching:
         # Second run: artifact_fresh() must return True → stage skips
         caplog.clear()
         with caplog.at_level(logging.INFO):
-            stage_idf("foursquare", small_fsq_parquet, output_path, t0)
+            stage_idf("overture_place", small_overture_parquet, output_path, t0)
 
         assert any("skip" in record.message.lower() for record in caplog.records), (
             "Should log skip message when artifact+meta are fresh"
         )
 
-    def test_runs_when_output_missing(self, small_fsq_parquet, tmp_path, caplog):
+    def test_runs_when_output_missing(self, small_overture_parquet, tmp_path, caplog):
         """Runs normally when output doesn't exist."""
         output_path = str(tmp_path / "idf_out.parquet")
         t0 = time.monotonic()
@@ -547,14 +423,14 @@ class TestStageIdfMtimeCaching:
         assert not os.path.exists(output_path)
 
         with caplog.at_level(logging.INFO):
-            stage_idf("foursquare", small_fsq_parquet, output_path, t0)
+            stage_idf("overture_place", small_overture_parquet, output_path, t0)
 
         assert os.path.exists(output_path), "Should create output when missing"
         assert any("start" in record.message.lower() for record in caplog.records), (
             "Should log starting message when output is missing"
         )
 
-    def test_runs_when_input_newer(self, small_fsq_parquet, tmp_path, caplog):
+    def test_runs_when_input_newer(self, small_overture_parquet, tmp_path, caplog):
         """Re-runs when an input parquet is newer than the meta sidecar.
 
         Under the meta-driven contract, artifact_fresh() checks:
@@ -574,7 +450,7 @@ class TestStageIdfMtimeCaching:
         t0 = time.monotonic()
 
         # First run: produces artifact + meta
-        stage_idf("foursquare", small_fsq_parquet, output_path, t0)
+        stage_idf("overture_place", small_overture_parquet, output_path, t0)
         assert os.path.exists(output_path)
         assert os.path.exists(meta_path)
 
@@ -587,19 +463,19 @@ class TestStageIdfMtimeCaching:
         # Second run: artifact_fresh() returns False (meta < input) → re-runs
         caplog.clear()
         with caplog.at_level(logging.INFO):
-            stage_idf("foursquare", small_fsq_parquet, output_path, t0)
+            stage_idf("overture_place", small_overture_parquet, output_path, t0)
 
         assert any("start" in record.message.lower() for record in caplog.records), (
             "Should log starting message when input is newer than meta"
         )
 
-    def test_force_overrides_fresh(self, small_fsq_parquet, tmp_path, caplog):
+    def test_force_overrides_fresh(self, small_overture_parquet, tmp_path, caplog):
         """force=True re-runs despite fresh output."""
         output_path = str(tmp_path / "idf_out.parquet")
         t0 = time.monotonic()
 
         # First run
-        stage_idf("foursquare", small_fsq_parquet, output_path, t0)
+        stage_idf("overture_place", small_overture_parquet, output_path, t0)
         assert os.path.exists(output_path)
 
         # Set output to the future
@@ -609,7 +485,7 @@ class TestStageIdfMtimeCaching:
         # Second run with force=True
         caplog.clear()
         with caplog.at_level(logging.INFO):
-            stage_idf("foursquare", small_fsq_parquet, output_path, t0, force=True)
+            stage_idf("overture_place", small_overture_parquet, output_path, t0, force=True)
 
         assert any("start" in record.message.lower() for record in caplog.records), (
             "Should log starting message when force=True"
@@ -712,10 +588,10 @@ class TestIdfSortPin:
     implementation produces an unsorted parquet, this test fails in Red phase.
     """
 
-    def test_idf_sorted_by_category(self, fsq_idf_parquet, tmp_path):
+    def test_idf_sorted_by_category(self, overture_idf_parquet, tmp_path):
         """idf.parquet must be sorted non-decreasingly on the 'category' column."""
         output = str(tmp_path / "idf.parquet")
-        stage_idf("foursquare", str(fsq_idf_parquet), output, time.monotonic(), force=True)
+        stage_idf("overture_place", str(overture_idf_parquet), output, time.monotonic(), force=True)
         con = duckdb.connect()
         cats = [r[0] for r in con.execute(
             f"SELECT category FROM read_parquet('{output}')"
@@ -749,29 +625,29 @@ class TestStageIdfMetaSidecar:
     """
 
     @pytest.fixture
-    def small_fsq_parquet(self, tmp_path):
-        """Minimal FSQ parquet for meta-sidecar tests."""
-        parquet_path = tmp_path / "small_fsq.parquet"
+    def small_overture_parquet(self, tmp_path):
+        """Minimal Overture parquet for meta-sidecar tests."""
+        parquet_path = tmp_path / "small_overture.parquet"
 
         conn = duckdb.connect(":memory:")
         conn.execute("""
-            CREATE TABLE tmp_fsq (
-                fsq_place_id     VARCHAR,
-                name             VARCHAR,
-                fsq_category_ids VARCHAR[]
+            CREATE TABLE tmp_ov (
+                id          VARCHAR,
+                categories  STRUCT("primary" VARCHAR),
+                names       STRUCT("primary" VARCHAR)
             )
         """)
         conn.execute("""
-            INSERT INTO tmp_fsq VALUES
-                ('x001', 'Place A', ['cat1']::VARCHAR[]),
-                ('x002', 'Place B', ['cat2']::VARCHAR[])
+            INSERT INTO tmp_ov VALUES
+                ('x001', {'primary': 'cat1'}, {'primary': 'Place A'}),
+                ('x002', {'primary': 'cat2'}, {'primary': 'Place B'})
         """)
-        conn.execute(f"COPY tmp_fsq TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
         conn.close()
 
         return str(parquet_path)
 
-    def test_meta_json_written_after_stage(self, small_fsq_parquet, tmp_path):
+    def test_meta_json_written_after_stage(self, small_overture_parquet, tmp_path):
         """After stage_idf, <output_path>.meta.json must exist.
 
         meta.json must contain:
@@ -783,7 +659,7 @@ class TestStageIdfMetaSidecar:
         output = tmp_path / "idf.parquet"
         meta_path = tmp_path / "idf.parquet.meta.json"
 
-        stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic())
+        stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
 
         assert output.exists(), "idf.parquet must be written"
         assert meta_path.exists(), (
@@ -806,7 +682,7 @@ class TestStageIdfMetaSidecar:
             f"got {meta.get('inputs')!r}"
         )
 
-    def test_stale_tmp_clobbered(self, small_fsq_parquet, tmp_path):
+    def test_stale_tmp_clobbered(self, small_overture_parquet, tmp_path):
         """A stale <output_path>.tmp is removed before building; meta.json is written after.
 
         Fails RED because current stage_idf never writes .meta.json, so the
@@ -820,7 +696,7 @@ class TestStageIdfMetaSidecar:
         tmp_file.write_bytes(b"garbage data from a previous interrupted run")
         assert tmp_file.exists(), "Test setup: .tmp must exist before the call"
 
-        stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic(), force=True)
+        stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic(), force=True)
 
         assert output.exists(), "idf.parquet must be written"
         assert not tmp_file.exists(), (
@@ -831,7 +707,7 @@ class TestStageIdfMetaSidecar:
             "fails RED because current implementation does not call finalize_artifact"
         )
 
-    def test_freshness_meta_driven(self, small_fsq_parquet, tmp_path):
+    def test_freshness_meta_driven(self, small_overture_parquet, tmp_path):
         """artifact_fresh(output, resolved_inputs, {}) must return True after a run.
 
         Fails RED because:
@@ -843,11 +719,11 @@ class TestStageIdfMetaSidecar:
 
         output = tmp_path / "idf.parquet"
 
-        stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic())
+        stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
         assert output.exists(), "idf.parquet must be written"
 
-        resolved_inputs = _resolve_glob_paths(small_fsq_parquet)
-        assert resolved_inputs, "small_fsq_parquet fixture must resolve to at least one file"
+        resolved_inputs = _resolve_glob_paths(small_overture_parquet)
+        assert resolved_inputs, "small_overture_parquet fixture must resolve to at least one file"
 
         # artifact_fresh must return True for the just-built fresh artifact.
         # Fails RED because current code never writes .meta.json (artifact_fresh returns False).
@@ -857,7 +733,7 @@ class TestStageIdfMetaSidecar:
             "fails RED because no .meta.json is written by the current implementation"
         )
 
-    def test_partial_write_not_reused(self, small_fsq_parquet, tmp_path, caplog):
+    def test_partial_write_not_reused(self, small_overture_parquet, tmp_path, caplog):
         """Meta absent → artifact_fresh False → stage_idf re-runs (does not skip).
 
         Scenario: a crash occurred BEFORE the meta sidecar was written (e.g. kill -9
@@ -881,7 +757,7 @@ class TestStageIdfMetaSidecar:
         meta_path = tmp_path / "idf.parquet.meta.json"
 
         # Step 1: successful first run
-        stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic())
+        stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
         assert output.exists(), "first run must produce idf.parquet"
 
         # Step 2: simulate crash — delete the meta sidecar.
@@ -891,7 +767,7 @@ class TestStageIdfMetaSidecar:
             meta_path.unlink()
 
         # Step 3: meta-absent state must be detected.
-        resolved_inputs = _resolve_glob_paths(small_fsq_parquet)
+        resolved_inputs = _resolve_glob_paths(small_overture_parquet)
         assert not artifact_fresh(str(output), resolved_inputs, {}), (
             "artifact_fresh must return False when .meta.json is absent; "
             "fails RED because _is_output_fresh() does not check for meta and "
@@ -901,7 +777,7 @@ class TestStageIdfMetaSidecar:
         # Step 4: a non-forced re-run must detect the missing meta and re-run.
         caplog.clear()
         with caplog.at_level(logging.INFO):
-            stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic())
+            stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
 
         logged_messages = [r.message.lower() for r in caplog.records]
         assert any("start" in msg for msg in logged_messages), (
@@ -918,7 +794,7 @@ class TestStageIdfMetaSidecar:
         )
 
     def test_stale_artifact_newer_than_meta_not_reused(
-        self, small_fsq_parquet, tmp_path, caplog
+        self, small_overture_parquet, tmp_path, caplog
     ):
         """Crash between rename and meta-write: artifact newer than meta → not reused.
 
@@ -949,7 +825,7 @@ class TestStageIdfMetaSidecar:
         meta_path = tmp_path / "idf.parquet.meta.json"
 
         # Step 1: successful first run
-        stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic())
+        stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
         assert output.exists(), "first run must produce idf.parquet"
 
         # Step 2: meta must exist — RED failure if finalize_artifact is not called.
@@ -969,7 +845,7 @@ class TestStageIdfMetaSidecar:
         )
 
         # Step 4: artifact-newer-than-meta must be detected as stale.
-        resolved_inputs = _resolve_glob_paths(small_fsq_parquet)
+        resolved_inputs = _resolve_glob_paths(small_overture_parquet)
         assert not artifact_fresh(str(output), resolved_inputs, {}), (
             "artifact_fresh must return False when mtime(artifact) > mtime(meta); "
             "this guards against a crash between the atomic rename and the meta write"
@@ -978,7 +854,7 @@ class TestStageIdfMetaSidecar:
         # Step 5: a non-forced re-run must detect the stale state and re-run.
         caplog.clear()
         with caplog.at_level(logging.INFO):
-            stage_idf("foursquare", small_fsq_parquet, str(output), time.monotonic())
+            stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
 
         logged_messages = [r.message.lower() for r in caplog.records]
         assert any("start" in msg for msg in logged_messages), (

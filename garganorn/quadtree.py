@@ -6,7 +6,7 @@ import time
 
 import duckdb
 import yaml
-from .database import FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions
+from .database import OverturePlaces, OpenStreetMap, OvertureDivisions
 from .stages import (
     quadkey_to_bbox,
     bboxes_intersect,
@@ -25,7 +25,7 @@ from .covering import stage_covering, ensure_covering
 
 log = logging.getLogger(__name__)
 
-SOURCES = {cls.source_key: cls for cls in [FoursquareOSP, OverturePlaces, OpenStreetMap, OvertureDivisions]}
+SOURCES = {cls.source_key: cls for cls in [OverturePlaces, OpenStreetMap, OvertureDivisions]}
 
 
 def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB"):
@@ -306,7 +306,7 @@ def _cmd_all(args):
         )
 
     # Step 2: idf per configured place source (fixed order)
-    PLACE_SOURCES_ORDER = ["overture_place", "osm", "foursquare"]
+    PLACE_SOURCES_ORDER = ["overture_place", "osm"]
     for src_name in PLACE_SOURCES_ORDER:
         src_cfg = sources.get(src_name)
         if src_cfg is None:
@@ -407,9 +407,9 @@ def main():
         "idf", help="Compute IDF scores from place parquet"
     )
     idf_p.add_argument("--source", required=True,
-                       choices=["foursquare", "overture_place", "osm"])
+                       choices=["overture_place", "osm"])
     idf_p.add_argument("--parquet", default=None,
-                       help="Parquet glob pattern (foursquare, overture_place)")
+                       help="Parquet glob pattern (overture_place)")
     idf_p.add_argument("--parquet-dir", default=None, dest="parquet_dir",
                        help="osm-pbf-parquet output directory (osm only)")
     idf_p.add_argument("--output", required=True,
@@ -453,10 +453,10 @@ def main():
         "run", help="Run the full pipeline for a data source"
     )
     run_p.add_argument("--source", required=True,
-                       choices=["foursquare", "overture_place", "osm", "overture_division"],
+                       choices=["overture_place", "osm", "overture_division"],
                        help="Data source")
     run_p.add_argument("--parquet", default=None,
-                       help="Parquet glob pattern (foursquare, overture_place)")
+                       help="Parquet glob pattern (overture_place)")
     run_p.add_argument("--parquet-dir", default=None, dest="parquet_dir",
                        help="osm-pbf-parquet output directory (osm only)")
     run_p.add_argument("--division-parquet", default=None, dest="division_parquet",

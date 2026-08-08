@@ -1,10 +1,7 @@
 """Tests for export and query path bug fixes.
 
 These tests verify that the export pipeline correctly handles:
-- Empty trigram lists (short queries, non-ASCII scripts)
 - OSM rkey format consistency between export and manifest
-
-All tests MUST FAIL with the current code and PASS after fixes are implemented.
 """
 
 import gzip
@@ -18,56 +15,6 @@ import pytest
 from garganorn.database import OpenStreetMap
 from garganorn.tile_reader import TileBackedCollection
 from garganorn.stages import write_manifest_db
-
-
-class TestEmptyTrigrams:
-    """Tests for EXPORT-1/EXPORT-12: Empty trigram list causes SQL error.
-
-    Bug: When trigrams list is empty (short queries < 3 chars, or non-ASCII
-    scripts), SQL generates `WHERE trigram IN ()` which is invalid SQL,
-    causing a crash.
-
-    Fix spec: In nearest(), check for empty trigrams before calling
-    query_nearest(). Return empty list with log warning. The guard must be
-    BEFORE SQL construction.
-    """
-
-    def test_nearest_short_query_returns_empty(self, osm_db):
-        """Test that nearest() returns empty list for 2-char query without crashing.
-
-        Query "ab" has only 2 characters, which produces 0 trigrams.
-        Current behavior: SQL error "WHERE trigram IN ()" is invalid.
-        Expected behavior: Return empty list with a log warning.
-        """
-        result = osm_db.nearest(q="ab")
-        assert result == []
-        # Test should pass without raising duckdb.Error or similar
-
-    def test_nearest_normal_query_works(self, osm_db):
-        """Non-regression test: normal queries still work after empty trigram fix.
-
-        Query "tartine" produces normal trigrams and should return results.
-        This ensures the fix doesn't break normal text search.
-        """
-        result = osm_db.nearest(q="tartine")
-        # Should return at least one result from OSM test data
-        assert len(result) > 0
-        # Result should contain "Tartine Manufactory" (trigram search on name field)
-        names = [r["name"] for r in result]
-        assert any("tartine" in name.lower() for name in names)
-
-    def test_nearest_cjk_returns_empty(self, osm_db):
-        """Test that nearest() returns empty list for CJK without crashing.
-
-        Query "東京" (Tokyo) is non-ASCII. After accent stripping, it may
-        produce 0 trigrams if the script doesn't have 3+ characters.
-        Current behavior: May crash with empty trigram list.
-        Expected behavior: Return empty list with a log warning.
-        """
-        # CJK characters that might produce 0 trigrams after normalization
-        result = osm_db.nearest(q="東京")
-        # Should not crash; empty result is acceptable
-        assert isinstance(result, list)
 
 
 class TestOSMRkeyFormat:

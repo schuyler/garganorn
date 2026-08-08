@@ -1,23 +1,9 @@
 repo: places.atgeo.org
-databases:
-  - type: foursquare
-    path: db/fsq-osp.duckdb
-  - type: overture_place
-    path: db/overture-maps.duckdb
 
 tiles:
   max_per_tile: 1000
   memory_limit: 48GB
   collections:
-    org.atgeo.places.foursquare:
-      slug: foursquare
-      manifest: data/foursquare/tiles/current/manifest.duckdb
-      # Presence enables tile-backed getRecord for this collection; the value is
-      # ignored, since the run directory is derived from `manifest`.
-      tiles_dir: data/foursquare/tiles/current
-      base_url: https://places.atgeo.org/tiles/foursquare
-      source: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
-      license: https://docs.foursquare.com/data-products/docs/access-fsq-os-places
     org.atgeo.places.overture.place:
       slug: overture-place
       manifest: data/overture_place/tiles/current/manifest.duckdb
@@ -52,5 +38,3 @@ pipeline:
       parquet: db/cache/overture/*/part-*.parquet
     osm:
       parquet_dir: db/cache/osm/parquet
-    foursquare:
-      parquet: db/cache/fsq/*/places-*.parquet

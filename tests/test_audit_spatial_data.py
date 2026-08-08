@@ -97,8 +97,8 @@ class TestSpatial1CoordinateRangeValidation:
 
             con.close()
 
-    def test_foursquare_out_of_range_latitude(self):
-        """Foursquare place with latitude=100 should get NULL qk17."""
+    def test_overture_place_out_of_range_latitude(self):
+        """Overture place with latitude=100 should get NULL qk17."""
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = pathlib.Path(tmpdir) / "test.duckdb"
             con = duckdb.connect(str(db_path))
@@ -107,15 +107,12 @@ class TestSpatial1CoordinateRangeValidation:
             # Create a test parquet with invalid coordinates
             con.execute("""
                 CREATE TABLE test_places AS
-                SELECT 'fsq001' AS fsq_place_id,
+                SELECT 'ov002' AS id,
                        'Test Place' AS name,
-                       100.0 AS latitude,
-                       -122.4194 AS longitude,
-                       ST_Point(-122.4194, 100.0) AS geom,
+                       ST_Point(-122.4194, 100.0) AS geometry,
+                       {'primary': 'amenity=cafe'} AS categories,
                        {xmin: -122.5, xmax: -122.3, ymin: 100.0, ymax: 100.2} AS bbox,
-                       ['13065143'] AS fsq_category_ids,
-                       '2023-01-01'::DATE AS date_refreshed,
-                       NULL::DATE AS date_closed
+                       {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
             con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
 
@@ -133,14 +130,14 @@ class TestSpatial1CoordinateRangeValidation:
                 "density_norm": 10.0,
                 "idf_norm": 18.0,
             }
-            raw_sql = _load_sql("foursquare_import.sql", substitutions)
+            raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
 
             # This should not raise an error, but qk17 should be NULL
             con.execute(sql)
 
             # Check that the place was imported with NULL qk17
-            result = con.execute("SELECT qk17 FROM places WHERE fsq_place_id = 'fsq001'").fetchone()
+            result = con.execute("SELECT qk17 FROM places WHERE id = 'ov002'").fetchone()
             assert result is not None, "Place should be imported even with invalid coordinates"
             qk17 = result[0]
             assert qk17 is None, f"qk17 should be NULL for out-of-range latitude, got {qk17}"
@@ -300,52 +297,6 @@ class TestSpatial4BboxOverlapFilter:
 
             con.close()
 
-    def test_foursquare_partial_overlap(self):
-        """Foursquare place partially overlapping bbox should be included."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = pathlib.Path(tmpdir) / "test.duckdb"
-            con = duckdb.connect(str(db_path))
-            con.execute("INSTALL spatial; LOAD spatial;")
-
-            # Create a test parquet with bbox that partially overlaps filter
-            con.execute("""
-                CREATE TABLE test_places AS
-                SELECT 'fsq001' AS fsq_place_id,
-                       'Test Place' AS name,
-                       37.7749 AS latitude,
-                       -122.5 AS longitude,
-                       ST_Point(-122.5, 37.7749) AS geom,
-                       {xmin: -122.6, xmax: -122.4, ymin: 37.7, ymax: 37.9} AS bbox,
-                       ['13065143'] AS fsq_category_ids,
-                       '2023-01-01'::DATE AS date_refreshed,
-                       NULL::DATE AS date_closed
-            """)
-            con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
-
-            # Run import SQL
-            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-            idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
-            substitutions = {
-                "memory_limit": "4GB",
-                "parquet_glob": str(pathlib.Path(tmpdir) / "test.parquet"),
-                "xmin": -122.55, "xmax": -122.30,
-                "ymin": 37.60, "ymax": 37.85,
-                "density_cte": density_cte,
-                "idf_cte": idf_cte,
-                "density_norm": 10.0,
-                "idf_norm": 18.0,
-            }
-            raw_sql = _load_sql("foursquare_import.sql", substitutions)
-            sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-
-            con.execute(sql)
-
-            # Check that the place was imported (it overlaps the filter)
-            result = con.execute("SELECT COUNT(*) FROM places WHERE fsq_place_id = 'fsq001'").fetchone()
-            assert result[0] == 1, f"Foursquare place with overlapping bbox should be imported, got count {result[0]}"
-
-            con.close()
-
 
 # ---------------------------------------------------------------------------
 # Test DATA-1: OSM way centroid NaN from empty node sets
@@ -454,108 +405,3 @@ class TestData3BboxNormalization:
 
             con.close()
 
-    def test_foursquare_inverted_bbox(self):
-        """Foursquare place with inverted bbox should still be importable."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = pathlib.Path(tmpdir) / "test.duckdb"
-            con = duckdb.connect(str(db_path))
-            con.execute("INSTALL spatial; LOAD spatial;")
-
-            # Create a test parquet with inverted bbox (xmin > xmax, ymin > ymax)
-            # After normalization: bbox should be [-122.5, -122.3, 37.7, 37.9]
-            con.execute("""
-                CREATE TABLE test_places AS
-                SELECT 'fsq001' AS fsq_place_id,
-                       'Test Place' AS name,
-                       37.7749 AS latitude,
-                       -122.4194 AS longitude,
-                       ST_Point(-122.4194, 37.7749) AS geom,
-                       {xmin: -122.3, xmax: -122.5, ymin: 37.9, ymax: 37.7} AS bbox,
-                       ['13065143'] AS fsq_category_ids,
-                       '2023-01-01'::DATE AS date_refreshed,
-                       NULL::DATE AS date_closed
-            """)
-            con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
-
-            # Run import SQL - filter bbox overlaps the normalized place bbox
-            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-            idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
-            substitutions = {
-                "memory_limit": "4GB",
-                "parquet_glob": str(pathlib.Path(tmpdir) / "test.parquet"),
-                "xmin": -122.55, "xmax": -122.25,
-                "ymin": 37.65, "ymax": 37.95,
-                "density_cte": density_cte,
-                "idf_cte": idf_cte,
-                "density_norm": 10.0,
-                "idf_norm": 18.0,
-            }
-            raw_sql = _load_sql("foursquare_import.sql", substitutions)
-            sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-
-            con.execute(sql)
-
-            # Check that the place was imported with valid qk17
-            result = con.execute("SELECT qk17 FROM places WHERE fsq_place_id = 'fsq001'").fetchone()
-            assert result is not None, "Place should be imported"
-            qk17 = result[0]
-            assert qk17 is not None, f"qk17 should not be NULL after bbox normalization, got {qk17}"
-
-            con.close()
-
-
-# ---------------------------------------------------------------------------
-# Test DATA-8: FSQ empty category array guard
-# ---------------------------------------------------------------------------
-
-class TestData8FsqEmptyCategoryArrayGuard:
-    """Foursquare places with empty category arrays should be handled gracefully."""
-
-    def test_fsq_empty_category_array(self):
-        """Place with empty category array should import with idf_score=0."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            db_path = pathlib.Path(tmpdir) / "test.duckdb"
-            con = duckdb.connect(str(db_path))
-            con.execute("INSTALL spatial; LOAD spatial;")
-
-            # Create a test parquet with empty category array
-            con.execute("""
-                CREATE TABLE test_places AS
-                SELECT 'fsq001' AS fsq_place_id,
-                       'Test Place' AS name,
-                       37.7749 AS latitude,
-                       -122.4194 AS longitude,
-                       ST_Point(-122.4194, 37.7749) AS geom,
-                       {xmin: -122.42, xmax: -122.41, ymin: 37.77, ymax: 37.78} AS bbox,
-                       [] AS fsq_category_ids,
-                       '2023-01-01'::DATE AS date_refreshed,
-                       NULL::DATE AS date_closed
-            """)
-            con.execute("COPY test_places TO '" + str(pathlib.Path(tmpdir) / "test.parquet") + "' (FORMAT PARQUET);")
-
-            # Run import SQL
-            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-            idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
-            substitutions = {
-                "memory_limit": "4GB",
-                "parquet_glob": str(pathlib.Path(tmpdir) / "test.parquet"),
-                "xmin": -122.55, "xmax": -122.30,
-                "ymin": 37.60, "ymax": 37.85,
-                "density_cte": density_cte,
-                "idf_cte": idf_cte,
-                "density_norm": 10.0,
-                "idf_norm": 18.0,
-            }
-            raw_sql = _load_sql("foursquare_import.sql", substitutions)
-            sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-
-            # This should not raise an error
-            con.execute(sql)
-
-            # Check that the place was imported with importance=0 (no IDF score)
-            result = con.execute("SELECT importance FROM places WHERE fsq_place_id = 'fsq001'").fetchone()
-            assert result is not None, "Place with empty category array should be imported"
-            importance = result[0]
-            assert importance == 0, f"importance should be 0 for empty categories, got {importance}"
-
-            con.close()

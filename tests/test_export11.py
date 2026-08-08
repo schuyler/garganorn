@@ -272,37 +272,6 @@ class TestExport11LoggingUsage:
             "The print() call should be replaced with log.warning()."
         )
 
-    def test_database_py_uses_log_for_debug_params(self):
-        """database.py must use log.debug() for search parameter debug output.
-
-        Currently line 255: print(f"Searching with params: {params}")
-        After fix: log.debug("Searching with params: %s", params)
-
-        The module logger 'log' is already defined on line 9. FAILS until print() is replaced.
-        """
-        database_path = REPO_ROOT / "garganorn" / "database.py"
-        source = database_path.read_text()
-
-        # Check for log.debug call
-        tree = ast.parse(source)
-
-        has_log_debug = False
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Attribute):
-                    if node.func.attr == "debug":
-                        if isinstance(node.func.value, ast.Name):
-                            if node.func.value.id == "log":
-                                has_log_debug = True
-
-        # Also check the source for the specific message
-        has_searching_msg = "Searching with params" in source
-
-        assert has_log_debug and has_searching_msg, (
-            "database.py does not use log.debug() for search parameter output. "
-            "The current print() call should be replaced with log.debug()."
-        )
-
 
 class TestExport11RuntimeBehavior:
     """Red-phase tests for EXPORT-11: Verify no stdout output at runtime.

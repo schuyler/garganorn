@@ -1,9 +1,9 @@
 """Tests for download scripts and import cache enforcement.
 
 These tests are written in red (failing) state. They will pass once:
-- download-fsq.sh, download-overture.sh, download-osm.sh are created
-- import-fsq-extract.sh and import-overture-extract.sh enforce cache presence
-  (replacing their S3 download loops with cache presence checks)
+- download-overture.sh, download-osm.sh are created
+- import-overture-extract.sh enforces cache presence
+  (replacing its S3 download loop with a cache presence check)
 """
 
 import os
@@ -36,70 +36,10 @@ def _run(script_name: str, args: list[str], env: dict | None = None) -> subproce
 # ---------------------------------------------------------------------------
 # Tests 1-3: import script cache enforcement
 #
-# These fail because import-fsq-extract.sh and import-overture-extract.sh do
-# not yet enforce cache presence. They currently download from S3 rather than
-# checking for a local cache and failing with the expected messages.
+# These fail because import-overture-extract.sh does not yet enforce cache
+# presence. It currently downloads from S3 rather than checking for a local
+# cache and failing with the expected messages.
 # ---------------------------------------------------------------------------
-
-
-class TestFsqImportCacheEnforcement:
-    """import-fsq-extract.sh must fail when the cache is absent or incomplete."""
-
-    def test_fsq_import_fails_without_cache(self, tmp_path):
-        """import-fsq-extract.sh exits 1 and mentions download-fsq.sh when cache is empty.
-
-        Red: --cache-dir flag does not exist yet in the script. Once the green
-        implementation adds --cache-dir, this test will pass.
-        """
-        # Pass --cache-dir pointing at a nonexistent directory so the script
-        # can skip S3 discovery and check the cache directly.
-        result = _run(
-            "import-fsq-extract.sh",
-            ["--cache-dir", str(tmp_path / "nonexistent")] + SAMPLE_BBOX,
-        )
-
-        assert result.returncode == 1, (
-            f"Expected exit code 1, got {result.returncode}.\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        combined = result.stdout + result.stderr
-        assert "Cache missing" in combined, (
-            "Expected 'Cache missing' in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        assert "download-fsq.sh" in combined, (
-            "Expected 'download-fsq.sh' in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-
-    def test_fsq_import_fails_incomplete_cache(self, tmp_path):
-        """import-fsq-extract.sh exits 1 with an 'Incomplete FSQ cache' message when fewer than 100 parquet files are present.
-
-        Red: --cache-dir flag does not exist yet in the script. Once the green
-        implementation adds --cache-dir, this test will pass.
-        """
-        # Create 50 fake parquet files directly in tmp_path (incomplete cache).
-        for i in range(50):
-            (tmp_path / f"places-{i:05d}.zstd.parquet").touch()
-
-        result = _run(
-            "import-fsq-extract.sh",
-            ["--cache-dir", str(tmp_path)] + SAMPLE_BBOX,
-        )
-
-        assert result.returncode == 1, (
-            f"Expected exit code 1, got {result.returncode}.\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        combined = result.stdout + result.stderr
-        assert "Incomplete FSQ cache" in combined, (
-            "Expected 'Incomplete FSQ cache' in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        assert "50" in combined, (
-            "Expected file count '50' mentioned in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
 
 
 class TestOvertureImportCacheEnforcement:
@@ -139,27 +79,6 @@ class TestOvertureImportCacheEnforcement:
 # These fail with FileNotFoundError or non-zero exit because the scripts have
 # not been created.
 # ---------------------------------------------------------------------------
-
-
-class TestDownloadFsqUsage:
-    """download-fsq.sh --help exits 0 with usage information."""
-
-    def test_download_fsq_usage(self):
-        """Running download-fsq.sh --help exits 0 and prints usage.
-
-        Red: scripts/download-fsq.sh does not exist yet.
-        """
-        result = _run("download-fsq.sh", ["--help"])
-
-        assert result.returncode == 0, (
-            f"Expected exit code 0, got {result.returncode}.\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        combined = result.stdout + result.stderr
-        assert "Usage" in combined or "usage" in combined or "--cache-dir" in combined, (
-            "Expected usage information in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
 
 
 class TestDownloadOvertureUsage:

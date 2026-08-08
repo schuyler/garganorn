@@ -10,7 +10,7 @@
                 "properties": {
                     "collection": {
                         "type": "string",
-                        "description": "The collection to get coverage for, e.g. 'org.atgeo.places.foursquare'",
+                        "description": "The collection to get coverage for, e.g. 'org.atgeo.places.overture.place'",
                         "format": "nsid"
                     },
                     "bbox": {

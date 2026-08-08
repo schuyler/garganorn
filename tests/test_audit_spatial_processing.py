@@ -42,7 +42,7 @@ class TestSPATIAL2_MalformedQK17Validation:
         # Create places table with a malformed qk17
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -72,7 +72,7 @@ class TestSPATIAL2_MalformedQK17Validation:
         sql = _load_sql(
             "compute_tile_assignments.sql",
             {
-                "pk_expr": "fsq_place_id",
+                "pk_expr": "place_id",
                 "min_zoom": 6,
                 "max_zoom": 17,
                 "max_per_tile": 1000,
@@ -96,7 +96,7 @@ class TestSPATIAL2_MalformedQK17Validation:
 
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -120,7 +120,7 @@ class TestSPATIAL2_MalformedQK17Validation:
         sql = _load_sql(
             "compute_tile_assignments.sql",
             {
-                "pk_expr": "fsq_place_id",
+                "pk_expr": "place_id",
                 "min_zoom": 6,
                 "max_zoom": 17,
                 "max_per_tile": 1000,
@@ -252,7 +252,7 @@ class TestEXPORT6_NullQK17Logging:
         # Create places table with some NULL qk17 values
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -283,7 +283,7 @@ class TestEXPORT6_NullQK17Logging:
         # Capture logging output
         with caplog.at_level(logging.WARNING):
             stage_tile_assignment(
-                places_parquet, ta_parquet, "foursquare",
+                places_parquet, ta_parquet, "overture_place",
                 max_per_tile=1000, force=True
             )
 
@@ -314,7 +314,7 @@ class TestEXPORT6_NullQK17Logging:
 
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -338,7 +338,7 @@ class TestEXPORT6_NullQK17Logging:
         # Capture logging output
         with caplog.at_level(logging.WARNING):
             stage_tile_assignment(
-                places_parquet, ta_parquet, "foursquare",
+                places_parquet, ta_parquet, "overture_place",
                 max_per_tile=1000, force=True
             )
 
@@ -370,7 +370,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
 
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -394,7 +394,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
         # Capture logging output
         with caplog.at_level(logging.ERROR):
             stage_tile_assignment(
-                places_parquet, ta_parquet, "foursquare",
+                places_parquet, ta_parquet, "overture_place",
                 max_per_tile=1000, force=True
             )
 
@@ -426,7 +426,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
 
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -449,7 +449,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
         # Run stage_tile_assignment with duplicate input and capture error logs
         with caplog.at_level(logging.ERROR):
             stage_tile_assignment(
-                places_parquet, ta_parquet, "foursquare",
+                places_parquet, ta_parquet, "overture_place",
                 max_per_tile=1000, force=True
             )
 
@@ -461,7 +461,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
 
         assert len(error_messages) > 0, (
             "Expected EXPORT-7 error log about places assigned to multiple tiles when input "
-            "places parquet has duplicate fsq_place_id values; "
+            "places parquet has duplicate id values; "
             f"captured log records: {[(r.levelno, r.message) for r in caplog.records]}"
         )
 
@@ -472,7 +472,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
 
         con.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                id VARCHAR,
                 name VARCHAR,
                 latitude DOUBLE,
                 longitude DOUBLE,
@@ -490,7 +490,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
         con.execute(f"COPY places TO '{places_parquet}' (FORMAT PARQUET)")
         con.close()
 
-        stage_tile_assignment(places_parquet, ta_parquet, "foursquare", max_per_tile=1000, force=True)
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place", max_per_tile=1000, force=True)
 
         # Check parquet schema - place_id should be the first column
         check_con = duckdb.connect()

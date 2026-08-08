@@ -1,4 +1,4 @@
-"""Tests for foursquare_export_tiles.sql, overture_place_export_tiles.sql, and export_tiles()."""
+"""Tests for overture_place_export_tiles.sql and export_tiles()."""
 
 import gzip
 import inspect
@@ -9,17 +9,17 @@ import re
 import duckdb
 import pytest
 from tests.quadtree_helpers import (
-    REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit,
+    _load_sql, _strip_spatial_install, _strip_memory_limit,
     run_overture_import, run_tile_assignments, run_osm_import,
 )
 
 
 # ---------------------------------------------------------------------------
-# Module-local helpers: build a minimal FSQ places + tile_assignments DB
+# Module-local helpers: build a minimal Overture places + tile_assignments DB
 # ---------------------------------------------------------------------------
 
-_FSQ_EXPORT_PLACES = [
-    # (fsq_place_id, name, lat, lon, importance, country)
+_OVERTURE_EXPORT_PLACES = [
+    # (id, name, lat, lon, importance, country)
     ("exp001", "Blue Bottle Coffee",  37.7749, -122.4194, 72, "US"),
     ("exp002", "Golden Gate Park",    37.7694, -122.4862, 85, "US"),
     ("exp003", "Tartine Bakery",      37.7617, -122.4243, 68, "US"),
@@ -31,61 +31,55 @@ _FSQ_EXPORT_PLACES = [
 _EXPORT_TILE_QK = "023130"
 
 
-def _make_fsq_export_db(conn, places_rows=None):
-    """Populate `conn` with minimal `places` and `tile_assignments` tables.
+def _make_overture_export_db(conn, places_rows=None):
+    """Populate `conn` with minimal `places` and `tile_assignments` tables
+    matching the schema garganorn/sql/overture_place_export_tiles.sql expects.
 
-    `places_rows` defaults to _FSQ_EXPORT_PLACES if None.
-    Each entry is (fsq_place_id, name, lat, lon, importance, country).
+    `places_rows` defaults to _OVERTURE_EXPORT_PLACES if None.
+    Each entry is (id, name, lat, lon, importance, country).
     """
     if places_rows is None:
-        places_rows = _FSQ_EXPORT_PLACES
-
-    conn.execute("INSTALL spatial; LOAD spatial;")
+        places_rows = _OVERTURE_EXPORT_PLACES
 
     conn.execute("""
         CREATE TABLE places (
-            fsq_place_id        VARCHAR,
-            name                VARCHAR,
-            latitude            DOUBLE,
-            longitude           DOUBLE,
-            importance          INTEGER,
-            address             VARCHAR,
-            locality            VARCHAR,
-            region              VARCHAR,
-            postcode            VARCHAR,
-            country             VARCHAR,
-            admin_region        VARCHAR,
-            post_town           VARCHAR,
-            po_box              VARCHAR,
-            date_created        DATE,
-            date_refreshed      DATE,
-            tel                 VARCHAR,
-            website             VARCHAR,
-            email               VARCHAR,
-            facebook_id         VARCHAR,
-            instagram           VARCHAR,
-            twitter             VARCHAR,
-            fsq_category_ids    VARCHAR[],
-            fsq_category_labels VARCHAR[],
-            placemaker_url      VARCHAR,
-            variants            STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-            qk17                VARCHAR
+            id          VARCHAR PRIMARY KEY,
+            bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+            names       STRUCT("primary" VARCHAR),
+            categories  STRUCT("primary" VARCHAR),
+            addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+            websites    VARCHAR[],
+            socials     VARCHAR[],
+            emails      VARCHAR[],
+            phones      VARCHAR[],
+            brand       STRUCT(names STRUCT("primary" VARCHAR)),
+            confidence  DOUBLE,
+            version     INTEGER,
+            sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
+            importance  INTEGER,
+            variants    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
         )
     """)
 
-    for fsq_id, name, lat, lon, imp, country in places_rows:
-        country_val = f"'{country}'" if country is not None else "NULL"
-        # Compute qk17 from actual coordinates so ST_QuadKey produces a valid 17-char key.
+    for place_id, name, lat, lon, imp, country in places_rows:
+        addr_sql = (
+            f"[{{'country': '{country}', 'postcode': NULL, 'locality': NULL, "
+            "'freeform': NULL, 'region': NULL}]"
+            if country is not None else "NULL"
+        )
         conn.execute(f"""
-            INSERT INTO places
-            SELECT
-                '{fsq_id}', '{name}', {lat}, {lon}, {imp},
-                NULL, NULL, NULL, NULL, {country_val},
-                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-                ARRAY['13065143'], ARRAY['Food & Drink'],
+            INSERT INTO places VALUES (
+                '{place_id}',
+                {{'xmin': {lon}-0.001, 'ymin': {lat}-0.001, 'xmax': {lon}+0.001, 'ymax': {lat}+0.001}},
+                {{'primary': '{name}'}},
+                {{'primary': 'coffee_shop'}},
+                {addr_sql},
+                NULL, NULL, NULL, NULL,
                 NULL,
-                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
-                ST_QuadKey({lon}, {lat}, 17)
+                0.9, 1, NULL,
+                {imp},
+                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
+            )
         """)
 
     conn.execute("""
@@ -94,10 +88,10 @@ def _make_fsq_export_db(conn, places_rows=None):
             tile_qk  VARCHAR
         )
     """)
-    for fsq_id, _name, _lat, _lon, _imp, _country in places_rows:
+    for place_id, _name, _lat, _lon, _imp, _country in places_rows:
         conn.execute(
             "INSERT INTO tile_assignments VALUES (?, ?)",
-            [fsq_id, _EXPORT_TILE_QK],
+            [place_id, _EXPORT_TILE_QK],
         )
 
     conn.execute("""
@@ -106,208 +100,6 @@ def _make_fsq_export_db(conn, places_rows=None):
             relations_json VARCHAR
         )
     """)
-
-
-# ---------------------------------------------------------------------------
-# Tests: foursquare_export_tiles.sql
-# ---------------------------------------------------------------------------
-
-class TestFsqExportTiles:
-    """Tests for garganorn/sql/foursquare_export_tiles.sql.
-
-    All tests fail at Red phase: the SQL file does not exist yet.
-    """
-
-    _SUBS = {"attribution": "Foursquare Open Source Places", "repo": "https://example.com"}
-
-    def _run_export(self, conn):
-        raw_sql = _load_sql("foursquare_export_tiles.sql", self._SUBS)
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        conn.execute(sql)
-
-    def test_sql_file_exists(self):
-        sql_path = REPO_ROOT / "garganorn" / "sql" / "foursquare_export_tiles.sql"
-        assert sql_path.exists(), f"SQL file not found: {sql_path}"
-
-    def test_export_produces_rows(self, tmp_path):
-        db_path = tmp_path / "test_fsq_export_rows.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT tile_qk, record_json FROM tile_export").fetchall()
-        conn.close()
-        assert len(rows) >= len(_FSQ_EXPORT_PLACES), (
-            f"foursquare_export_tiles.sql must produce at least one row per fixture place (>=4); got {len(rows)}"
-        )
-
-    def test_record_json_structure(self, tmp_path):
-        """record_json must be valid JSON with flat structure (no uri/value wrapper)."""
-        db_path = tmp_path / "test_fsq_export_struct.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT tile_qk, record_json FROM tile_export").fetchall()
-        conn.close()
-        assert rows, "No rows returned from tile_export"
-        for tile_qk, record_json in rows:
-            parsed = json.loads(record_json)
-            assert "uri" not in parsed, (
-                f"record_json for {tile_qk} should NOT have 'uri' key (flat structure); keys={list(parsed)}"
-            )
-            assert "value" not in parsed, (
-                f"record_json for {tile_qk} should NOT have 'value' key (flat structure); keys={list(parsed)}"
-            )
-            assert parsed.get("$type") == "org.atgeo.place", (
-                f"record_json $type must be 'org.atgeo.place'; got {parsed.get('$type')!r}"
-            )
-
-    def test_record_schema(self, tmp_path):
-        """Each record_json row must have the expected top-level fields."""
-        db_path = tmp_path / "test_fsq_export_rec_schema.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            assert "uri" not in parsed, f"Record should NOT have 'uri': {list(parsed)}"
-            assert "value" not in parsed, f"Record should NOT have 'value': {list(parsed)}"
-            assert "rkey" in parsed, f"Record missing 'rkey': {list(parsed)}"
-            assert parsed.get("$type") == "org.atgeo.place", (
-                f"$type must be 'org.atgeo.place'; got {parsed.get('$type')!r}"
-            )
-            assert "name" in parsed, f"Record missing 'name': {list(parsed)}"
-            assert "importance" in parsed, f"Record missing 'importance': {list(parsed)}"
-            assert isinstance(parsed["importance"], int), (
-                f"importance must be int; got {type(parsed['importance'])}"
-            )
-            assert "locations" in parsed, f"Record missing 'locations': {list(parsed)}"
-            assert isinstance(parsed["locations"], list), "locations must be a list"
-            assert "variants" in parsed, f"Record missing 'variants': {list(parsed)}"
-            assert isinstance(parsed["variants"], list), "variants must be a list"
-            assert "attributes" in parsed, f"Record missing 'attributes': {list(parsed)}"
-            assert isinstance(parsed["attributes"], dict), "attributes must be a dict"
-            assert "relations" in parsed, f"Record missing 'relations': {list(parsed)}"
-            assert isinstance(parsed["relations"], dict), "relations must be a dict"
-
-    def test_geo_location(self, tmp_path):
-        """First location entry must be a geo location with string lat/lon."""
-        db_path = tmp_path / "test_fsq_export_geo.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            locations = parsed["locations"]
-            assert len(locations) >= 1, "Each record must have at least one location"
-            geo = locations[0]
-            assert geo.get("$type") == "community.lexicon.location.geo", (
-                f"First location must be geo type; got {geo.get('$type')!r}"
-            )
-            assert "latitude" in geo, "Geo location missing 'latitude'"
-            assert "longitude" in geo, "Geo location missing 'longitude'"
-            assert isinstance(geo["latitude"], str), (
-                f"geo latitude must be a string; got {type(geo['latitude'])}"
-            )
-            assert isinstance(geo["longitude"], str), (
-                f"geo longitude must be a string; got {type(geo['longitude'])}"
-            )
-
-    def test_address_location_when_country_present(self, tmp_path):
-        """A place with a non-null country must have an address location as the second entry."""
-        db_path = tmp_path / "test_fsq_export_addr.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        found = False
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            if parsed.get("name") in ("Blue Bottle Coffee", "Golden Gate Park", "Tartine Bakery"):
-                locations = parsed["locations"]
-                assert len(locations) >= 2, (
-                    f"Place with country must have address location; "
-                    f"got {len(locations)} location(s) for {parsed['name']}"
-                )
-                addr = locations[1]
-                assert addr.get("$type") == "community.lexicon.location.address", (
-                    f"Second location must be address type; got {addr.get('$type')!r}"
-                )
-                assert addr.get("country") == "US", (
-                    f"Address country should be 'US'; got {addr.get('country')!r}"
-                )
-                found = True
-        assert found, "No records with country found in export output"
-
-    def test_no_address_when_country_null(self, tmp_path):
-        """A place with null country must have exactly 1 location (geo only)."""
-        db_path = tmp_path / "test_fsq_export_no_addr.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        found = False
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            if parsed.get("name") == "Mystery Spot":
-                locations = parsed["locations"]
-                assert len(locations) == 1, (
-                    f"Place with null country must have exactly 1 location; "
-                    f"got {len(locations)}"
-                )
-                found = True
-        assert found, "Mystery Spot (null country place) not found in export output"
-
-    def test_no_null_fields_in_locations(self, tmp_path):
-        """No location in any record must contain a key with a None/null value.
-
-        Fails against current code: list_concat unions geo and address struct types,
-        so geo locations get spurious null address fields (country, region, etc.) and
-        address locations get spurious null geo fields (latitude, longitude).
-        """
-        db_path = tmp_path / "test_fsq_no_null_loc.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-        assert rows, "No rows returned from tile_export"
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            locations = parsed["locations"]
-            for loc in locations:
-                null_keys = [k for k, v in loc.items() if v is None]
-                assert not null_keys, (
-                    f"Location {loc.get('$type')!r} in record {parsed.get('rkey')!r} "
-                    f"has null values for keys: {null_keys}. "
-                    "Locations must contain only fields belonging to their type."
-                )
-
-    def test_tile_export_is_view_not_table(self, tmp_path):
-        """tile_export must be a VIEW, not a BASE TABLE.
-
-        Fails because foursquare_export_tiles.sql currently creates a TABLE.
-        After the implementation changes to CREATE OR REPLACE VIEW, this test will pass.
-        """
-        db_path = tmp_path / "test_tile_export_table_type.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        self._run_export(conn)
-        row = conn.execute(
-            "SELECT table_type FROM information_schema.tables WHERE table_name = 'tile_export'"
-        ).fetchone()
-        conn.close()
-        assert row is not None, "tile_export not found in information_schema.tables"
-        assert row[0] == "VIEW", (
-            f"tile_export must be a VIEW; got {row[0]!r}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -333,11 +125,11 @@ class TestExportTiles:
 
         db_path = tmp_path / "export_tiles_test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
+        _make_overture_export_db(conn)
 
         output_dir = tmp_path / "output"
         output_dir.mkdir()
-        export_tiles(conn, str(output_dir), "foursquare")
+        export_tiles(conn, str(output_dir), "overture_place")
         conn.close()
 
         gz_files = list(output_dir.rglob("*.json.gz"))
@@ -363,11 +155,11 @@ class TestExportTiles:
 
         db_path = tmp_path / "export_manifest_test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
+        _make_overture_export_db(conn)
 
         output_dir = tmp_path / "output_manifest"
         output_dir.mkdir()
-        result = export_tiles(conn, str(output_dir), "foursquare")
+        result = export_tiles(conn, str(output_dir), "overture_place")
         conn.close()
 
         assert isinstance(result, dict), (
@@ -388,11 +180,11 @@ class TestExportTiles:
 
         db_path = tmp_path / "export_content_test.duckdb"
         conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
+        _make_overture_export_db(conn)
 
         output_dir = tmp_path / "output_content"
         output_dir.mkdir()
-        export_tiles(conn, str(output_dir), "foursquare")
+        export_tiles(conn, str(output_dir), "overture_place")
         conn.close()
 
         gz_files = list(output_dir.rglob("*.json.gz"))
@@ -447,7 +239,7 @@ class TestExportTiles:
         # Patch the SQL file read so we don't need the actual SQL file on disk.
         fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
-            export_tiles(mock_con, str(output_dir), "foursquare")
+            export_tiles(mock_con, str(output_dir), "overture_place")
 
         # Confirm fetchall was never called (the side_effect above would have
         # raised already; this assertion is belt-and-suspenders).
@@ -536,7 +328,7 @@ class TestExportTiles:
         stages_logger.setLevel(logging.DEBUG)
         try:
             with patch("pathlib.Path.read_text", return_value=fake_sql):
-                export_tiles(mock_con, str(output_dir), "foursquare")
+                export_tiles(mock_con, str(output_dir), "overture_place")
         finally:
             logger.removeHandler(handler)
             stages_logger.removeHandler(handler)
@@ -606,7 +398,7 @@ class TestExportTiles:
         stages_logger.setLevel(logging.DEBUG)
         try:
             with patch("pathlib.Path.read_text", return_value=fake_sql):
-                export_tiles(mock_con, str(output_dir), "foursquare")
+                export_tiles(mock_con, str(output_dir), "overture_place")
         finally:
             logger.removeHandler(handler)
             stages_logger.removeHandler(handler)
@@ -664,7 +456,7 @@ class TestExportTiles:
 
         with patch("pathlib.Path.read_text",
                    return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            result = export_tiles(mock_con, str(output_dir), "foursquare")
+            result = export_tiles(mock_con, str(output_dir), "overture_place")
 
         assert len(result) == 2, f"Expected 2 tiles, got {len(result)}"
         assert result[qk_a] == 2, f"qk_a tile should have 2 records, got {result[qk_a]}"
@@ -707,7 +499,7 @@ class TestExportTiles:
 
         with patch("pathlib.Path.read_text",
                    return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            export_tiles(mock_con, str(output_dir), "foursquare")
+            export_tiles(mock_con, str(output_dir), "overture_place")
 
         gz_files = list(output_dir.rglob("*.json.gz"))
         assert gz_files, "No .json.gz written"
@@ -715,18 +507,18 @@ class TestExportTiles:
             data = json.load(f)
 
         assert "source" in data, f"Envelope missing 'source'; keys: {list(data)}"
-        assert data["source"] == SOURCES["foursquare"].source_url, (
-            f"source must be SOURCES['foursquare'].source_url = {SOURCES['foursquare'].source_url!r}; "
+        assert data["source"] == SOURCES["overture_place"].source_url, (
+            f"source must be SOURCES['overture_place'].source_url = {SOURCES['overture_place'].source_url!r}; "
             f"got {data['source']!r}"
         )
         assert "license" in data, f"Envelope missing 'license'; keys: {list(data)}"
-        assert data["license"] == SOURCES["foursquare"].license_url, (
-            f"license must be SOURCES['foursquare'].license_url = {SOURCES['foursquare'].license_url!r}; "
+        assert data["license"] == SOURCES["overture_place"].license_url, (
+            f"license must be SOURCES['overture_place'].license_url = {SOURCES['overture_place'].license_url!r}; "
             f"got {data['license']!r}"
         )
         assert "collection" in data, f"Envelope missing 'collection'; keys: {list(data)}"
-        assert data["collection"] == SOURCES["foursquare"].collection, (
-            f"collection must be SOURCES['foursquare'].collection = {SOURCES['foursquare'].collection!r}; "
+        assert data["collection"] == SOURCES["overture_place"].collection, (
+            f"collection must be SOURCES['overture_place'].collection = {SOURCES['overture_place'].collection!r}; "
             f"got {data['collection']!r}"
         )
 
@@ -748,7 +540,7 @@ class TestExportTiles:
 
         with patch("pathlib.Path.read_text",
                    return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            result = export_tiles(mock_con, str(output_dir), "foursquare")
+            result = export_tiles(mock_con, str(output_dir), "overture_place")
 
         assert result == {qk: 1}, f"Expected {{qk: 1}}, got {result}"
 
@@ -791,7 +583,7 @@ class TestExportTiles:
 
         with patch("pathlib.Path.read_text",
                    return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            result = export_tiles(mock_con, str(output_dir), "foursquare")
+            result = export_tiles(mock_con, str(output_dir), "overture_place")
 
         assert result[qk_a] == 2, f"qk_a must have 2 records (spanning batches); got {result[qk_a]}"
         assert result[qk_b] == 1, f"qk_b must have 1 record; got {result[qk_b]}"
@@ -843,7 +635,7 @@ class TestExportTiles:
 
         fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
         with patch("pathlib.Path.read_text", return_value=fake_sql):
-            export_tiles(mock_con, str(output_dir), "foursquare")
+            export_tiles(mock_con, str(output_dir), "overture_place")
 
         # Verify output files contain valid JSON with the correct structure.
         # (json.loads patch is no longer active here, so json.load works normally.)
@@ -1130,109 +922,14 @@ class TestContainmentInExport:
     """Tests specifying division containment in tile export output.
 
     All tests in this class FAIL in the Red phase because:
-      - Tests 1-4: the export SQL files do not yet LEFT JOIN place_containment,
+      - Tests 3-4: the export SQL files do not yet LEFT JOIN place_containment,
         so relations.within is never populated.
       - Tests 5-8: compute_containment() does not exist, run_pipeline() does not
         accept boundaries_db, and main() does not accept --boundaries.
     """
 
-    _FSQ_SUBS = {"repo": "places.atgeo.org"}
     _OV_SUBS = {"repo": "places.atgeo.org"}
     _OSM_SUBS = {"repo": "places.atgeo.org"}
-
-    # ------------------------------------------------------------------
-    # Test 1: FSQ export includes relations.within when containment present
-    # ------------------------------------------------------------------
-
-    def test_fsq_relations_with_containment(self, tmp_path):
-        """FSQ export must include relations.within for exp001 when place_containment populated.
-
-        Fails in Red phase because foursquare_export_tiles.sql has `relations: MAP {}`
-        and does not LEFT JOIN place_containment.
-        """
-        db_path = tmp_path / "fsq_containment_with.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        _create_place_containment(conn, [("exp001", _SF_WITHIN_JSON)])
-
-        raw_sql = _load_sql("foursquare_export_tiles.sql", self._FSQ_SUBS)
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        conn.execute(sql)
-
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        record = None
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            if parsed.get("rkey") == "exp001":
-                record = parsed
-                break
-
-        assert record is not None, "exp001 must appear in tile_export"
-        relations = record.get("relations", {})
-        assert "within" in relations, (
-            f"relations must have 'within' key when place_containment populated; "
-            f"got relations={relations!r}"
-        )
-        within = relations["within"]
-        assert isinstance(within, list), (
-            f"relations.within must be a list; got {type(within)}"
-        )
-        assert len(within) == 4, (
-            f"relations.within must have 4 entries (NA, US, CA, SF); got {len(within)}: {within}"
-        )
-        for entry in within:
-            assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey must have division prefix; got {entry['rkey']!r}"
-            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
-
-    # ------------------------------------------------------------------
-    # Test 2: FSQ export produces empty relations when containment table is empty
-    # ------------------------------------------------------------------
-
-    def test_fsq_relations_empty_containment(self, tmp_path):
-        """FSQ export must produce relations={{}} when place_containment table is empty.
-
-        Fails in Red phase because foursquare_export_tiles.sql does not LEFT JOIN
-        place_containment at all — it uses the hardcoded `relations: MAP {}`.
-        After the implementation, the SQL must reference place_containment via
-        a LEFT JOIN so this test (and test 1) both work against the same SQL.
-
-        Verified by asserting that foursquare_export_tiles.sql contains a reference to
-        'place_containment': if the LEFT JOIN is missing, the SQL never touches
-        the table and this test fails.
-        """
-        import pathlib
-        sql_path = pathlib.Path(REPO_ROOT) / "garganorn" / "sql" / "foursquare_export_tiles.sql"
-        sql_text = sql_path.read_text()
-        assert "place_containment" in sql_text, (
-            "foursquare_export_tiles.sql must reference 'place_containment' via a LEFT JOIN; "
-            "the current SQL has no such reference. "
-            "Add: LEFT JOIN place_containment pc ON pc.place_id = p.fsq_place_id"
-        )
-
-        db_path = tmp_path / "fsq_containment_empty.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_fsq_export_db(conn)
-        _create_place_containment(conn, [])  # empty table, same schema
-
-        raw_sql = _load_sql("foursquare_export_tiles.sql", self._FSQ_SUBS)
-        sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
-        conn.execute(sql)
-
-        rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
-        conn.close()
-
-        assert rows, "tile_export must produce rows even with empty place_containment"
-        for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            relations = parsed.get("relations", {})
-            assert relations == {}, (
-                f"relations must be {{}} when place_containment is empty; got {relations!r}"
-            )
 
     # ------------------------------------------------------------------
     # Test 3: Overture export includes relations.within when containment present
@@ -1391,7 +1088,7 @@ class TestContainmentInExport:
         # Build a minimal places table with SF coordinates
         conn.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 latitude     DOUBLE,
                 longitude    DOUBLE,
                 qk17         VARCHAR
@@ -1406,7 +1103,7 @@ class TestContainmentInExport:
 
         # tile_assignments is a §3.2 precondition (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
-        conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
+        conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
         # Export to parquet for Phase 2 API
         import os
@@ -1425,7 +1122,7 @@ class TestContainmentInExport:
         containment_dir = str(tmp_path / "containment_produces")
         _stage_compute_containment(
             places_pq, ta_pq, str(division_db_path),
-            "fsq_place_id", "longitude", "latitude", containment_dir,
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir, force=True,
         )
 
@@ -1517,7 +1214,7 @@ class TestContainmentInExport:
 
         conn.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 latitude     DOUBLE,
                 longitude    DOUBLE,
                 qk17         VARCHAR
@@ -1530,7 +1227,7 @@ class TestContainmentInExport:
 
         # tile_assignments is a §3.2 precondition (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
-        conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
+        conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
         # Export to parquet for Phase 2 API
         import os
@@ -1549,7 +1246,7 @@ class TestContainmentInExport:
         containment_dir = str(tmp_path / "containment_bbox")
         _stage_compute_containment(
             places_pq, ta_pq, str(division_db_path),
-            "fsq_place_id", "longitude", "latitude", containment_dir,
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir, force=True,
         )
 
@@ -1624,7 +1321,7 @@ class TestContainmentInExport:
         # If --boundaries is not defined, argparse will raise SystemExit(2).
         test_args = [
             "run",
-            "--source", "foursquare",
+            "--source", "overture_place",
             "--parquet", "/tmp/test.parquet",
             "--output", "/tmp/output",
             "--boundaries", "/tmp/boundaries.duckdb",
@@ -1678,7 +1375,7 @@ class TestContainmentInExport:
         conn.execute("INSTALL spatial; LOAD spatial;")
         conn.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 latitude     DOUBLE,
                 longitude    DOUBLE,
                 qk17         VARCHAR
@@ -1694,7 +1391,7 @@ class TestContainmentInExport:
         ta_pq = str(tmp_path / "ta_none.parquet")
         conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
         conn.execute(
-            f"COPY (SELECT fsq_place_id AS place_id, left(qk17, 6) AS tile_qk FROM places) "
+            f"COPY (SELECT place_id, left(qk17, 6) AS tile_qk FROM places) "
             f"TO '{ta_pq}' (FORMAT PARQUET)"
         )
         conn.close()
@@ -1702,7 +1399,7 @@ class TestContainmentInExport:
         from garganorn.stages import compute_containment as _stage_compute_containment
         containment_dir = str(tmp_path / "containment_none")
         _stage_compute_containment(
-            places_pq, ta_pq, None, "fsq_place_id", "longitude", "latitude",
+            places_pq, ta_pq, None, "place_id", "longitude", "latitude",
             containment_dir, force=True,
         )
 
@@ -1745,7 +1442,7 @@ class TestContainmentInExport:
         conn.execute("INSTALL spatial; LOAD spatial;")
         conn.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 latitude     DOUBLE,
                 longitude    DOUBLE,
                 qk17         VARCHAR
@@ -1759,7 +1456,7 @@ class TestContainmentInExport:
 
         # tile_assignments is a §3.2 precondition (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
-        conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
+        conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
         # Export to parquet for Phase 2 API
         import os
@@ -1778,7 +1475,7 @@ class TestContainmentInExport:
         containment_dir = str(tmp_path / "containment_ocean")
         _stage_compute_containment(
             places_pq, ta_pq, str(division_db_path),
-            "fsq_place_id", "longitude", "latitude", containment_dir,
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir, force=True,
         )
 
@@ -1830,7 +1527,7 @@ class TestContainmentInExport:
         conn.execute("INSTALL spatial; LOAD spatial;")
         conn.execute("""
             CREATE TABLE places (
-                fsq_place_id VARCHAR,
+                place_id VARCHAR,
                 latitude     DOUBLE,
                 longitude    DOUBLE,
                 qk17         VARCHAR
@@ -1849,7 +1546,7 @@ class TestContainmentInExport:
 
         # tile_assignments is a §3.2 precondition (no fallback in fixed code).
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
-        conn.execute("INSERT INTO tile_assignments SELECT fsq_place_id, left(qk17, 6) FROM places")
+        conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
         # Export to parquet for Phase 2 API
         import os
@@ -1868,7 +1565,7 @@ class TestContainmentInExport:
         containment_dir = str(tmp_path / "containment_edge")
         _stage_compute_containment(
             places_pq, ta_pq, str(division_db_path),
-            "fsq_place_id", "longitude", "latitude", containment_dir,
+            "place_id", "longitude", "latitude", containment_dir,
             covering_dir=covering_dir, force=True,
         )
 
@@ -1950,10 +1647,10 @@ class TestExportRecordParityPhase2:
             "fails RED because Phase 2 signature not yet implemented"
         )
 
-    def test_two_forced_fsq_exports_byte_identical(
-        self, fsq_parquet, density_parquet, tmp_path, monkeypatch
+    def test_two_forced_overture_exports_byte_identical(
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
-        """Two forced exports from the same foursquare artifacts must produce
+        """Two forced exports from the same overture artifacts must produce
         gunzip-byte-identical tile files (§3.8 determinism: ORDER BY tile_qk, place_id).
 
         Two details make this assertion mean what it says:
@@ -1988,12 +1685,12 @@ class TestExportRecordParityPhase2:
         def _run(root):
             root.mkdir()
             _run_pipeline(
-                "foursquare", fsq_parquet,
+                "overture_place", overture_parquet,
                 (-122.55, 37.60, -122.30, 37.85),
                 str(root), memory_limit="4GB", max_per_tile=100,
                 density_parquet=density_parquet, force=True,
             )
-            tiles_current = root / "foursquare" / "tiles" / "current"
+            tiles_current = root / "overture_place" / "tiles" / "current"
             assert tiles_current.exists(), (
                 f"Phase 2 tiles must be at {tiles_current}"
             )
@@ -2118,18 +1815,18 @@ class TestStageExportPhase2Body:
     # Fixture helpers
     # ------------------------------------------------------------------
 
-    def _build_fsq_fixtures(self, tmp_path):
-        """Build minimal foursquare places.parquet + tile_assignments.parquet.
+    def _build_overture_fixtures(self, tmp_path):
+        """Build minimal overture places.parquet + tile_assignments.parquet.
 
-        Uses _make_fsq_export_db to populate tables matching foursquare_export_tiles.sql,
-        then COPYs them to parquet files for Phase 2 input.
+        Uses _make_overture_export_db to populate tables matching
+        overture_place_export_tiles.sql, then COPYs them to parquet files
+        for Phase 2 input.
         """
         import os
         places_pq = str(tmp_path / "places.parquet")
         ta_pq = str(tmp_path / "tile_assignments.parquet")
         conn = duckdb.connect()
-        conn.execute("INSTALL spatial; LOAD spatial;")
-        _make_fsq_export_db(conn)
+        _make_overture_export_db(conn)
         conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
         conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
         conn.close()
@@ -2175,14 +1872,14 @@ class TestStageExportPhase2Body:
         from pathlib import Path
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
 
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
         # Every record's value must have relations == {}
         gz_files = list(Path(tiles_root).rglob("*.json.gz"))
@@ -2226,7 +1923,7 @@ class TestStageExportPhase2Body:
         from pathlib import Path
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
         t0 = time.monotonic()
         fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
@@ -2242,9 +1939,9 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root_a)
         os.makedirs(tiles_root_b)
 
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
                      now=fixed_now)
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root_b, t0,
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_b, t0,
                      now=fixed_now)
 
         def _collect_tile_bytes(root):
@@ -2292,7 +1989,7 @@ class TestStageExportPhase2Body:
         import os, time
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
 
         tiles_root = str(tmp_path / "tiles")
@@ -2309,7 +2006,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         # FAILS RED: NotImplementedError
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
         # After implementation: the incomplete leftover run dir must be deleted
         leftover_run_dir = os.path.join(tiles_root, leftover_ts)
@@ -2329,14 +2026,14 @@ class TestStageExportPhase2Body:
         import os, time
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
         # FAILS RED: NotImplementedError
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
         # After implementation: find run dir via tiles/current symlink
         current = os.path.join(tiles_root, "current")
@@ -2362,14 +2059,14 @@ class TestStageExportPhase2Body:
         import os, time
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
         # FAILS RED: NotImplementedError
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
         current = os.path.join(tiles_root, "current")
         assert os.path.islink(current), "tiles/current must be a symlink after stage_export"
@@ -2397,7 +2094,7 @@ class TestStageExportPhase2Body:
         import os, time
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_fsq_fixtures(tmp_path)
+        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
         containment_dir = self._build_containment_dir(tmp_path)
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
@@ -2413,7 +2110,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         # FAILS RED: NotImplementedError
-        stage_export("foursquare", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
         # After implementation: at most 2 complete run dirs should survive (keep-2)
         complete_dirs = sorted([

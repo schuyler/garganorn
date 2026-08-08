@@ -27,7 +27,6 @@
 
 | Document | Description |
 |----------|-------------|
-| [foursquare.md](foursquare.md) | Foursquare Open Source Places schema and data model |
 | [overture.md](overture.md) | Overture Maps Places schema and data model |
 
 ## Feature Specs
