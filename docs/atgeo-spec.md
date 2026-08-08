@@ -161,6 +161,12 @@ records carry a `bbox` of their extent; Overture place records may add
 `address` entries. `hthree` is declared but not yet produced. Handle the
 union, not the current subset.
 
+`variants` is populated only for `org.atgeo.places.overture.place`, from the
+upstream multilingual and rule-based names. The other two collections always
+carry an empty array — the field is part of the record shape everywhere, but
+no producer fills it for OSM or divisions today. Don't build multilingual
+lookup against a collection that has none.
+
 `attributes` is the source's own vocabulary, passed through rather than
 homogenized: OSM records carry a filtered tag map including the primary
 category tag; Overture place records carry the upstream Overture fields

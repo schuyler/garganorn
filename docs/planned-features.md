@@ -9,6 +9,54 @@ yet. Add new sections here rather than starting another file.
 Each section below is its own proposal with its own status. Nothing in this
 document is scoped for implementation until its section says so.
 
+## OSM name variants
+
+Status: designed, never built. The design below is salvaged from
+`name-variants-design.md`, which was written when the pipeline still had a
+search index and shell-script imports, and has been deleted.
+
+`variants` is populated for Overture places and hardcoded to `[]` for
+everything else. `osm_import.sql` emits an empty list at both the node insert
+and the way insert, and `overture_division_import.sql` does the same. The
+column has always been there; the OSM data behind it never was.
+
+What that costs: OSM carries `name:*` tags for a great many places, and none
+of it reaches a tile. A client searching `org.atgeo.places.osm` for "Köln"
+cannot find a record whose primary name is "Cologne", where the same search
+against Overture would work.
+
+The mapping from OSM tags to variant types, which is the part worth not
+re-deriving:
+
+| tag | type | language |
+|---|---|---|
+| `name:{lang}` | `alternate` | `{lang}` |
+| `alt_name` | `alternate` | — |
+| `int_name` | `alternate` | — |
+| `official_name` | `official` | — |
+| `short_name` | `short` | — |
+| `loc_name` | `colloquial` | — |
+| `old_name` | `historical` | — |
+
+Values are semicolon-delimited and split on `;`, with empty results dropped.
+No filter change is needed upstream: `osmium tags-filter` selects on category
+tags and preserves every tag on a matching element, so the name tags are
+already present in the parquet.
+
+The original implementation sketch should not be followed. It proposed a
+second pass over the parquet, `ALTER TABLE ADD COLUMN`, and an `UPDATE` to
+backfill — which D3 in `design-constraints.md` exists to forbid, since every
+column mutation on a large table is a full rewrite. The Overture path already
+demonstrates the shape to copy: one per-row `list_transform` expression
+computed inside the import CTAS, no unnest, no re-aggregation, no second
+scan.
+
+Open question, and the reason this is a proposal rather than a task: whether
+it is worth building. Overture already supplies multilingual names for places
+that have them, and OSM's `name:*` coverage is thin outside Europe. The
+honest disposition may be "recorded, unlikely to be built." Someone should
+measure the tag coverage in a planet extract before anyone writes SQL.
+
 ## Serve tiles uncompressed; let the transport layer own compression
 
 Status: proposed, not started. No design has been reviewed.

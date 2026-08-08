@@ -179,6 +179,17 @@ their referenced nodes' coordinates (`way_centroids`); both the node and
 way pipelines apply the same category allow-list, keeping only named POIs
 in a fixed set of OSM tag categories.
 
+**Variants**: only `overture_place` produces any. They are computed per row
+inside the same CTAS, by concatenating two `list_transform`s — one over
+`map_entries(names.common)`, whose entries are always typed `alternate` with
+the map key as the language, and one over `names.rules`, whose `variant`
+string maps `common` and `alternate` to `alternate`, `official` to
+`official`, `short` to `short`, and anything unrecognized to `alternate`.
+Entries with a NULL or blank name are filtered out; the result is
+`list_sort`ed. Duplicates between the two sources are deliberately not
+deduplicated. `osm` and `overture_division` emit an empty list literal —
+the column exists, the data was never built (see `planned-features.md`).
+
 ## 6. `stage_tile_assignment` (`garganorn/stages.py`)
 
 **Writes**: `<source>/tile_assignments.parquet`.

@@ -201,9 +201,9 @@ Forces a full re-export. Land P1 and P2 first.
       `explored-and-discarded.md`, a dead provenance comment in
       `test_containment_covering.py`, and a `(spec §4)` citation in
       `pipeline-implementation-decisions.md`, all resolved by deletion (none
-      load-bearing). The `atgeo-appview-sdk-design.md` remainder went with
-      that document's overhaul below; what's left lives in
-      `name-variants-design.md`, tracked as its own item
+      load-bearing). The remaining two documents' `§N` references went with
+      the documents: `atgeo-appview-sdk-design.md` in its overhaul below,
+      `name-variants-design.md` when it was dissolved. None are left
 - [ ] Find every place in the code that references a non-authoritative design
       document and remove the reference
 - [x] Nothing verifies the `file.py:line` citations in `docs/`. `atgeo-spec.md`
@@ -250,13 +250,24 @@ Forces a full re-export. Land P1 and P2 first.
       One substantive change rather than a trim, flagged in the new document
       as unreviewed: the sidecar must serve `getCoverage` rather than a
       manifest, or no ATGeo client could talk to it
-- [ ] `name-variants-design.md` (listed as a live implementation spec in
+- [x] `name-variants-design.md` (listed as a live implementation spec in
       `index.md`) is stale beyond a quick patch: it names both
-      `scripts/import-osm.sh` and `scripts/import-overture-extract.sh` (§3.1,
-      §3.2), both deleted in the P8 dead-script sweep, and still describes the
-      removed `name_index` table (`is_variant`, `norm_name`, trigram columns)
-      and FSQ as a source. Needs a full reconciliation pass, not a rename of
-      the two script references
+      `scripts/import-osm.sh` and `scripts/import-overture-extract.sh`, both
+      deleted in the P8 dead-script sweep, and still describes the removed
+      `name_index` table (`is_variant`, `norm_name`, trigram columns) and FSQ
+      as a source. Dissolved rather than reconciled, because the reconciliation
+      surfaced something bigger: **the OSM half was never implemented.**
+      `osm_import.sql` emits an empty variants list at both the node and way
+      inserts and `overture_division_import.sql` does the same, so only
+      Overture places carry variants — and the document's presence in
+      `index.md` as a live spec had been implying otherwise. Split three ways:
+      the OSM tag-to-variant-type mapping to `planned-features.md` as an
+      unbuilt feature, at the top of that list; what actually ships to
+      `pipeline-artifacts.md` under `stage_import`; and a note to
+      `atgeo-spec.md` that two of the three collections always return an
+      empty array, which no document said. The rest — `name_index`,
+      `process_record`, the whole search-impact section, FSQ, and a migration
+      plan for a pipeline that rebuilds from scratch every run — was deleted
 
 `atgeo-appview-design.md`, `atgeo-client-sdk.md`, and
 `org.atgeo.tiles.service.json` stay, framed as aspirational.

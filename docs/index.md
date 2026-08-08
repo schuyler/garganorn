@@ -36,7 +36,6 @@
 
 | Document | Description |
 |----------|-------------|
-| [name-variants-design.md](name-variants-design.md) | Multilingual and variant name storage/retrieval |
 | [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (planned) |
 | [planned-features.md](planned-features.md) | New feature ideas not yet designed or scoped |
 
