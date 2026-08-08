@@ -1,199 +1,216 @@
-# ATGeo tile format and XRPC reference
+# The ATGeo gazetteer interface
 
-What a client fetching from an ATGeo gazetteer receives: the tile files, the
-record envelope inside them, the place record shape, the containment level
-vocabulary, and the XRPC methods the server answers.
+What a client of an ATGeo gazetteer sends and receives: the tile format, the
+record shapes, and the XRPC methods. If you are writing a client, this
+document plus the lexicon documents the server publishes (`GET /{nsid}`,
+described under [Plain HTTP](#plain-http)) are the contract; you should not
+need to read the server's source.
 
-This document describes the intended format and interface. Almost all of it is
-implemented today, and citations point at the implementing code or the test
-that pins it, so a statement can be checked and will fail visibly when it stops
-being true. Where the code has not caught up — a field still written that is
-going away, a method still served that is being removed — the intent is stated
-here and the gap is recorded under [Divergences from the
-code](#divergences-from-the-code). Nothing is asserted that isn't either
-implemented or decided.
-
-Not covered here, because none of it exists: the streaming AppView, the client
-SDKs, service discovery, and the conformance-vector corpus. Those are designs,
-and they live in `atgeo-appview-sdk-design.md`.
+This document describes the behavior and intent of the interface as it is
+served today. Implementation guidance for spatial AppViews will eventually
+live here too; for now, the gazetteer interface is the whole story.
 
 ---
+
+## The safety principle
+
+The server must never receive information precise enough to locate a person.
+
+Everything unusual about this interface follows from that one rule. There is
+no server-side search, so search terms — which reveal intent — never leave
+the client. There is no record enumeration. The only spatial question a
+client can ask is coarse: which tiles cover this region, at a precision floor
+of roughly a kilometre. A caller can name a region no finer than that, or
+name a record it already knows the key for — neither shape lets a query
+describe a point, so no query can resolve to a device's position.
+
+The threat model and the full reasoning are in
+[tile-privacy-design.md](tile-privacy-design.md). Sections below reference
+this principle rather than re-deriving it.
+
+## How queries work
+
+Two steps, and only two:
+
+1. Call `org.atgeo.getCoverage` with a collection and a bounding box. The
+   server returns a list of tile URLs.
+2. Fetch every URL returned and concatenate the `records` arrays into one
+   result set.
+
+That merged set is the query result. Matching, ranking, and filtering are
+the client's job, performed locally — the server never sees what you were
+looking for. There is no pagination, no server-side ranking, and no
+partial-result protocol.
 
 ## Tiles
 
-A tile is a set of place records whose locations fall inside one quadkey cell,
-stored as a gzipped JSON file.
+A tile is a set of place records whose locations fall inside one quadkey
+cell, stored as a gzipped JSON file.
 
 **Quadkey scheme.** Web-Mercator (Bing) quadkeys over WGS84 longitude and
-latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing southward
-(`covering.py:46`, `:31`). Latitude is clamped to ±85.05112877980659
-(`covering.py:25`). Zoom is the length of the quadkey string.
+latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing
+southward. Latitude is clamped to ±85.05112878. Zoom is the length of the
+quadkey string.
 
-The pipeline derives quadkeys with DuckDB's `ST_QuadKey(lon, lat, 17)` at
-import (`sql/foursquare_import.sql:19`, `sql/osm_import.sql:148`) and decodes
-them in Python with `quadkey_to_bbox` (`stages.py:662-677`). The two agree:
-`test_quadtree_functions.py:83-91` round-trips a point through the DuckDB
-encoder and asserts the Python-decoded bbox contains it. A SQL twin of the
-decoder matching to 1e-9 lives in `sql/qk_env_macro.sql`.
+**Tile URLs are opaque.** A client never constructs one; it receives whole
+URLs from `getCoverage` and fetches them. A tile URL is permanently
+immutable — it never serves two different byte streams. When the gazetteer
+publishes a new data release, the URLs change completely, which costs a
+client nothing because a client always asks `getCoverage` again rather than
+remembering URLs. Old releases are eventually retired, so a hoarded URL will
+in time return 404; that is the penalty for remembering.
 
-**Tile URLs are opaque.** A client never constructs one. It calls
-`getCoverage` for a region, receives a list of URLs, fetches all of them, and
-concatenates the `records` arrays into one result set. The on-disk path scheme
-is a serving detail described under [Serving layout](#serving-layout); nothing
-a client does depends on it, and it can change without breaking a client.
+**Zoom and assignment.** Tiles exist at zooms 6 through 17. Assignment is
+adaptive: a record goes in the coarsest tile holding no more than a
+per-deployment cap of records (1,000 by default), falling back to zoom 17
+when no coarser tile qualifies. Consequences a client must handle: tiles at
+different zooms coexist in one collection, and no fixed zoom may be
+assumed.
 
-Because each record belongs to exactly one tile, concatenation needs no
-deduplication — two tiles returned for the same region, even at different
-zooms, hold disjoint record sets.
+**One record, one tile.** Within a collection, each record belongs to
+exactly one tile, so any two tiles hold disjoint record sets. Concatenation
+therefore needs no deduplication.
 
-The only stability a tile URL owes anyone is consistency within a single
-release of a collection: every URL `getCoverage` hands out for that release
-resolves to that release's bytes. Across releases the URLs may change
-completely, because a client always asks again rather than remembering.
+**Transport.** Tiles are served with `Content-Encoding: gzip` and
+`Content-Type: application/json`, unconditionally. The server does not
+negotiate: gzip is sent regardless of the request's `Accept-Encoding`, so a
+client must be prepared to decompress.
 
-**Compression.** Tiles are gzipped on disk with `mtime=0` so identical input
-produces identical bytes (`stages.py:1648`). The server sends those bytes
-verbatim with `Content-Encoding: gzip` and `Content-Type: application/json`
-(`__main__.py:120-121`, pinned by `test_app.py:255-259`). It does not
-negotiate: gzip is sent regardless of the request's `Accept-Encoding`.
+**Caching.** Because tile URLs are immutable, tiles are served with
+`Cache-Control: public, max-age=604800, immutable` — cache them for a week
+and never revalidate. `getCoverage` responses carry `max-age=3600`, so a
+client learns about a new release within an hour of asking.
 
-**Zoom and assignment.** Tiles exist at any zoom from 6 to 17
-(`stages.py:1319`); the range is fixed and not configurable. Assignment is
-adaptive — a record goes in the coarsest tile holding no more than
-`max_per_tile` records, falling back to zoom 17 when no zoom qualifies
-(`stages.py:1409-1417`). `max_per_tile` defaults to 1000 (`stages.py:1319`,
-`config.yaml.example:40`).
+## The tile payload
 
-A consequence: tiles at different zooms coexist in one collection, and a
-zoom-6 tile and a zoom-9 tile may cover overlapping ground
-(`test_integration_quadtree.py:458-479`). A client must not assume a fixed
-zoom.
-
-**One record, one tile.** Each record belongs to exactly one tile per
-collection. The assignment table has one row per input record
-(`stages.py:1416-1423`), asserted by `test_tile_assignment.py:79`. A record
-reaching two tiles means a duplicate primary key upstream, which the export
-audit detects and reports as an error (`stages.py:1433-1438`).
-
-**Caching.** Tiles are served with `Cache-Control: public, max-age=<ttl>` when
-a TTL is configured, deliberately without `immutable`
-(`__main__.py:122-126`, `test_app.py:281-284`).
-
-That omission is forced by the current URL shape, not by the design. Tiles are
-served through a `current` symlink repointed on each pipeline run
-(`stages.py:1699-1707`), so one URL can return different bytes after a later
-run, and a cache honoring `immutable` would serve stale tiles for the full
-`max_age` window. Since URLs need only be consistent within a release, a
-run-stamped path would make every tile URL permanently immutable instead.
-
----
-
-## Record envelope
-
-A tile payload is one JSON object with these top-level keys, in order
-(`envelope.py:51-60`):
+A tile payload is one JSON object with these top-level keys, in order:
 
 | key | meaning |
 |---|---|
 | `collection` | NSID of the collection carried in this tile |
-| `attribution` | string; producers emit a URL, but the content is unconstrained |
+| `source` | URL of the upstream dataset |
+| `license` | URL of the upstream dataset's license |
 | `generated_at` | RFC 3339 UTC timestamp, `Z`-suffixed, seconds precision |
 | `records` | array of record objects |
 
-There is no envelope version field. Lexicon schemas are upgrade-only, so the
-evolution rule already governing the records inside a tile governs the tile
-too. The code still writes one — see [Divergences from the
-code](#divergences-from-the-code).
+`source` and `license` together are the attribution: a link to where the
+data came from and a link to the terms it came under.
 
-`generated_at` is run-scoped: one timestamp is taken at the start of a pipeline
-run, used to name the run directory, and stamped identically on every tile of
-that run (`stages.py:1553-1555`). `test_stages.py:379-399` asserts every tile
-in a run carries the same value. It is not a per-tile or per-flush time, so
-differences between tiles never indicate relative freshness.
+`generated_at` is release-scoped: every tile of a release carries the
+identical value. It is not a per-tile time, so differences between tiles
+from different releases never indicate relative freshness of the records
+inside.
 
-Each element of `records` has exactly three keys — `uri`, `cid`, `value`
-(`envelope.py:39`, asserted by `test_envelope.py:124` and
-`test_stages.py:218`).
+There is no version field. Lexicon schemas evolve upgrade-only, so the rule
+that governs the records inside a tile governs the tile too. The general
+form of that rule, which applies to every response shape in this document:
+**ignore keys you don't recognize.** New keys may appear anywhere; existing
+keys keep their meaning.
 
-### `uri`
+Each element of `records` has exactly three keys:
 
-`https://{host}/{collection}/{rkey}` — a dereferenceable URL where a GET
-returns the bare record value (`envelope.py:16-25`, `__main__.py:101-108`).
-The `rkey` is the post-transform key, so an OSM record's rkey carries its
-`node:`/`way:`/`relation:` prefix. Characters legal in a URI path segment are
-served raw: the colon is not percent-encoded (`test_envelope.py:87-88`). This
-is the same form `getRecord` returns, so tile URIs and XRPC-resolved URIs agree
-by construction.
+- **`uri`** — `https://{host}/{collection}/{rkey}`, a dereferenceable URL
+  where a GET returns the bare record value. The rkey is served raw:
+  characters legal in a URI path segment, colons included, are not
+  percent-encoded. This is the same form `getRecord` reports, so tile URIs
+  and XRPC-resolved URIs agree by construction.
 
-Gazetteer records never use `at://`. The `at://` scheme addresses ATProto
-repository data, and ATProto has no per-record "signed by a DID" mechanism
-outside MST inclusion in a signed commit. A gazetteer record minting an `at://`
-URI it cannot resolve or verify would be dishonest about what it is. The URI
-scheme is therefore a provenance signal: `https://` means the record is not
-repository-backed and not CID-verifiable.
+  Gazetteer records never use `at://`. That scheme addresses ATProto
+  repository data, and a gazetteer record is not repository-backed: no
+  signed commit includes it, so an `at://` URI would promise a verifiability
+  the record cannot deliver. The URI scheme is a provenance signal —
+  `https://` means "not repository data, not CID-verifiable."
 
-Recorded as considered and out of scope: a pipeline stage could batch-build a
-real MST and signed commit over the gazetteer, earning `at://` honestly. It is
-inadvisable today because shared relay infrastructure assumes account-sized
-repos, and a 100M-record repo rewriting monthly is a crawl-load citizenship
-problem. Revisit if the ecosystem grows bulk-repo conventions.
+- **`cid`** — always the literal `null`, present rather than omitted. It is
+  never computed: there is no signed commit to verify a hash against, so a
+  CID here would be a checksum wearing a costume.
 
-### `cid`
-
-Always the literal `null` for gazetteer records, present rather than omitted
-(`envelope.py:39`, `test_envelope.py:134`). It is never computed by any means.
-
-A real ATProto CID requires canonical DAG-CBOR encoding, which bans floats — a
-constraint gazetteer records only meet by accident, since raw Overture
-`attributes` structs can contain them. Computing a hash nobody can verify
-against a signed commit is a caching nicety, not a security property, and is
-not worth the encoding-audit cost.
-
-### `value`
-
-The record payload, embedded verbatim as the JSON string DuckDB's `to_json()`
-produced. The envelope writer splices it in rather than re-encoding, which
-avoids a per-record parse/serialize round trip and preserves DuckDB's UTF-8
-exactly with no `ensure_ascii` escaping (`envelope.py:31-35`, `:51-61`).
-`test_envelope.py:156-185` asserts round-trip fidelity including non-ASCII.
-
----
+- **`value`** — the place record.
 
 ## Place records
 
-The `value` of a place record as actually emitted (`test_export.py:164-192`):
+The normative schema is the `org.atgeo.place` lexicon; this section is the
+narrative. A place record's `value` carries:
 
 | field | type | notes |
 |---|---|---|
 | `$type` | string | `org.atgeo.place` |
-| `rkey` | string | record key, post-transform |
+| `rkey` | string | record key |
 | `name` | string | primary name |
-| `importance` | integer | 0–100 |
-| `locations` | array | union of `community.lexicon.location.{geo,hthree,address,bbox}` |
+| `importance` | integer | 0–100; see [Importance](#importance) |
+| `locations` | array | union members below |
 | `variants` | array | `{name, type?, language?}` |
-| `attributes` | object | source-specific; divisions carry `{subtype, level}` |
+| `attributes` | object | source-specific; shape differs by collection |
 | `relations` | object | `{within: [...]}` |
 
-`importance` is computed at import as a blend of local density and name rarity
-— `round(60*least(density/norm,1) + 40*least(idf/norm,1))` for places
-(`foursquare_import.sql:45-48`), and a population-weighted variant for
-divisions (`overture_division_import.sql:105-112`). The XRPC layer hoists it
-out of `value` into the response wrapper (`server.py:116`, `:268`).
+Coordinate values inside `locations` are decimal strings with six decimal
+places, not JSON numbers. Parse them.
 
-`relations.within` is a list of `{rkey}` objects naming the containing
-divisions, emitted already sorted by containment level ascending, then by
-boundary id (`sql/compute_containment.sql:58-59`; serving path
-`boundaries.py:49-54`). The level itself is not carried in the relation — it
-is the producer's sort key only, so the ordering is the information a consumer
-gets.
+`locations` is declared as a four-member union:
+`community.lexicon.location.geo`, `.hthree`, `.address`, and `.bbox`. What
+producers currently emit: point records carry a `geo`; division (boundary)
+records carry a `bbox` of their extent; Overture place records may add
+`address` entries. `hthree` is declared but not yet produced. Handle the
+union, not the current subset.
 
----
+`attributes` is the source's own vocabulary, passed through rather than
+homogenized: OSM records carry a filtered tag map including the primary
+category tag; Overture place records carry the upstream Overture fields
+(names, categories, websites, and so on); division records carry `subtype`,
+`country`, `level`, and `population` — the last always present, 0 meaning
+the source recorded none — plus `region` and `wikidata` when present.
+
+`relations.within` lists the divisions containing the record, as `{rkey}`
+objects whose keys are collection-qualified —
+`org.atgeo.places.overture.division:{id}` — ordered broadest first
+(containment level ascending, then by id). The level itself is not carried;
+the ordering is the information.
+
+Three declared fields are not yet produced: `published_at`, `same_as`, and
+`relation.name`. They are declared ahead of the work that will emit them
+(dataset conflation, for the latter two). A client must tolerate their
+absence now and their presence later.
+
+## Importance
+
+`importance` is an integer from 0 to 100 expressing how much a place
+matters relative to other places in the same collection. It blends two
+signals: how busy the place's surroundings are, and how distinctive its
+category is. It is comparable within a collection and meaningless across
+collections.
+
+The reference producer computes it as follows. For place records (Overture
+places and OSM alike):
+
+    importance = round(60 · min(density / 10, 1) + 40 · min(idf / 18, 1))
+
+where `density` is ln(1 + n) for n the count of Overture places in the
+enclosing zoom-15 cell — Overture-derived even when scoring OSM records,
+so both collections share one notion of "busy" — and `idf` is ln(N / n)
+over the source's own corpus of named, categorized places: rare categories
+score high, ubiquitous ones score low.
+
+For division records:
+
+    importance = round(40 · min(ln(1 + population) / 20, 1))
+
+except localities, which add the density term the way places do:
+
+    importance = round(60 · min(density / 10, 1) + 40 · min(ln(1 + population) / 20, 1))
+
+with `density` averaged over the zoom-15 cells intersecting the locality's
+bounding box. A consequence worth knowing: divisions other than localities
+top out at 40.
+
+The normalization constants (10, 18, 20) are producer parameters, not
+protocol. Another producer could choose differently and still be an ATGeo
+gazetteer.
 
 ## Containment levels
 
 Division containment uses this vocabulary rather than any source dataset's
-native admin-level field. Overture's `admin_level` is explicitly excluded: it
-is OSM-inherited and semantically inconsistent across countries.
+native admin-level field. Overture's `admin_level` is deliberately excluded:
+in practice it is 96% NULL and ambiguous even within a single subtype.
 
 | level | subtype |
 |------:|--------------|
@@ -208,176 +225,90 @@ is OSM-inherited and semantically inconsistent across countries.
 | 65 | `neighborhood` |
 | 70 | `microhood` |
 
-Exactly as coded in `LEVEL_VOCAB` (`levels.py:28-39`), with the key set and
-every value asserted by `test_levels.py:79-99`.
+The stride-5 numbering follows the descent locality → borough → macrohood →
+neighborhood → microhood, so a macrohood sorts above its neighborhoods and a
+microhood nests inside its neighborhood. The gaps are deliberate insertion
+room. There is no level 0: continents are never emitted as divisions.
+`borough` is mapped but currently unpopulated — present Overture division
+data contains no borough subtype.
 
-The stride-5 numbering follows the WoF descent locality → borough → macrohood
-→ neighborhood → microhood, so a macrohood sorts above its neighborhoods and a
-microhood nests inside its neighborhood. Gaps are deliberate insertion room.
+A subtype outside this table fails the producer's build before any artifact
+is written, so the guarantee a client gets is simple: no record ever carries
+an out-of-vocabulary level.
 
-`borough` (55) is mapped but unpopulated — current Overture division data
-contains no borough subtype (`test_levels.py:84-87`). There is no level 0;
-continent has no producer entry (`levels.py:24-25`).
+## XRPC interface
 
-**Unmapped subtypes fail the import.** The generated SQL `CASE` has no `ELSE`
-branch (`levels.py:67-73`), so an unmapped subtype yields `NULL`. Two checks
-run after the CTAS and before any artifact is written: an existence check
-listing offending subtypes (`stages.py:874-885`) and a `count(*) WHERE level IS
-NULL = 0` assertion (`stages.py:891-899`). Either raises. `test_levels.py:198-231`
-asserts both fire and that no `places.parquet` is written when they do.
+Two methods, both at `/xrpc/{nsid}`. Every error returns HTTP 400 with a
+body of `{"error": name, "message": text}`. Responses may include keys not
+documented here; per the forward-compatibility rule above, ignore them.
 
-This table was drawn from documented Overture subtypes. It should be confirmed
-against `SELECT DISTINCT subtype` on a current division parquet before being
-trusted, with any extras brought back as an amendment rather than silently
-mapped.
-
----
-
-## XRPC methods
-
-Two methods, both at `/xrpc/<nsid>`. Every error returns HTTP 400 with a body
-of `{"error": <name>, "message": ...}`.
-
-Together they define the whole query surface: ask which tiles cover a region,
-then fetch those tiles. There is no server-side text search and no record
-enumeration. A caller can name a region no finer than roughly a kilometre, or
-name a record it already knows the key for — neither shape lets a query
-describe a point.
-
-### `org.atgeo.getCoverage`
+### org.atgeo.getCoverage
 
 Which tiles cover a bounding box.
 
-Parameters: `collection` (required), `bbox` (required, comma-separated
-`minLon,minLat,maxLon,maxLat`).
+Parameters: `collection` (required, NSID), `bbox` (required, comma-separated
+`minLon,minLat,maxLon,maxLat` in WGS84 decimal degrees).
 
-Returns `{"tiles": [...]}` — a sorted list of fully-formed, opaque tile URLs
-(`quadtree.py:131`). The caller fetches every URL returned and concatenates the
-records; there is no pagination, no ranking, and no partial-result protocol.
-Filtering and ordering are the client's, applied after the merge.
+Returns `{"tiles": [...]}` — a sorted list of fully-formed, opaque tile
+URLs. Fetch them all and merge; filtering and ordering are yours, applied
+after the merge.
+
+A bbox may cross the antimeridian: `minLon > 0 > maxLon` means the box
+wraps across ±180°. Tiles that merely touch the box at an edge or corner
+count as covering it.
 
 Errors, in evaluation order:
 
-- `BboxTooPrecise` — any bbox coordinate carrying more than two decimal places.
-  Checked before parsing (`server.py:200-211`). This is the precision floor,
-  and it is enforced by the server rather than left to client courtesy: a
-  caller cannot ask a question finer than roughly a kilometre, so no query can
-  resolve to a device's position. `test_get_coverage.py:140-214` covers
-  scientific notation, trailing zeros, and bare `37.`.
-- `InvalidBbox` — malformed or out-of-range coordinates.
-- `CollectionNotFound` — unknown collection, or a collection whose tile run is
-  incomplete (`__main__.py:40-49`, `test_app.py:447-455`).
-- `BboxTooLarge` — the box covers more than `max_coverage_tiles` tiles, default
-  50 (`quadtree.py:132-133`, `server.py:45`).
+- `BboxTooPrecise` — any coordinate carrying more than two decimal places.
+  This is the precision floor from [the safety principle](#the-safety-principle):
+  requests snap to a 0.01° grid, about 1.1 km at the equator. The check is
+  textual — `37.770` fails on its trailing zero, and scientific notation is
+  rejected outright. The server rejects rather than truncating, so a client
+  that leaks precision hears about it instead of being silently covered
+  for. Snap your coordinates before sending.
+- `InvalidBbox` — not four comma-separated finite numbers, `minLat ≥
+  maxLat`, or `minLon ≥ maxLon` without the antimeridian signature above.
+- `CollectionNotFound` — the collection is unknown or not currently
+  servable.
+- `BboxTooLarge` — the box covers more tiles than the deployment's budget,
+  50 by default. Ask for a smaller region.
 
-Coverage is answered from `manifest.duckdb`: the server caches every distinct
-`tile_qk` at boot (`quadtree.py:117-124`) and intersects the bbox against each
-tile's bounds. `bboxes_intersect` treats touching edges and corners as
-intersecting and handles bboxes crossing the antimeridian by wrap detection
-(`stages.py:725-752`).
-
-### `com.atproto.repo.getRecord`
+### com.atproto.repo.getRecord
 
 One record by key.
 
-Parameters: `repo`, `collection`, `rkey` (all required).
+Parameters: `repo`, `collection`, `rkey` (all required). `repo` is the
+gazetteer's own hostname. A `cid` parameter is declared for future version
+selection and is not yet honored.
 
-Returns `{"uri", "attribution", "importance"?, "value", "_query"}`. For
-tile-backed collections the record is read out of the tile file itself: the
-rkey is resolved to a tile via `manifest.duckdb`, and that tile is opened and
-scanned (`tile_reader.py:30-56`), with a 256-entry LRU cache on parsed tiles.
-Containment relations are attached as `record["relations"]["within"]`
-(`server.py:88-110`).
+Returns `{"uri", "source", "license", "importance"?, "value"}`. `source`
+and `license` mean what they mean in the tile payload. `importance` appears
+when the record has one, hoisted out of `value` into the response wrapper.
+There is no `cid` key in the response — not even a null one.
 
 Errors: `CollectionNotFound`, `RecordNotFound`.
 
-The same record is available over plain HTTP at `/{collection}/{rkey}`, which
-returns the bare value with no envelope (`__main__.py:101-108`) — this is what
-makes the `uri` in a tile dereferenceable.
+One special case: with `collection=com.atproto.lexicon.schema`, the method
+returns the server's own lexicon documents as `{uri, value}` with an
+`at://` URI and no source, license, or importance. Fetching `GET /{nsid}`
+(below) is the simpler way to get the same documents.
 
-Lexicon documents are served at `GET /<nsid>` (`__main__.py:76-81`), outside
-the XRPC surface.
+### Plain HTTP
 
----
+- `GET /{collection}/{rkey}` returns the bare record value, no envelope.
+  This is what makes the `uri` in every tile record dereferenceable.
+- `GET /{nsid}` returns the lexicon document for that NSID.
+- `GET /.well-known/did.json` identifies the server as a `did:web`.
 
-## Divergences from the code
+## Collections
 
-The code has not caught up to three decisions. Each is decided, not open.
+The producer currently builds three collections:
 
-**`org.atgeo.searchRecords` is being removed.** It is currently registered
-(`server.py:39`) and implemented (`server.py:232-284`), taking raw
-`latitude`/`longitude` at arbitrary precision and explicitly exempt from the
-`BboxTooPrecise` check (`test_get_coverage.py:220-226`). While it is served,
-the precision floor described above holds on `getCoverage` and not on
-`searchRecords`. Removal takes the route, the method, its tests
-(`test_server.py:100-209`), and `lexicon/searchRecords.json`.
+| collection | source | license |
+|---|---|---|
+| `org.atgeo.places.overture.place` | [Overture Maps](https://overturemaps.org/) places | [Overture attribution](https://docs.overturemaps.org/attribution/) |
+| `org.atgeo.places.osm` | [OpenStreetMap](https://www.openstreetmap.org/) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |
+| `org.atgeo.places.overture.division` | [Overture Maps](https://overturemaps.org/) divisions | [Overture attribution](https://docs.overturemaps.org/attribution/) |
 
-**`com.atproto.repo.listRecords` is being removed.** It currently serves only
-`com.atproto.lexicon.schema`, enumerating the server's own lexicon documents,
-and raises `CollectionNotFound` for everything else (`server.py:130-134`).
-Lexicon documents remain reachable at `GET /<nsid>`, so removal costs no
-capability. It takes the route, the method, and `lexicon/listRecords.json`.
-
-**The `atgeo` version key is being removed.** `envelope.py:13` defines
-`ATGEO_VERSION = 1` and writes it into every tile payload (`:52`), into
-`manifest.json` (`:74`), and into the `manifest.duckdb` metadata table
-(`stages.py:632-633`). It originated in `atgeo-appview-sdk-design.md` §1.2 as a
-proposed addition to the pipeline format. Removal touches those four write
-sites and roughly eight test assertions (`test_envelope.py:57, 216, 227, 307,
-319-325, 335`; `test_stages.py:202, 277-284`) which currently assert the
-five-key set. Nothing reads it.
-
----
-
-## Open inconsistencies
-
-Unlike the above, these are not decided.
-
-**Emitted records do not validate against `place.json`, and nothing checks
-that they do.** There is no lexicon-conformance harness in `tests/`; the shape
-tests hardcode expected keys independently of the lexicon file. They already
-disagree in both directions. Emitted but undeclared: `importance`, `$type`,
-`collection`. Declared but never produced: `same_as`, `published_at`,
-`relation.name`, and the entire `#ref` def.
-
-**`org.atgeo.place#ref` is unreferenced.** No code in `garganorn/` uses it. It
-is the mechanism the SDK design's check-in write path depends on, so it is
-declared ahead of a consumer that does not exist yet.
-
-**`getRecord.json:27-31` declares a `cid` parameter the method does not
-accept.** lexrpc passes unknown query parameters through as keyword arguments,
-so a request carrying `?cid=` reaches a method that has no such argument.
-
-**`config.yaml.example:9` sets `tiles.max_per_tile`, which nothing reads.**
-Only the `pipeline:` section is loaded (`quadtree.py:141-145`); the effective
-key is `pipeline.max_per_tile` at `config.yaml.example:40`.
-
-**Antimeridian handling is implemented but untested.** The wrap branches in
-`bboxes_intersect` (`stages.py:725-752`) and the two-lobe split in
-`bbox_to_quadkeys` (`covering.py:68-78`) have no test coverage.
-
----
-
-## Serving layout
-
-Informative — how a deployment is arranged, not a contract a client depends on.
-
-Within a run directory, a tile file is at `{qk[:6]}/{qk}.json.gz`
-(`stages.py:1646-1650`) — the first six quadkey characters are a directory, the
-full quadkey names the file. Quadkeys shorter than six characters do not occur,
-since assignment starts at zoom 6. Clients never see this structure; they get
-whole URLs from `getCoverage`.
-
-Each collection's tiles live under `{output_dir}/{source}/tiles/`, with one
-directory per pipeline run named for its UTC timestamp, and a `current`
-symlink pointing at the newest complete run (`quadtree.py:34`,
-`stages.py:1554-1557`, `:1699-1707`). A collection's configured `base_url`
-resolves inside that symlink and must end with the collection's slug, which
-`create_app` enforces at startup (`__main__.py:32-35`).
-
-`manifest.json` is written last in a run and serves as its completeness
-marker: the server refuses to serve a collection whose run lacks one
-(`__main__.py:40-49`), the next run deletes run directories without one
-(`stages.py:1530-1545`), and the freshness gate keys on its mtime
-(`stages.py:1517-1528`). Its contents are not read by anything. Two complete
-runs are retained (`stages.py:1709-1719`).
+A deployment may serve any subset. Ask `getCoverage`; a collection it
+doesn't recognize is a collection the deployment doesn't serve.
