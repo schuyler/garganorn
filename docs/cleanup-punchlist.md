@@ -62,9 +62,24 @@ Land before P6's rebuild, or the rebuild will not take effect.
       whether `garganorn_source_wof` is referenced before removing it
 - [ ] `config.yaml.j2` updated for P1's versioned `base_url` and P6's
       attribution keys
+- [ ] Nothing in the role populates the source cache. `tiles.yml` assumes
+      Overture and OSM parquet are already present, so a build against an
+      empty or partial cache produces empty collections. Either make
+      `download-overture.sh` a role task or make it a prerequisite the role
+      checks. Pairs with the glob preflight in P8
+- [ ] `{{ garganorn_home }}/data` is created only as a side effect of the
+      temp-directory task in `tiles.yml`, so `--tags app,service` alone leaves
+      it missing. Make it an explicit task
+- [ ] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
+      pinning the operator's terminal for the duration and losing the run on a
+      dropped connection. This is why the role keeps getting routed around by
+      ad-hoc scripts. Use `poll: 0` with a separate status-check play, or drive
+      Ansible from the box
 
 **Accept:** a `--tags tiles` run leaves the service restarted, and
-`getCoverage` reflects the new run with no manual step.
+`getCoverage` reflects the new run with no manual step. Provisioning a fresh
+host and running `--tags tiles` produces a populated tileset with no manual
+step at all.
 
 ## P3 — Lexicon conformance
 
