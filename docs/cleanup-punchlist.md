@@ -28,7 +28,7 @@ No re-export needed; the run directories already exist on disk. Land before P6.
       `data/{source}/tiles/{stamp}/`, in `config.yaml.example` and the README.
       The spec's serving-layout section needs no edit — it writes the path as
       `{output_dir}`
-- [ ] Move `{garganorn_home}/tiles` to `{garganorn_home}/data` on the server
+- [x] Move `{garganorn_home}/tiles` to `{garganorn_home}/data` on the server
       and rebase the Ansible role defaults and template onto `data/`. The
       top-level `boundaries:` key is unaffected by this move — it points at
       `db/wof-boundaries.duckdb`, outside the tiles tree
@@ -41,17 +41,17 @@ returns 404.
 
 Land before P6's rebuild, or the rebuild will not take effect.
 
-- [ ] Tile build task notifies `restart garganorn`
-- [ ] Ansible handlers are not tag-filtered; they fire whenever notified,
+- [x] Tile build task notifies `restart garganorn`
+- [x] Ansible handlers are not tag-filtered; they fire whenever notified,
       independent of `--tags`. No `tags: always` needed — the actual gap is
       the previous bullet, the tile pipeline task's missing
       `notify: restart garganorn`
-- [ ] Replace the "has never been timed on the box" comment on the `async`
+- [x] Replace the "has never been timed on the box" comment on the `async`
       kill-ceiling in `defaults/main.yml` (currently 43200) with the measured
       ~90 minutes. The value is a kill-ceiling, not a build cadence, and must
       not be lowered — doing so would kill planet-scale builds. There is no
       such value in `host_vars/garganorn-1.yml`
-- [ ] Reconcile `garganorn_bbox` and `garganorn_tile_bbox`. They are separate
+- [x] Reconcile `garganorn_bbox` and `garganorn_tile_bbox`. They are separate
       variables with different defaults — `garganorn_bbox` (empty default)
       drives the import stage in `import.yml`; `garganorn_tile_bbox` (CONUS
       default in `defaults/main.yml`) drives the pipeline `bbox` in
@@ -60,14 +60,14 @@ Land before P6's rebuild, or the rebuild will not take effect.
       the tile variable default to the import one
 - [ ] Remove the Foursquare find/assert block and `garganorn_source_fsq`; check
       whether `garganorn_source_wof` is referenced before removing it
-- [ ] `config.yaml.j2` updated for P1's versioned `base_url` and P6's
+- [x] `config.yaml.j2` updated for P1's versioned `base_url` and P6's
       attribution keys
-- [ ] Nothing in the role populates the source cache. `tiles.yml` assumes
+- [x] Nothing in the role populates the source cache. `tiles.yml` assumes
       Overture and OSM parquet are already present, so a build against an
       empty or partial cache produces empty collections. Either make
       `download-overture.sh` a role task or make it a prerequisite the role
       checks. Pairs with the glob preflight in P8
-- [ ] `{{ garganorn_home }}/data` is created only as a side effect of the
+- [x] `{{ garganorn_home }}/data` is created only as a side effect of the
       temp-directory task in `tiles.yml`, so `--tags app,service` alone leaves
       it missing. Make it an explicit task
 - [ ] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
