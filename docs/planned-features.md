@@ -15,9 +15,8 @@ Status: proposed, not started. No design has been reviewed.
 
 Tiles are stored gzipped on disk (`.json.gz`) and served that way today:
 `garganorn/__main__.py`'s `/tiles/<slug>/<path:tile_path>` route
-unconditionally sets `Content-Encoding: gzip` on the response
-(`__main__.py:112-125`), regardless of what the client's `Accept-Encoding`
-says. Caddy currently decompresses this in transit for every request
+unconditionally sets `Content-Encoding: gzip` on the response, regardless of
+what the client's `Accept-Encoding` says. Caddy currently decompresses this in transit for every request
 (see `knowledge/server_infrastructure.md`'s tile-serving note) — the
 backend always emits gzip, and the reverse proxy always undoes it.
 

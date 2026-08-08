@@ -126,10 +126,10 @@ stays undocumented.
 - [x] Delete the trigram, Jaro-Winkler, `_strip_accents`, and `name_index`
       machinery from `database.py` and from the import SQL
 - [x] Delete the serving half of `database.py` — `nearest()`,
-      `process_record`, `Database.get_record` — keeping what `stages.py:31` and
-      `quadtree.py:9` import
+      `process_record`, `Database.get_record` — keeping what `stages.py` and
+      `quadtree.py` import
 - [x] Delete `garganorn/boundaries.py` and the serving-time relations
-      computation at `server.py:88-110`, which overwrites the tile's
+      computation at `server.py`, which overwrites the tile's
       precomputed `relations.within`
 - [x] Remove `databases:` from config, `DATABASE_TYPES` from `config.py`, and
       `self.db` from `Server`
@@ -164,7 +164,7 @@ Forces a full re-export. Land P1 and P2 first.
 ## P7 — Documentation
 
 - [ ] Schuyler reviews `atgeo-spec.md` intensively, including re-deriving the
-      `importance` formula now that its citation (`foursquare_import.sql:45-48`)
+      `importance` formula now that its citation (`foursquare_import.sql`)
       is dead. No piecemeal edits to it until he has
 - [ ] State the user-safety principle once, prominently, and reference it
       rather than re-deriving it at each error condition. Blocked on the spec
@@ -267,7 +267,7 @@ as aspirational.
       content carried the live P6 envelope and populated
       `relations.within`. 100/100 sampled `getCoverage` URLs resolved 200.
       No findings
-- [x] Remove the compatibility shim at `tile_reader.py:41-49` — its stated
+- [x] Remove the compatibility shim at `tile_reader.py` — its stated
       removal condition (first re-export after the envelope deploy) is met
 - [x] Remove the dead `tiles.max_per_tile` config key
 - [x] Remove `print()` calls from production paths (already zero; nothing to
