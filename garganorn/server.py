@@ -121,7 +121,7 @@ class Server:
 
         Enforces the 0.01° grid required by the tile-based privacy model: clients must
         snap bounding boxes to coarse grid boundaries so the server cannot infer precise
-        user location from getCoverage requests. See docs/tile-privacy-design.md.
+        user location from getCoverage requests.
 
         Precision is checked by string inspection, not float comparison, so
         '37.770' (3 chars after '.') and '1e2' (scientific notation) are both rejected.

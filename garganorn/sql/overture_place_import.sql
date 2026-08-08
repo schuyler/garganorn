@@ -9,7 +9,7 @@ ${density_cte}
 ${idf_cte}
 
 -- Import Overture places and compute importance + variants in one pass (Phase 2: density+IDF+importance+variants unified in import CTAS)
--- D6 (docs/design-constraints.md): ov_base is scanned exactly
+-- ov_base is scanned exactly
 -- once beyond its own definition (the final SELECT below). Density/idf are
 -- joined directly against pre-deduplicated lookup tables instead of via a
 -- helper CTE that re-scans ov_base, and variants is computed per-row with

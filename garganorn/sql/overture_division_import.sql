@@ -12,8 +12,7 @@
 -- (not repeated literally in this comment because substitution is plain
 -- string replacement and would corrupt the comment text). It is rendered by
 -- stage_division_import() in stages.py from garganorn.levels.LEVEL_VOCAB,
--- the single source of truth (pipeline-implementation-decisions.md
--- "OQ-P2-2 — containment level vocabulary"). Overture's raw
+-- the single source of truth. Overture's raw
 -- admin_level is 96% NULL and ambiguous within a subtype, so it is not
 -- carried into places.
 --
@@ -64,8 +63,7 @@ division_base AS (
         -- atgeo containment level, derived from subtype alone (no ELSE branch:
         -- an unmapped subtype must produce NULL here so the fail-loud validator
         -- and the post-CTAS NULL-level assertion in stage_division_import()
-        -- catch it; pipeline-implementation-decisions.md
-        -- "OQ-P2-2 — containment level vocabulary").
+        -- catch it).
         ${level_case} AS level,
         d.wikidata,
         greatest(coalesce(d.population, 0), 0) AS population,

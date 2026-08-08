@@ -11,6 +11,7 @@
 
 | Document | Description |
 |----------|-------------|
+| [pipeline-artifacts.md](pipeline-artifacts.md) | What each pipeline stage writes: artifact format, schema, sort order, and why |
 | [design-constraints.md](design-constraints.md) | DuckDB behaviors, pipeline invariants, tradeoffs, normalization constants |
 | [pipeline-implementation-decisions.md](pipeline-implementation-decisions.md) | Condensed design decisions behind the shipped pipeline (covering/containment, artifact restructure, envelope, level vocabulary, serving-path) |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
@@ -36,6 +37,7 @@
 |----------|-------------|
 | [name-variants-design.md](name-variants-design.md) | Multilingual and variant name storage/retrieval |
 | [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (planned) |
+| [planned-features.md](planned-features.md) | New feature ideas not yet designed or scoped |
 
 ## Reference Queries
 

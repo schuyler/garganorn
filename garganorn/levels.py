@@ -1,26 +1,21 @@
-"""The atgeo containment level vocabulary (pipeline-implementation-decisions.md
-"OQ-P2-2 — containment level vocabulary").
+"""The atgeo containment level vocabulary.
 
 LEVEL_VOCAB is the single source of truth mapping Overture division `subtype`
 to the atgeo containment `level` integer. It is keyed on subtype alone —
 Overture's raw `admin_level` is 96% NULL and ambiguous within a subtype, so
-it is never used as an input to this mapping (pipeline-implementation-decisions.md
-"OQ-P2-2 — containment level vocabulary").
+it is never used as an input to this mapping.
 
 Two consumers derive from this dict so SQL and Python cannot drift:
   - garganorn/stages.py renders a `${level_case}` CASE expression (with NO
-    ELSE branch, belt-and-braces per the level-vocabulary decision above)
-    into overture_division_import.sql from LEVEL_VOCAB.
+    ELSE branch, belt-and-braces: an unmapped subtype must produce NULL
+    rather than silently default) into overture_division_import.sql from
+    LEVEL_VOCAB.
   - garganorn/stages.py's fail-loud validator in stage_division_import()
     checks every division subtype against LEVEL_VOCAB's keys and raises
     RuntimeError listing any unmapped subtypes.
 
-Values follow a uniform stride-5 (per the level-vocabulary decision above):
-borough=55, macrohood=60, neighborhood=65, microhood=70. This is a protocol
-change from the narrower table in atgeo-spec.md's "Containment levels"
-section (which only defined levels through neighborhood=60) — macrohood
-and microhood are additions, and
-neighborhood moves from 60 to 65.
+Values follow a uniform stride-5: borough=55, macrohood=60, neighborhood=65,
+microhood=70.
 
 Level 0 (continent) has no producer entry: continents are never emitted as
 division rows, so they never appear as a LEVEL_VOCAB key.
@@ -44,8 +39,7 @@ def level_case_sql(subtype_expr: str = "d.subtype", alias: str | None = None) ->
     """Render the LEVEL_VOCAB CASE expression for SQL, with NO ELSE branch.
 
     Single-source rendering of the CASE used to compute the atgeo containment
-    `level` from a division `subtype` column (pipeline-implementation-decisions.md
-    "OQ-P2-2 — containment level vocabulary"). The
+    `level` from a division `subtype` column. The
     absence of an ELSE branch is intentional: an unmapped subtype must
     produce NULL so the fail-loud validator and the post-CTAS NULL-level
     assertion in stage_division_import() catch it, rather than silently

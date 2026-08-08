@@ -295,8 +295,7 @@ def compute_containment(
 ) -> None:
     """Write <src>/containment/ with per-prefix parquet files and _meta.json (Phase 2).
 
-    Implements the containment-artifact design (see
-    docs/pipeline-implementation-decisions.md, "Phase 2"):
+    Sequence:
     - Reads places and tile_assignments from parquet artifacts.
     - Builds per-qk4-prefix containment parquet files under containment_dir.
     - Uses dir-swap atomicity (covering.py pattern): builds under .tmp/, writes
@@ -562,8 +561,7 @@ def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> 
         # records are (rkey, record_json) pairs; record_json is a DuckDB
         # to_json()::VARCHAR string — already valid JSON. wrap_record composes
         # the {uri, cid, value} envelope via string concatenation, avoiding a
-        # per-record json.loads/json.dumps round trip (pipeline-implementation-
-        # decisions.md "OQ-P2-1 — record envelope adoption").
+        # per-record json.loads/json.dumps round trip.
         wrapped = [
             envelope.wrap_record(
                 envelope.record_uri(REPO, source_cls.collection, rkey), record_json
@@ -638,8 +636,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         output_dir: Directory where manifest.duckdb will be written.
         source: Source key (overture_place, osm, overture_division).
         generated_at: RFC 3339 Z run-scoped timestamp shared with the tiles and
-            manifest.json (pipeline-implementation-decisions.md
-            "OQ-P2-1 — record envelope adoption"). Defaults to the current time if omitted
+            manifest.json. Defaults to the current time if omitted
             (legacy/test callers that don't thread a run timestamp).
         temp_directory: DuckDB temp_directory for spill (optional). Callers
             reached via stage_export should pass its own temp_directory so
@@ -693,12 +690,10 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
 
 
 def write_manifest(output_dir, *, generated_at):
-    """Write manifest.json as the run's completeness marker
-    (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope adoption").
+    """Write manifest.json as the run's completeness marker.
 
     generated_at is required-keyword: callers must supply the single
-    run-scoped timestamp shared with every tile and manifest.duckdb (per the
-    envelope decision above).
+    run-scoped timestamp shared with every tile and manifest.duckdb.
     """
     data = {"generated_at": generated_at}
     manifest_path = os.path.join(output_dir, "manifest.json")
@@ -863,11 +858,9 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         )
 
     # Render the subtype -> level CASE from garganorn.levels.LEVEL_VOCAB (the
-    # single source of truth, pipeline-implementation-decisions.md
-    # "OQ-P2-2 — containment level vocabulary") so SQL and Python can't
-    # drift. NO ELSE branch: an unmapped subtype must yield NULL
-    # (belt-and-braces, per the level-vocabulary decision above), caught by
-    # the fail-loud validator below.
+    # single source of truth) so SQL and Python can't drift. NO ELSE branch:
+    # an unmapped subtype must yield NULL (belt-and-braces), caught by the
+    # fail-loud validator below.
     level_case = level_case_sql()
 
     # Read and transform import SQL for Phase 2:
@@ -915,11 +908,10 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         log.info("[overture_division] import: %d rows loaded (%.1fs)",
                  count, time.monotonic() - t0)
 
-        # Fail-loud enforcement (pipeline-implementation-decisions.md
-        # "OQ-P2-2 — containment level vocabulary"): every division subtype
-        # must be a known LEVEL_VOCAB key. Runs after the CTAS and before any
-        # artifact write (before the COPY and the boundaries.duckdb ATTACH) so
-        # a bad release never produces partial output. Never default or guess.
+        # Fail-loud enforcement: every division subtype must be a known
+        # LEVEL_VOCAB key. Runs after the CTAS and before any artifact write
+        # (before the COPY and the boundaries.duckdb ATTACH) so a bad release
+        # never produces partial output. Never default or guess.
         placeholders = ",".join("?" * len(LEVEL_VOCAB))
         unmapped = con.execute(f"""
             SELECT DISTINCT subtype FROM division_all
@@ -928,13 +920,12 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         if unmapped:
             raise RuntimeError(
                 f"overture_division import: unmapped division subtype(s) "
-                f"{sorted(s for (s,) in unmapped)}; the atgeo level vocabulary "
-                f"(see atgeo-spec.md, \"Containment levels\") must be amended before import. "
+                f"{sorted(s for (s,) in unmapped)}; garganorn.levels.LEVEL_VOCAB "
+                f"must be amended before import. "
                 f"Never default or guess."
             )
 
-        # Belt-and-braces (per the level-vocabulary decision above): the
-        # ${level_case} CASE has no ELSE branch, so
+        # Belt-and-braces: the ${level_case} CASE has no ELSE branch, so
         # an unmapped subtype would already have raised above; this assertion
         # confirms level is total regardless.
         null_level_count = con.execute(
@@ -965,8 +956,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
         try:
             # Filter threshold expressed via LEVEL_VOCAB['locality'] so it can't
-            # drift from the vocabulary (pipeline-implementation-decisions.md
-            # "OQ-P2-2 — containment level vocabulary"): country (10)
+            # drift from the vocabulary: country (10)
             # through locality (50) inclusive; hoods (>= 55) excluded.
             assert LEVEL_VOCAB['locality'] == 50
             con.execute(f"""
@@ -1217,8 +1207,8 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     and reused in importance computation across all place sources.
 
     Phase 2: Uses tmp+rename + finalize_artifact for atomicity; freshness
-    gate uses artifact_fresh() (meta-aware). Output sorted by tile_qk15
-    (see design-constraints.md D2).
+    gate uses artifact_fresh() (meta-aware). Output sorted by tile_qk15 so
+    zone-map pruning works on tile-prefix filters downstream.
 
     Phase 4: Tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax) are
     computed in SQL using the qk_env() macro (garganorn/sql/qk_env_macro.sql),
@@ -1552,9 +1542,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
             Applied unconditionally, since SET temp_directory is always
             issued for this stage.
         force: If True, bypass freshness gate. Default False.
-        now: Optional aware UTC datetime for deterministic-timestamp injection
-            (pipeline-implementation-decisions.md "OQ-P2-1 — record envelope
-            adoption"). When provided, it names the run dir AND derives the
+        now: Optional aware UTC datetime for deterministic-timestamp injection.
+            When provided, it names the run dir AND derives the
             shared generated_at RFC 3339 Z string stamped into every tile,
             manifest.json, and manifest.duckdb metadata. Defaults to
             datetime.now(timezone.utc) when omitted.
@@ -1593,10 +1582,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                     log.info("[%s] export: removed incomplete run dir %s", source, entry)
 
     # Step 3: Create new timestamped run dir
-    # One timestamp, threaded to both the run-dir name and generated_at
-    # (per the envelope decision above) — fixes the double-now() drift where
-    # the run dir and
-    # manifest generated_at could straddle a clock tick under the old code.
+    # One timestamp, threaded to both the run-dir name and generated_at,
+    # so the run dir and manifest generated_at can never straddle a clock tick.
     os.makedirs(tiles_root, exist_ok=True)
     run_now = now if now is not None else datetime.now(timezone.utc)
     timestamp = run_now.strftime("%Y%m%dT%H%M%S")
@@ -1678,8 +1665,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
 
             records are (rkey, record_json) pairs; record_json is a DuckDB
             to_json()::VARCHAR string. wrap_record composes the {uri, cid,
-            value} envelope via string concatenation (per the envelope decision
-            above) — no per-record
+            value} envelope via string concatenation — no per-record
             json.loads/json.dumps round trip.
             """
             wrapped = [

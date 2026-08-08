@@ -1,10 +1,8 @@
-"""The atgeo v1 tile/record envelope (pipeline-implementation-decisions.md
-"OQ-P2-1 — record envelope adoption").
+"""The atgeo v1 tile/record envelope.
 
 Shared by the pipeline export path (garganorn.stages) and the legacy
 export_tiles() module function, so there is exactly one implementation of
-the envelope shape (pipeline-implementation-decisions.md
-"OQ-P2-1 — record envelope adoption").
+the envelope shape.
 
 Imports nothing from garganorn — no import cycle with server.py or stages.py.
 """
@@ -12,8 +10,7 @@ import json
 
 
 def record_uri(repo: str, collection: str, rkey: str) -> str:
-    """Build the canonical dereferenceable record URI (pipeline-implementation-decisions.md
-    "OQ-P2-1 — record envelope adoption").
+    """Build the canonical dereferenceable record URI.
 
     https://{repo}/{collection}/{rkey} -- not at://; gazetteer records are not
     repository data. rkey is the record's rkey *after* source transforms (for
@@ -26,20 +23,20 @@ def record_uri(repo: str, collection: str, rkey: str) -> str:
 def wrap_record(uri: str, record_json: str) -> str:
     """Wrap a record's flat JSON string into the {uri, cid, value} envelope.
 
-    String composition, not json.loads + json.dumps (per the envelope decisions above): record_json is
+    String composition, not json.loads + json.dumps: record_json is
     already valid JSON text (from DuckDB's to_json()), so it is embedded
     verbatim rather than being parsed and reserialized. This avoids a
     per-record round trip and preserves DuckDB's UTF-8 output exactly
     (no ensure_ascii escaping).
 
-    cid is literally null -- never computed (per the envelope decisions above, APPROVED).
+    cid is literally null -- never computed.
     """
     return '{"uri":%s,"cid":null,"value":%s}' % (json.dumps(uri), record_json)
 
 
 def build_tile_payload(collection: str, source_url: str, license_url: str,
                         generated_at: str, wrapped_records: list) -> bytes:
-    """Build the top-level tile payload (per the envelope decisions above).
+    """Build the top-level tile payload.
 
     Top-level keys are exactly {collection, source, license, generated_at,
     records}. wrapped_records is a list of already-wrap_record()-wrapped JSON
