@@ -119,11 +119,19 @@ Each element of `records` has exactly three keys:
   repository data, and a gazetteer record is not repository-backed: no
   signed commit includes it, so an `at://` URI would promise a verifiability
   the record cannot deliver. The URI scheme is a provenance signal —
-  `https://` means "not repository data, not CID-verifiable."
+  `https://` means "not repository data, not commit-verifiable."
 
-- **`cid`** — always the literal `null`, present rather than omitted. It is
-  never computed: there is no signed commit to verify a hash against, so a
-  CID here would be a checksum wearing a costume.
+- **`cid`** — currently always the literal `null`, present rather than
+  omitted. The reason is cost, not principle. A CID is a content hash and
+  carries no claim of repository membership, so a gazetteer could compute one
+  honestly. What it could not do is make that hash mean what a CID means in a
+  PDS response, where it resolves through a signed commit and so attests
+  authorship. Here it would attest only that the bytes match a hash served
+  alongside them — enough to tell whether a record changed between releases,
+  worth nothing against a hostile server. That is a real use with no consumer
+  yet, set against canonically re-encoding every record on every build, so
+  the field stays null for now. Read `null` as "no hash available," not as a
+  permanent property of gazetteer records.
 
 - **`value`** — the place record.
 

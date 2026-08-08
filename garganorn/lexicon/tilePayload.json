@@ -16,7 +16,7 @@
                 "cid": {
                     "type": "string",
                     "format": "cid",
-                    "description": "Always null; tile records have no computed CID."
+                    "description": "The record's content hash, or null when the producer computes none. Gazetteer records are always null."
                 },
                 "value": {
                     "type": "unknown",

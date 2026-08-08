@@ -213,10 +213,11 @@ Uniformity is in processing, not provenance. A client that wants to know
 whether a record is repository-backed can tell from the URI scheme, which is a
 signal it deserves rather than a leak to smooth over.
 
-One conflict to resolve before this ships: `org.atgeo.tilePayload` types `cid`
-as nullable but describes it as "always null; tile records have no computed
-CID." That is true of the gazetteer and false of an AppView. The type is
-already right; only the description needs widening.
+`org.atgeo.tilePayload` accommodates this: `cid` is typed nullable and
+described as the record's content hash, or null when the producer computes
+none. The gazetteer computes none today for reasons of cost rather than
+principle — `atgeo-spec.md` has the argument — so a sidecar emitting genuine
+commit-verified CIDs needs no schema change.
 
 ## Rebuild and backfill
 
