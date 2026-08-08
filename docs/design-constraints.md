@@ -210,6 +210,15 @@ production, so no valid baseline existed to compare against).
 
 ---
 
+## Licensing Posture
+
+The OSM tileset is an ODbL Derivative Database: it is served under ODbL with
+attribution, which the tile envelope's `source` and `license` links provide.
+The density artifact is a Produced Work, not a database extraction, so
+blending Overture-derived density scores into OSM importance does not make
+the OSM tileset a derivative of Overture data. This is why per-source score
+derivation is unnecessary.
+
 ## Normalization Constants
 
 | Constant | Default | Used by |

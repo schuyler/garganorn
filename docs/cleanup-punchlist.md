@@ -176,10 +176,10 @@ Forces a full re-export. Land P1 and P2 first.
 - [x] Promote `tile-privacy-design.md` out of "Feature Specs" in `index.md`
 - [ ] `getCoverage.json`'s description carries the reason there is no `q`
       parameter
-- [ ] Record the licensing posture in the repo: the OSM tileset is an ODbL
-      Derivative Database, the density artifact is a Produced Work, and
-      attribution is a source link plus a license link. Currently written down
-      nowhere in the repo
+- [x] Record the licensing posture in the repo — folded into
+      `design-constraints.md` ("Licensing Posture") rather than a standalone
+      doc; the attribution mechanism itself is already stated in
+      `atgeo-spec.md`
 - [x] Delete `pipeline-restructure-design.md`
 - [ ] Write reference material for the pipeline artifacts — what each stage
       writes, the schemas, the sort orders — from the code rather than from
