@@ -106,9 +106,10 @@ step at all.
       `tests/test_envelope.py`
 
 `published_at` stays declared though nothing produces it — a deliberate
-exception, not an oversight. `same_as` and `relation.name` stay declared for
-the same reason: future work on identifying conflations between datasets,
-with room to expand to other place relationships. `getRecord.json`'s `cid`
+exception, not an oversight. `same_as` stays declared for the same reason:
+future work on identifying conflations between datasets, with room to expand
+to other place relationships. `relation.name` no longer belongs in that list
+— clients need division names inline, and producing it is scoped in P10. `getRecord.json`'s `cid`
 parameter and output field also stay declared but unimplemented: a CID is a
 pure content hash, so version selection by `cid` is buildable later (at
 minimum across the two tile runs retention already keeps) without needing
@@ -229,9 +230,14 @@ Forces a full re-export. Land P1 and P2 first.
       patch (envelope/manifest reconciliation — no `atgeo` version field or
       version-rejection rule, `source`/`license` in place of `attribution`,
       a `generated_at`-only manifest not served over HTTP, stamped tile
-      URLs — was the original narrower scope). Blocked on Schuyler, same as
-      the `atgeo-spec.md` review above: no piecemeal edits until he's
-      scoped the overhaul
+      URLs — was the original narrower scope). **Partly done**: Schuyler
+      scoped the SDK half, and it is extracted to `atgeo-client-sdk.md` — a
+      two-method surface (`searchPlaces`, `getPlace`), one collection per
+      call, SDK-side coordinate snapping, region-less search deferred to
+      summary tiles. §3 of the old doc now carries a superseded pointer.
+      What remains blocked is the AppView half: §1's protocol restatement
+      (which duplicates and contradicts `atgeo-spec.md`, now the only
+      normative wire document) and §2's sidecar design
 - [ ] `name-variants-design.md` (listed as a live implementation spec in
       `index.md`) is stale beyond a quick patch: it names both
       `scripts/import-osm.sh` and `scripts/import-overture-extract.sh` (§3.1,
@@ -360,12 +366,76 @@ as aspirational.
       one of three honest outcomes (launched / already running / status
       unknown) instead of always claiming success
 
+## P10 — Divisions: tile assignment and containment names
+
+Both items exist because a client asking "where am I" gets an answer it
+cannot use. They are coupled: containment names fix the common case, correct
+tile assignment fixes the collection. Forces a re-export.
+
+- [ ] **Divisions are assigned to tiles by bounding-box midpoint.**
+      `sql/overture_division_import.sql:74-78` comments "qk17 placed at the
+      geometry centroid" and then computes the midpoint of the bbox, which
+      is not the centroid and for anything crescent-shaped, multipart, or
+      with overseas territories is not inside the division at all — Norway,
+      Chile, Indonesia. The deeper error is indexing an area by a point:
+      a client's bbox over San Francisco gets whichever division midpoints
+      happen to land in it, missing the division the user is standing in if
+      its midpoint is just outside, and missing every division larger than
+      the bbox unconditionally. Correct rule: assign each division to the
+      **deepest tile wholly containing its bbox**, which is the longest
+      common quadkey prefix of the bbox corners — no geometry needed, the
+      bbox columns are already in the table. Unique, so "one record, one
+      tile" and dedup-free concatenation both survive, and `getCoverage`
+      then returns the whole containment stack for a region at a cost of
+      about one extra tile per zoom level. Fix the lying comment either way
+- [ ] Two decisions the assignment rule forces, to settle before
+      implementing. **First**, it collides with adaptive assignment:
+      `compute_tile_assignments.sql` picks the coarsest tile holding
+      ≤ `max_per_tile` records, a record-count rule, and if that is allowed
+      to split a shallow tile deeper it breaks containment again. For the
+      division collection the extent rule has to win. **Second**,
+      straddling: a division whose bbox crosses a quadkey boundary is pushed
+      shallow, and a small one sitting on the prime meridian lands at z0.
+      Probably survivable — few records, and coarse tiles stay small — but
+      it needs a stated answer (accept, clamp, or let those divisions appear
+      in up to four tiles and give up dedup-free concatenation for this
+      collection alone) rather than being discovered in the data
+- [ ] **Produce `relation.name`.** `relations.within` is a list of opaque
+      `org.atgeo.places.overture.division:{id}` rkeys, so rendering "San
+      Francisco, California" costs one `getRecord` per division per result —
+      an N+1 that tells the server exactly which records a user is looking
+      at, which is the surveillance surface `getCoverage` exists to avoid.
+      The field is already declared in `place.json`. It is built in
+      `sql/compute_containment.sql:56-59`; `bnd.places` already carries
+      `names` and `level` alongside `id`, so this is a projection of
+      `(id, names)` into a temp table joined once at the final SELECT
+      (materialize before joining — see D10). Gzip absorbs the size: a tile
+      is 1,000 records in one small area repeating a handful of names
+- [ ] Decide whether to carry `level` in the same object. `atgeo-spec.md`
+      says "the level itself is not carried; the ordering is the
+      information," which is true for rendering the whole string and useless
+      for a client that wants just the city. One integer, and the object is
+      already being touched. Spec edit if yes
+- [ ] Note in `atgeo-spec.md` that containment stops at locality.
+      `stages.py:963-970` builds `bnd.places` with `WHERE level <= 50`, so
+      `relations.within` never contains a borough, macrohood, neighborhood,
+      or microhood — those exist in the division tileset but in no place
+      record's containment. Currently undocumented, and it is the difference
+      between "San Francisco, California, United States" (available) and
+      "Hayes Valley" (not)
+
+**Accept:** a bbox over a city returns that city's own division record and
+its ancestors, not a scatter of neighbours whose midpoints happened to land
+nearby; a place record renders its full containment string with no further
+network calls.
+
 ---
 
 ## Sequencing
 
 Recommended order: **P5 → P4 → P3 → P1 → P2 → P6**, with P7 and P8 folded in
-wherever they fit.
+wherever they fit. P10 is independent of all of them and forces its own
+re-export.
 
 ## Out of scope
 

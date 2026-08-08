@@ -22,7 +22,8 @@
 | Document | Description |
 |----------|-------------|
 | [atgeo-spec.md](atgeo-spec.md) | Tile format, record envelope, containment levels, and the XRPC methods a client can call |
-| [atgeo-appview-sdk-design.md](atgeo-appview-sdk-design.md) | Spatial AppView + client SDK design (mostly unbuilt) |
+| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design: two methods, `searchPlaces` and `getPlace` (unbuilt) |
+| [atgeo-appview-sdk-design.md](atgeo-appview-sdk-design.md) | Spatial AppView design (unbuilt); its SDK section is superseded by the above |
 | [org.atgeo.tiles.service.json](org.atgeo.tiles.service.json) | Lexicon schema for `org.atgeo.tiles.service` records |
 
 ## Data Sources

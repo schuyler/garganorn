@@ -457,6 +457,13 @@ becoming an infrastructure problem.
 
 ## 3. Client SDKs
 
+> **Superseded by [atgeo-client-sdk.md](atgeo-client-sdk.md).** This section
+> assumes clients hold the manifest and compute coverage locally; the
+> gazetteer does not distribute one, which invalidates the API surface in
+> §3.2, the region-less search design, and roughly half the conformance
+> corpus in §1.6. The shipped surface is two methods. Kept here for the
+> reasoning, not the conclusions.
+
 Three repos: `@atgeo/client` (npm), `AtgeoClient` (SwiftPM),
 `org.atgeo:client` (Maven). Native code, platform-idiomatic I/O
 (`fetch` / `URLSession` / `OkHttp` + coroutines), zero heavyweight
