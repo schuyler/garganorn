@@ -39,11 +39,7 @@ class TileBackedCollection:
         except FileNotFoundError:
             return None
         for record in tile_data["records"]:
-            # Deployment-window tolerance (docs/pipeline-implementation-decisions.md,
-            # "OQ-P2-1 — record envelope adoption"): old-shape tiles (no "value"
-            # wrapper) fall back to the record itself. TEMPORARY — remove
-            # after the first production re-export following this deploy.
-            value = record.get("value", record)
+            value = record["value"]
             if value["rkey"] == rkey:
                 # Shallow copy prevents mutations by the server layer (e.g., popping
                 # "importance") from corrupting the lru_cache-held tile dict.

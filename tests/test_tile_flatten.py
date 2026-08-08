@@ -30,29 +30,6 @@ def _load_sql(filename: str) -> str:
     return sql_path.read_text()
 
 
-def _make_manifest_db(tmp_path, entries):
-    """Create a manifest.duckdb with the given (rkey, tile_qk) entries."""
-    p = tmp_path / "manifest.duckdb"
-    con = duckdb.connect(str(p))
-    con.execute("CREATE TABLE record_tiles (rkey VARCHAR, tile_qk VARCHAR)")
-    for rkey, tile_qk in entries:
-        con.execute("INSERT INTO record_tiles VALUES (?, ?)", [rkey, tile_qk])
-    con.execute("CREATE TABLE metadata (source VARCHAR, generated_at VARCHAR)")
-    con.execute("INSERT INTO metadata VALUES ('test', '2026-01-01T00:00:00+00:00')")
-    con.close()
-    return p
-
-
-def _write_tile(tiles_dir, tile_qk, records):
-    """Write a gzipped JSON tile file at the expected path."""
-    subdir = os.path.join(str(tiles_dir), tile_qk[:6])
-    os.makedirs(subdir, exist_ok=True)
-    path = os.path.join(subdir, f"{tile_qk}.json.gz")
-    with gzip.open(path, "wt") as f:
-        json.dump({"records": records}, f)
-    return path
-
-
 def _strip_spatial_install(sql: str) -> str:
     """Remove INSTALL/LOAD spatial statements for in-memory DuckDB."""
     lines = []
@@ -338,71 +315,6 @@ def test_export_no_uri_value_wrapper(tmp_path, source):
     for (record_json,) in rows:
         parsed = json.loads(record_json)
         _assert_flat_record(parsed)
-
-
-# ---------------------------------------------------------------------------
-# Tests: tile_reader uses rkey matching instead of URI suffix matching
-# ---------------------------------------------------------------------------
-
-class TestTileReaderUsesRkeyMatching:
-    """tile_reader.get_record() should find records by rkey field directly."""
-
-    def test_tile_reader_uses_rkey_matching(self, tmp_path):
-        """get_record() should match rkey field directly, not URI suffix.
-
-        This test FAILS against current code because tile_reader.get_record()
-        still uses record["uri"].endswith(target_uri_suffix) matching.
-        """
-        from garganorn.tile_reader import TileBackedCollection
-
-        tile_qk = "023010"
-        rkey = "place001"
-        collection = "org.atgeo.places.test"
-
-        # Create a flat-structure tile (no uri/value wrapper)
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_tile(tmp_path, tile_qk, [
-            {
-                # Flat structure: rkey at top level, no uri/value wrapper
-                "$type": "org.atgeo.place",
-                "rkey": rkey,
-                "name": "Test Place",
-                "importance": 75,
-                "locations": [
-                    {
-                        "$type": "community.lexicon.location.geo",
-                        "latitude": "37.7749",
-                        "longitude": "-122.4194"
-                    }
-                ],
-                "variants": [],
-                "attributes": {},
-                "relations": {}
-            }
-        ])
-
-        col = TileBackedCollection(
-            collection=collection,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-            source_url="https://example.com/source",
-            license_url="https://example.com/license",
-        )
-
-        # This FAILS because current implementation looks for record["uri"]
-        # which doesn't exist in flat-structure tiles
-        result = col.get_record("repo", collection, rkey)
-
-        assert result is not None, (
-            f"get_record() should find record with rkey={rkey} in flat-structure tile. "
-            f"Current implementation looks for 'uri' key which doesn't exist."
-        )
-        assert result["rkey"] == rkey, (
-            f"Returned record should have rkey={rkey}, got {result.get('rkey')}"
-        )
-        assert result["name"] == "Test Place", (
-            f"Returned record should have name='Test Place', got {result.get('name')}"
-        )
 
 
 # ---------------------------------------------------------------------------

@@ -1,14 +1,8 @@
 """Tests for garganorn.tile_reader.TileBackedCollection.
 
-New-envelope coverage (§6 item 10; pipeline-implementation-decisions.md
-"OQ-P2-1 — record envelope adoption"):
-TestTileBackedCollectionNewEnvelope below asserts get_record() works against
-atgeo v1 {uri, cid, value}-wrapped tiles, returning the `value` sub-object
-(not the wrapper) with rkey/importance handling intact. TestTileBackedCollection
-(pre-existing, below) exercises the OLD flat-record shape and doubles as the
-deployment-window tolerance-path fixture (per the envelope decisions above;
-`record.get("value", record)`) while old-shape tiles may still exist on disk
-during the deploy window.
+Tiles are atgeo v1 {uri, cid, value}-wrapped records. get_record() matches
+on `record["value"]["rkey"]` and returns `copy.copy(record["value"])` — the
+value sub-object, not the wrapper.
 """
 import gzip
 import json
@@ -38,17 +32,6 @@ def _make_manifest_db(tmp_path, entries):
     return p
 
 
-def _write_tile(tiles_dir, tile_qk, records):
-    """Write a gzipped JSON tile file at the expected path (OLD flat-record shape)."""
-    subdir = os.path.join(str(tiles_dir), tile_qk[:6])
-    os.makedirs(subdir, exist_ok=True)
-    path = os.path.join(subdir, f"{tile_qk}.json.gz")
-    with gzip.open(path, "wt") as f:
-        json.dump({"collection": COLLECTION, "source": SOURCE_URL, "license": LICENSE_URL,
-                   "records": records}, f)
-    return path
-
-
 def _write_envelope_tile(tiles_dir, tile_qk, values, generated_at="2026-07-09T18:00:00Z"):
     """Write a gzipped JSON tile file in the NEW atgeo v1 {uri, cid, value} shape.
 
@@ -70,106 +53,11 @@ def _write_envelope_tile(tiles_dir, tile_qk, values, generated_at="2026-07-09T18
     return path
 
 
-class TestTileBackedCollection:
-    def setup_method(self):
-        TileBackedCollection._cached_read_tile.cache_clear()
-
-    def test_get_record_returns_correct_value(self, tmp_path):
-        """rkey in manifest and tile → correct value dict returned."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_tile(tmp_path, tile_qk, [
-            {"rkey": rkey, "name": "Test Place"}
-        ])
-
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
-        )
-        result = col.get_record("repo", COLLECTION, rkey)
-
-        assert result is not None
-        assert result["rkey"] == rkey
-        assert result["name"] == "Test Place"
-
-    def test_get_record_missing_rkey_returns_none(self, tmp_path):
-        """rkey not in manifest → None."""
-        tile_qk = "023010"
-        manifest_db = _make_manifest_db(tmp_path, [("place001", tile_qk)])
-        _write_tile(tmp_path, tile_qk, [
-            {"rkey": "place001", "name": "Test Place"}
-        ])
-
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
-        )
-        result = col.get_record("repo", COLLECTION, "nonexistent")
-
-        assert result is None
-
-    def test_get_record_missing_tile_file_returns_none(self, tmp_path):
-        """rkey in manifest but tile file missing → None (no FileNotFoundError propagated)."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        # Intentionally do NOT write the tile file
-
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
-        )
-        result = col.get_record("repo", COLLECTION, rkey)
-
-        assert result is None
-
-    def test_tile_caching(self, tmp_path):
-        """Two get_record calls on the same tile → gzip.open called exactly once."""
-        tile_qk = "023010"
-        manifest_db = _make_manifest_db(tmp_path, [
-            ("place001", tile_qk),
-            ("place002", tile_qk),
-        ])
-        _write_tile(tmp_path, tile_qk, [
-            {"rkey": "place001", "name": "First Place"},
-            {"rkey": "place002", "name": "Second Place"},
-        ])
-
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
-        )
-
-        with patch("garganorn.tile_reader.gzip.open", wraps=gzip.open) as mock_gzip:
-            col.get_record("repo", COLLECTION, "place001")
-            col.get_record("repo", COLLECTION, "place002")
-
-        assert mock_gzip.call_count == 1
-
-
 class TestTileBackedCollectionNewEnvelope:
-    """§6 item 10 — get_record() against new-shape ({uri, cid, value}) tiles.
+    """get_record() against {uri, cid, value}-wrapped tiles.
 
-    get_record() must match `record["value"]["rkey"]` (not top-level
-    `record["rkey"]`, which does not exist in wrapped records) and return
-    `copy.copy(record["value"])` — the value sub-object, not the wrapper
-    (per the envelope decisions above). These FAIL against the current
-    implementation, which does
-    `record["rkey"]` directly and would KeyError/never-match against
-    {uri, cid, value}-wrapped records.
+    Verifies get_record() matches `record["value"]["rkey"]` and returns
+    `copy.copy(record["value"])` — the value sub-object, not the wrapper.
     """
 
     def setup_method(self):
@@ -274,4 +162,51 @@ class TestTileBackedCollectionNewEnvelope:
         assert "importance" in second, (
             "mutating one get_record() result must not affect a subsequent call "
             "(cache corruption via shared reference)"
+        )
+
+    def test_get_record_missing_tile_file_returns_none(self, tmp_path):
+        """rkey is in the manifest but the tile file itself is missing on disk
+        (e.g. deleted after manifest generation) → get_record() catches
+        FileNotFoundError and returns None instead of raising."""
+        tile_qk = "023010"
+        rkey = "place001"
+        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
+        # Deliberately do not write the tile file.
+
+        col = TileBackedCollection(
+            collection=COLLECTION,
+            manifest_db_path=str(manifest_db),
+            tiles_dir=str(tmp_path),
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
+        )
+        result = col.get_record("repo", COLLECTION, rkey)
+
+        assert result is None
+
+    def test_tile_caching(self, tmp_path):
+        """Two get_record() calls against the same tile only read the tile
+        file from disk once (_cached_read_tile is lru_cache-backed)."""
+        tile_qk = "023010"
+        rkey = "place001"
+        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
+        _write_envelope_tile(tmp_path, tile_qk, [
+            {"rkey": rkey, "name": "Test Place", "importance": 75}
+        ])
+
+        col = TileBackedCollection(
+            collection=COLLECTION,
+            manifest_db_path=str(manifest_db),
+            tiles_dir=str(tmp_path),
+            source_url=SOURCE_URL,
+            license_url=LICENSE_URL,
+        )
+
+        with patch("garganorn.tile_reader.gzip.open", wraps=gzip.open) as mock_open:
+            col.get_record("repo", COLLECTION, rkey)
+            col.get_record("repo", COLLECTION, rkey)
+
+        assert mock_open.call_count == 1, (
+            "second get_record() for the same tile should hit the cache, "
+            "not reopen the tile file"
         )

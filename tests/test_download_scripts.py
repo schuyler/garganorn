@@ -1,10 +1,4 @@
-"""Tests for download scripts and import cache enforcement.
-
-These tests are written in red (failing) state. They will pass once:
-- download-overture.sh, download-osm.sh are created
-- import-overture-extract.sh enforces cache presence
-  (replacing its S3 download loop with a cache presence check)
-"""
+"""Tests for download-overture.sh and download-osm.sh."""
 
 import os
 import pathlib
@@ -31,46 +25,6 @@ def _run(script_name: str, args: list[str], env: dict | None = None) -> subproce
         text=True,
         env=merged_env,
     )
-
-
-# ---------------------------------------------------------------------------
-# Tests 1-3: import script cache enforcement
-#
-# These fail because import-overture-extract.sh does not yet enforce cache
-# presence. It currently downloads from S3 rather than checking for a local
-# cache and failing with the expected messages.
-# ---------------------------------------------------------------------------
-
-
-class TestOvertureImportCacheEnforcement:
-    """import-overture-extract.sh must fail when the cache is absent."""
-
-    def test_overture_import_fails_without_cache(self, tmp_path):
-        """import-overture-extract.sh exits 1 and mentions download-overture.sh when cache is empty.
-
-        Red: --cache-dir flag does not exist yet in the script. Once the green
-        implementation adds --cache-dir, this test will pass.
-        """
-        # Pass --cache-dir pointing at a nonexistent directory so the script
-        # can skip S3 discovery and check the cache directly.
-        result = _run(
-            "import-overture-extract.sh",
-            ["--cache-dir", str(tmp_path / "nonexistent")] + SAMPLE_BBOX,
-        )
-
-        assert result.returncode == 1, (
-            f"Expected exit code 1, got {result.returncode}.\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        combined = result.stdout + result.stderr
-        assert "Cache missing" in combined, (
-            "Expected 'Cache missing' in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
-        assert "download-overture.sh" in combined, (
-            "Expected 'download-overture.sh' in output, but got:\n"
-            f"stdout: {result.stdout[:500]}\nstderr: {result.stderr[:500]}"
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -156,29 +110,6 @@ class TestOvertureCacheLayout:
     """Overture cache should use a flat layout for places (matching the
     quadtree pipeline's config glob) and flat division naming."""
 
-    def test_import_finds_parquets_at_cache_root(self, tmp_path):
-        """import-overture-extract.sh finds parquet files directly under cache_dir.
-
-        Places parquet files live at cache_dir root, matching
-        download-overture.sh's output and the quadtree pipeline's
-        db/cache/overture/<release>/*.parquet glob — not nested under places/.
-        """
-        for i in range(5):
-            (tmp_path / f"part-{i:05d}-00000.parquet").touch()
-
-        # Run import with --cache-dir pointing to tmp_path
-        result = _run(
-            "import-overture-extract.sh",
-            ["--cache-dir", str(tmp_path)] + SAMPLE_BBOX,
-        )
-
-        combined = result.stdout + result.stderr
-        # Should NOT say "Cache missing" because files exist at cache_dir root
-        assert "Cache missing" not in combined, (
-            f"Script should find parquet files directly under cache_dir, but it reported 'Cache missing'.\n"
-            f"stdout: {result.stdout[:1000]}\nstderr: {result.stderr[:1000]}"
-        )
-
     def test_download_script_no_equals_in_local_paths(self):
         """download-overture.sh should not use S3 type= naming in local directory paths.
 
@@ -238,30 +169,6 @@ class TestOvertureCacheLayout:
             "Found divisions/ in local path construction. "
             "Division types should be at cache root (division/, division_area/), not nested under divisions/.\n"
             f"Problematic lines:\n" + "\n".join(f"  Line {n}: {line}" for n, line in problematic_lines)
-        )
-
-    def test_import_cache_check_uses_cache_root(self):
-        """import-overture-extract.sh parquet glob should check cache_dir root, not places/.
-
-        Places files live flat under cache_dir, matching download-overture.sh's
-        output and the quadtree pipeline's config glob.
-        """
-        script_path = SCRIPTS_DIR / "import-overture-extract.sh"
-        script_content = script_path.read_text()
-
-        # Find lines with *.parquet glob patterns
-        parquet_lines = []
-        for line_num, line in enumerate(script_content.splitlines(), 1):
-            if "*.parquet" in line:
-                parquet_lines.append((line_num, line.strip()))
-
-        # No *.parquet line should reference a places/ subdirectory
-        places_references = [line for n, line in parquet_lines if "places/" in line]
-
-        assert not places_references, (
-            "Found *.parquet glob pattern(s) referencing a places/ subdirectory; "
-            "places files should be read directly from cache_dir root.\n"
-            "Problematic lines:\n" + "\n".join(f"  {line}" for line in places_references)
         )
 
     def test_download_script_no_places_nesting(self):

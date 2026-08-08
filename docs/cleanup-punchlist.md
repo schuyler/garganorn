@@ -174,7 +174,7 @@ Forces a full re-export. Land P1 and P2 first.
 - [x] Dissolve `pipeline-status.md`: durable tradeoffs to `design-constraints.md`,
       open items here, the rest deleted
 - [x] Promote `tile-privacy-design.md` out of "Feature Specs" in `index.md`
-- [ ] `getCoverage.json`'s description carries the reason there is no `q`
+- [x] `getCoverage.json`'s description carries the reason there is no `q`
       parameter
 - [x] Record the licensing posture in the repo — folded into
       `design-constraints.md` ("Licensing Posture") rather than a standalone
@@ -207,6 +207,13 @@ Forces a full re-export. Land P1 and P2 first.
       envelope and manifest: no `atgeo` version field or version-rejection
       rule, `source`/`license` in place of `attribution`, a `generated_at`-only
       manifest that is not served over HTTP, and stamped tile URLs
+- [ ] `name-variants-design.md` (listed as a live implementation spec in
+      `index.md`) is stale beyond a quick patch: it names both
+      `scripts/import-osm.sh` and `scripts/import-overture-extract.sh` (§3.1,
+      §3.2), both deleted in the P8 dead-script sweep, and still describes the
+      removed `name_index` table (`is_variant`, `norm_name`, trigram columns)
+      and FSQ as a source. Needs a full reconciliation pass, not a rename of
+      the two script references
 
 `atgeo-appview-sdk-design.md` and `org.atgeo.tiles.service.json` stay, framed
 as aspirational.
@@ -217,10 +224,11 @@ as aspirational.
       against source parquet; tile count and total gzipped size per source;
       `getCoverage` + fetch in scattered regions with a plausibility check; and
       confirmation that every URL `getCoverage` returns resolves
-- [ ] Remove the compatibility shim at `tile_reader.py:41-49` — its stated
+- [x] Remove the compatibility shim at `tile_reader.py:41-49` — its stated
       removal condition (first re-export after the envelope deploy) is met
-- [ ] Remove the dead `tiles.max_per_tile` config key
-- [ ] Remove `print()` calls from production paths
+- [x] Remove the dead `tiles.max_per_tile` config key
+- [x] Remove `print()` calls from production paths (already zero; nothing to
+      do)
 - [ ] Assert the division-import Hilbert sort is actually applied
       (`ST_Hilbert` in `stages.py`); nothing tests it today. See D2
 - [ ] Preflight the configured source globs before a build runs. `config.yaml`
@@ -233,35 +241,44 @@ as aspirational.
       tiles as blank-named records
 - [ ] Sweep the suite for tests that enforce nothing — ones asserting against
       their own fixtures, or exercising code that no longer exists. Find them
-      by mutating the source and seeing what stays green. Known instance:
-      `tests/test_audit_spatial_processing.py`
+      by mutating the source and seeing what stays green. Known instances:
+      `tests/test_audit_spatial_processing.py`; six classes in
+      `tests/test_import_pipeline.py` (`TestNodeImport`, `TestTagFiltering`,
+      `TestWayCentroidResolution`, `TestOutputSchema`, `TestDensityOsmMode`,
+      `TestInlineIdfOsmMode`) that reference nonexistent
+      `build-density.sh`/`build-idf.sh` scripts and test hand-copied SQL
+      disconnected from production code
+- [ ] `tests/test_pipeline.py`'s assertion failure messages (around lines
+      434, 437) say `tiles.memory_limit`/`tiles.max_per_tile`, but the test
+      itself correctly exercises the live `pipeline:` config section — just
+      wrong strings in the error text, not a test-correctness bug
 - [ ] Evaluate once the removals above are done: should maritime divisions
       keep being dropped by the `is_land=true` filter, which excludes bays,
       straits, and seas? It is a completeness question, not a logging one
-- [ ] Evaluate once the removals above are done: does `IDF ln(N/0)` survive
+- [x] Evaluate once the removals above are done: does `IDF ln(N/0)` survive
       the trigram removal, or was it only reachable through the search path?
+      It survives: `stage_idf` computes IDF from live place data via
+      `GROUP BY category`, which can't produce `n_places=0`, and it feeds the
+      production importance formula, wholly independent of the deleted
+      search/trigram path. No code change needed.
 - [ ] Strip orphaned audit finding IDs (`SCORE-n`, `SPATIAL-n`, `DATA-n`,
       `EXPORT-n`) from source comments, test names, and `docs/` as those files
       are touched — nothing defines them any more
-- [ ] Delete `scripts/import-osm.sh` and `scripts/import-overture-extract.sh`
+- [x] Delete `scripts/import-osm.sh` and `scripts/import-overture-extract.sh`
       — dead. `stages.py`'s `stage_import` calls `garganorn/sql/osm_import.sql`
       and `overture_place_import.sql` directly and never shells out to
-      either script. Delete or rewrite the ~30 assertions in
-      `tests/test_import_pipeline.py` that pin their exact SQL contents
-      (including a trigram `name_index` build these scripts' non-existent
-      caller doesn't need), and fix the `README.md`/`DOCKER.md` usage
-      instructions, which currently document running them directly, to
-      point at the real pipeline
-- [ ] `tests/conftest.py`'s `overture_db`/`osm_db`/`osm_db_path` fixtures and
+      either script. Deleted both scripts and the classes in
+      `tests/test_import_pipeline.py` pinning their exact SQL contents, plus
+      a second, separately-scoped test file (`tests/test_download_scripts.py`)
+      found only by running the full suite. `README.md` needed no edit — it
+      already didn't reference either script; `DOCKER.md` is deleted outright
+      below rather than fixed
+- [x] `tests/conftest.py`'s `overture_db`/`osm_db`/`osm_db_path` fixtures and
       the `_create_osm_db`/`OSM_PLACES`/`OSM_IMPORTANCE` builder are unused —
       confirmed by grep, nothing in the suite queries them since P4's serving-DB
       removal. Delete them (only `overture_db_path` is still used, by
       `test_database.py`)
-- [ ] Check whether Docker support is still viable. `DOCKER.md` documents
-      running `./scripts/import-overture-extract.sh` directly, which is
-      being deleted above; confirm whether the Docker path has a working
-      equivalent using the real `stages.py` pipeline or whether Docker
-      support itself should be dropped
+- [x] Remove the outmoded docker support
 - [ ] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
       pinning the operator's terminal for the duration and losing the run on a
       dropped connection. This is why the role keeps getting routed around by

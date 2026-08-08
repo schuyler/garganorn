@@ -14,10 +14,8 @@ set -euo pipefail
 # This script handles stages 0 and 1 of the OSM import pipeline: filtering a
 # PBF file to place-relevant OSM tags using osmium, then converting the result
 # to Parquet using osm-pbf-parquet. Both stages cache their output and skip
-# processing when the cache is current. import-osm.sh calls this script
-# automatically before building the DuckDB places table, but it can also be
-# run standalone when only the Parquet output is needed (e.g., to feed the
-# quadtree tile pipeline without running the full database import).
+# processing when the cache is current. Run standalone to produce Parquet
+# output for the quadtree tile pipeline.
 
 # ─── Dependency checks ────────────────────────────────────────────────────────
 

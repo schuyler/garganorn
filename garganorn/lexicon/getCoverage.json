@@ -4,7 +4,7 @@
     "defs": {
         "main": {
             "type": "query",
-            "description": "Get tile file URLs covering a bounding box for a given collection",
+            "description": "Get tile file URLs covering a bounding box for a given collection; no text/name search parameter, by design (see docs/tile-privacy-design.md)",
             "parameters": {
                 "type": "params",
                 "properties": {

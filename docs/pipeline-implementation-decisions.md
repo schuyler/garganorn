@@ -309,10 +309,10 @@ fixture checklist. Orthogonality: OQ-P2-2 changes the division record's
   `ensure_ascii`-escaping DuckDB's UTF-8 — JSON-equivalent, byte-different,
   acceptable since byte-parity is already retired.
 - **Server ships atomically with the pipeline.** New server + old tiles →
-  `KeyError: 'value'`. Covered by a temporary `record.get("value", record)`
-  tolerance in `tile_reader.py` (removed after the first re-export) plus
-  deploy-code-then-re-export ordering. This is internal correctness, not
-  external compatibility.
+  `KeyError: 'value'`. A temporary `record.get("value", record)` tolerance in
+  `tile_reader.py` covered the gap and was removed after the first
+  re-export; deploy-code-then-re-export ordering is the lasting mitigation.
+  This is internal correctness, not external compatibility.
 
 ## OQ-P2-5 — serving-path migration (merged `fd0ff8d`)
 

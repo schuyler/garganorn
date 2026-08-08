@@ -1,7 +1,6 @@
 repo: places.atgeo.org
 
 tiles:
-  max_per_tile: 1000
   memory_limit: 48GB
   collections:
     org.atgeo.places.overture.place:

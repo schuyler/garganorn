@@ -87,51 +87,35 @@ class TestOSMRkeyFormat:
             FROM places
         """)
 
-        # Write mock tile file with reformatted rkeys (as export SQL does)
+        # Write mock tile file with reformatted rkeys (as export SQL does),
+        # wrapped in the current {uri, cid, value} envelope shape.
+        def _envelope(rkey, name, lat, lon):
+            return {
+                "uri": f"https://places.atgeo.org/org.atgeo.places.osm/{rkey}",
+                "cid": None,
+                "value": {
+                    "$type": "org.atgeo.place",
+                    "rkey": rkey,
+                    "name": name,
+                    "importance": 10,
+                    "locations": [{
+                        "$type": "community.lexicon.location.geo",
+                        "latitude": lat,
+                        "longitude": lon
+                    }],
+                    "variants": [],
+                    "attributes": {}
+                },
+            }
+
         tile_data = {
             "collection": "org.atgeo.places.osm",
             "source": "https://www.openstreetmap.org/",
             "license": "https://opendatacommons.org/licenses/odbl/1-0/",
             "records": [
-                {
-                    "$type": "org.atgeo.place",
-                    "rkey": "node:12345",  # Reformatted from n12345
-                    "name": "Node Place",
-                    "importance": 10,
-                    "locations": [{
-                        "$type": "community.lexicon.location.geo",
-                        "latitude": "37.774900",
-                        "longitude": "-122.419400"
-                    }],
-                    "variants": [],
-                    "attributes": {}
-                },
-                {
-                    "$type": "org.atgeo.place",
-                    "rkey": "way:67890",  # Reformatted from w67890
-                    "name": "Way Place",
-                    "importance": 10,
-                    "locations": [{
-                        "$type": "community.lexicon.location.geo",
-                        "latitude": "37.775000",
-                        "longitude": "-122.419500"
-                    }],
-                    "variants": [],
-                    "attributes": {}
-                },
-                {
-                    "$type": "org.atgeo.place",
-                    "rkey": "relation:11111",  # Reformatted from r11111
-                    "name": "Relation Place",
-                    "importance": 10,
-                    "locations": [{
-                        "$type": "community.lexicon.location.geo",
-                        "latitude": "37.775100",
-                        "longitude": "-122.419600"
-                    }],
-                    "variants": [],
-                    "attributes": {}
-                },
+                _envelope("node:12345", "Node Place", "37.774900", "-122.419400"),  # Reformatted from n12345
+                _envelope("way:67890", "Way Place", "37.775000", "-122.419500"),  # Reformatted from w67890
+                _envelope("relation:11111", "Relation Place", "37.775100", "-122.419600"),  # Reformatted from r11111
             ]
         }
 
