@@ -4,9 +4,7 @@ These tests are written RED — they FAIL against the current codebase and
 PASS once Phase 1 changes are implemented.
 
 Part 1: Lexicon schema (garganorn/lexicon/place.json)
-  - #relation must NOT have a `level` property
   - rkey description must use a generic example format (not WoF-specific)
-  - `within` description must NOT contain the word "level"
 
 Part 2: Collection rename
   - OvertureMaps.collection must equal "org.atgeo.places.overture.place"
@@ -42,22 +40,6 @@ def _load_config_yaml():
 # Part 1: Lexicon schema
 # ---------------------------------------------------------------------------
 
-def test_relation_def_has_no_level_property():
-    """#relation definition must NOT have a `level` property.
-
-    The `level` property is WoF-specific and belongs in the WoF boundaries
-    collection, not in the generic place relation schema.
-    FAILS until `level` is removed from the #relation def in place.json.
-    """
-    schema = _load_place_json()
-    relation_def = schema["defs"]["relation"]
-    properties = relation_def.get("properties", {})
-    assert "level" not in properties, (
-        "place.json #relation.properties must not contain 'level'. "
-        "Remove it — level is WoF-specific and does not belong in the generic relation schema."
-    )
-
-
 def test_relation_rkey_description_is_generic():
     """rkey description in #relation must use a generic example, not WoF-specific.
 
@@ -71,25 +53,6 @@ def test_relation_rkey_description_is_generic():
         f"place.json #relation.properties.rkey description must not reference WoF. "
         f"Got: {rkey_desc!r}. "
         "Replace with a generic example that does not name a specific data source."
-    )
-
-
-def test_within_description_has_no_level_word():
-    """The `within` array description must NOT contain the word 'level'.
-
-    Once `level` is removed from #relation, ordering by level is no longer
-    expressed in the schema; references to it should be removed from descriptions.
-    FAILS until 'level' is removed from the `within` description in place.json.
-    """
-    schema = _load_place_json()
-    within_desc = (
-        schema["defs"]["main"]["record"]["properties"]
-        ["relations"]["properties"]["within"]["description"]
-    )
-    assert "level" not in within_desc.lower(), (
-        f"place.json relations.within description must not contain 'level'. "
-        f"Got: {within_desc!r}. "
-        "Remove the level reference — level no longer exists on #relation."
     )
 
 

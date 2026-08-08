@@ -112,6 +112,7 @@ def _make_division_db(path):
             id            VARCHAR,
             geometry      GEOMETRY,
             level         INTEGER,
+            names         STRUCT("primary" VARCHAR),
             min_latitude  DOUBLE,
             max_latitude  DOUBLE,
             min_longitude DOUBLE,
@@ -123,6 +124,7 @@ def _make_division_db(path):
             '85922583',
             ST_GeomFromText('POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))'),
             50,
+            {'primary': 'San Francisco'},
             37.6, 37.85, -122.55, -122.3
         )
     """)

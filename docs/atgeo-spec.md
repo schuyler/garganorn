@@ -174,16 +174,17 @@ category tag; Overture place records carry the upstream Overture fields
 `country`, `level`, and `population` — the last always present, 0 meaning
 the source recorded none — plus `region` and `wikidata` when present.
 
-`relations.within` lists the divisions containing the record, as `{rkey}`
-objects whose keys are collection-qualified —
+`relations.within` lists the divisions containing the record, as `{rkey,
+name, level}` objects whose `rkey`s are collection-qualified —
 `org.atgeo.places.overture.division:{id}` — ordered broadest first
-(containment level ascending, then by id). The level itself is not carried;
-the ordering is the information.
+(containment level ascending, then by id). Containment reaches every level
+in the vocabulary, country through microhood, not just locality and
+coarser, wherever the source data supports it.
 
-Three declared fields are not yet produced: `published_at`, `same_as`, and
-`relation.name`. They are declared ahead of the work that will emit them
-(dataset conflation, for the latter two). A client must tolerate their
-absence now and their presence later.
+Two declared fields are not yet produced: `published_at` and `same_as`.
+They are declared ahead of the work that will emit them (dataset
+conflation, for the latter). A client must tolerate their absence now and
+their presence later.
 
 ## Importance
 

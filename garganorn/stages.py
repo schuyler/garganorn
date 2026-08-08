@@ -955,10 +955,6 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
 
         con.execute(f"ATTACH '{boundaries_tmp}' AS bnd")
         try:
-            # Filter threshold expressed via LEVEL_VOCAB['locality'] so it can't
-            # drift from the vocabulary: country (10)
-            # through locality (50) inclusive; hoods (>= 55) excluded.
-            assert LEVEL_VOCAB['locality'] == 50
             con.execute(f"""
                 CREATE TABLE bnd.places AS
                 SELECT id, geometry, level,
@@ -967,7 +963,6 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
                        min_longitude, max_longitude,
                        importance, variants
                 FROM division_all
-                WHERE level <= 50
                 ORDER BY ST_Hilbert(geometry,
                     {{'min_x': -180.0, 'min_y': -90.0,
                       'max_x': 180.0, 'max_y': 90.0}}::BOX_2D)

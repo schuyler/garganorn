@@ -82,6 +82,7 @@ def _create_simple_boundaries_db(db_path):
             id VARCHAR,
             geometry GEOMETRY,
             level INTEGER,
+            names STRUCT("primary" VARCHAR),
             min_latitude DOUBLE,
             max_latitude DOUBLE,
             min_longitude DOUBLE,
@@ -90,8 +91,8 @@ def _create_simple_boundaries_db(db_path):
     """)
     for bid, level, wkt, min_lat, min_lon, max_lat, max_lon in _SIMPLE_BOUNDARIES:
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            [bid, wkt, level, min_lat, max_lat, min_lon, max_lon],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
+            [bid, wkt, level, bid, min_lat, max_lat, min_lon, max_lon],
         )
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
@@ -178,8 +179,8 @@ class TestContainmentBehaviorPorts:
             f"Expected default '{_COLLECTION_PREFIX}', got {default!r}"
         )
 
-    def test_rkey_only_relations_sf_point(self, simple_boundaries_db, tmp_path):
-        """SF point: place_containment relations have only 'rkey' keys, division prefix."""
+    def test_relation_shape_sf_point(self, simple_boundaries_db, tmp_path):
+        """SF point: place_containment relations have rkey/name/level keys, division prefix."""
         places_parquet = _make_parquet_places(
             tmp_path, [("p_sf", -122.4194, 37.7749)], "rkeys_places.parquet"
         )
@@ -213,12 +214,13 @@ class TestContainmentBehaviorPorts:
             within = data.get("within", [])
             assert len(within) > 0
             for entry in within:
-                assert set(entry.keys()) == {"rkey"}, (
-                    f"Relation must have only 'rkey', got {set(entry.keys())}: {entry}"
+                assert set(entry.keys()) == {"rkey", "name", "level"}, (
+                    f"Relation must have rkey/name/level, got {set(entry.keys())}: {entry}"
                 )
                 assert entry["rkey"].startswith(_COLLECTION_PREFIX + ":"), (
                     f"rkey missing division prefix: {entry['rkey']}"
                 )
+                assert entry["name"], f"name must be non-empty: {entry}"
 
     def test_sf_point_expected_boundary_ids(self, simple_boundaries_db, tmp_path):
         """SF point: rkeys include continent, country, region, locality; exclude Manhattan."""
@@ -351,6 +353,7 @@ class TestContainmentOrdering:
                 id VARCHAR,
                 geometry GEOMETRY,
                 level INTEGER,
+                names STRUCT("primary" VARCHAR),
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
@@ -360,13 +363,13 @@ class TestContainmentOrdering:
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_named', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
-                25, -10.0, 10.0, -10.0, 10.0
+                25, {'primary': 'r_named'}, -10.0, 10.0, -10.0, 10.0
             )
         """)
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_null', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
-                NULL, -10.0, 10.0, -10.0, 10.0
+                NULL, {'primary': 'r_null'}, -10.0, 10.0, -10.0, 10.0
             )
         """)
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
@@ -1065,6 +1068,7 @@ class TestAntimeridianEdgeArm:
                 id VARCHAR,
                 geometry GEOMETRY,
                 level INTEGER,
+                names STRUCT("primary" VARCHAR),
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
@@ -1079,8 +1083,8 @@ class TestAntimeridianEdgeArm:
             "((-180 -15, -170 -15, -170 15, -180 15, -180 -15)))"  # west lobe
         )
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            ["ami_boundary", ami_wkt, 10, -15.0, 15.0, 170.0, -170.0],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
+            ["ami_boundary", ami_wkt, 10, "ami_boundary", -15.0, 15.0, 170.0, -170.0],
         )
         # Non-antimeridian boundary covering the gap area around lon=0.
         # Ensures the gap place has a valid containment result (gap_boundary's rkey)
@@ -1088,8 +1092,8 @@ class TestAntimeridianEdgeArm:
         # vacuously asserting absence from an empty result set.
         gap_wkt = "POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))"
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, ?, ?, ?, ?)",
-            ["gap_boundary", gap_wkt, 25, -10.0, 10.0, -10.0, 10.0],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
+            ["gap_boundary", gap_wkt, 25, "gap_boundary", -10.0, 10.0, -10.0, 10.0],
         )
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
         conn.close()

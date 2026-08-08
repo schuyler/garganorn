@@ -15,6 +15,10 @@
                 "name": {
                     "type": "string",
                     "description": "Display name of the related place."
+                },
+                "level": {
+                    "type": "integer",
+                    "description": "Containment level of the related place, when applicable (see the level vocabulary)."
                 }
             }
         },

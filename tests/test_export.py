@@ -1167,8 +1167,8 @@ class TestContainmentInExport:
                 assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
                 assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
                     f"rkey must be collection-qualified; got {entry['rkey']!r}"
-                assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-                assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+                assert "name" in entry, f"'name' key missing from within entry: {entry}"
+                assert "level" in entry, f"'level' key missing from within entry: {entry}"
 
     # ------------------------------------------------------------------
     # Test 6b: compute_containment bbox pre-filter regression guard

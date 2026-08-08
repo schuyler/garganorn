@@ -222,14 +222,14 @@ class TestFailLoudUnmappedSubtype:
 # ---------------------------------------------------------------------------
 
 class TestBoundaryFilterDelta:
-    """boundaries.duckdb export filter (level <= 50) delta vs the old admin_level filter.
+    """boundaries.duckdb carries every LEVEL_VOCAB level, no cutoff.
 
-    Filter `level <= 50` (country..locality) includes localadmin and
-    counties, and excludes all hoods (borough/macrohood/neighborhood/
-    microhood, level >= 55). Uses a synthetic division_parquet fixture
-    covering one subtype per level tier to exercise the row-inclusion
-    boundary directly, rather than empirical row-count reconciliation
-    numbers (not a unit-testable invariant).
+    country through microhood are all included — there is no level filter
+    on `bnd.places` any more, since the level vocabulary is already the
+    full set of levels the pipeline knows how to produce. Uses a synthetic
+    division_parquet fixture covering one subtype per level tier to
+    exercise row inclusion directly, rather than empirical row-count
+    reconciliation numbers (not a unit-testable invariant).
     """
 
     _BBOX = (-180, -90, 180, 90)
@@ -334,8 +334,8 @@ class TestBoundaryFilterDelta:
                 f"{subtype} (level <= 50) must be included in boundaries.duckdb; found ids: {ids}"
             )
 
-    def test_hoods_excluded_from_boundaries_db(self, tmp_path):
-        """macrohood/neighborhood/microhood (level >= 60) must be excluded, matching today's scope."""
+    def test_hoods_included_in_boundaries_db(self, tmp_path):
+        """macrohood/neighborhood/microhood (level >= 60) must be included; containment reaches them."""
         from garganorn import stages
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
@@ -348,8 +348,8 @@ class TestBoundaryFilterDelta:
         ids = {r[0] for r in con.execute("SELECT id FROM bnd.places").fetchall()}
         con.close()
         for subtype in ["macrohood", "neighborhood", "microhood"]:
-            assert f"div_{subtype}" not in ids, (
-                f"{subtype} (level >= 60) must be excluded from boundaries.duckdb; found ids: {ids}"
+            assert f"div_{subtype}" in ids, (
+                f"{subtype} must be included in boundaries.duckdb; found ids: {ids}"
             )
 
 
