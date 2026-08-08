@@ -58,8 +58,12 @@ Land before P6's rebuild, or the rebuild will not take effect.
       `config.yaml.j2`. Setting only the first renders a CONUS tile build while
       appearing to be configured for planet. Either give them one name or make
       the tile variable default to the import one
-- [ ] Remove the Foursquare find/assert block and `garganorn_source_fsq`; check
-      whether `garganorn_source_wof` is referenced before removing it
+- [x] Remove the Foursquare find/assert block and `garganorn_source_fsq`.
+      `garganorn_source_wof` is confirmed dead too (garganorn's own pipeline
+      builds `boundaries.duckdb` from Overture Division, not WoF; no code
+      reads a `boundaries:` config key) and was removed alongside it, along
+      with the wholly-dead `databases:` config key in `config.yaml.j2`
+      (garganorn's `config.py` hasn't read it since P4)
 - [x] `config.yaml.j2` updated for P1's versioned `base_url` and P6's
       attribution keys
 - [x] Nothing in the role populates the source cache. `tiles.yml` assumes
@@ -70,11 +74,6 @@ Land before P6's rebuild, or the rebuild will not take effect.
 - [x] `{{ garganorn_home }}/data` is created only as a side effect of the
       temp-directory task in `tiles.yml`, so `--tags app,service` alone leaves
       it missing. Make it an explicit task
-- [ ] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
-      pinning the operator's terminal for the duration and losing the run on a
-      dropped connection. This is why the role keeps getting routed around by
-      ad-hoc scripts. Use `poll: 0` with a separate status-check play, or drive
-      Ansible from the box
 
 **Accept:** a `--tags tiles` run leaves the service restarted, and
 `getCoverage` reflects the new run with no manual step. Provisioning a fresh
@@ -263,6 +262,11 @@ as aspirational.
       being deleted above; confirm whether the Docker path has a working
       equivalent using the real `stages.py` pipeline or whether Docker
       support itself should be dropped
+- [ ] `--tags tiles` runs Ansible with `poll: 60` against a ~90-minute build,
+      pinning the operator's terminal for the duration and losing the run on a
+      dropped connection. This is why the role keeps getting routed around by
+      ad-hoc scripts. Use `poll: 0` with a separate status-check play, or drive
+      Ansible from the box
 
 ---
 
