@@ -1,11 +1,11 @@
-"""Failing tests for spatial processing bug fixes (SPATIAL-2, SPATIAL-5, EXPORT-6, EXPORT-7).
+"""Failing tests for spatial processing bug fixes.
 
 These tests verify that the following bugs are fixed:
 
-SPATIAL-2: Malformed qk17 not validated in tile assignment
-SPATIAL-5: ST_Intersection can produce invalid/empty geometries
-EXPORT-6: NULL qk17 places silently dropped from tiles
-EXPORT-7: No uniqueness validation on tile assignments
+Malformed qk17 not validated in tile assignment
+ST_Intersection can produce invalid/empty geometries
+NULL qk17 places silently dropped from tiles
+No uniqueness validation on tile assignments
 
 All tests should FAIL with the current code and PASS after fixes are implemented.
 """
@@ -23,8 +23,8 @@ from garganorn.stages import (
 from tests.quadtree_helpers import _load_sql
 
 
-class TestSPATIAL2_MalformedQK17Validation:
-    """SPATIAL-2: Malformed qk17 values must be validated and rejected.
+class TestMalformedQK17Validation:
+    """Malformed qk17 values must be validated and rejected.
 
     Bug: compute_tile_assignments.sql calls left(qk17, level) without verifying
     qk17 is well-formed (length 17, digits 0-3 only). NULL is filtered, but
@@ -137,8 +137,8 @@ class TestSPATIAL2_MalformedQK17Validation:
         assert len(place_ids) == 0, f"Expected 0 places, got {len(place_ids)}"
 
 
-class TestSPATIAL5_InvalidGeometryFilter:
-    """SPATIAL-5: ST_Intersection can produce invalid/empty geometries.
+class TestInvalidGeometryFilter:
+    """ST_Intersection can produce invalid/empty geometries.
 
     Bug: Clipping boundaries to tile envelopes via ST_Intersection can produce
     degenerate geometries (point intersections, zero-area slivers). These
@@ -234,8 +234,8 @@ class TestSPATIAL5_InvalidGeometryFilter:
         assert valid_count >= 1, "tile_boundaries should contain at least one valid polygon"
 
 
-class TestEXPORT6_NullQK17Logging:
-    """EXPORT-6: NULL qk17 places are silently dropped from tile assignments.
+class TestNullQK17Logging:
+    """NULL qk17 places are silently dropped from tile assignments.
 
     Bug: Places with NULL qk17 are filtered out of tile_assignments with no
     warning logged. This makes data quality issues invisible.
@@ -353,8 +353,8 @@ class TestEXPORT6_NullQK17Logging:
             f"Expected no warning when all qk17 are valid, but got: {warning_messages}"
 
 
-class TestEXPORT7_TileAssignmentUniqueness:
-    """EXPORT-7: No uniqueness validation on tile assignments.
+class TestTileAssignmentUniqueness:
+    """No uniqueness validation on tile assignments.
 
     Bug: No check that each place appears exactly once in tile_assignments.
     Duplicate place_ids could cause incorrect exports and data corruption.
@@ -420,7 +420,7 @@ class TestEXPORT7_TileAssignmentUniqueness:
         assert duplicate_count is None, "Expected no duplicate place_ids"
 
     def test_manually_inserted_duplicates_detected(self, tmp_path, caplog):
-        """If input places parquet has duplicate pk values, an EXPORT-7 error should be logged."""
+        """If input places parquet has duplicate pk values, an error should be logged."""
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
 
@@ -453,14 +453,14 @@ class TestEXPORT7_TileAssignmentUniqueness:
                 max_per_tile=1000, force=True
             )
 
-        # Check that an EXPORT-7 error was logged (message contains "multiple" or "duplicate")
+        # Check that an error was logged (message contains "multiple" or "duplicate")
         error_messages = [record.message for record in caplog.records
                          if record.levelno >= logging.ERROR
                          and ('multiple' in record.message.lower()
                               or 'duplicate' in record.message.lower())]
 
         assert len(error_messages) > 0, (
-            "Expected EXPORT-7 error log about places assigned to multiple tiles when input "
+            "Expected error log about places assigned to multiple tiles when input "
             "places parquet has duplicate id values; "
             f"captured log records: {[(r.levelno, r.message) for r in caplog.records]}"
         )

@@ -628,8 +628,7 @@ class TestOvertureVariantsCharacterization:
     def test_neither_common_nor_rules_yields_empty_list_not_null(self, overture_parquet, tmp_path):
         """ov004: names present with common=empty map, rules=empty list.
 
-        ov004 is an existing fixture row (unmodified) already shaped this
-        way. Pins that variants is exactly [] and NOT NULL when there are no
+        Pins that variants is exactly [] and NOT NULL when there are no
         candidate entries at all.
         """
         db_path = tmp_path / "test_variants_ov004.duckdb"
@@ -641,11 +640,16 @@ class TestOvertureVariantsCharacterization:
         assert variants == [], f"expected [], got {variants!r}"
         assert variants is not None
 
-    def test_names_struct_itself_null_yields_empty_list_not_null(self, overture_parquet, tmp_path):
-        """ov003: names IS NULL entirely (existing fixture row, unmodified).
+    def test_common_and_rules_both_null_yields_empty_list_not_null(self, overture_parquet, tmp_path):
+        """ov003: names.primary present, names.common and names.rules both
+        SQL NULL (not just empty).
 
-        Pins that variants is exactly [] and NOT NULL even when the whole
-        `names` struct is SQL NULL, not just its common/rules fields.
+        Pins that variants is exactly [] and NOT NULL when both source
+        fields are NULL, not just empty, complementing ov010 (common NULL,
+        rules populated) and ov011 (common populated, rules NULL). A row
+        with the whole `names` struct SQL NULL can no longer reach this
+        code path: names.primary would also be NULL, and the ov_base
+        filter excludes NULL-name rows before variants is computed.
         """
         db_path = tmp_path / "test_variants_ov003.duckdb"
         conn = duckdb.connect(str(db_path))

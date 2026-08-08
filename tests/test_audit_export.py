@@ -18,7 +18,7 @@ from garganorn.stages import write_manifest_db
 
 
 class TestOSMRkeyFormat:
-    """Tests for EXPORT-3/EXPORT-8: OSM rkey format mismatch between export and manifest.
+    """Tests for OSM rkey format mismatch between export and manifest.
 
     Bug: Export tiles write JSON with rkey `node:12345`, but manifest stores
     `n12345`. When client calls get_record("node:12345"), manifest lookup

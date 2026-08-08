@@ -149,9 +149,19 @@ def finalize_artifact(tmp_path: str, artifact: str, params: dict,
     Path(artifact + ".meta.json").write_text(json.dumps(meta))
 
 
-def _resolve_glob_paths(pattern: str) -> list[str]:
-    """Expand a glob pattern to a sorted list of file paths."""
-    return sorted(glob_module.glob(pattern))
+def _resolve_glob_paths(pattern: str, *, required: bool = False) -> list[str]:
+    """Expand a glob pattern to a sorted list of file paths.
+
+    Raises RuntimeError if `required` is True and the pattern matches nothing
+    (a misconfigured or empty source cache would otherwise build silently on
+    zero input files).
+    """
+    paths = sorted(glob_module.glob(pattern))
+    if required and not paths:
+        raise RuntimeError(
+            f"configured source glob matched no files: {pattern!r}"
+        )
+    return paths
 
 
 def _run_sql(con, source, stage, filename, t0, **params):
@@ -647,6 +657,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         os.remove(tmp_path)
     con = duckdb.connect()
     try:
+        con.execute("SET enable_progress_bar = false")
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
         if max_temp_directory_size:
@@ -814,8 +825,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
 
     # Compute input files for freshness tracking
     input_files = (
-        _resolve_glob_paths(division_parquet_path) +
-        _resolve_glob_paths(division_area_parquet_path)
+        _resolve_glob_paths(division_parquet_path, required=True) +
+        _resolve_glob_paths(division_area_parquet_path, required=True)
     )
     if density_parquet:
         input_files += _resolve_glob_paths(str(density_parquet))
@@ -1071,10 +1082,10 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     # Compute input file list for freshness tracking
     if source == "osm":
         node_parquet_path, way_parquet_path = parquet_glob
-        input_files = (_resolve_glob_paths(node_parquet_path)
-                       + _resolve_glob_paths(way_parquet_path))
+        input_files = (_resolve_glob_paths(node_parquet_path, required=True)
+                       + _resolve_glob_paths(way_parquet_path, required=True))
     else:
-        input_files = _resolve_glob_paths(str(parquet_glob))
+        input_files = _resolve_glob_paths(str(parquet_glob), required=True)
 
     if density_parquet:
         input_files += _resolve_glob_paths(str(density_parquet))
@@ -1230,7 +1241,7 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     if os.path.exists(_tmp):
         os.remove(_tmp)
 
-    input_files = _resolve_glob_paths(parquet_glob)
+    input_files = _resolve_glob_paths(parquet_glob, required=True)
 
     if not force:
         if artifact_fresh(output_path, input_files, {}):
@@ -1306,9 +1317,10 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
     # Resolve input_files unconditionally so finalize_artifact can record them.
     if source == "osm":
         node_glob, way_glob = parquet_glob
-        input_files = _resolve_glob_paths(node_glob) + _resolve_glob_paths(way_glob)
+        input_files = (_resolve_glob_paths(node_glob, required=True)
+                       + _resolve_glob_paths(way_glob, required=True))
     else:
-        input_files = _resolve_glob_paths(parquet_glob)
+        input_files = _resolve_glob_paths(parquet_glob, required=True)
 
     if not force and artifact_fresh(output_path, input_files, {}):
         log.info("idf: skipping (output is fresh)")
@@ -1365,8 +1377,8 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     force=True.
 
     Diagnostics emitted:
-      EXPORT-6: warning when places are dropped due to NULL or malformed qk17.
-      EXPORT-7: error when any place_id appears in more than one tile.
+      Warning when places are dropped due to NULL or malformed qk17.
+      Error when any place_id appears in more than one tile.
 
     Args:
         places_parquet: Path to input places.parquet file.
@@ -1414,7 +1426,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET preserve_insertion_order = false")
 
-        # Total places count for EXPORT-6 dropped-place diagnostic
+        # Total places count for dropped-place diagnostic
         total = con.execute(
             f"SELECT count(*) FROM read_parquet('{pq_sql}')"
         ).fetchone()[0]
@@ -1465,7 +1477,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
             f"SELECT count(*) FROM read_parquet('{tmp_sql}')"
         ).fetchone()[0]
 
-        # EXPORT-7: duplicate place_id check
+        # Duplicate place_id check
         dupes = con.execute(f"""
             SELECT place_id, count(*) AS cnt
             FROM read_parquet('{tmp_sql}')
@@ -1476,7 +1488,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     finally:
         con.close()
 
-    # EXPORT-6: warn about dropped places (NULL or invalid qk17)
+    # Warn about dropped places (NULL or invalid qk17)
     dropped = total - assigned
     if dropped > 0:
         log.warning(
@@ -1484,7 +1496,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
             source, dropped,
         )
 
-    # EXPORT-7: warn about duplicate assignments
+    # Warn about duplicate assignments
     if dupes:
         log.error(
             "[%s] tile_assignment: %d places assigned to multiple tiles",

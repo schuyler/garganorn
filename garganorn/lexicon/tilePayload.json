@@ -1,0 +1,63 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.tilePayload",
+    "defs": {
+        "wrappedRecord": {
+            "type": "object",
+            "description": "A single record as it appears in a tile's records array.",
+            "required": ["uri", "cid", "value"],
+            "nullable": ["cid"],
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "The record's dereferenceable https:// URI."
+                },
+                "cid": {
+                    "type": "string",
+                    "format": "cid",
+                    "description": "Always null; tile records have no computed CID."
+                },
+                "value": {
+                    "type": "unknown",
+                    "description": "The record itself."
+                }
+            }
+        },
+        "main": {
+            "type": "object",
+            "description": "The top-level JSON envelope of a gazetteer tile file.",
+            "required": ["collection", "source", "license", "generated_at", "records"],
+            "properties": {
+                "collection": {
+                    "type": "string",
+                    "format": "nsid",
+                    "description": "The NSID of the record collection contained in this tile."
+                },
+                "source": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URL of the collection's source dataset."
+                },
+                "license": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URL of the source dataset's license."
+                },
+                "generated_at": {
+                    "type": "string",
+                    "format": "datetime",
+                    "description": "When this tile was generated."
+                },
+                "records": {
+                    "type": "array",
+                    "description": "The tile's records.",
+                    "items": {
+                        "type": "ref",
+                        "ref": "#wrappedRecord"
+                    }
+                }
+            }
+        }
+    }
+}

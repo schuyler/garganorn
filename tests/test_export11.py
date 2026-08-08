@@ -1,6 +1,6 @@
-"""Failing tests for EXPORT-11: Remove print() statements from production code.
+"""Failing tests for removing print() statements from production code.
 
-EXPORT-11: Debug print statements in production code should be replaced with
+Debug print statements in production code should be replaced with
 logging calls or removed. This module contains tests that FAIL against the
 current code and PASS after the fix is applied.
 
@@ -23,8 +23,8 @@ from garganorn.database import Database
 REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 
-class TestExport11NoPrintCalls:
-    """Red-phase tests for EXPORT-11: No print() calls in production modules.
+class TestNoPrintCalls:
+    """Red-phase tests for no print() calls in production modules.
 
     Each test FAILES against the current code and PASSES after print() statements
     are replaced with logging calls or removed.
@@ -123,8 +123,8 @@ class TestExport11NoPrintCalls:
         )
 
 
-class TestExport11LoggingUsage:
-    """Red-phase tests for EXPORT-11: Verify logging is used instead of print().
+class TestLoggingUsage:
+    """Red-phase tests verifying logging is used instead of print().
 
     After the fix, server.py should use logging.warning() and logging.error(),
     and database.py should use log.warning() and log.debug() (the module logger
@@ -273,8 +273,8 @@ class TestExport11LoggingUsage:
         )
 
 
-class TestExport11RuntimeBehavior:
-    """Red-phase tests for EXPORT-11: Verify no stdout output at runtime.
+class TestRuntimeBehavior:
+    """Red-phase tests verifying no stdout output at runtime.
 
     These tests verify that the production code paths do not write to stdout.
     They FAIL against the current code (which uses print()) and PASS after

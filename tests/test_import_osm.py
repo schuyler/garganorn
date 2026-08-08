@@ -92,6 +92,54 @@ class TestOsmImport:
         conn.close()
         assert "n1003" not in rkeys, "No-name node n1003 must be excluded"
 
+    def test_empty_and_whitespace_name_excluded(self, tmp_path):
+        """A node with an empty-string or whitespace-only name tag must be
+        excluded, the same as a missing name tag (see test_no_name_excluded).
+        Uses a standalone fixture, not the shared osm_parquet fixture, so it
+        doesn't disturb rkey/count expectations elsewhere.
+        """
+        base = tmp_path / "empty_name_fixture"
+        base.mkdir()
+        node_path = base / "node_data.parquet"
+        way_path = base / "way_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_nodes (
+                id   BIGINT,
+                tags MAP(VARCHAR, VARCHAR),
+                lat  DOUBLE,
+                lon  DOUBLE
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_nodes VALUES
+                (2001, map(['name','amenity'], ['','cafe']),      37.7700, -122.4100),
+                (2002, map(['name','amenity'], ['   ','cafe']),   37.7710, -122.4110),
+                (2003, map(['name','amenity'], ['Real Cafe','cafe']), 37.7720, -122.4120)
+        """)
+        conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+        conn.execute("""
+            CREATE TABLE tmp_ways (
+                id   BIGINT,
+                tags MAP(VARCHAR, VARCHAR),
+                nds  STRUCT(ref BIGINT)[]
+            )
+        """)
+        conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        db_path = tmp_path / "test_osm_empty_name.duckdb"
+        conn2 = duckdb.connect(str(db_path))
+        conn2.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(conn2, str(node_path), str(way_path))
+        rkeys = {row[0] for row in conn2.execute("SELECT rkey FROM places").fetchall()}
+        conn2.close()
+        assert "n2001" not in rkeys, "Empty-name node n2001 must be excluded"
+        assert "n2002" not in rkeys, "Whitespace-only-name node n2002 must be excluded"
+        assert "n2003" in rkeys, "Named node n2003 must survive"
+
     def test_surviving_places(self, osm_parquet, tmp_path):
         """Nodes n1001 and n1002 must appear by rkey."""
         db_path = tmp_path / "test_osm_survive.duckdb"

@@ -352,14 +352,14 @@ class TestTileAssignmentParity:
 # ---------------------------------------------------------------------------
 
 class TestTileAssignmentDiagnostics:
-    """EXPORT-6 dropped-place warning and EXPORT-7 duplicate-place warning
+    """Dropped-place warning and duplicate-place warning
     must still be emitted (as log messages) from stage_tile_assignment in Phase 2.
 
     Fails RED because stage_tile_assignment does not yet accept places_parquet.
     """
 
     def test_dropped_place_warning_emitted_for_null_qk17(self, tmp_path, caplog):
-        """EXPORT-6: dropped-place warning emitted when a place has NULL qk17.
+        """Dropped-place warning emitted when a place has NULL qk17.
 
         Fails RED because stage_tile_assignment does not yet accept places_parquet.
         """
@@ -381,7 +381,7 @@ class TestTileAssignmentDiagnostics:
             # Fails RED: wrong signature
             _stages.stage_tile_assignment(parquet_path, output, "overture_place", max_per_tile=100)
 
-        # EXPORT-6 diagnostic: must log a warning about dropped places
+        # Diagnostic: must log a warning about dropped places
         dropped_warnings = [
             r.message for r in caplog.records
             if r.levelno >= logging.WARNING and (
@@ -390,12 +390,12 @@ class TestTileAssignmentDiagnostics:
             )
         ]
         assert dropped_warnings, (
-            "EXPORT-6: stage_tile_assignment must log a warning for places with NULL qk17 "
+            "stage_tile_assignment must log a warning for places with NULL qk17 "
             "(dropped places diagnostic) — fails RED because signature not yet updated"
         )
 
     def test_duplicate_place_warning_emitted(self, tmp_path, caplog):
-        """EXPORT-7: duplicate-place-id warning emitted when a place appears in multiple tiles.
+        """Duplicate-place-id warning emitted when a place appears in multiple tiles.
 
         Fails RED because stage_tile_assignment does not yet accept places_parquet.
         """

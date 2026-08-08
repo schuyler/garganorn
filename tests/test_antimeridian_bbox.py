@@ -1,4 +1,4 @@
-"""Tests for antimeridian bbox handling (DATA-4).
+"""Tests for antimeridian bbox handling.
 
 These tests FAIL against current code because antimeridian-spanning features
 are silently dropped by bbox validation. The fix requires detecting xmin > xmax

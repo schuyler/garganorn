@@ -44,10 +44,10 @@ def _strip_memory_limit(sql: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Test SPATIAL-1: Coordinate range validation before ST_QuadKey()
+# Coordinate range validation before ST_QuadKey()
 # ---------------------------------------------------------------------------
 
-class TestSpatial1CoordinateRangeValidation:
+class TestCoordinateRangeValidation:
     """ST_QuadKey() must validate coordinates are in [-180,180]×[-90,90]."""
 
     def test_overture_place_out_of_range_longitude(self):
@@ -189,10 +189,10 @@ class TestSpatial1CoordinateRangeValidation:
 
 
 # ---------------------------------------------------------------------------
-# Test SPATIAL-4/DATA-4: Bbox filter should use overlap, not containment
+# Bbox filter should use overlap, not containment
 # ---------------------------------------------------------------------------
 
-class TestSpatial4BboxOverlapFilter:
+class TestBboxOverlapFilter:
     """Bbox filters should use overlap logic, not containment."""
 
     def test_overture_division_partial_overlap(self):
@@ -299,10 +299,10 @@ class TestSpatial4BboxOverlapFilter:
 
 
 # ---------------------------------------------------------------------------
-# Test DATA-1: OSM way centroid NaN from empty node sets
+# OSM way centroid NaN from empty node sets
 # ---------------------------------------------------------------------------
 
-class TestData1OsmWayEmptyNodeGuard:
+class TestOsmWayEmptyNodeGuard:
     """OSM ways with zero valid nodes should be filtered out."""
 
     def test_osm_way_with_no_valid_nodes(self):
@@ -351,10 +351,10 @@ class TestData1OsmWayEmptyNodeGuard:
 
 
 # ---------------------------------------------------------------------------
-# Test DATA-3: Bbox min/max ordering never validated
+# Bbox min/max ordering never validated
 # ---------------------------------------------------------------------------
 
-class TestData3BboxNormalization:
+class TestBboxNormalization:
     """Inverted bboxes should be normalized using LEAST/GREATEST."""
 
     def test_overture_place_inverted_bbox(self):

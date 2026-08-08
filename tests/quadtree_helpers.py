@@ -207,8 +207,11 @@ def write_minimal_overture_parquet(path, place_rows):
     Used by tests that need full control over which places match which
     density/idf keys (e.g. row-fan-out or importance-arithmetic
     characterization), independent of the shared overture_parquet fixture.
-    names.common and names.rules are both NULL for every row; these rows
-    are not intended to exercise variants derivation.
+    names.primary is set to a placeholder ("Place <id>", matching the
+    convention in make_tile_assignment_db above) so rows survive the
+    non-empty-name import filter; names.common and names.rules are both
+    NULL for every row, since these rows are not intended to exercise
+    variants derivation.
     """
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
@@ -241,7 +244,7 @@ def write_minimal_overture_parquet(path, place_rows):
                 ?,
                 {'xmin': ?, 'ymin': ?, 'xmax': ?, 'ymax': ?},
                 ?,
-                {'primary': NULL::VARCHAR,
+                {'primary': ?,
                  'common': NULL::MAP(VARCHAR, VARCHAR),
                  'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
                 {'primary': ?},
@@ -252,6 +255,7 @@ def write_minimal_overture_parquet(path, place_rows):
                 place_id,
                 lon - 0.001, lat - 0.001, lon + 0.001, lat + 0.001,
                 f"POINT({lon} {lat})",
+                f"Place {place_id}",
                 category,
             ],
         )

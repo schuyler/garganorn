@@ -102,6 +102,133 @@ class TestOvertureImport:
         missing = expected - ids
         assert not missing, f"Expected rows missing after import: {missing}"
 
+    def test_empty_whitespace_and_null_name_excluded(self, tmp_path):
+        """A row with an empty-string, whitespace-only, or NULL names.primary
+        must be excluded: all three are the same visible symptom (a place
+        with no name), not distinct cases. Uses a standalone fixture, not
+        the shared overture_parquet fixture, to isolate this from other
+        rows' expectations.
+        """
+        base = tmp_path / "empty_name_fixture"
+        base.mkdir()
+        parquet_path = base / "overture_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_ov (
+                id          VARCHAR,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                geometry    VARCHAR,
+                names       STRUCT(
+                                "primary" VARCHAR,
+                                common MAP(VARCHAR, VARCHAR),
+                                rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                            ),
+                categories  STRUCT("primary" VARCHAR),
+                addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+                websites    VARCHAR[],
+                socials     VARCHAR[],
+                emails      VARCHAR[],
+                phones      VARCHAR[],
+                brand       VARCHAR,
+                confidence  DOUBLE,
+                version     INTEGER,
+                sources     VARCHAR[]
+            )
+        """)
+        for place_id, name in [
+            ('ovempty', ''),
+            ('ovblank', '   '),
+            ('ovnull', None),
+            ('ovgood', 'Real Place'),
+        ]:
+            conn.execute("""
+                INSERT INTO tmp_ov VALUES (
+                    ?,
+                    {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+                    'POINT(-122.419 37.775)',
+                    {'primary': ?,
+                     'common': map([]::VARCHAR[], []::VARCHAR[]),
+                     'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+                    {'primary': 'coffee_shop'},
+                    NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+                )
+            """, [place_id, name])
+        conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        db_path = tmp_path / "test_ov_empty_name.duckdb"
+        conn2 = duckdb.connect(str(db_path))
+        conn2.execute("INSTALL spatial; LOAD spatial;")
+        run_overture_import(conn2, str(base / "*.parquet"))
+        ids = {row[0] for row in conn2.execute("SELECT id FROM places").fetchall()}
+        conn2.close()
+        assert "ovempty" not in ids, "Empty-string name row must be excluded"
+        assert "ovblank" not in ids, "Whitespace-only name row must be excluded"
+        assert "ovnull" not in ids, "NULL-name row must be excluded"
+        assert "ovgood" in ids, "Named row must survive"
+
+    def test_whitespace_only_variant_excluded(self, tmp_path):
+        """A names.common/names.rules entry whose value is whitespace-only
+        must be dropped from variants, the same as NULL/'' (see conftest.py
+        ov013, which covers NULL/'' but not whitespace-only). Uses a
+        standalone fixture to isolate this from the shared overture_parquet
+        fixture's ov013 row.
+        """
+        base = tmp_path / "whitespace_variant_fixture"
+        base.mkdir()
+        parquet_path = base / "overture_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_ov (
+                id          VARCHAR,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                geometry    VARCHAR,
+                names       STRUCT(
+                                "primary" VARCHAR,
+                                common MAP(VARCHAR, VARCHAR),
+                                rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                            ),
+                categories  STRUCT("primary" VARCHAR),
+                addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+                websites    VARCHAR[],
+                socials     VARCHAR[],
+                emails      VARCHAR[],
+                phones      VARCHAR[],
+                brand       VARCHAR,
+                confidence  DOUBLE,
+                version     INTEGER,
+                sources     VARCHAR[]
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_ov VALUES (
+                'ovwsvariant',
+                {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+                'POINT(-122.419 37.775)',
+                {'primary': 'Whitespace Variant Place',
+                 'common': map(['en'], ['   ']),
+                 'rules':  [{'language': 'de', 'value': '  ', 'variant': 'short'}]},
+                {'primary': 'coffee_shop'},
+                NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+            )
+        """)
+        conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        db_path = tmp_path / "test_ov_ws_variant.duckdb"
+        conn2 = duckdb.connect(str(db_path))
+        conn2.execute("INSTALL spatial; LOAD spatial;")
+        run_overture_import(conn2, str(base / "*.parquet"))
+        variants = conn2.execute(
+            "SELECT variants FROM places WHERE id = 'ovwsvariant'"
+        ).fetchone()[0]
+        conn2.close()
+        assert variants == [], f"expected [] for whitespace-only variant values; got {variants!r}"
+
     def test_qk17_is_17_chars(self, overture_parquet, tmp_path):
         """qk17 values must be 17-character strings for all surviving rows."""
         db_path = tmp_path / "test_ov_qk17_len.duckdb"

@@ -183,11 +183,6 @@ class TestRunPipeline:
             f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
         )
 
-    @pytest.mark.xfail(
-        raises=(duckdb.IOException, duckdb.CatalogException),
-        reason="OSM pipeline with nonexistent parquet raises DuckDB IO/Catalog error; "
-               "test confirms tuple parquet_glob is unpacked without TypeError",
-    )
     def test_osm_pipeline_parquet_is_tuple(self, tmp_path):
         """run_pipeline accepts a 2-tuple for parquet_glob (OSM node+way paths)."""
         try:
@@ -198,16 +193,18 @@ class TestRunPipeline:
         output_dir = tmp_path / "osm_tuple_out"
         output_dir.mkdir()
 
-        # Nonexistent paths — DuckDB will raise IOException or CatalogException,
-        # but the function must not raise TypeError from failing to unpack the tuple.
-        run_pipeline(
-            "osm",
-            ("/nonexistent/nodes/*.parquet", "/nonexistent/ways/*.parquet"),
-            (-122.55, 37.60, -122.30, 37.85),
-            str(output_dir),
-            memory_limit="4GB",
-            max_per_tile=100,
-        )
+        # Nonexistent paths — the configured-glob preflight check raises
+        # RuntimeError naming the unmatched pattern, but the function must
+        # not raise TypeError from failing to unpack the tuple.
+        with pytest.raises(RuntimeError, match=re.escape("/nonexistent/nodes/*.parquet")):
+            run_pipeline(
+                "osm",
+                ("/nonexistent/nodes/*.parquet", "/nonexistent/ways/*.parquet"),
+                (-122.55, 37.60, -122.30, 37.85),
+                str(output_dir),
+                memory_limit="4GB",
+                max_per_tile=100,
+            )
 
 
 # ---------------------------------------------------------------------------

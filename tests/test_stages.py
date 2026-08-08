@@ -31,6 +31,8 @@ from garganorn.stages import (
     stage_tile_assignment,
     compute_containment,
     stage_export,
+    stage_density_extract,
+    stage_idf,
     write_manifest,
     write_manifest_db,
     _coord_exprs,
@@ -1286,6 +1288,110 @@ def _build_export_inputs(overture_parquet, tmp_path, subdir):
                         pk_expr, lon_expr, lat_expr, containment_dir,
                         memory_limit="4GB", force=True)
     return places_parquet, ta_parquet, containment_dir
+
+
+class TestConfiguredSourceGlobPreflight:
+    """A configured source glob that matches zero files must raise before
+    the pipeline builds an empty artifact -- config.yaml globs like
+    db/cache/overture/*/part-*.parquet silently match nothing when the
+    cache holds only divisions, and stage_import/stage_division_import/
+    stage_density_extract/stage_idf otherwise proceed to build an empty
+    output artifact with no error."""
+
+    def test_overture_place_glob_matches_nothing_raises(self, tmp_path):
+        empty_glob = str(tmp_path / "empty" / "*.parquet")
+        places_parquet = str(tmp_path / "places.parquet")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            stage_import("overture_place", empty_glob, (-122.55, 37.60, -122.30, 37.85),
+                         places_parquet, memory_limit="4GB", force=True)
+
+        assert empty_glob in str(excinfo.value)
+        assert not os.path.exists(places_parquet), (
+            "stage_import must fail before writing any output artifact"
+        )
+
+    @pytest.mark.parametrize("empty_side", ["node", "way"])
+    def test_osm_glob_matches_nothing_raises(self, empty_side, osm_parquet, tmp_path):
+        empty_glob = str(tmp_path / f"empty_{empty_side}" / "*.parquet")
+        node_glob = empty_glob if empty_side == "node" else osm_parquet["node"]
+        way_glob = empty_glob if empty_side == "way" else osm_parquet["way"]
+        places_parquet = str(tmp_path / f"places_{empty_side}.parquet")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            stage_import("osm", (node_glob, way_glob), (-122.55, 37.60, -122.30, 37.85),
+                         places_parquet, memory_limit="4GB", force=True)
+
+        assert empty_glob in str(excinfo.value)
+        assert not os.path.exists(places_parquet), (
+            "stage_import must fail before writing any output artifact"
+        )
+
+    @pytest.mark.parametrize("empty_side", ["division", "division_area"])
+    def test_overture_division_glob_matches_nothing_raises(
+        self, empty_side, division_parquet, tmp_path
+    ):
+        division_path, division_area_path = division_parquet
+        empty_glob = str(tmp_path / f"empty_{empty_side}" / "*.parquet")
+        if empty_side == "division":
+            division_path = empty_glob
+        else:
+            division_area_path = empty_glob
+        places_parquet = str(tmp_path / f"places_{empty_side}.parquet")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            stage_import("overture_division", (division_path, division_area_path),
+                         (-122.55, 37.60, -122.30, 37.85),
+                         places_parquet, memory_limit="4GB", force=True)
+
+        assert empty_glob in str(excinfo.value)
+        assert not os.path.exists(places_parquet), (
+            "stage_division_import must fail before writing any output artifact"
+        )
+        boundaries_path = str(Path(places_parquet).parent / "boundaries.duckdb")
+        assert not os.path.exists(boundaries_path), (
+            "stage_division_import must fail before writing boundaries.duckdb"
+        )
+
+    def test_density_extract_glob_matches_nothing_raises(self, tmp_path):
+        empty_glob = str(tmp_path / "empty" / "*.parquet")
+        density_output = str(tmp_path / "density.parquet")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            stage_density_extract(empty_glob, density_output, time.monotonic(),
+                                  memory_limit="4GB", force=True)
+
+        assert empty_glob in str(excinfo.value)
+        assert not os.path.exists(density_output), (
+            "stage_density_extract must fail before writing any output artifact"
+        )
+
+    def test_idf_overture_glob_matches_nothing_raises(self, tmp_path):
+        empty_glob = str(tmp_path / "empty" / "*.parquet")
+        idf_output = str(tmp_path / "idf.parquet")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            stage_idf("overture_place", empty_glob, idf_output, time.monotonic(), force=True)
+
+        assert empty_glob in str(excinfo.value)
+        assert not os.path.exists(idf_output), (
+            "stage_idf must fail before writing any output artifact"
+        )
+
+    @pytest.mark.parametrize("empty_side", ["node", "way"])
+    def test_idf_osm_glob_matches_nothing_raises(self, empty_side, osm_parquet, tmp_path):
+        empty_glob = str(tmp_path / f"empty_{empty_side}" / "*.parquet")
+        node_glob = empty_glob if empty_side == "node" else osm_parquet["node"]
+        way_glob = empty_glob if empty_side == "way" else osm_parquet["way"]
+        idf_output = str(tmp_path / f"idf_{empty_side}.parquet")
+
+        with pytest.raises(RuntimeError) as excinfo:
+            stage_idf("osm", (node_glob, way_glob), idf_output, time.monotonic(), force=True)
+
+        assert empty_glob in str(excinfo.value)
+        assert not os.path.exists(idf_output), (
+            "stage_idf must fail before writing any output artifact"
+        )
 
 
 class TestAssertDensityParquetUniqueMaxTempDirectorySize:

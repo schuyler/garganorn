@@ -345,13 +345,16 @@ def overture_parquet(tmp_path_factory):
         )
     """)
 
-    # ov003 — in-bbox, names IS NULL
+    # ov003 — in-bbox, names.common and names.rules both NULL (primary
+    # present so the row survives the non-empty-name import filter).
     conn.execute("""
         INSERT INTO tmp_ov VALUES (
             'ov003',
             {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
             'POINT(-122.410 37.770)',
-            NULL,
+            {'primary': 'Place ov003',
+             'common': NULL::MAP(VARCHAR, VARCHAR),
+             'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
             {'primary': 'coffee_shop'},
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
@@ -363,7 +366,7 @@ def overture_parquet(tmp_path_factory):
             'ov004',
             {'xmin': -122.431, 'ymin': 37.779, 'xmax': -122.429, 'ymax': 37.781},
             'POINT(-122.430 37.780)',
-            {'primary': NULL::VARCHAR,
+            {'primary': 'Place ov004',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
             {'primary': 'coffee_shop'},
@@ -377,7 +380,7 @@ def overture_parquet(tmp_path_factory):
             'ov005',
             {'xmin': -122.401, 'ymin': 37.779, 'xmax': -122.399, 'ymax': 37.781},
             'POINT(-122.400 37.780)',
-            {'primary': NULL::VARCHAR,
+            {'primary': 'Place ov005',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
             {'primary': 'unique_venue'},

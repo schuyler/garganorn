@@ -1,6 +1,6 @@
-"""Tests for scoring behavior (SCORE-5).
+"""Tests for scoring behavior.
 
-TestNegativePopulationClamping (SCORE-5) tests genuine domain behavior. It
+TestNegativePopulationClamping tests genuine domain behavior. It
 uses _transitional_import_phase1 (the legacy con-based interface) until the
 division import is fully ported in Phase 2b.
 """
@@ -16,7 +16,7 @@ from garganorn.stages import stage_import
 
 
 class TestNegativePopulationClamping:
-    """Tests for SCORE-5: Negative population clamping in Overture division import.
+    """Tests for negative population clamping in Overture division import.
 
     The SQL should use GREATEST(coalesce(population, 0), 0) to clamp negative
     population values to 0 before computing ln(1 + population), ensuring

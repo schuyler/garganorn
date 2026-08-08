@@ -26,7 +26,10 @@ envelope.py's pure functions in isolation.
 import gzip
 import json
 
+import lexrpc
 import pytest
+
+from garganorn.server import load_lexicons
 
 try:
     from garganorn import envelope
@@ -274,3 +277,37 @@ class TestBuildTilePayload:
         compressed = gzip.compress(payload, mtime=0)
         decompressed = gzip.decompress(compressed)
         assert json.loads(decompressed) == json.loads(payload)
+
+    def test_build_tile_payload_validates_against_lexicon_schema(self):
+        """build_tile_payload's output validates against org.atgeo.tilePayload.
+
+        org.atgeo.tilePayload#main is an object def, not a query/procedure
+        output, so there is no method NSID to call lexrpc.Server.validate()
+        with (per its ('input', 'output', 'message', 'parameters', 'record')
+        contract); _validate_schema is the same code validate() delegates
+        to, invoked directly against the def.
+        """
+        _check_envelope()
+        payload = envelope.build_tile_payload(
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT,
+            [self._wrapped("ov001", "A"), self._wrapped("ov002", "B")],
+        )
+        server = lexrpc.Server(lexicons=load_lexicons())
+        schema = server.defs["org.atgeo.tilePayload"]
+        server._validate_schema(
+            name="output", val=json.loads(payload), type_name="org.atgeo.tilePayload",
+            lexicon="org.atgeo.tilePayload", schema=schema,
+        )
+
+    def test_build_tile_payload_empty_records_validates_against_lexicon_schema(self):
+        """records is required and must validate even when empty."""
+        _check_envelope()
+        payload = envelope.build_tile_payload(
+            self._COLLECTION, self._SOURCE_URL, self._LICENSE_URL, self._GENERATED_AT, [],
+        )
+        server = lexrpc.Server(lexicons=load_lexicons())
+        schema = server.defs["org.atgeo.tilePayload"]
+        server._validate_schema(
+            name="output", val=json.loads(payload), type_name="org.atgeo.tilePayload",
+            lexicon="org.atgeo.tilePayload", schema=schema,
+        )
