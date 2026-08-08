@@ -166,7 +166,7 @@ Forces a full re-export. Land P1 and P2 first.
 - [ ] State the user-safety principle once, prominently, and reference it
       rather than re-deriving it at each error condition. Blocked on the spec
       review above
-- [ ] Rewrite the README: no searchRecords, no Foursquare, worked examples
+- [x] Rewrite the README: no searchRecords, no Foursquare, worked examples
       actually run against overture/osm, `getCoverage` + tile fetch as the
       interface, remove the dead `docs/s2_duckdb_design.md` link, and state
       which collections are served and that the server has no users

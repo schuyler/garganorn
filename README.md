@@ -4,11 +4,15 @@ Garganorn is intended to be a test bed for experimenting with adding location da
 
 Currently, the project implements an ATProtocol XRPC server designed to serve static location datasets ("gazetteers").
 
-**WARNING: This code has not been formally released and interfaces WILL change without warning. YMMV. Patches welcome.**
+**WARNING: This code has not been formally released and interfaces WILL change without warning. YMMV. Patches welcome.** There are no users yet — nothing depends on this in production.
 
 The project is named after the earliest recorded [mammoth goose](https://en.wikipedia.org/wiki/Garganornis).
 
 ![Garganornis ballmanni](https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg/374px-Garganornis_ballmanni_%28reconstruction_by_Stefano_Maugeri%29.jpg)
+
+## What it serves
+
+Two collections today: [Overture Maps](https://overturemaps.org/) places (`org.atgeo.places.overture.place`) and [OpenStreetMap](https://www.openstreetmap.org/) (`org.atgeo.places.osm`). Both are served as pre-built, gzipped tile files — there's no live search or query-by-name; you discover tiles for a bounding box and fetch them.
 
 ## Configuration
 
@@ -23,19 +27,31 @@ tiles:
       manifest: data/overture_place/tiles/current/manifest.duckdb
       tiles_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
+      source: https://overturemaps.org/
+      license: https://docs.overturemaps.org/attribution/
+  max_coverage_tiles: 50
 ```
 
-## Data import
+`source` and `license` are required — they show up in every record's `getRecord` envelope and every tile's header, so clients can attribute correctly without a separate lookup.
 
-Look in [`scripts/import-overture-extract.sh`](scripts/import-overture-extract.sh) for an example of how to import data.
+## Getting source data
 
-Building one of these databases takes a few minutes for a reasonable bounding box on a reasonable machine with a reasonable Internet connection. You must build at least one database locally for the service to have data to serve.
+Garganorn builds tiles from local parquet, so you need to fetch that first.
 
-If `db/density.parquet` exists at import time, places are assigned density-based importance scores for ranking. Category IDF is computed inline during import from the places table itself. If the density file is absent, importance defaults to 0.
+Overture Maps (places + administrative divisions, auto-discovers the latest release):
 
-The density table is an optional artifact built separately from a global places dataset. This produces a versioned parquet file in `db/` with a symlink (`density.parquet`). Rebuilding is rarely needed — global density patterns change slowly.
+```
+scripts/download-overture.sh --cache-dir db/cache/overture
+```
 
-See [`docs/s2_duckdb_design.md`](docs/s2_duckdb_design.md) for design details.
+OpenStreetMap comes from Geofabrik as a `.osm.pbf` extract, then gets filtered and converted to parquet (requires [`osmium`](https://osmcode.org/osmium-tool/) and [`osm-pbf-parquet`](https://github.com/OvertureMaps/osm-pbf-parquet) on your `PATH`):
+
+```
+scripts/download-osm.sh --region north-america/us-northeast --cache-dir db/cache/osm
+scripts/extract-osm-parquet.sh db/cache/osm/us-northeast-latest.osm.pbf --cache-dir db/cache/osm
+```
+
+Use a smaller Geofabrik region for local testing — the default `north-america` extract is large.
 
 ## Tile export pipeline
 
@@ -56,14 +72,14 @@ Supported sources (for `run --source`):
 Imports Overture Maps administrative boundaries from the `division` and `division_area` parquet themes. Produces two outputs:
 
 - **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, admin_level, wikidata, population).
-- **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries. Used by the venue tile pipeline via `--boundaries`.
+- **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries. Used by other sources' tile pipelines via `--boundaries`.
 
 ```
 python -m garganorn.quadtree run \
   --source overture_division \
-  --division-parquet /data/overture/division.parquet \
-  --division-area-parquet /data/overture/division_area.parquet \
-  --output /srv/data
+  --division-parquet db/cache/overture/*/division/*.parquet \
+  --division-area-parquet db/cache/overture/*/division_area/*.parquet \
+  --output data
 ```
 
 To enrich another source's tiles with division containment (adds `relations.within` to each record):
@@ -71,9 +87,9 @@ To enrich another source's tiles with division containment (adds `relations.with
 ```
 python -m garganorn.quadtree run \
   --source overture_place \
-  --parquet '/data/overture/places/*.parquet' \
-  --boundaries /srv/data/overture_division/boundaries.duckdb \
-  --output /srv/data
+  --parquet 'db/cache/overture/*/part-*.parquet' \
+  --boundaries data/overture_division/boundaries.duckdb \
+  --output data
 ```
 
 Optional arguments (`run`, all sources):
@@ -119,12 +135,74 @@ gunicorn "garganorn.__main__:create_app()" --bind 0.0.0.0:8000 --workers 2
 
 ## Querying the XRPC service
 
-The collection name for each data source is set by the database class. For Overture Maps it's `org.atgeo.places.overture.place`.
+There's no search — you ask for tile coverage over a bounding box, then fetch the tiles directly. Bounding boxes must be snapped to a 0.01° grid (that's the privacy model: coarse enough that the server can't infer a client's precise location from requests).
+
+### getCoverage
+
+```
+$ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getCoverage?collection=org.atgeo.places.osm&bbox=-71.55,43.20,-71.50,43.25'
+{"tiles":["https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz","https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json.gz"]}
+```
+
+Fetch one of those URLs directly — it's a gzipped JSON array of records, source/license included in the header so you don't need a separate lookup:
+
+```
+$ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz' | gunzip
+{
+  "collection": "org.atgeo.places.osm",
+  "source": "https://www.openstreetmap.org/",
+  "license": "https://opendatacommons.org/licenses/odbl/1-0/",
+  "generated_at": "2026-08-08T06:16:21Z",
+  "records": [
+    {
+      "uri": "https://places.atgeo.org/org.atgeo.places.osm/node:10080395917",
+      "cid": null,
+      "value": {
+        "$type": "org.atgeo.place",
+        "rkey": "node:10080395917",
+        "name": "HomeGoods",
+        "importance": 0,
+        "locations": [
+          {"$type": "community.lexicon.location.geo", "latitude": "43.288557", "longitude": "-71.575664"}
+        ],
+        "variants": [],
+        "attributes": {
+          "addr:city": "Concord",
+          "addr:street": "Merchants Way",
+          "shop": "houseware"
+        },
+        "relations": {}
+      }
+    }
+    // ... more records ...
+  ]
+}
+```
 
 ### getRecord
 
+Look up a single record by collection + rkey instead:
+
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=places.atgeo.org&collection=org.atgeo.places.overture.place&rkey=<id>'
+$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=places.atgeo.org&collection=org.atgeo.places.osm&rkey=node:10080395917'
+{
+  "uri": "https://places.atgeo.org/org.atgeo.places.osm/node:10080395917",
+  "source": "https://www.openstreetmap.org/",
+  "license": "https://opendatacommons.org/licenses/odbl/1-0/",
+  "importance": 0,
+  "value": {
+    "$type": "org.atgeo.place",
+    "rkey": "node:10080395917",
+    "name": "HomeGoods",
+    "locations": [
+      {"$type": "community.lexicon.location.geo", "latitude": "43.288557", "longitude": "-71.575664"}
+    ],
+    "variants": [],
+    "attributes": {"addr:city": "Concord", "addr:street": "Merchants Way", "shop": "houseware"},
+    "relations": {}
+  },
+  "_query": {"parameters": {"repo": "places.atgeo.org", "collection": "org.atgeo.places.osm", "rkey": "node:10080395917"}, "elapsed_ms": 6}
+}
 ```
 
 ## Proposed Lexicon schemas
