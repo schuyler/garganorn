@@ -63,7 +63,7 @@ def test_config_without_tiles_returns_none(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# OQ-P2-5 slug/path/URL-contract schema
+# Slug/path/URL-contract schema
 # ---------------------------------------------------------------------------
 
 _SLUG_CONFIG = {

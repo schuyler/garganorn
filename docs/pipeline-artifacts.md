@@ -82,8 +82,8 @@ branch — an unmapped `subtype` must surface as NULL, not a silent default.
 **Schema** (`boundaries.duckdb`, table `places`): `id, geometry GEOMETRY,
 level, names, subtype, country, region, wikidata, population,
 min_latitude, max_latitude, min_longitude, max_longitude, importance,
-variants`, filtered to `level <= 50` (country through locality; boroughs
-and finer, level >= 55, are dropped), plus an `RTREE` index on `geometry`.
+variants`, unfiltered — every level in `LEVEL_VOCAB` (country through
+microhood) is present — plus an `RTREE` index on `geometry`.
 
 **Sort**: `places.parquet` is `ORDER BY qk17 NULLS LAST` — same zone-map
 reasoning as the other two sources' `places.parquet`. `boundaries.duckdb`

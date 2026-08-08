@@ -12,7 +12,6 @@
 |----------|-------------|
 | [pipeline-artifacts.md](pipeline-artifacts.md) | What each pipeline stage writes: artifact format, schema, sort order, and why |
 | [design-constraints.md](design-constraints.md) | DuckDB behaviors, pipeline invariants, tradeoffs, normalization constants |
-| [pipeline-implementation-decisions.md](pipeline-implementation-decisions.md) | Condensed design decisions behind the shipped pipeline (covering/containment, artifact restructure, envelope, level vocabulary, serving-path) |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
 | [performance-improvements.md](performance-improvements.md) | Proposed performance work on already-correct code, including correct division tile assignment and containment names (planned, not started) |
 | [known-data-quality-issues.md](known-data-quality-issues.md) | Source-data characteristics investigated and deliberately left unfixed |

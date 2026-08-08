@@ -142,6 +142,18 @@ DuckDB issues make this plausible as an engine limitation rather than a bug
 here: [duckdb/duckdb#14087](https://github.com/duckdb/duckdb/issues/14087),
 [duckdb/duckdb#18330](https://github.com/duckdb/duckdb/issues/18330).
 
+### D11: DuckDB version spread — dev pins 1.5.1, production runs 1.4.4
+
+All SQL must run unchanged on both. Two syntax consequences: `ATTACH 'p'
+AS x (READ_ONLY)` is the only attach form that parses on both versions
+(`... READ_ONLY AS` parses on neither); `COPY`'s `KV_METADATA` option is
+1.4+ only, which is why parquet/DB metadata lives in JSON sidecars
+(`.meta.json`, `_meta.json`, `manifest.json`) rather than embedded
+key-value metadata.
+
+**Applies to**: all SQL files; run `.venv/bin/pytest` to test against the
+dev pin.
+
 ---
 
 ## Pipeline Architecture Constraints
@@ -165,6 +177,14 @@ spatial keys from lon/lat coordinates.
   - Defaults: `density_norm=10.0`, `pop_norm=20.0`
 - **Non-locality divisions**: `40% population` only
   - Formula: `round(40 * least(ln(1+population)/pop_norm, 1.0))`
+
+The norm divisors (`density_norm=10.0`, `idf_norm=18.0`, `pop_norm=20.0`)
+are not arbitrary: each comes from a statistical analysis of that
+variable's distribution, chosen so the term scales to roughly `[0, 1)`
+before weighting. The 60/40 split rests on no such analysis — it was
+chosen by eyeballing search results across categories and picking
+coefficients that made the ranking look subjectively reasonable. Don't
+conflate the two when tuning or explaining this formula.
 
 **Applies to**: `overture_place_import.sql`,
 `osm_import.sql`, `overture_division_import.sql`
@@ -192,11 +212,20 @@ few percent of noise moves rankings very little.
 There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes five
 subcommands (`quadtree.py`): `density`, `idf`, `covering`, `run`
 (one source), `all` (every source). Each stage is independently gated by
-artifact freshness (mtime + params, see `pipeline-implementation-decisions.md`
-"One caching mechanism"), so there's no shared ordered pipeline object —
-`all` sequences density → idf per source → division → remaining sources,
-but `run`/individual subcommands can be invoked in any order and simply
-no-op if their inputs aren't ready.
+artifact freshness, so there's no shared ordered pipeline object — `all`
+sequences density → idf per source → division → remaining sources, but
+`run`/individual subcommands can be invoked in any order and simply no-op
+if their inputs aren't ready. Freshness itself is one mechanism
+everywhere: an artifact is fresh iff it exists, its meta sidecar exists
+and parses, the sidecar's recorded `params` matches the caller's exactly,
+the sidecar is strictly newer than every resolved input, and
+`mtime(artifact) <= mtime(meta)` (so a crash between artifact rename and
+meta write reads as stale). Editing a stage's SQL text does not itself
+invalidate its artifact — SQL is neither an input nor hashed — so
+`--force` (CLI) / `force=True` (tests) is the remedy after a SQL edit; it
+invalidates by deleting outputs, nothing else. See pipeline-artifacts.md's
+"Shared machinery" for the freshness/atomicity implementation this
+describes.
 
 **Applies to**: `quadtree.py`
 
@@ -212,9 +241,14 @@ makes IDF cacheable per-dataset.
 
 Replaced the old per-tile recursive containment (adaptive quadtree,
 CROSS JOIN per contained tile, z6 seeds subdividing past a 200-boundary
-threshold to z14) with a two-artifact approach in the Phase 1 pipeline
-restructure. Full reasoning and decisions: `pipeline-implementation-decisions.md`
-("Phase 1 — covering + containment rewrite").
+threshold to z14) with a two-artifact approach. The reason a plain R-tree
+prefilter isn't enough on its own: `ST_Contains`-style cost scales with
+the boundary polygon's vertex count, not the candidate count, so a
+900K-vertex boundary costs the same per test whether the candidate point
+is a sliver away or on the other side of the tile (see also D10). Clipping
+each boundary to a tile's own envelope during descent trims that cost
+without changing the answer, since every candidate in that tile is inside
+it: `ST_Contains(clipped, point) ⟺ ST_Contains(full, point)`.
 
 1. **Covering** (`covering.py` `stage_covering`, `COVER_MIN_ZOOM=4`,
    `COVER_MAX_ZOOM=12`): level-by-level descent z4→z12 precomputes which
@@ -234,6 +268,34 @@ construction, so a place matches each boundary at most once (no `DISTINCT`
 needed). Verified against an in-suite brute-force `ST_Contains` oracle, not
 a captured baseline (the old per-tile code never worked correctly in
 production, so no valid baseline existed to compare against).
+
+### P7: Tile serving uses three distinct, deliberately separate namespaces
+
+NSID dotted (`org.atgeo.places.overture.place`, a config key) → disk
+`source_key` snake_case (`overture_place`, private, never appears in a
+URL) → public `slug` kebab-case (`overture-place`, in the tile URL path).
+The serving route is `/tiles/<slug>/<path:tile_path>`, resolving a public
+slug to that collection's own `tiles_dir` — not a route rooted at a
+source directory, which would let `GET .../places.parquet` or
+`containment/` resolve on disk (`safe_join` blocks `..`, not sibling
+paths). This also means public URLs never mirror the on-disk snake_case
+layout. `base_url` must end with `/<slug>` or `getCoverage` emits URLs no
+route can serve — checked at startup, not discovered at request time.
+
+**Applies to**: `garganorn/__main__.py` (`serve_tile` route, `base_url`
+check)
+
+---
+
+## Compatibility Policy
+
+Backwards compatibility with prior tile/record formats is a non-goal —
+the atgeo lexicons have never been in production use and the API has
+only ever been published as beta. This is what unblocks format changes
+(envelope shape, level vocabulary, tile layout) without a consumer
+migration path. The one compatibility that does matter is internal: the
+server's own coupling to the tiles it reads, which is why a deploy ships
+server-then-re-export in that order, not the other way around.
 
 ---
 

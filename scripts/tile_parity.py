@@ -24,11 +24,9 @@ def canonical_tile(gz_path):
 
     Records are atgeo v1 {uri, cid, value}-wrapped; sorted by their
     value["rkey"] (missing rkey sorts as empty string). Tile-level
-    `generated_at` is stripped -- it is a run-scoped timestamp
-    (docs/pipeline-implementation-decisions.md, "OQ-P2-1 — record envelope
-    adoption"), not a value difference. Keys are sorted and whitespace is
-    stripped so the string is stable across runs that differ only in
-    ordering.
+    `generated_at` is stripped -- it is a run-scoped timestamp, not a
+    value difference. Keys are sorted and whitespace is stripped so the
+    string is stable across runs that differ only in ordering.
     """
     def _sort_key(r):
         # New envelope: {uri, cid, value: {..., rkey, ...}}. Old (pre-envelope)
