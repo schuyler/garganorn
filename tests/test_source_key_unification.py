@@ -206,8 +206,10 @@ class TestQuadtreeSourceKeys:
 
         # Test with overture_division
         lon, lat = garganorn.quadtree._coord_exprs("overture_division")
-        assert "bbox" in lon and "bbox" in lat, \
-            "_coord_exprs('overture_division') should return bbox expressions"
+        assert "interior_lon" in lon, \
+            "_coord_exprs('overture_division') should return an interior_lon expression"
+        assert "interior_lat" in lat, \
+            "_coord_exprs('overture_division') should return an interior_lat expression"
 
         # Test with osm
         lon, lat = garganorn.quadtree._coord_exprs("osm")

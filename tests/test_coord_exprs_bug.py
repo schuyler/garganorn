@@ -277,3 +277,142 @@ class TestComputeContainmentOverture:
         rkeys = [r["rkey"] for r in within]
         assert any("85922583" in rk for rk in rkeys), \
             f"Expected division rkey containing '85922583' in relations: {rkeys}"
+
+
+# ---------------------------------------------------------------------------
+# Representative-candidate-point bug: a division as its own candidate
+# ---------------------------------------------------------------------------
+
+class TestComputeContainmentDivisionCrescent:
+    """A division acting as its own containment CANDIDATE (overture_division
+    rows tested against boundaries.duckdb) must use its true interior point,
+    not its bbox midpoint, to decide which other division it falls within.
+
+    Regression for the representative-candidate-point bug: for a crescent/
+    non-convex division whose bbox spans a border with a neighboring
+    division, the bbox midpoint can land in the neighbor's territory
+    instead of the division's own, misattributing the `within` relation
+    (this is what happens for Norway/Chile/Indonesia-shaped divisions in
+    production). This test models that directly: a candidate crescent
+    division's true land sits just west of a border between County A (its
+    real parent) and County B (its neighbor); its bbox is built so the
+    midpoint falls just east of the border, inside County B.
+
+    With the current bbox-midpoint _coord_exprs("overture_division"), the
+    candidate resolves to County B -- wrong. After the interior-point fix
+    lands, _coord_exprs will read interior_lon/interior_lat instead, and
+    this same test (unchanged) must resolve the candidate to County A.
+    """
+
+    _COUNTY_A_WKT = "POLYGON((0 0, 1 0, 1 2, 0 2, 0 0))"   # west of the x=1 border
+    _COUNTY_B_WKT = "POLYGON((1 0, 2 0, 2 2, 1 2, 1 0))"   # east of the x=1 border
+    # bbox midpoint the unfixed code computes for the crescent candidate --
+    # just inside County B, across the border from the candidate's true land.
+    _MID_X, _MID_Y = 1.02, 1.0
+
+    def _make_boundaries_db(self, path):
+        con = duckdb.connect(path)
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.execute("""
+            CREATE TABLE places (
+                id            VARCHAR,
+                geometry      GEOMETRY,
+                level         INTEGER,
+                names         STRUCT("primary" VARCHAR),
+                min_latitude  DOUBLE,
+                max_latitude  DOUBLE,
+                min_longitude DOUBLE,
+                max_longitude DOUBLE
+            )
+        """)
+        for div_id, name, wkt in [
+            ("county_a", "County A", self._COUNTY_A_WKT),
+            ("county_b", "County B", self._COUNTY_B_WKT),
+        ]:
+            con.execute(f"""
+                INSERT INTO places
+                SELECT '{div_id}', g, 35, {{'primary': '{name}'}},
+                       ST_YMin(g), ST_YMax(g), ST_XMin(g), ST_XMax(g)
+                FROM (SELECT ST_GeomFromText('{wkt}') AS g)
+            """)
+        con.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
+        con.close()
+
+    def test_bbox_midpoint_misattributes_crescent_division_to_wrong_neighbor(self, tmp_path):
+        division_path = str(tmp_path / "division.duckdb")
+        self._make_boundaries_db(division_path)
+
+        from garganorn.covering import stage_covering
+        covering_dir = str(tmp_path / "covering")
+        stage_covering(division_path, covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        con = duckdb.connect(":memory:")
+        con.execute("INSTALL spatial; LOAD spatial;")
+        qk17_mid = con.execute(
+            "SELECT ST_QuadKey(?, ?, 17)", [self._MID_X, self._MID_Y]
+        ).fetchone()[0]
+
+        con.execute("""
+            CREATE TABLE places (
+                id            VARCHAR,
+                bbox          STRUCT(xmin DOUBLE, xmax DOUBLE, ymin DOUBLE, ymax DOUBLE),
+                qk17          VARCHAR,
+                interior_lon  DOUBLE,
+                interior_lat  DOUBLE
+            )
+        """)
+        # interior_lon/interior_lat are the candidate's true interior point,
+        # west of the border inside County A -- what the fixed _coord_exprs
+        # will read once it switches from bbox midpoint to these columns.
+        con.execute(
+            "INSERT INTO places VALUES ('crescent_child', "
+            "{'xmin': ?, 'xmax': ?, 'ymin': ?, 'ymax': ?}, ?, ?, ?)",
+            [self._MID_X - 0.01, self._MID_X + 0.01,
+             self._MID_Y - 0.01, self._MID_Y + 0.01, qk17_mid,
+             0.5, 1.0],
+        )
+        con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+        con.execute("INSERT INTO tile_assignments VALUES ('crescent_child', ?)", [qk17_mid[:6]])
+
+        places_parquet = str(tmp_path / "crescent_places.parquet")
+        ta_parquet = str(tmp_path / "crescent_ta.parquet")
+        con.execute(
+            f"COPY (SELECT id, bbox, qk17, interior_lon, interior_lat FROM places) "
+            f"TO '{places_parquet}' (FORMAT PARQUET)"
+        )
+        con.execute(f"COPY (SELECT place_id, tile_qk FROM tile_assignments) TO '{ta_parquet}' (FORMAT PARQUET)")
+
+        lon_expr, lat_expr = _coord_exprs("overture_division", alias="p")
+        containment_dir = str(tmp_path / "containment")
+        compute_containment(
+            places_parquet, ta_parquet, division_path,
+            "id", lon_expr, lat_expr, containment_dir,
+            covering_dir=covering_dir,
+            force=True,
+        )
+
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir) if f.endswith(".parquet")
+        ]
+        check_con = duckdb.connect()
+        rows = (
+            check_con.execute(
+                f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
+            ).fetchall()
+            if parquet_files else []
+        )
+        check_con.close()
+
+        assert len(rows) == 1, (
+            f"Expected 1 containment row for crescent_child, got {len(rows)}: {rows}"
+        )
+        relations = json.loads(rows[0][1])
+        rkeys = [r["rkey"] for r in relations.get("within", [])]
+        assert any("county_a" in rk for rk in rkeys), (
+            f"Expected crescent_child to be within County A (its true "
+            f"containing division), got: {rkeys}. The bbox-midpoint "
+            f"_coord_exprs('overture_division') expression lands in "
+            f"County B's territory instead -- this is the "
+            f"representative-candidate-point bug."
+        )

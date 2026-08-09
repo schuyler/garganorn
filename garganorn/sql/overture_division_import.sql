@@ -52,6 +52,11 @@ merged_areas AS (
     FROM division_area
     GROUP BY division_id
 ),
+merged_areas_interior AS (
+    SELECT division_id, geometry,
+           ST_PointOnSurface(geometry) AS interior_point
+    FROM merged_areas
+),
 division_base AS (
     SELECT
         d.id,
@@ -80,9 +85,11 @@ division_base AS (
         ST_YMin(ma.geometry) AS min_latitude,
         ST_YMax(ma.geometry) AS max_latitude,
         ST_XMin(ma.geometry) AS min_longitude,
-        ST_XMax(ma.geometry) AS max_longitude
+        ST_XMax(ma.geometry) AS max_longitude,
+        ST_X(ma.interior_point) AS interior_lon,
+        ST_Y(ma.interior_point) AS interior_lat
     FROM division d
-    JOIN merged_areas ma ON ma.division_id = d.id
+    JOIN merged_areas_interior ma ON ma.division_id = d.id
 ),
 -- Compute average density for localities: find all z15 density tiles whose
 -- bbox intersects the locality's bounding box. Uses bbox-overlap join

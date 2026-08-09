@@ -207,6 +207,28 @@ def _assert_unique_key(con, table, key_col, source_path):
         )
 
 
+def _assert_interior_points(con, source_expr, description):
+    """Fail loudly if any row's (interior_lon, interior_lat) is not
+    ST_Within its own geometry. Standalone for direct unit-testability --
+    ST_PointOnSurface should make this unreachable via real import data.
+    Catches: NULL coordinates, NaN coordinates (e.g. from POINT EMPTY when
+    ST_PointOnSurface has nothing to work with), and any point that ST_Within
+    reports as outside the geometry (including via off-surface points from
+    degenerate GEOMETRYCOLLECTION-shaped input)."""
+    non_interior_count = con.execute(f"""
+        SELECT count(*) FROM {source_expr}
+        WHERE interior_lon IS NULL OR interior_lat IS NULL
+           OR isnan(interior_lon) OR isnan(interior_lat)
+           OR NOT ST_Within(ST_Point(interior_lon, interior_lat), geometry)
+    """).fetchone()[0]
+    if non_interior_count != 0:
+        raise RuntimeError(
+            f"{description}: {non_interior_count} rows have an interior "
+            f"point outside their own geometry; ST_PointOnSurface should "
+            f"guarantee this cannot happen. Never default or guess."
+        )
+
+
 def _assert_density_parquet_unique(density_parquet, *, temp_directory=None,
                                    max_temp_directory_size="250GB",
                                    memory_limit=None):
@@ -270,9 +292,11 @@ def _coord_exprs(source, alias=""):
     with that table alias (e.g. "t.longitude" instead of "longitude").
     """
     prefix = f"{alias}." if alias else ""
-    if source in ("overture_place", "overture_division"):
+    if source == "overture_place":
         return (f"({prefix}bbox.xmin + {prefix}bbox.xmax) / 2.0",
                 f"({prefix}bbox.ymin + {prefix}bbox.ymax) / 2.0")
+    if source == "overture_division":
+        return f"{prefix}interior_lon", f"{prefix}interior_lat"
     return f"{prefix}longitude", f"{prefix}latitude"
 
 
@@ -937,6 +961,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
                 f"have a NULL level after the level_case CASE; this should be "
                 f"unreachable once the fail-loud subtype check above passes."
             )
+
+        _assert_interior_points(con, "division_all", "overture_division import")
 
         # Step 2: COPY places artifact (geometry excluded, qk17-sorted)
         con.execute(

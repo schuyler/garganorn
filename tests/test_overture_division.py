@@ -82,38 +82,49 @@ class TestAttribution:
 # ---------------------------------------------------------------------------
 
 class TestCoordExprs:
-    """_coord_exprs must return bbox midpoint expressions for overture_division."""
+    """_coord_exprs must return the division's own interior-point columns
+    for overture_division, not overture_place's bbox-midpoint expression.
 
-    def test_returns_bbox_midpoint_no_alias(self):
+    A bbox midpoint can land outside a non-convex/crescent/multi-part
+    (MULTIPOLYGON) division's own geometry -- e.g. Norway, Chile, Indonesia.
+    The fix computes ST_PointOnSurface(geometry) once at import time and
+    stores it as interior_lon/interior_lat columns; _coord_exprs must
+    reference those columns for overture_division instead of bbox.
+    """
+
+    def test_returns_interior_point_no_alias(self):
         from garganorn.quadtree import _coord_exprs
         lon_expr, lat_expr = _coord_exprs("overture_division")
-        assert "bbox.xmin" in lon_expr and "bbox.xmax" in lon_expr, (
-            f"Expected bbox midpoint lon expression, got {lon_expr!r}"
+        assert lon_expr == "interior_lon", (
+            f"Expected 'interior_lon', got {lon_expr!r}"
         )
-        assert "bbox.ymin" in lat_expr and "bbox.ymax" in lat_expr, (
-            f"Expected bbox midpoint lat expression, got {lat_expr!r}"
+        assert lat_expr == "interior_lat", (
+            f"Expected 'interior_lat', got {lat_expr!r}"
         )
 
-    def test_returns_bbox_midpoint_with_alias(self):
+    def test_returns_interior_point_with_alias(self):
         from garganorn.quadtree import _coord_exprs
         lon_expr, lat_expr = _coord_exprs("overture_division", alias="p")
-        assert "p.bbox.xmin" in lon_expr and "p.bbox.xmax" in lon_expr, (
-            f"Expected aliased bbox midpoint lon expression, got {lon_expr!r}"
+        assert lon_expr == "p.interior_lon", (
+            f"Expected 'p.interior_lon', got {lon_expr!r}"
         )
-        assert "p.bbox.ymin" in lat_expr and "p.bbox.ymax" in lat_expr, (
-            f"Expected aliased bbox midpoint lat expression, got {lat_expr!r}"
+        assert lat_expr == "p.interior_lat", (
+            f"Expected 'p.interior_lat', got {lat_expr!r}"
         )
 
-    def test_matches_overture_expressions(self):
-        """overture_division coord exprs should match overture_place's (same bbox schema)."""
+    def test_differs_from_overture_place_expressions(self):
+        """overture_division must no longer share overture_place's bbox
+        midpoint expression -- that shared expression is the bug."""
         from garganorn.quadtree import _coord_exprs
         ov_lon, ov_lat = _coord_exprs("overture_place")
         div_lon, div_lat = _coord_exprs("overture_division")
-        assert div_lon == ov_lon, (
-            f"overture_division lon_expr {div_lon!r} != overture_place {ov_lon!r}"
+        assert div_lon != ov_lon, (
+            f"overture_division lon_expr must differ from overture_place's "
+            f"bbox-midpoint expression; got the same: {div_lon!r}"
         )
-        assert div_lat == ov_lat, (
-            f"overture_division lat_expr {div_lat!r} != overture_place {ov_lat!r}"
+        assert div_lat != ov_lat, (
+            f"overture_division lat_expr must differ from overture_place's "
+            f"bbox-midpoint expression; got the same: {div_lat!r}"
         )
 
 
@@ -449,3 +460,95 @@ class TestDivisionImportArtifactPhase2:
             "stage_import must rebuild when boundaries.duckdb is missing "
             "(single meta gates both artifacts)"
         )
+
+
+# ---------------------------------------------------------------------------
+# _assert_interior_points (representative-candidate-point fix, RED)
+# ---------------------------------------------------------------------------
+
+class TestAssertInteriorPoints:
+    """_assert_interior_points must raise RuntimeError when any row's
+    (interior_lon, interior_lat) is not ST_Within its own geometry, and
+    must not raise when every row's point is genuinely interior.
+
+    Exercised directly against a synthetic (geometry, interior_lon,
+    interior_lat) table -- no need to reconstruct division_all's full
+    column set, per the design note in stages._assert_interior_points.
+    """
+
+    _SQUARE_WKT = "POLYGON((0 0, 10 0, 10 10, 0 10, 0 0))"
+    # Two disjoint squares -- an exterior point (15, 15), the midpoint
+    # between their centers (5, 5) and (25, 25), sits in the gap between
+    # them, outside both parts, modeling the Norway/Chile/Indonesia
+    # multi-part failure mode this guard exists to catch.
+    _MULTIPOLYGON_WKT = (
+        "MULTIPOLYGON(((0 0, 10 0, 10 10, 0 10, 0 0)),"
+        "((20 20, 30 20, 30 30, 20 30, 20 20)))"
+    )
+
+    def _make_table(self):
+        con = duckdb.connect(":memory:")
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.execute("""
+            CREATE TABLE t (
+                geometry GEOMETRY,
+                interior_lon DOUBLE,
+                interior_lat DOUBLE
+            )
+        """)
+        return con
+
+    def test_exterior_point_raises(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._SQUARE_WKT}'), 50.0, 50.0)
+        """)
+        with pytest.raises(RuntimeError):
+            _stages._assert_interior_points(con, "t", "test import")
+
+    def test_multipolygon_exterior_point_raises(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._MULTIPOLYGON_WKT}'), 15.0, 15.0)
+        """)
+        with pytest.raises(RuntimeError):
+            _stages._assert_interior_points(con, "t", "test import")
+
+    def test_null_lon_raises(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._SQUARE_WKT}'), NULL, 5.0)
+        """)
+        with pytest.raises(RuntimeError):
+            _stages._assert_interior_points(con, "t", "test import")
+
+    def test_null_lat_raises(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._SQUARE_WKT}'), 5.0, NULL)
+        """)
+        with pytest.raises(RuntimeError):
+            _stages._assert_interior_points(con, "t", "test import")
+
+    def test_nan_lon_raises(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._SQUARE_WKT}'), 'NaN'::DOUBLE, 5.0)
+        """)
+        with pytest.raises(RuntimeError):
+            _stages._assert_interior_points(con, "t", "test import")
+
+    def test_nan_lat_raises(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._SQUARE_WKT}'), 5.0, 'NaN'::DOUBLE)
+        """)
+        with pytest.raises(RuntimeError):
+            _stages._assert_interior_points(con, "t", "test import")
+
+    def test_interior_point_does_not_raise(self):
+        con = self._make_table()
+        con.execute(f"""
+            INSERT INTO t VALUES (ST_GeomFromText('{self._SQUARE_WKT}'), 5.0, 5.0)
+        """)
+        _stages._assert_interior_points(con, "t", "test import")

@@ -9,10 +9,10 @@ scoped for implementation until its section says so.
 ## Containment computation: polygon tiling, and correct division tile assignment
 
 Status: design settled in the 2026-08-09 walkthrough, recorded below as
-three named shippable units. representative-candidate-point is
-implementable now. overlap-tile-references and fragment-containment are
-blocked only on the Discovery step, which pins three numbers; every
-other formerly-open question is decided in the body below. (History:
+three named shippable units. representative-candidate-point has
+shipped. Discovery (below) has pinned all three numbers, so
+overlap-tile-references and fragment-containment are also unblocked for
+implementation. (History:
 scoping 2026-08-08 merged this with the division tile assignment
 problem once both needed the same mechanism; a rigor pass 2026-08-09
 corrected the description of the current tile-assignment path and added
@@ -74,18 +74,6 @@ the *import* stage only; `run_pipeline` (`quadtree.py`) then calls
 divisions included, feeding the midpoint `qk17` into the `max_per_tile`
 splitter. The `qk17` column is the mechanism's *input*, not the whole
 mechanism.
-
-### Problem: division candidate points share the defect
-
-Divisions are not only boundaries that contain things; they are also
-candidates that get contained — each division carries its own
-`relations.within` list, computed by the same containment machinery
-that handles places, which needs a point per candidate. `_coord_exprs`
-supplies that point as the bbox midpoint, the same computation as
-`qk17`: Norway's own parent relations are decided at a point that may
-lie in Sweden or the open sea, producing wrong or missing `within`
-entries on the division record itself. Fixed by
-representative-candidate-point below.
 
 ### Requirements
 
@@ -254,30 +242,30 @@ stated in prose: fragment-containment extends the covering machinery
 that overlap-tile-references reads, so it lands last and reworks
 nothing that shipped before it.
 
-- **representative-candidate-point** — replace the bbox-midpoint
-  candidate point for division candidates with an interior
-  representative point (`ST_PointOnSurface`-style) computed at import,
-  guarded by a fail-loud import assertion that the point is
-  `ST_Within` the geometry — same pattern as the subtype/level
-  validator, and the invariant must hold for every geometry type
-  `ST_Union_Agg` can produce (MULTIPOLYGON included). A single interior
-  point cannot perfectly represent an area's containment, but admin
-  hierarchies are nested enough that it is correct in all
-  non-pathological cases — and it is categorically better than a point
-  that may not be inside the division, at a fraction of the cost of
-  polygon-polygon intersection. No data dependency; ships first and
-  alone, so `within`-relation diffs in the next build are attributable
-  to this change and nothing else.
+- **representative-candidate-point** — shipped. Division candidates'
+  containment point is now `ST_PointOnSurface` of the division's
+  geometry (computed once, in `overture_division_import.sql`'s
+  `merged_areas_interior` CTE) instead of the bbox midpoint, guarded by
+  a fail-loud import assertion (`_assert_interior_points`, a standalone
+  helper following the `_assert_unique_key` convention) that the point is `ST_Within` the
+  geometry for every shape `ST_Union_Agg` can produce, MULTIPOLYGON
+  included. `_coord_exprs`'s `overture_division` branch reads the new
+  `interior_lon`/`interior_lat` columns; `qk17` and tile assignment are
+  untouched. A single interior point still can't perfectly represent an
+  area's containment, but admin hierarchies are nested enough that it's
+  correct in all non-pathological cases, and it's categorically better
+  than a point that may not be inside the division at all. Shipped
+  alone, with no dependency on the other two units, so `within`-relation
+  diffs in the next build are attributable to this change and nothing
+  else.
 - **overlap-tile-references** — the correctness fix. Division-to-tile
-  references from real overlap (Tier A / Tier B above), membership
-  only, no stored fragments; replaces `stage_tile_assignment` for the
-  division source. Blocked on Discovery items 1 and 2 (reference zoom,
-  worst-cell counts).
+  references from real overlap (Tier A / Tier B above; reference zoom
+  z4), membership only, no stored fragments; replaces
+  `stage_tile_assignment` for the division source.
 - **fragment-containment** — the performance fix. The three
-  covering-loop modifications above: adaptive stopping rule, persisted
-  edge-leaf geometry, variable-depth edge arm. Blocked on Discovery
-  item 3 (`V` and the depth cap); storage placement decided during
-  implementation.
+  covering-loop modifications above: adaptive stopping rule (`V =
+  5000`, depth cap 16), persisted edge-leaf geometry, variable-depth
+  edge arm. Storage placement decided during implementation.
 
 ### Verification
 
@@ -312,41 +300,58 @@ them invisible to spot checks. The checks target them directly:
 
 ### Discovery
 
-Prerequisite for overlap-tile-references and fragment-containment; runs
-where the build artifacts live (`boundaries.duckdb` and a fresh build
-log — this supersedes the standing instruction in Evidence to re-run
-the log analysis). Three numbers, each feeding a decision:
+Prerequisite for overlap-tile-references and fragment-containment; ran
+against `boundaries.duckdb` and the covering artifact on `atgeo-1` from
+the 2026-08-08 build — the same build behind `compute-containment.log`/
+`tile-build.log` in the repo root, which turned out to already be the
+fresh build log this step needed. Three numbers, now pinned:
 
-1. **Reference zoom.** Cells-per-division distributions at candidate
-   zooms (z4–z7) from `bnd.places` geometry, worst cases first
-   (Russia, Canada). Feeds the Tier A reference zoom, checked against
-   the client `max_tiles=50` cap and tolerable tile bloat (a
-   division's record is duplicated once per referencing tile).
-2. **Worst-cell division counts.** Divisions-overlapping-cell at those
-   same zooms for the densest cells (dense sub-locality regions, e.g.
-   Jakarta). Feeds the decision to accept unbounded per-tile division
-   counts after dropping `max_per_tile`. Fold in the sub-locality
-   size/cost sanity check (the level-vocabulary doubling already
-   shipped) — same query, same pass.
-3. **Fragment capacity and depth cap.** `ST_NPoints` distribution over
-   `bnd.places`; then prototype the vertex-count stopping rule on a
-   copy of the covering loop to measure fragment counts and bytes at
-   candidate `V` values, and validate the cost-∝-vertex-count model
-   against the fresh log. Feeds `V`, the depth cap, and the size
-   budget for the storage-placement decision.
+1. **Reference zoom: z4.** Cells-touched-per-division at z4 has p99 =
+   1.67, p999 = 2.12; only Antarctica (71 cells) breaches the client's
+   `max_tiles=50` cap, and total tile-reference duplication stays under
+   1.2%. Every zoom from z5 up puts Russia and/or Canada over the cap.
+   Antarctica is a guardrail case (below), not a reason to go coarser.
+   z4 dominates the z4–z7 candidate range outright — it's both the
+   shallowest option and the only one under the cap — so there's no
+   real tradeoff between zoom depth and tile bloat to weigh here.
+2. **Unbounded per-tile division counts: accepted.** Divisions-per-cell
+   at z4 is heavily clustered — one SE-Asia-region cell (`1202`) holds
+   130,269 of 617,734 divisions (p50 across hit cells is 12) — geographically
+   concentrated bloat, not diffuse growth. (This measures covering-touch
+   at a fixed z4, an upper bound on Tier B's actual per-tile counts,
+   which place each division at its own size-fit zoom — real counts run
+   lower.) The implausible-referencing-count guardrail (below) is the
+   intended backstop, not a `max_per_tile`-style cap.
+3. **Fragment capacity: `V = 5000`, depth cap `16`.** `ST_NPoints` over
+   all divisions: p50 = 123, p99 = 6,217, max = 345,467. The ~20
+   known-slow cells' cost is driven by a handful of hyper-complex
+   single boundaries (130k-345k vertices) tested at full size against
+   every candidate point. Prototyping the adaptive stopping rule shows
+   fragment count falling monotonically as `V` grows (23,891 fragments
+   at `V = 500` down to 2,244 at `V = 5000`); `V = 500` fails to
+   converge even at the prototype's z18 depth cap. `V = 5000` cuts
+   worst-case per-point test cost 40-70x for the worst cells and fully
+   resolves by z15 — three levels past today's `COVER_MAX_ZOOM = 12`,
+   with one level of headroom under the depth cap. Storage isn't what
+   a tighter `V` would buy: total stored vertices across all fragments
+   barely moves with `V` (3.88M at `V = 500` vs 4.05M at `V = 5000`,
+   +4.5%) — the real cost of going tighter is fragment count and
+   recursion depth, both minimized by `V = 5000` while it still clears
+   the fix's own target (the 10-38x slowdowns the original log
+   analysis measured) with margin to spare.
 
 ### Open questions
 
-- [ ] The three Discovery numbers: reference zoom; acceptability of
-      unbounded per-tile division counts; `V` and the depth cap.
 - [ ] Storage placement for persisted edge-leaf geometry —
-      implementation-time, sized by Discovery item 3. Key and
-      attribution are inherited from the covering and are not
+      implementation-time, sized by the pinned `V`/depth cap above.
+      Key and attribution are inherited from the covering and are not
       reopenable here.
 - [ ] Guardrail: log (or fail on) divisions whose referencing-cell
       count is implausible for their level, so a garbage geometry
       (`known-data-quality-issues.md` documents them) cannot fan out
-      into hundreds of tiles silently.
+      into hundreds of tiles silently. Concrete candidates from
+      Discovery: Antarctica (71 cells at z4) and a level-50 division
+      reaching 27 cells at z7 against a level-50 median of 1.
 
 ### Evidence
 
