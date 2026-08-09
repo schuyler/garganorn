@@ -80,15 +80,21 @@ does anything at all with attributes has to write against one shape. Picking
 a collection and staying there is what apps will do in practice; the
 invariant just declines to pretend otherwise.
 
-### Division results need deduplication
+### Deduplicate concatenated results by `rkey`
 
-Every other collection guarantees one record, one tile. The division
-collection (`org.atgeo.places.overture.division`) does not: a division
-can be referenced from more than one tile it overlaps, so a `searchPlaces`
-call against that collection must dedupe its concatenated results by
-`rkey` before matching and ranking. [atgeo-spec.md](atgeo-spec.md) is
-normative here; this note exists so the concatenation step doesn't get
-written once per collection and get this one wrong.
+Every `searchPlaces` call that concatenates `records` arrays from more
+than one tile must dedupe the result by `rkey` before matching and
+ranking — for every collection, not just ones that currently produce
+duplicates. [atgeo-spec.md](atgeo-spec.md) is normative here; this note
+exists so the concatenation step doesn't get written once per collection
+and skip this because a given collection looks duplicate-free today.
+
+In practice, only the division collection
+(`org.atgeo.places.overture.division`) currently produces real
+duplicates: a division can be referenced from more than one tile it
+overlaps. Every other collection currently places each record in
+exactly one tile, so dedup is a no-op there today — but the code path
+shouldn't assume that stays true.
 
 ### Precision is the SDK's job, not the developer's
 

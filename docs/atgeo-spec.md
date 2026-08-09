@@ -67,16 +67,21 @@ when no coarser tile qualifies. Consequences a client must handle: tiles at
 different zooms coexist in one collection, and no fixed zoom may be
 assumed.
 
-**One record, one tile — with one declared exception.** Within a
-collection, each record belongs to exactly one tile, so any two tiles
-hold disjoint record sets and concatenation needs no deduplication. The
-division collection (`org.atgeo.places.overture.division`) is the
-exception: a division can be referenced from more than one tile, so a
-client concatenating `records` arrays from more than one division tile
-MUST deduplicate by `rkey`. This is declared ahead of the work that will
-produce it — division tile assignment today still puts each division in
-exactly one tile — so a client written against this spec is correct
-before and after that lands.
+**Deduplicate by `rkey`.** A client concatenating `records` arrays from
+more than one tile in the same collection MUST deduplicate by `rkey`.
+This holds for every collection, unconditionally — a client can't tell
+from the wire alone whether a given collection's current placement
+behavior happens to avoid duplicates, and a future server-side change
+shouldn't require a corresponding client-side change to stay correct.
+
+Whether duplication actually occurs today varies by collection, as a
+performance characteristic rather than a client-facing guarantee:
+non-division collections currently place each record in exactly one
+tile, so concatenating their tiles produces near-zero redundant bytes
+in practice. The division collection
+(`org.atgeo.places.overture.division`) is the current exception: a
+division can be referenced from more than one tile, so real duplication
+should be expected there.
 
 **Transport.** Tiles are served with `Content-Encoding: gzip` and
 `Content-Type: application/json`, unconditionally. The server does not
