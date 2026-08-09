@@ -261,7 +261,9 @@ nothing that shipped before it.
 - **overlap-tile-references** — the correctness fix. Division-to-tile
   references from real overlap (Tier A / Tier B above; reference zoom
   z4), membership only, no stored fragments; replaces
-  `stage_tile_assignment` for the division source.
+  `stage_tile_assignment` for the division source. Implementation-level
+  design, reviewed through four rounds: see
+  [overlap-tile-references-design.md](overlap-tile-references-design.md).
 - **fragment-containment** — the performance fix. The three
   covering-loop modifications above: adaptive stopping rule (`V =
   5000`, depth cap 16), persisted edge-leaf geometry, variable-depth
