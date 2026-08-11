@@ -78,6 +78,25 @@ class TestStageTileAssignment:
             "stage_tile_assignment must disable the DuckDB progress bar"
         )
 
+    def test_applies_memory_limit(self, overture_parquet, tmp_path, monkeypatch):
+        """stage_tile_assignment does a CROSS JOIN generate_series over all
+        places plus a global sort; it must bound memory to the given
+        memory_limit rather than running at DuckDB's default."""
+        places_parquet = str(tmp_path / "places_ml.parquet")
+        ta_parquet = str(tmp_path / "tile_assignments_ml.parquet")
+
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True)
+
+        import garganorn.stages as stages_mod
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
+                              max_per_tile=100, memory_limit="7GB", force=True)
+
+        assert any("SET memory_limit = '7GB'" in s for s in statements), (
+            "stage_tile_assignment must apply the given memory_limit"
+        )
+
 
 class TestStageContainment:
     """Tests for compute_containment function."""

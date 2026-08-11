@@ -1356,6 +1356,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
             con.execute(f"SET temp_directory = '{temp_directory}'")
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
         con.execute("SET enable_progress_bar = false")
 
