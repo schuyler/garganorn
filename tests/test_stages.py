@@ -60,6 +60,24 @@ class TestStageTileAssignment:
         con.close()
         assert count > 0, "tile_assignments should have rows"
 
+    def test_disables_progress_bar(self, overture_parquet, tmp_path, monkeypatch):
+        """The CROSS JOIN generate_series over all places plus a global sort
+        must disable the DuckDB progress bar so it doesn't pollute build logs."""
+        places_parquet = str(tmp_path / "places_pb.parquet")
+        ta_parquet = str(tmp_path / "tile_assignments_pb.parquet")
+
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True)
+
+        import garganorn.stages as stages_mod
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
+                              max_per_tile=100, force=True)
+
+        assert any("SET enable_progress_bar = false" in s for s in statements), (
+            "stage_tile_assignment must disable the DuckDB progress bar"
+        )
+
 
 class TestStageContainment:
     """Tests for compute_containment function."""
@@ -1463,6 +1481,19 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         )
         assert "250GB" in stmts[0], (
             f"default bound must be 250GB; got: {stmts[0]!r}"
+        )
+
+    def test_disables_progress_bar(self, density_parquet, monkeypatch):
+        """The uniqueness count over the density parquet must disable the
+        DuckDB progress bar so it doesn't pollute build logs."""
+        from garganorn.stages import _assert_density_parquet_unique
+        import garganorn.stages as stages_mod
+
+        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        _assert_density_parquet_unique(density_parquet)
+
+        assert any("SET enable_progress_bar = false" in s for s in statements), (
+            "_assert_density_parquet_unique must disable the DuckDB progress bar"
         )
 
 

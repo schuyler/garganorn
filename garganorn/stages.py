@@ -279,6 +279,7 @@ def _assert_density_parquet_unique(density_parquet, *, temp_directory=None,
             con.execute(f"SET temp_directory = '{temp_directory}'")
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute("SET enable_progress_bar = false")
         source_sql = density_parquet.replace("'", "''")
         _assert_unique_key(con, f"read_parquet('{source_sql}')", "tile_qk15", density_parquet)
     finally:
@@ -1356,6 +1357,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
 
         # Total places count for dropped-place diagnostic
         total = con.execute(

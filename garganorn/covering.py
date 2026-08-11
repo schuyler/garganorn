@@ -185,6 +185,7 @@ def stage_covering(
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(f"SET memory_limit = '{memory_limit}'")
         con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
         con.execute("INSTALL spatial; LOAD spatial")
 
         _load_qk_env_macros(con)
