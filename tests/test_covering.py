@@ -39,6 +39,7 @@ def _check_covering():
 
 
 from garganorn.stages import quadkey_to_bbox
+from tests.duckdb_spy import spy_on_duckdb_connect
 
 # ---------------------------------------------------------------------------
 # Minimal boundaries DB shared by covering tests
@@ -410,28 +411,6 @@ class TestStageCoveringSchema:
         assert meta["cover_max_zoom"] == 7
 
 
-def _spy_on_duckdb_connect(monkeypatch, module):
-    """Record every SQL statement executed on connections opened by `module`."""
-    real_connect = module.duckdb.connect
-    statements = []
-
-    class _RecordingConn:
-        def __init__(self, real):
-            self._real = real
-
-        def execute(self, sql, *a, **kw):
-            statements.append(sql)
-            return self._real.execute(sql, *a, **kw)
-
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    monkeypatch.setattr(
-        module.duckdb, "connect", lambda *a, **kw: _RecordingConn(real_connect(*a, **kw))
-    )
-    return statements
-
-
 class TestStageCoveringProgressBar:
     """stage_covering's long-running iterative per-zoom loop must disable
     the DuckDB progress bar so it doesn't pollute build logs."""
@@ -440,7 +419,7 @@ class TestStageCoveringProgressBar:
         _check_covering()
         import garganorn.covering as covering_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, covering_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, covering_mod)
         out_dir = str(tmp_path_factory.mktemp("progress_cov") / "covering")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=5)
 

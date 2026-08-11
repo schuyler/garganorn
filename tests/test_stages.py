@@ -39,6 +39,7 @@ from garganorn.stages import (
 )
 from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
 from garganorn.quadtree import run_pipeline, SOURCES
+from tests.duckdb_spy import spy_on_duckdb_connect
 
 
 class TestStageTileAssignment:
@@ -70,7 +71,7 @@ class TestStageTileAssignment:
                      places_parquet, memory_limit="4GB", force=True)
 
         import garganorn.stages as stages_mod
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, force=True)
 
@@ -89,7 +90,7 @@ class TestStageTileAssignment:
                      places_parquet, memory_limit="4GB", force=True)
 
         import garganorn.stages as stages_mod
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="7GB", force=True)
 
@@ -717,31 +718,14 @@ class TestStageExportTempDirectory:
         scratch = tmp_path / "scratch_td2"
         scratch.mkdir()
 
-        real_connect = stages_mod.duckdb.connect
-        recorded = {"statements": []}
-
-        class _RecordingConn:
-            def __init__(self, real):
-                self._real = real
-
-            def execute(self, sql, *a, **kw):
-                recorded["statements"].append(sql)
-                return self._real.execute(sql, *a, **kw)
-
-            def __getattr__(self, name):
-                return getattr(self._real, name)
-
-        def spy_connect(*a, **kw):
-            return _RecordingConn(real_connect(*a, **kw))
-
-        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
                      force=True, temp_directory=str(scratch))
 
-        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
-        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {recorded['statements']}"
+        temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
+        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {statements}"
         stmt = temp_dir_stmts[0]
         assert str(scratch) in stmt, (
             f"stage_export must SET temp_directory under the caller-supplied "
@@ -768,31 +752,14 @@ class TestStageExportTempDirectory:
         )
         tiles_root = str(tmp_path / "tiles_td3")
 
-        real_connect = stages_mod.duckdb.connect
-        recorded = {"statements": []}
-
-        class _RecordingConn:
-            def __init__(self, real):
-                self._real = real
-
-            def execute(self, sql, *a, **kw):
-                recorded["statements"].append(sql)
-                return self._real.execute(sql, *a, **kw)
-
-            def __getattr__(self, name):
-                return getattr(self._real, name)
-
-        def spy_connect(*a, **kw):
-            return _RecordingConn(real_connect(*a, **kw))
-
-        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
                                force=True)
 
-        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
-        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {recorded['statements']}"
+        temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
+        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {statements}"
         assert run_dir + ".spill" in temp_dir_stmts[0], (
             f"default spill location must remain run_dir + '.spill'; got: {temp_dir_stmts[0]!r}"
         )
@@ -864,35 +831,18 @@ class TestStageImportTempDirectory:
         scratch = tmp_path / "scratch_import"
         scratch.mkdir()
 
-        real_connect = stages_mod.duckdb.connect
-        recorded = {"statements": []}
-
-        class _RecordingConn:
-            def __init__(self, real):
-                self._real = real
-
-            def execute(self, sql, *a, **kw):
-                recorded["statements"].append(sql)
-                return self._real.execute(sql, *a, **kw)
-
-            def __getattr__(self, name):
-                return getattr(self._real, name)
-
-        def spy_connect(*a, **kw):
-            return _RecordingConn(real_connect(*a, **kw))
-
-        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      density_parquet=density_parquet, temp_directory=str(scratch))
 
-        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
+        temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, (
             f"stage_import must SET temp_directory on its own connection when "
             f"temp_directory is supplied (matching stage_division_import's "
             f"precedent); no such statement was recorded. "
-            f"Statements executed: {recorded['statements']}"
+            f"Statements executed: {statements}"
         )
         assert str(scratch) in temp_dir_stmts[0], (
             f"stage_import must SET temp_directory to the caller-supplied "
@@ -909,30 +859,13 @@ class TestStageImportTempDirectory:
 
         places_parquet = str(tmp_path / "places_import_td2.parquet")
 
-        real_connect = stages_mod.duckdb.connect
-        recorded = {"statements": []}
-
-        class _RecordingConn:
-            def __init__(self, real):
-                self._real = real
-
-            def execute(self, sql, *a, **kw):
-                recorded["statements"].append(sql)
-                return self._real.execute(sql, *a, **kw)
-
-            def __getattr__(self, name):
-                return getattr(self._real, name)
-
-        def spy_connect(*a, **kw):
-            return _RecordingConn(real_connect(*a, **kw))
-
-        monkeypatch.setattr(stages_mod.duckdb, "connect", spy_connect)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
                      density_parquet=density_parquet)
 
-        temp_dir_stmts = [s for s in recorded["statements"] if "SET temp_directory" in s]
+        temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert not temp_dir_stmts, (
             f"stage_import must not SET temp_directory when it wasn't "
             f"supplied; got: {temp_dir_stmts}"
@@ -1227,7 +1160,7 @@ class TestStageImportLookupKeyUniqueness:
         a TEMP TABLE first."""
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_stream.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet)
@@ -1250,7 +1183,7 @@ class TestStageImportLookupKeyUniqueness:
         than running at DuckDB's ~80%-of-RAM default."""
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_memlimit.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet)
@@ -1274,33 +1207,6 @@ class TestStageImportLookupKeyUniqueness:
 # temp_directory is also configured, so an unconfigured temp_directory never
 # leaves spill unbounded at DuckDB's default location.
 # ---------------------------------------------------------------------------
-
-def _spy_on_duckdb_connect(monkeypatch, module):
-    """Record every SQL statement executed on connections opened by `module`.
-
-    Returns the list that accumulates statements. The connection is a
-    transparent proxy: __getattr__ forwards everything untouched, so the
-    stage under test behaves exactly as it would unspied.
-    """
-    real_connect = module.duckdb.connect
-    statements = []
-
-    class _RecordingConn:
-        def __init__(self, real):
-            self._real = real
-
-        def execute(self, sql, *a, **kw):
-            statements.append(sql)
-            return self._real.execute(sql, *a, **kw)
-
-        def __getattr__(self, name):
-            return getattr(self._real, name)
-
-    monkeypatch.setattr(
-        module.duckdb, "connect", lambda *a, **kw: _RecordingConn(real_connect(*a, **kw))
-    )
-    return statements
-
 
 def _max_temp_stmts(statements):
     return [s for s in statements if "SET max_temp_directory_size" in s]
@@ -1442,7 +1348,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
     def _statements_before_density_check(statements):
         """Statements recorded strictly before _assert_density_parquet_unique's
         own uniqueness query -- isolates ITS connection's SET calls from
-        stage_import's own (later) connection, since _spy_on_duckdb_connect
+        stage_import's own (later) connection, since spy_on_duckdb_connect
         records every execute() across every connection into one flat,
         time-ordered list."""
         create_idx = next(
@@ -1455,7 +1361,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
     ):
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         scratch = tmp_path / "scratch_adpu"
         scratch.mkdir()
 
@@ -1485,7 +1391,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         exactly the incident this setting exists to prevent."""
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu_notd.parquet"), memory_limit="4GB",
@@ -1508,7 +1414,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         from garganorn.stages import _assert_density_parquet_unique
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         _assert_density_parquet_unique(density_parquet)
 
         assert any("SET enable_progress_bar = false" in s for s in statements), (
@@ -1525,7 +1431,7 @@ class TestStageImportMaxTempDirectorySize:
     ):
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         scratch = tmp_path / "scratch_mtds"
         scratch.mkdir()
 
@@ -1550,7 +1456,7 @@ class TestStageImportMaxTempDirectorySize:
         make the setting opt-in and leave every existing caller exposed."""
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         scratch = tmp_path / "scratch_mtds_def"
         scratch.mkdir()
 
@@ -1572,7 +1478,7 @@ class TestStageImportMaxTempDirectorySize:
         """`if max_temp_directory_size:` lets a caller opt out deliberately."""
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         scratch = tmp_path / "scratch_mtds_none"
         scratch.mkdir()
 
@@ -1597,7 +1503,7 @@ class TestStageImportMaxTempDirectorySize:
         prevent."""
         import garganorn.stages as stages_mod
 
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_notd.parquet"), memory_limit="4GB",
@@ -1627,7 +1533,7 @@ class TestStageExportMaxTempDirectorySize:
         places_parquet, ta_parquet, containment_dir = _build_export_inputs(
             overture_parquet, tmp_path, "inputs_mtds1"
         )
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds1"), time.monotonic(),
@@ -1650,7 +1556,7 @@ class TestStageExportMaxTempDirectorySize:
         )
         scratch = tmp_path / "scratch_export_mtds"
         scratch.mkdir()
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds2"), time.monotonic(),
@@ -1681,7 +1587,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         scratch.mkdir()
         out_dir = tmp_path / "manifest_out1"
         out_dir.mkdir()
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         write_manifest_db(ta_parquet, str(out_dir), "overture_place",
                           temp_directory=str(scratch), max_temp_directory_size="6GB")
@@ -1706,7 +1612,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         scratch.mkdir()
         out_dir = tmp_path / "manifest_out2"
         out_dir.mkdir()
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         write_manifest_db(ta_parquet, str(out_dir), "overture_place",
                           temp_directory=str(scratch))
@@ -1728,7 +1634,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         scratch.mkdir()
         out_dir = tmp_path / "manifest_out3"
         out_dir.mkdir()
-        statements = _spy_on_duckdb_connect(monkeypatch, stages_mod)
+        statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
 
         write_manifest_db(ta_parquet, str(out_dir), "overture_place",
                           temp_directory=str(scratch), max_temp_directory_size=None)

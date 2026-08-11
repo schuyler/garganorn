@@ -12,6 +12,7 @@ from tests.quadtree_helpers import (
     _load_sql, _strip_spatial_install, _strip_memory_limit,
     run_overture_import, run_tile_assignments, run_osm_import,
 )
+from tests.duckdb_spy import spy_on_duckdb_connect
 
 
 # ---------------------------------------------------------------------------
@@ -1359,6 +1360,7 @@ class TestStageExportPhase2Body:
         from datetime import datetime, timezone
         from pathlib import Path
         from garganorn.stages import stage_export
+        import garganorn.stages as stages_module
 
         assignments = [
             (f"exp{tile_i}{rec_i}", tile_qk)
@@ -1383,7 +1385,7 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root_a)
         os.makedirs(tiles_root_b)
 
-        sql_log = _capture_executed_sql(monkeypatch)
+        sql_log = spy_on_duckdb_connect(monkeypatch, stages_module)
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
                      now=fixed_now, export_partition_zoom=6)
@@ -1720,35 +1722,6 @@ _PASS2_ORDER_BY = "ORDER BY tile_qk, place_id"
 _PRESERVE_INSERTION_ORDER_FALSE = "preserve_insertion_order = false"
 
 
-def _capture_executed_sql(monkeypatch):
-    """Patch garganorn.stages.duckdb.connect so every SQL string executed on
-    a connection stage_export opens is recorded, in order, into the returned
-    list. Delegates to the real duckdb.connect/execute throughout -- this
-    observes the query shape stage_export submits, it doesn't stub DuckDB.
-    """
-    import garganorn.stages as stages_module
-
-    real_connect = duckdb.connect
-    sql_log = []
-
-    class _RecordingConnection:
-        def __init__(self, real_conn):
-            self._real_conn = real_conn
-
-        def execute(self, sql, *args, **kwargs):
-            sql_log.append(sql)
-            return self._real_conn.execute(sql, *args, **kwargs)
-
-        def __getattr__(self, name):
-            return getattr(self._real_conn, name)
-
-    def _recording_connect(*args, **kwargs):
-        return _RecordingConnection(real_connect(*args, **kwargs))
-
-    monkeypatch.setattr(stages_module.duckdb, "connect", _recording_connect)
-    return sql_log
-
-
 def _assert_two_pass_query_shape(sql_log, expected_partitions):
     """Assert pass 1 materialises unsorted via exactly one COPY ...
     PARTITION_BY statement and pass 2 issues one ORDER BY tile_qk, place_id
@@ -1820,6 +1793,7 @@ class TestBatchedExportPartitioning:
         """
         import os, time
         from garganorn.stages import stage_export
+        import garganorn.stages as stages_module
 
         assignments = (
             [(f"short{i}", "0123") for i in range(5)]
@@ -1831,7 +1805,7 @@ class TestBatchedExportPartitioning:
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
 
-        sql_log = _capture_executed_sql(monkeypatch)
+        sql_log = spy_on_duckdb_connect(monkeypatch, stages_module)
 
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
@@ -1952,6 +1926,7 @@ class TestBatchedExportPartitioning:
         """
         import os, time
         from garganorn.stages import stage_export
+        import garganorn.stages as stages_module
 
         assignments = [(f"{source}_{i}", "0123") for i in range(3)] + [
             (f"{source}_x", "0201")
@@ -1961,7 +1936,7 @@ class TestBatchedExportPartitioning:
         tiles_root = str(tmp_path / f"tiles_{source}")
         os.makedirs(tiles_root)
 
-        sql_log = _capture_executed_sql(monkeypatch)
+        sql_log = spy_on_duckdb_connect(monkeypatch, stages_module)
 
         run_dir = stage_export(
             source, places_pq, ta_pq, containment_dir, tiles_root,
