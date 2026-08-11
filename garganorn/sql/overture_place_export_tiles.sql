@@ -75,5 +75,5 @@ SELECT
     })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.id
-LEFT JOIN place_containment pc ON pc.place_id = p.id
-ORDER BY ta.tile_qk, ta.place_id;
+LEFT JOIN place_containment pc ON pc.place_id = p.id;
+-- No ORDER BY: stage_export sorts per partition (pass 2), not here.

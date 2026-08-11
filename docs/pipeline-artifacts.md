@@ -229,17 +229,27 @@ license, generated_at, records: [{uri, cid: null, value: <record>}]}`.
 `metadata(source, collection, generated_at)`. `manifest.json` is just
 `{generated_at}`.
 
-**Sort**: the export cursor reads `ORDER BY tile_qk, place_id` —
-`place_id` is a deterministic tiebreaker with no meaning downstream, kept
-solely so repeated runs over identical inputs produce byte-identical
-gzip output. `manifest.duckdb`'s `record_tiles` is sorted by `rkey`, since
-lookups against it are by record key.
+**Sort**: two passes. Pass 1 copies the export query's output into a
+staging directory, Hive-partitioned by `left(tile_qk,
+export_partition_zoom)`, with no `ORDER BY` — this bounds peak spill to
+one partition rather than the whole dataset. Pass 2 reads one partition
+at a time with `ORDER BY tile_qk, place_id` and streams it to the flush
+loop below. `place_id` is a deterministic tiebreaker with no meaning
+downstream, kept solely so repeated runs over identical inputs produce
+byte-identical gzip output. `manifest.duckdb`'s `record_tiles` is sorted
+by `rkey`, since lookups against it are by record key.
 
-**Shape**: streams the query via `fetchmany(1000)` so at most one tile's
-records are buffered in Python memory regardless of source size; flush
-work (JSON wrap + gzip + write) is handed to a thread pool with inflight
-futures capped at `2 * workers`, so compression overlaps with the next
-batch's fetch without unbounded queueing. `manifest.json` is written last
+**Shape**: the staging directory is private to the stage, which creates
+and destroys it, so it never appears in `Writes` above. It sits beside
+the spill directory either way: under `temp_directory` when the caller
+supplies one, otherwise beside the run dir on the tiles volume. Sizing
+the tiles volume therefore has to account for it when no
+`temp_directory` is given. Pass 2 streams each partition's query via
+`fetchmany(1000)` so at most
+one tile's records are buffered in Python memory regardless of source
+size; flush work (JSON wrap + gzip + write) is handed to a thread pool
+with inflight futures capped at `2 * workers`, so compression overlaps
+with the next batch's fetch without unbounded queueing. `manifest.json` is written last
 — after every tile file and after `manifest.duckdb` — so its presence is
 the run's sole completeness marker: freshness gating and the keep-2
 retention sweep both key off it, and a crash mid-export leaves a run dir

@@ -368,3 +368,51 @@ complexity) also drives the slow cells above. It doesn't, and while
 investigating it, a data characteristic surfaced that isn't performance
 work at all (source boundaries duplicated under two different IDs). Both
 now live in `known-data-quality-issues.md`.
+
+## Which pipeline disk writes earn their keep
+
+Status: one open question (the import sort), one settled note kept as
+context (the export staging write). Neither is scoped for implementation.
+
+The bar is that spill stays bounded — a few dozen GB is fine, hundreds
+is not.
+
+### The import sort by qk17
+
+`stage_import` writes the places parquet with `ORDER BY qk17 NULLS LAST`
+(`stages.py`, and the division equivalent). Sorting the full wide places
+table is the pipeline's other whole-dataset sort.
+
+Its usual justification is DuckDB zone-map pruning, which requires the
+filtered column to be sorted. But a sweep of every `qk17` predicate in
+the repo finds exactly one range filter — the per-batch
+`WHERE qk17 >= … AND qk17 <= …` in `compute_containment` — and it runs
+against `places_slim`, a temp table that is itself built `ORDER BY
+p.qk17`. Every other `qk17` use is `left(qk17, N)` inside a `GROUP BY`,
+a join key, or an `IS NOT NULL`: full-scan work that gains nothing from
+sort order. **No query prunes the places parquet by a `qk17` range.**
+
+Dropping the sort would move `places_slim`'s build from a cheap re-sort
+of sorted input to a real sort — but of a four-column projection, not
+the wide table.
+
+To measure before acting: sorting by `qk17` clusters spatially adjacent
+rows, which plausibly improves parquet compression on `names` and
+`addresses`. That is the one real benefit, and it wants a number rather
+than an argument.
+
+### The export staging write
+
+The batched export writes a staging parquet of the payload, estimated at
+25–40 GiB. A few dozen GB is within budget, so this is recorded as
+understood rather than as work to do.
+
+Zero is reachable for `overture_place` and `osm` by filtering both sides
+of the export join on a quadkey prefix range instead of materialising:
+for those sources `tile_qk` is always a prefix of the place's own
+`qk17`, so both sides prune by zone map and nothing extra is written.
+It does not generalise to divisions, whose tile references come from the
+covering artifact rather than their own `qk17`, so a places-side `qk17`
+filter would drop them silently. That buys back a few dozen GB at the
+cost of a second export mechanism — not a trade worth making unless
+something else motivates it.

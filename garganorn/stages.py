@@ -562,86 +562,6 @@ def compute_containment(
         shutil.rmtree(old_dir, ignore_errors=True)
 
 
-def export_tiles(con, output_dir: str, source: str, max_workers: int = None) -> dict:
-    """Query DuckDB for per-record JSON, group by tile_qk, write gzipped files.
-
-    Streams results via fetchmany(1000) to keep memory bounded. One tile's
-    records are accumulated in-memory at a time; on tile boundary, submits a
-    flush job to a ThreadPoolExecutor. Backpressure limits inflight futures to
-    2 * max_workers. Returns {qk: record_count}.
-    """
-    raw = (_SQL_DIR / f"{source}_export_tiles.sql").read_text()
-    sql = string.Template(raw).safe_substitute(repo=REPO)
-    total_tiles = con.execute("SELECT COUNT(DISTINCT tile_qk) FROM tile_assignments").fetchone()[0]
-    log.info("export: %d tiles to write", total_tiles)
-    con.execute(sql)
-    con.execute("SET enable_progress_bar = false")
-    cursor = con.execute("SELECT tile_qk, rkey, record_json FROM tile_export ORDER BY tile_qk")
-
-    source_cls = _SOURCES[source]
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    def flush_tile(qk, records):
-        # records are (rkey, record_json) pairs; record_json is a DuckDB
-        # to_json()::VARCHAR string — already valid JSON. wrap_record composes
-        # the {uri, cid, value} envelope via string concatenation, avoiding a
-        # per-record json.loads/json.dumps round trip.
-        wrapped = [
-            envelope.wrap_record(
-                envelope.record_uri(REPO, source_cls.collection, rkey), record_json
-            )
-            for rkey, record_json in records
-        ]
-        payload = envelope.build_tile_payload(
-            source_cls.collection, source_cls.source_url, source_cls.license_url,
-            generated_at, wrapped
-        )
-        subdir = os.path.join(output_dir, qk[:6])
-        os.makedirs(subdir, exist_ok=True)
-        compressed = gzip.compress(payload, mtime=0)
-        with open(os.path.join(subdir, f"{qk}.json.gz"), "wb") as f:
-            f.write(compressed)
-        return (qk, len(records))
-
-    manifest = {}
-    current_qk = None
-    accumulated = []
-    futures = deque()
-    max_inflight = 2 * (max_workers or os.cpu_count() or 4)
-
-    def _drain_oldest():
-        """Wait on oldest future, collect result into manifest, log progress."""
-        qk, count = futures.popleft().result()
-        manifest[qk] = count
-        if len(manifest) % 1000 == 0:
-            log.info("export: wrote %d tiles", len(manifest))
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        while True:
-            batch = cursor.fetchmany(1000)
-            if not batch:
-                break
-            for tile_qk, rkey, record_json in batch:
-                if tile_qk != current_qk:
-                    if current_qk is not None:
-                        if len(futures) >= max_inflight:
-                            _drain_oldest()
-                        futures.append(executor.submit(flush_tile, current_qk, accumulated))
-                    current_qk = tile_qk
-                    accumulated = []  # rebind, not .clear() — workers hold a ref to the old list
-                accumulated.append((rkey, record_json))
-
-        if current_qk is not None:
-            futures.append(executor.submit(flush_tile, current_qk, accumulated))
-
-        # Drain remaining futures
-        while futures:
-            _drain_oldest()
-
-    log.info("export: wrote %d tiles total", len(manifest))
-    return manifest
-
-
 def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: str,
                       *, generated_at: str = None,
                       temp_directory: str | None = None,
@@ -1526,6 +1446,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
 def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str,
                  containment_dir: str, tiles_root: str, t0: float,
                  export_workers: int = None,
+                 export_partition_zoom: int = 6,
                  memory_limit: str = "48GB",
                  temp_directory: str | None = None,
                  max_temp_directory_size: str | None = "250GB",
@@ -1545,19 +1466,26 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         tiles_root: Directory under which <timestamp>/ tile dirs are written.
         t0: Start time for logging (monotonic time).
         export_workers: Thread count for tile gzip compression.
+        export_partition_zoom: Hive partition-prefix depth for the two-pass
+            export (pass 1 partitions tile_export unsorted by
+            left(tile_qk, export_partition_zoom); pass 2 sorts and flushes
+            one partition at a time). Default 6, matching the qk[:6] output
+            subdirectory grain. Not exposed via run_pipeline, the CLI, or
+            config.yaml.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         temp_directory: optional caller-supplied spill directory, same contract
             as stage_covering's temp_directory (garganorn/covering.py):
             stage_export never rmtree's or otherwise owns this directory
-            itself -- it only ever creates and destroys a private subdirectory
+            itself -- it only ever creates and destroys private subdirectories
             under it that it exclusively owns. When temp_directory is None
-            (default), the owned spill dir is run_dir + '.spill', a sibling of
-            the run dir on the tiles volume (existing behavior, preserved for
-            callers that don't supply temp_directory). When the caller
-            supplies temp_directory, the owned spill dir is
-            os.path.join(temp_directory, 'export.spill') -- a private subdir
-            on the caller's chosen volume that stage_export creates and
-            destroys, leaving the rest of the caller's directory untouched.
+            (default), the owned spill/staging dirs are run_dir + '.spill' and
+            run_dir + '.staging', siblings of the run dir on the tiles
+            volume. When the caller supplies temp_directory, the
+            owned dirs are os.path.join(temp_directory, 'export.spill') and
+            os.path.join(temp_directory, 'export.staging') -- private
+            subdirs on the caller's chosen volume that stage_export creates
+            and destroys, leaving the rest of the caller's directory
+            untouched.
         max_temp_directory_size: DuckDB max_temp_directory_size string,
             bounding spill under the owned spill dir (default "250GB").
             Applied unconditionally, since SET temp_directory is always
@@ -1641,24 +1569,27 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     # Step 5: Open ephemeral in-memory connection and execute the substituted SQL
     if temp_directory is None:
         spill_dir = run_dir + ".spill"
+        staging_dir = run_dir + ".staging"
     else:
         spill_dir = os.path.join(temp_directory, "export.spill")
+        staging_dir = os.path.join(temp_directory, "export.staging")
     con = duckdb.connect()
     manifest = {}
     try:
-        # Clear crash leftovers from a prior SIGKILL'd run before creating
-        # the spill dir fresh (covering.py:165-167's pattern). The old
-        # per-run spill dir name (run_dir + '.spill') was always unique, so
-        # this never mattered; the caller-supplied 'export.spill' subdir is
-        # fixed, so residue from a killed run would otherwise persist and
-        # accumulate on the very volume this stage exists to bound.
+        # spill_dir/staging_dir names are fixed (not per-run), so residue
+        # from a SIGKILLed run would otherwise persist across invocations.
         if os.path.exists(spill_dir):
             shutil.rmtree(spill_dir, ignore_errors=True)
         os.makedirs(spill_dir, exist_ok=True)
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
+        os.makedirs(staging_dir, exist_ok=True)
         con.execute(f"SET temp_directory = '{spill_dir}'")
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(f"SET memory_limit = '{memory_limit}'")
+        # Prerequisite for pass 1 to stream straight to its partition writers
+        # without materialising to preserve row order.
         con.execute("SET preserve_insertion_order = false")
         # No LOAD spatial needed: none of the export SQLs use ST_* functions
         con.execute(sql)
@@ -1670,13 +1601,23 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         ).fetchone()[0]
         log.info("[%s] export: %d tiles to write", source, tile_count)
 
-        # Step 6: Stream cursor with 4 columns for determinism
-        # ORDER BY (tile_qk, place_id) makes per-run output byte-identical.
-        # place_id is retained solely as the deterministic sort key; rkey is
-        # the record's post-transform key used for the {uri, cid, value} wrap.
-        cursor = con.execute(
-            "SELECT tile_qk, place_id, rkey, record_json FROM tile_export "
-            "ORDER BY tile_qk, place_id"
+        # Step 6: Pass 1 -- materialise tile_export unsorted, partitioned by
+        # tile_qk prefix. No ORDER BY: the join streams straight to each
+        # partition's writer, so peak spill is bounded by one partition, not
+        # the whole dataset.
+        con.execute(
+            f"COPY (SELECT tile_qk, place_id, rkey, record_json, "
+            f"left(tile_qk, {export_partition_zoom}) AS pfx FROM tile_export) "
+            f"TO '{staging_dir}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (pfx))"
+        )
+
+        # Partitions are enumerated by listing staging_dir, not by
+        # synthesising a 4^d prefix list: pass 1 only creates a directory
+        # for prefixes that have rows, and read_parquet on an empty glob
+        # errors (see the containment_expr comment above).
+        partition_prefixes = sorted(
+            entry[len("pfx="):] for entry in os.listdir(staging_dir)
+            if entry.startswith("pfx=")
         )
 
         source_cls = _SOURCES[source]
@@ -1706,8 +1647,6 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                 f.write(compressed)
             return (qk, len(records))
 
-        current_qk = None
-        accumulated = []
         futures = deque()
         max_inflight = 2 * (export_workers or os.cpu_count() or 4)
 
@@ -1718,22 +1657,32 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                 log.info("[%s] export: wrote %d tiles", source, len(manifest))
 
         with ThreadPoolExecutor(max_workers=export_workers) as executor:
-            while True:
-                batch = cursor.fetchmany(1000)
-                if not batch:
-                    break
-                for tile_qk, place_id, rkey, record_json in batch:
-                    if tile_qk != current_qk:
-                        if current_qk is not None:
-                            if len(futures) >= max_inflight:
-                                _drain_oldest()
-                            futures.append(executor.submit(flush_tile, current_qk, accumulated))
-                        current_qk = tile_qk
-                        accumulated = []
-                    accumulated.append((rkey, record_json))
+            # Pass 2: sort and flush one partition at a time.
+            for p in partition_prefixes:
+                cursor = con.execute(
+                    f"SELECT tile_qk, place_id, rkey, record_json "
+                    f"FROM read_parquet('{staging_dir}/pfx={p}/*.parquet') "
+                    f"ORDER BY tile_qk, place_id"
+                )
+                # Must reset per partition, or the previous partition's last tile gets flushed twice.
+                current_qk = None
+                accumulated = []
+                while True:
+                    batch = cursor.fetchmany(1000)
+                    if not batch:
+                        break
+                    for tile_qk, place_id, rkey, record_json in batch:
+                        if tile_qk != current_qk:
+                            if current_qk is not None:
+                                if len(futures) >= max_inflight:
+                                    _drain_oldest()
+                                futures.append(executor.submit(flush_tile, current_qk, accumulated))
+                            current_qk = tile_qk
+                            accumulated = []
+                        accumulated.append((rkey, record_json))
 
-            if current_qk is not None:
-                futures.append(executor.submit(flush_tile, current_qk, accumulated))
+                if current_qk is not None:
+                    futures.append(executor.submit(flush_tile, current_qk, accumulated))
 
             while futures:
                 _drain_oldest()
@@ -1742,6 +1691,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         con.close()
         if os.path.exists(spill_dir):
             shutil.rmtree(spill_dir, ignore_errors=True)
+        if os.path.exists(staging_dir):
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
     log.info("[%s] export: wrote %d tiles total (%.1fs)", source, len(manifest),
              time.monotonic() - t0)

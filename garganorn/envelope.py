@@ -1,8 +1,7 @@
 """The atgeo v1 tile/record envelope.
 
-Shared by the pipeline export path (garganorn.stages) and the legacy
-export_tiles() module function, so there is exactly one implementation of
-the envelope shape.
+Used by garganorn.stages' export path, so there is exactly one
+implementation of the envelope shape.
 
 Imports nothing from garganorn — no import cycle with server.py or stages.py.
 """

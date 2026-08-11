@@ -1,4 +1,4 @@
-"""Tests for overture_place_export_tiles.sql and export_tiles()."""
+"""Tests for the *_export_tiles.sql views and stage_export()."""
 
 import gzip
 import inspect
@@ -31,12 +31,16 @@ _OVERTURE_EXPORT_PLACES = [
 _EXPORT_TILE_QK = "023130"
 
 
-def _make_overture_export_db(conn, places_rows=None):
+def _make_overture_export_db(conn, places_rows=None, assignments=None):
     """Populate `conn` with minimal `places` and `tile_assignments` tables
     matching the schema garganorn/sql/overture_place_export_tiles.sql expects.
 
     `places_rows` defaults to _OVERTURE_EXPORT_PLACES if None.
     Each entry is (id, name, lat, lon, importance, country).
+
+    `assignments`, if given, is a list of (place_id, tile_qk) pairs that
+    populates tile_assignments directly, overriding the default of every
+    places_row's place_id assigned to _EXPORT_TILE_QK.
     """
     if places_rows is None:
         places_rows = _OVERTURE_EXPORT_PLACES
@@ -88,10 +92,12 @@ def _make_overture_export_db(conn, places_rows=None):
             tile_qk  VARCHAR
         )
     """)
-    for place_id, _name, _lat, _lon, _imp, _country in places_rows:
+    if assignments is None:
+        assignments = [(place_id, _EXPORT_TILE_QK) for place_id, *_ in places_rows]
+    for place_id, tile_qk in assignments:
         conn.execute(
             "INSERT INTO tile_assignments VALUES (?, ?)",
-            [place_id, _EXPORT_TILE_QK],
+            [place_id, tile_qk],
         )
 
     conn.execute("""
@@ -100,561 +106,6 @@ def _make_overture_export_db(conn, places_rows=None):
             relations_json VARCHAR
         )
     """)
-
-
-# ---------------------------------------------------------------------------
-# Tests: export_tiles() Python function
-# ---------------------------------------------------------------------------
-
-class TestExportTiles:
-    """Tests for garganorn.quadtree.export_tiles().
-
-    All tests fail at Red phase: garganorn.quadtree does not exist yet.
-    """
-
-    def test_import(self):
-        """Importing export_tiles must raise ImportError in Red phase."""
-        from garganorn.quadtree import export_tiles  # noqa: F401
-
-    def test_writes_gzipped_files(self, tmp_path):
-        """export_tiles must write .json.gz files under {output_dir}/{qk[:6]}/{qk}.json.gz."""
-        try:
-            from garganorn.quadtree import export_tiles
-        except (ImportError, ModuleNotFoundError):
-            pytest.skip("garganorn.quadtree not available")
-
-        db_path = tmp_path / "export_tiles_test.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_overture_export_db(conn)
-
-        output_dir = tmp_path / "output"
-        output_dir.mkdir()
-        export_tiles(conn, str(output_dir), "overture_place")
-        conn.close()
-
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert gz_files, "export_tiles must write at least one .json.gz file"
-        for gz in gz_files:
-            # Path must be output_dir/<6-char-prefix>/<qk>.json.gz
-            parts = gz.relative_to(output_dir).parts
-            assert len(parts) == 2, (
-                f"Expected 2-level path (<qk6>/<qk>.json.gz), got: {gz}"
-            )
-            qk_dir = parts[0]
-            qk_file = parts[1].replace(".json.gz", "")
-            assert qk_file.startswith(qk_dir), (
-                f"File quadkey {qk_file!r} must start with dir prefix {qk_dir!r}"
-            )
-
-    def test_returns_manifest_dict(self, tmp_path):
-        """export_tiles must return a dict mapping quadkey strings to integer record counts."""
-        try:
-            from garganorn.quadtree import export_tiles
-        except (ImportError, ModuleNotFoundError):
-            pytest.skip("garganorn.quadtree not available")
-
-        db_path = tmp_path / "export_manifest_test.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_overture_export_db(conn)
-
-        output_dir = tmp_path / "output_manifest"
-        output_dir.mkdir()
-        result = export_tiles(conn, str(output_dir), "overture_place")
-        conn.close()
-
-        assert isinstance(result, dict), (
-            f"export_tiles must return a dict; got {type(result)}"
-        )
-        for qk, count in result.items():
-            assert isinstance(qk, str), f"Manifest key must be str; got {type(qk)}"
-            assert isinstance(count, int), (
-                f"Manifest value must be int; got {type(count)} for key {qk!r}"
-            )
-
-    def test_json_content_valid(self, tmp_path):
-        """Each .json.gz file must decompress to valid JSON with a 'records' array."""
-        try:
-            from garganorn.quadtree import export_tiles
-        except (ImportError, ModuleNotFoundError):
-            pytest.skip("garganorn.quadtree not available")
-
-        db_path = tmp_path / "export_content_test.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_overture_export_db(conn)
-
-        output_dir = tmp_path / "output_content"
-        output_dir.mkdir()
-        export_tiles(conn, str(output_dir), "overture_place")
-        conn.close()
-
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert gz_files, "No .json.gz files written"
-        for gz in gz_files:
-            with gzip.open(gz, "rt", encoding="utf-8") as fh:
-                parsed = json.load(fh)
-            assert "records" in parsed, (
-                f"Decompressed JSON missing 'records' key in {gz}"
-            )
-            assert isinstance(parsed["records"], list), (
-                f"'records' must be a list in {gz}"
-            )
-
-    def test_uses_fetchmany_not_fetchall(self, tmp_path):
-        """export_tiles must use cursor.fetchmany() in a loop, not fetchall().
-
-        Fails against the current fetchall() implementation: the mock cursor's
-        fetchall() raises AssertionError if called, verifying it is NOT used.
-        After the fix (fetchmany sentinel loop), fetchall() is never called so
-        the test passes.
-        """
-        import gzip as _gzip
-        from unittest.mock import MagicMock, patch
-        from garganorn.quadtree import export_tiles
-
-        # Build two synthetic tile rows that a real cursor would return.
-        # record_json is the FLAT record shape emitted by the tile_export SQL
-        # views; export_tiles wraps each with envelope.wrap_record into the
-        # {uri, cid, value} envelope.
-        tile_qk_a = "023130" + "0" * 11  # 17-char quadkey
-        tile_qk_b = "023130" + "1" * 11
-        record_a = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"})
-        record_b = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"})
-        all_rows = [(tile_qk_a, "fsq001", record_a), (tile_qk_b, "fsq002", record_b)]
-
-        # Mock cursor: fetchmany returns rows in one batch, then [].
-        # fetchall raises AssertionError so the test fails immediately if called.
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [all_rows, []]
-        mock_cursor.fetchall.side_effect = AssertionError(
-            "export_tiles must not call fetchall(); use fetchmany() loop instead"
-        )
-
-        # Mock connection: execute() returns the mock cursor.
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_fetchmany"
-        output_dir.mkdir()
-
-        # Patch the SQL file read so we don't need the actual SQL file on disk.
-        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
-        with patch("pathlib.Path.read_text", return_value=fake_sql):
-            export_tiles(mock_con, str(output_dir), "overture_place")
-
-        # Confirm fetchall was never called (the side_effect above would have
-        # raised already; this assertion is belt-and-suspenders).
-        mock_cursor.fetchall.assert_not_called()
-
-        # Confirm fetchmany was called at least once.
-        assert mock_cursor.fetchmany.called, (
-            "export_tiles must call cursor.fetchmany()"
-        )
-
-        # Verify envelope structure in written files.
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert gz_files, "export_tiles must have written at least one .json.gz file"
-        gz_files.sort()
-        with _gzip.open(gz_files[0], "rt") as f:
-            envelope = json.load(f)
-        assert "source" in envelope, (
-            f"Envelope missing 'source'; keys: {list(envelope)}"
-        )
-        assert "license" in envelope, (
-            f"Envelope missing 'license'; keys: {list(envelope)}"
-        )
-        assert "records" in envelope, (
-            f"Envelope missing 'records'; keys: {list(envelope)}"
-        )
-        assert isinstance(envelope["records"], list), "'records' must be a list"
-        for item in envelope["records"]:
-            assert set(item.keys()) == {"uri", "cid", "value"}, (
-                f"Record item must be exactly {{uri, cid, value}}; got {list(item)}"
-            )
-            assert item["cid"] is None
-
-    def test_progress_log_format_no_total(self, tmp_path):
-        """Progress log at 1000-tile boundary must NOT include a total tile count.
-
-        The current implementation logs "export: wrote %d / %d tiles" (count + total).
-        The fix changes this to "export: wrote %d tiles" (running count only, no total).
-        This test fails against the current code and passes after the fix.
-        """
-        import logging
-        from unittest.mock import patch, MagicMock
-
-        from garganorn.quadtree import export_tiles
-
-        # Build 1000 synthetic tile rows to trigger a progress log.
-        # Each row has a UNIQUE tile_qk so we get 1000 distinct tiles — the
-        # tile_count % 1000 boundary fires when tile_count reaches 1000.
-        # record_json is the FLAT record shape (per the envelope decisions
-        # above); export_tiles wraps it.
-        def _make_row(i):
-            qk = f"02313{i:012d}"  # unique quadkey per row
-            payload = json.dumps({"$type": "org.atgeo.place", "rkey": str(i), "name": f"Place {i}"})
-            return (qk, str(i), payload)
-
-        all_rows = [_make_row(i) for i in range(1000)]
-
-        # Cursor returns all 1000 rows in first fetchmany call, then [].
-        # fetchall returns the list directly (as current code expects).
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [all_rows, []]
-        mock_cursor.fetchall.return_value = all_rows  # current code path
-
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_log_format"
-        output_dir.mkdir()
-
-        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
-        captured_messages = []
-
-        class _CapturingHandler(logging.Handler):
-            def emit(self, record):
-                captured_messages.append(record.getMessage())
-
-        handler = _CapturingHandler()
-        # Capture logs from both quadtree (for backward compat) and stages (actual implementation)
-        import garganorn.quadtree as _qt_module
-        import garganorn.stages as _stages_module
-        logger = logging.getLogger(_qt_module.__name__)
-        stages_logger = logging.getLogger(_stages_module.__name__)
-        logger.addHandler(handler)
-        stages_logger.addHandler(handler)
-        old_level = logger.level
-        logger.setLevel(logging.DEBUG)
-        stages_logger.setLevel(logging.DEBUG)
-        try:
-            with patch("pathlib.Path.read_text", return_value=fake_sql):
-                export_tiles(mock_con, str(output_dir), "overture_place")
-        finally:
-            logger.removeHandler(handler)
-            stages_logger.removeHandler(handler)
-            logger.setLevel(old_level)
-            stages_logger.setLevel(old_level)
-
-        # Find progress log messages that fire at the 1000-tile boundary.
-        progress_msgs = [m for m in captured_messages if "wrote" in m and "tiles" in m]
-        assert progress_msgs, (
-            "No 'wrote ... tiles' log message emitted at 1000-tile boundary"
-        )
-        # After the fix: messages must NOT contain a slash (no 'wrote X / Y tiles').
-        # The current code produces 'wrote 1000 / 1000 tiles', which contains '/'.
-        for msg in progress_msgs:
-            assert "/" not in msg, (
-                f"Progress log must not include a total (slash notation); got: {msg!r}. "
-                "Fix: log only the running tile count, not 'count / total'."
-            )
-
-    def test_post_loop_log_uses_manifest_len(self, tmp_path):
-        """After the tile-writing loop, export_tiles must log using len(manifest).
-
-        The current code logs 'export: queried %d tiles' BEFORE the loop using
-        len(result) (the full fetchall list).  The fix removes that pre-loop log
-        and instead logs after the loop using len(manifest).
-
-        This test asserts that the post-loop log message exists and that no
-        pre-loop 'queried' message is emitted.  Fails against current code
-        (which emits 'queried', not a post-loop manifest-based message) and
-        passes after the fix.
-        """
-        import logging
-        from unittest.mock import patch, MagicMock
-
-        from garganorn.quadtree import export_tiles
-
-        tile_qk = "023130" + "0" * 11
-        payload = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test"})
-        all_rows = [(tile_qk, "fsq001", payload)]
-
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [all_rows, []]
-        mock_cursor.fetchall.return_value = all_rows
-
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_postloop_log"
-        output_dir.mkdir()
-
-        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
-        captured_messages = []
-
-        class _CapturingHandler(logging.Handler):
-            def emit(self, record):
-                captured_messages.append(record.getMessage())
-
-        import garganorn.quadtree as _qt_module
-        import garganorn.stages as _stages_module
-        logger = logging.getLogger(_qt_module.__name__)
-        stages_logger = logging.getLogger(_stages_module.__name__)
-        handler = _CapturingHandler()
-        logger.addHandler(handler)
-        stages_logger.addHandler(handler)
-        old_level = logger.level
-        logger.setLevel(logging.DEBUG)
-        stages_logger.setLevel(logging.DEBUG)
-        try:
-            with patch("pathlib.Path.read_text", return_value=fake_sql):
-                export_tiles(mock_con, str(output_dir), "overture_place")
-        finally:
-            logger.removeHandler(handler)
-            stages_logger.removeHandler(handler)
-            logger.setLevel(old_level)
-            stages_logger.setLevel(old_level)
-
-        # Current code emits 'queried N tiles' before the loop.
-        # After the fix that message is gone; instead there's a post-loop message.
-        queried_msgs = [m for m in captured_messages if "queried" in m]
-        assert not queried_msgs, (
-            f"export_tiles must not emit a 'queried' pre-loop message; got: {queried_msgs!r}. "
-            "Fix: remove the pre-loop log and log tile count after the loop using len(manifest)."
-        )
-
-        # After the fix a post-loop summary log appears containing the tile count.
-        # The manifest has 1 tile; verify a message mentions '1' after the loop.
-        post_loop_msgs = [
-            m for m in captured_messages
-            if "export" in m and "1" in m and "queried" not in m
-        ]
-        assert post_loop_msgs, (
-            "export_tiles must emit a post-loop log message referencing the manifest tile count. "
-            f"Captured messages: {captured_messages!r}"
-        )
-
-    def test_python_groups_records_by_tile_qk(self, tmp_path):
-        """export_tiles groups per-record rows by tile_qk into separate .json.gz files.
-
-        export_tiles() uses the same envelope.py helpers as stage_export. Each
-        export SQL view outputs an `rkey` column alongside tile_qk and
-        record_json, and each written record must be {uri, cid, value}-wrapped,
-        not flat.
-        """
-        from unittest.mock import MagicMock, patch
-        from garganorn.quadtree import export_tiles
-
-        qk_a = "023130" + "0" * 11
-        qk_b = "023131" + "0" * 11
-        rec1 = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "A1"})
-        rec2 = json.dumps({"$type": "org.atgeo.place", "rkey": "2", "name": "A2"})
-        rec3 = json.dumps({"$type": "org.atgeo.place", "rkey": "3", "name": "B1"})
-        all_rows = [(qk_a, "1", rec1), (qk_a, "2", rec2), (qk_b, "3", rec3)]
-
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [all_rows, []]
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_group"
-        output_dir.mkdir()
-
-        with patch("pathlib.Path.read_text",
-                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            result = export_tiles(mock_con, str(output_dir), "overture_place")
-
-        assert len(result) == 2, f"Expected 2 tiles, got {len(result)}"
-        assert result[qk_a] == 2, f"qk_a tile should have 2 records, got {result[qk_a]}"
-        assert result[qk_b] == 1, f"qk_b tile should have 1 record, got {result[qk_b]}"
-
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert len(gz_files) == 2, f"Expected 2 .json.gz files, got {len(gz_files)}"
-
-        for gz in gz_files:
-            with gzip.open(gz, "rt") as f:
-                data = json.load(f)
-            assert "source" in data
-            assert "license" in data
-            assert "collection" in data
-            assert "generated_at" in data
-            assert "records" in data
-            assert isinstance(data["records"], list)
-            for rec in data["records"]:
-                assert set(rec.keys()) == {"uri", "cid", "value"}, (
-                    f"record must be {{uri, cid, value}}-wrapped; got {list(rec)}"
-                )
-                assert rec["cid"] is None
-                assert "$type" in rec["value"]
-
-    def test_source_and_license_in_envelope(self, tmp_path):
-        """export_tiles writes source/license from SOURCES[source] into the envelope."""
-        from unittest.mock import MagicMock, patch
-        from garganorn.quadtree import export_tiles, SOURCES
-
-        qk = "023130" + "0" * 11
-        rec = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "Test"})
-
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [[(qk, "1", rec)], []]
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_attr"
-        output_dir.mkdir()
-
-        with patch("pathlib.Path.read_text",
-                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            export_tiles(mock_con, str(output_dir), "overture_place")
-
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert gz_files, "No .json.gz written"
-        with gzip.open(gz_files[0], "rt") as f:
-            data = json.load(f)
-
-        assert "source" in data, f"Envelope missing 'source'; keys: {list(data)}"
-        assert data["source"] == SOURCES["overture_place"].source_url, (
-            f"source must be SOURCES['overture_place'].source_url = {SOURCES['overture_place'].source_url!r}; "
-            f"got {data['source']!r}"
-        )
-        assert "license" in data, f"Envelope missing 'license'; keys: {list(data)}"
-        assert data["license"] == SOURCES["overture_place"].license_url, (
-            f"license must be SOURCES['overture_place'].license_url = {SOURCES['overture_place'].license_url!r}; "
-            f"got {data['license']!r}"
-        )
-        assert "collection" in data, f"Envelope missing 'collection'; keys: {list(data)}"
-        assert data["collection"] == SOURCES["overture_place"].collection, (
-            f"collection must be SOURCES['overture_place'].collection = {SOURCES['overture_place'].collection!r}; "
-            f"got {data['collection']!r}"
-        )
-
-    def test_single_record_tile(self, tmp_path):
-        """A tile with exactly one {uri, cid, value}-wrapped record is correctly written."""
-        from unittest.mock import MagicMock, patch
-        from garganorn.quadtree import export_tiles
-
-        qk = "023130" + "0" * 11
-        rec = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "Solo"})
-
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [[(qk, "1", rec)], []]
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_single"
-        output_dir.mkdir()
-
-        with patch("pathlib.Path.read_text",
-                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            result = export_tiles(mock_con, str(output_dir), "overture_place")
-
-        assert result == {qk: 1}, f"Expected {{qk: 1}}, got {result}"
-
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert len(gz_files) == 1
-        with gzip.open(gz_files[0], "rt") as f:
-            data = json.load(f)
-        assert len(data["records"]) == 1
-        wrapped = data["records"][0]
-        assert set(wrapped.keys()) == {"uri", "cid", "value"}
-        assert wrapped["cid"] is None
-        assert wrapped["value"]["rkey"] == "1"
-        assert wrapped["value"]["name"] == "Solo"
-        assert wrapped["uri"].endswith("/1")
-
-    def test_tile_boundary_across_fetchmany_batches(self, tmp_path):
-        """Tile spanning two fetchmany batches is written correctly."""
-        from unittest.mock import MagicMock, patch
-        from garganorn.quadtree import export_tiles
-
-        qk_a = "023130" + "0" * 11
-        qk_b = "023131" + "0" * 11
-        rec1 = json.dumps({"$type": "org.atgeo.place", "rkey": "1", "name": "A1"})
-        rec2 = json.dumps({"$type": "org.atgeo.place", "rkey": "2", "name": "A2"})
-        rec3 = json.dumps({"$type": "org.atgeo.place", "rkey": "3", "name": "B1"})
-
-        # batch 1: first record of qk_a only
-        # batch 2: second record of qk_a + first record of qk_b (forces boundary split)
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [
-            [(qk_a, "1", rec1)],
-            [(qk_a, "2", rec2), (qk_b, "3", rec3)],
-            [],
-        ]
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_boundary"
-        output_dir.mkdir()
-
-        with patch("pathlib.Path.read_text",
-                   return_value="SELECT tile_qk, rkey, record_json FROM tile_export"):
-            result = export_tiles(mock_con, str(output_dir), "overture_place")
-
-        assert result[qk_a] == 2, f"qk_a must have 2 records (spanning batches); got {result[qk_a]}"
-        assert result[qk_b] == 1, f"qk_b must have 1 record; got {result[qk_b]}"
-
-        for qk, expected_count in [(qk_a, 2), (qk_b, 1)]:
-            gz = output_dir / qk[:6] / f"{qk}.json.gz"
-            assert gz.exists(), f"{gz} not written"
-            with gzip.open(gz, "rt") as f:
-                data = json.load(f)
-            assert len(data["records"]) == expected_count, (
-                f"{qk} tile: expected {expected_count} records, got {len(data['records'])}"
-            )
-            for wrapped in data["records"]:
-                assert set(wrapped.keys()) == {"uri", "cid", "value"}
-                assert wrapped["cid"] is None
-
-    def test_flush_tile_no_json_loads(self, tmp_path):
-        """flush_tile must not call json.loads on the per-record JSON — records
-        are already valid JSON strings that envelope.wrap_record composes via
-        string concatenation (per the envelope decisions above), not a
-        parse/reserialize round trip.
-
-        record_json rows are the FLAT record shape (as tile_export SQL views
-        emit them, per the envelope decisions above); export_tiles wraps each
-        with envelope.wrap_record
-        before writing, producing {uri, cid, value} entries in the output.
-        """
-        import gzip as _gzip
-        from unittest.mock import MagicMock, patch
-        from garganorn.quadtree import export_tiles
-
-        qk_a = "023130" + "0" * 11
-        qk_b = "023131" + "0" * 11
-        record_a = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq001", "name": "Test A"})
-        record_b = json.dumps({"$type": "org.atgeo.place", "rkey": "fsq002", "name": "Test B"})
-        all_rows = [(qk_a, "fsq001", record_a), (qk_b, "fsq002", record_b)]
-
-        mock_cursor = MagicMock()
-        mock_cursor.fetchmany.side_effect = [all_rows, []]
-        mock_cursor.fetchall.side_effect = AssertionError(
-            "export_tiles must not call fetchall()"
-        )
-
-        mock_con = MagicMock()
-        mock_con.execute.return_value = mock_cursor
-
-        output_dir = tmp_path / "output_no_json_loads"
-        output_dir.mkdir()
-
-        fake_sql = "SELECT tile_qk, rkey, record_json FROM tile_export"
-        with patch("pathlib.Path.read_text", return_value=fake_sql):
-            export_tiles(mock_con, str(output_dir), "overture_place")
-
-        # Verify output files contain valid JSON with the correct structure.
-        # (json.loads patch is no longer active here, so json.load works normally.)
-        gz_files = list(output_dir.rglob("*.json.gz"))
-        assert gz_files, "export_tiles must have written at least one .json.gz file"
-        for gz in gz_files:
-            with _gzip.open(gz, "rt", encoding="utf-8") as f:
-                envelope = json.load(f)
-            assert "source" in envelope, (
-                f"Envelope missing 'source'; keys: {list(envelope)}"
-            )
-            assert "license" in envelope, (
-                f"Envelope missing 'license'; keys: {list(envelope)}"
-            )
-            assert "records" in envelope, (
-                f"Envelope missing 'records'; keys: {list(envelope)}"
-            )
-            assert isinstance(envelope["records"], list), "'records' must be a list"
-            for item in envelope["records"]:
-                assert set(item.keys()) == {"uri", "cid", "value"}, (
-                    f"Record item must be exactly {{uri, cid, value}}; got {list(item)}"
-                )
-                assert item["cid"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1830,21 +1281,6 @@ class TestStageExportPhase2Body:
         conn.close()
         return places_pq, ta_pq
 
-    def _build_containment_dir(self, tmp_path, name="containment"):
-        """Build a containment_dir with only _meta.json (no *.parquet files).
-
-        Represents the Q3-degradation / empty-containment case.
-        When no *.parquet exists in containment_dir, stage_export must use:
-            (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
-        instead of read_parquet on an empty glob (which errors on DuckDB 1.2.1).
-        """
-        import os
-        cd = str(tmp_path / name)
-        os.makedirs(cd, exist_ok=True)
-        with open(os.path.join(cd, "_meta.json"), "w") as f:
-            json.dump({"empty": True, "params": {}, "inputs": []}, f)
-        return cd
-
     # ------------------------------------------------------------------
     # Test 1a: Record-JSON parity
     # ------------------------------------------------------------------
@@ -1868,7 +1304,7 @@ class TestStageExportPhase2Body:
         from garganorn.stages import stage_export
 
         places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
-        containment_dir = self._build_containment_dir(tmp_path)
+        containment_dir = _build_containment_dir(tmp_path, "containment")
 
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
@@ -1896,18 +1332,27 @@ class TestStageExportPhase2Body:
     # Test 1c: Determinism
     # ------------------------------------------------------------------
 
-    def test_determinism_two_exports_byte_identical(self, tmp_path):
+    def test_determinism_two_exports_byte_identical(self, tmp_path, monkeypatch):
         """Two exports from identical artifacts, with an injected fixed timestamp,
         produce byte-identical .json.gz files.
 
-        Pins the ORDER BY tile_qk, place_id invariant.
-        gzip mtime=0 is already set by the existing export_tiles implementation.
+        Pins ordering determinism end to end: fixture data spans three
+        export_partition_zoom partitions ('000000', '000111', '000222'), so
+        this exercises pass 2's per-partition sort producing the same result
+        as the old single global sort, not just within-tile ordering. Also
+        pins the query shape (one PARTITION_BY pass-1 statement, one sorted
+        pass-2 SELECT per partition) independently for each of the two runs
+        -- a fake implementation that keeps a single global sorted cursor
+        would produce byte-identical output too, so query shape is the only
+        way this test distinguishes it from the real two-pass mechanism.
+
+        gzip mtime=0 is already set by `stage_export`.
 
         Tiles carry a run-scoped `generated_at`; without injecting the same
         `now` into both calls, two exports run at different wall-clock
         seconds would legitimately differ in that one field, which would
-        make this test fail for a reason unrelated to the ORDER
-        BY/determinism property it exists to pin. Injecting `now` keeps the
+        make this test fail for a reason unrelated to the ordering/
+        determinism property it exists to pin. Injecting `now` keeps the
         test measuring the invariant it's named for.
         """
         import os, time
@@ -1915,8 +1360,15 @@ class TestStageExportPhase2Body:
         from pathlib import Path
         from garganorn.stages import stage_export
 
-        places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
-        containment_dir = self._build_containment_dir(tmp_path)
+        assignments = [
+            (f"exp{tile_i}{rec_i}", tile_qk)
+            for tile_i, tile_qk in enumerate([
+                "0000000000", "0000001111", "0001110000", "0001111111", "0002220000",
+            ])
+            for rec_i in range(3)
+        ]
+        places_pq, ta_pq = _build_overture_tiles_fixture(tmp_path, assignments, "det")
+        containment_dir = _build_containment_dir(tmp_path, "cd_det")
         t0 = time.monotonic()
         fixed_now = datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc)
 
@@ -1931,10 +1383,18 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root_a)
         os.makedirs(tiles_root_b)
 
+        sql_log = _capture_executed_sql(monkeypatch)
+
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
-                     now=fixed_now)
+                     now=fixed_now, export_partition_zoom=6)
+        first_run_sql = list(sql_log)
+
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_b, t0,
-                     now=fixed_now)
+                     now=fixed_now, export_partition_zoom=6)
+        second_run_sql = sql_log[len(first_run_sql):]
+
+        _assert_two_pass_query_shape(first_run_sql, expected_partitions=3)
+        _assert_two_pass_query_shape(second_run_sql, expected_partitions=3)
 
         def _collect_tile_bytes(root):
             """Return {rel_path: bytes} for all .json.gz files, relative to the run dir."""
@@ -1982,7 +1442,7 @@ class TestStageExportPhase2Body:
         from garganorn.stages import stage_export
 
         places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
-        containment_dir = self._build_containment_dir(tmp_path)
+        containment_dir = _build_containment_dir(tmp_path, "containment")
 
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
@@ -2019,7 +1479,7 @@ class TestStageExportPhase2Body:
         from garganorn.stages import stage_export
 
         places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
-        containment_dir = self._build_containment_dir(tmp_path)
+        containment_dir = _build_containment_dir(tmp_path, "containment")
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
         t0 = time.monotonic()
@@ -2052,7 +1512,7 @@ class TestStageExportPhase2Body:
         from garganorn.stages import stage_export
 
         places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
-        containment_dir = self._build_containment_dir(tmp_path)
+        containment_dir = _build_containment_dir(tmp_path, "containment")
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
         t0 = time.monotonic()
@@ -2087,7 +1547,7 @@ class TestStageExportPhase2Body:
         from garganorn.stages import stage_export
 
         places_pq, ta_pq = self._build_overture_fixtures(tmp_path)
-        containment_dir = self._build_containment_dir(tmp_path)
+        containment_dir = _build_containment_dir(tmp_path, "containment")
         tiles_root = str(tmp_path / "tiles")
         os.makedirs(tiles_root)
 
@@ -2115,4 +1575,588 @@ class TestStageExportPhase2Body:
         assert len(complete_dirs) <= 2, (
             f"keep-2 sweep must retain at most 2 complete run dirs; "
             f"found {len(complete_dirs)}: {complete_dirs}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Prefix-batched export (two-pass: unsorted COPY ... PARTITION_BY, then a
+# sort-and-flush per partition) -- see the prefix-batched export design doc.
+#
+# export_partition_zoom is a new stage_export parameter. Every test in
+# TestBatchedExportPartitioning passes it explicitly, so all of them fail RED
+# today with TypeError: stage_export() got an unexpected keyword argument
+# 'export_partition_zoom' -- a missing-feature failure, not a fixture bug.
+# ---------------------------------------------------------------------------
+
+def _build_containment_dir(tmp_path, name):
+    """Empty containment_dir (_meta.json only, no *.parquet) -- the
+    empty-containment shape stage_export must substitute instead of a
+    read_parquet glob."""
+    import os
+    cd = str(tmp_path / name)
+    os.makedirs(cd, exist_ok=True)
+    with open(os.path.join(cd, "_meta.json"), "w") as f:
+        json.dump({"empty": True, "params": {}, "inputs": []}, f)
+    return cd
+
+
+def _build_overture_tiles_fixture(tmp_path, assignments, name):
+    """places.parquet + tile_assignments.parquet for overture_place, with an
+    explicit place_id -> tile_qk mapping, decoupled from the place's own
+    lat/lon (only tile_assignments controls partition routing).
+
+    assignments: list of (place_id, tile_qk) pairs, place_ids unique.
+    """
+    places_rows = [
+        (place_id, f"Place {place_id}", 37.7749, -122.4194, 50, "US")
+        for place_id, _tile_qk in assignments
+    ]
+    conn = duckdb.connect()
+    _make_overture_export_db(conn, places_rows, assignments=assignments)
+    places_pq = str(tmp_path / f"{name}_places.parquet")
+    ta_pq = str(tmp_path / f"{name}_ta.parquet")
+    conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+    conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+    conn.close()
+    return places_pq, ta_pq
+
+
+def _build_osm_tiles_fixture(tmp_path, assignments, name):
+    """places.parquet + tile_assignments.parquet for the osm source, matching
+    the columns osm_export_tiles.sql selects off `places`.
+
+    assignments: list of (rkey, tile_qk) pairs. rkeys must not start with
+    n/w/r -- those prefixes trigger the node/way/relation rkey rewrite,
+    which isn't what this fixture is testing.
+    """
+    conn = duckdb.connect()
+    conn.execute("""
+        CREATE TABLE places (
+            rkey             VARCHAR PRIMARY KEY,
+            name             VARCHAR,
+            importance       INTEGER,
+            latitude         DOUBLE,
+            longitude        DOUBLE,
+            variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [],
+            primary_category VARCHAR,
+            tags             MAP(VARCHAR, VARCHAR)
+        )
+    """)
+    for rkey, _tile_qk in assignments:
+        conn.execute(
+            "INSERT INTO places VALUES (?, ?, 50, 37.7749, -122.4194, [], NULL, "
+            "map([]::VARCHAR[], []::VARCHAR[]))",
+            [rkey, f"Place {rkey}"],
+        )
+    conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+    for rkey, tile_qk in assignments:
+        conn.execute("INSERT INTO tile_assignments VALUES (?, ?)", [rkey, tile_qk])
+    conn.execute("CREATE TABLE place_containment (place_id VARCHAR, relations_json VARCHAR)")
+
+    places_pq = str(tmp_path / f"{name}_places.parquet")
+    ta_pq = str(tmp_path / f"{name}_ta.parquet")
+    conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+    conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+    conn.close()
+    return places_pq, ta_pq
+
+
+def _build_division_tiles_fixture(tmp_path, assignments, name):
+    """places.parquet + tile_assignments.parquet for overture_division,
+    matching the columns overture_division_export_tiles.sql selects off
+    `places`. assignments: list of (id, tile_qk) pairs."""
+    conn = duckdb.connect()
+    conn.execute("""
+        CREATE TABLE places (
+            id            VARCHAR PRIMARY KEY,
+            names         STRUCT("primary" VARCHAR),
+            importance    INTEGER,
+            min_latitude  DOUBLE, max_latitude  DOUBLE,
+            min_longitude DOUBLE, max_longitude DOUBLE,
+            variants      STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [],
+            subtype       VARCHAR, country VARCHAR, region VARCHAR,
+            level         VARCHAR, wikidata VARCHAR, population BIGINT
+        )
+    """)
+    for place_id, _tile_qk in assignments:
+        conn.execute(
+            "INSERT INTO places VALUES (?, {'primary': ?}, 50, 37.60, 37.85, "
+            "-122.55, -122.30, [], 'region', 'US', NULL, 'region', NULL, NULL)",
+            [place_id, f"Division {place_id}"],
+        )
+    conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+    for place_id, tile_qk in assignments:
+        conn.execute("INSERT INTO tile_assignments VALUES (?, ?)", [place_id, tile_qk])
+    conn.execute("CREATE TABLE place_containment (place_id VARCHAR, relations_json VARCHAR)")
+
+    places_pq = str(tmp_path / f"{name}_places.parquet")
+    ta_pq = str(tmp_path / f"{name}_ta.parquet")
+    conn.execute(f"COPY places TO '{places_pq}' (FORMAT PARQUET)")
+    conn.execute(f"COPY tile_assignments TO '{ta_pq}' (FORMAT PARQUET)")
+    conn.close()
+    return places_pq, ta_pq
+
+
+def _read_tile(run_dir, qk):
+    """Parsed JSON body of one tile's output file, or None if it wasn't written."""
+    import os
+    path = os.path.join(run_dir, qk[:6], f"{qk}.json.gz")
+    if not os.path.exists(path):
+        return None
+    with gzip.open(path) as f:
+        return json.loads(f.read())
+
+
+def _tile_rkeys(run_dir, qk):
+    """Set of rkeys in one tile's output file. Asserts the tile exists --
+    callers that need to assert absence should use _read_tile directly."""
+    tile = _read_tile(run_dir, qk)
+    assert tile is not None, f"tile {qk} was not written to {run_dir}"
+    return {rec["value"]["rkey"] for rec in tile["records"]}
+
+
+_PARTITION_BY_MARKER = "PARTITION_BY"
+_PASS2_ORDER_BY = "ORDER BY tile_qk, place_id"
+_PRESERVE_INSERTION_ORDER_FALSE = "preserve_insertion_order = false"
+
+
+def _capture_executed_sql(monkeypatch):
+    """Patch garganorn.stages.duckdb.connect so every SQL string executed on
+    a connection stage_export opens is recorded, in order, into the returned
+    list. Delegates to the real duckdb.connect/execute throughout -- this
+    observes the query shape stage_export submits, it doesn't stub DuckDB.
+    """
+    import garganorn.stages as stages_module
+
+    real_connect = duckdb.connect
+    sql_log = []
+
+    class _RecordingConnection:
+        def __init__(self, real_conn):
+            self._real_conn = real_conn
+
+        def execute(self, sql, *args, **kwargs):
+            sql_log.append(sql)
+            return self._real_conn.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._real_conn, name)
+
+    def _recording_connect(*args, **kwargs):
+        return _RecordingConnection(real_connect(*args, **kwargs))
+
+    monkeypatch.setattr(stages_module.duckdb, "connect", _recording_connect)
+    return sql_log
+
+
+def _assert_two_pass_query_shape(sql_log, expected_partitions):
+    """Assert pass 1 materialises unsorted via exactly one COPY ...
+    PARTITION_BY statement and pass 2 issues one ORDER BY tile_qk, place_id
+    SELECT per partition found -- the mechanism R2's bounded-peak-spill claim
+    rests on, not just output correctness.
+    """
+    partition_by_stmts = [s for s in sql_log if _PARTITION_BY_MARKER in s]
+    assert len(partition_by_stmts) == 1, (
+        f"expected exactly one PARTITION_BY statement (pass 1); "
+        f"got {len(partition_by_stmts)} in: {sql_log}"
+    )
+    assert "ORDER BY" not in partition_by_stmts[0], (
+        f"pass 1 must not sort:\n{partition_by_stmts[0]}"
+    )
+    pass2_stmts = [s for s in sql_log if _PASS2_ORDER_BY in s]
+    assert len(pass2_stmts) == expected_partitions, (
+        f"expected {expected_partitions} pass-2 sorted SELECTs (one per "
+        f"partition found); got {len(pass2_stmts)} in: {sql_log}"
+    )
+    assert any(_PRESERVE_INSERTION_ORDER_FALSE in s for s in sql_log), (
+        "SET preserve_insertion_order = false must still be issued -- it is "
+        "the prerequisite for pass 1 not to sort"
+    )
+
+
+def _spy_build_tile_payload(monkeypatch, snapshot_dir=None):
+    """Patch garganorn.stages.envelope.build_tile_payload to delegate to the
+    real function while counting calls -- one per flush_tile invocation, so
+    the count must equal the number of distinct tiles written. A missing
+    per-partition current_qk/accumulated reset re-flushes the previous
+    partition's last tile, producing one extra call.
+
+    If snapshot_dir is given, os.listdir(snapshot_dir) is captured on the
+    first call, before any teardown -- observes the staging dir mid-run,
+    without hardcoding its name.
+
+    Returns {'count': int, 'snapshot': list[str] | None}.
+    """
+    import os
+    import garganorn.stages as stages_module
+
+    real_build_tile_payload = stages_module.envelope.build_tile_payload
+    result = {"count": 0, "snapshot": None}
+
+    def _wrapper(*args, **kwargs):
+        result["count"] += 1
+        if snapshot_dir is not None and result["snapshot"] is None:
+            result["snapshot"] = os.listdir(snapshot_dir)
+        return real_build_tile_payload(*args, **kwargs)
+
+    monkeypatch.setattr(stages_module.envelope, "build_tile_payload", _wrapper)
+    return result
+
+
+class TestBatchedExportPartitioning:
+    """Tests for the two-pass prefix-partitioned export pipeline: pass 1
+    materialises tile_export unsorted, partitioned by left(tile_qk,
+    export_partition_zoom); pass 2 sorts and flushes one partition at a time.
+    """
+
+    def test_short_and_long_tile_qk_mixed_in_one_run(self, tmp_path, monkeypatch):
+        """A tile_qk shorter than the partition depth (e.g. a z4 division
+        tile reference, once overlap-tile-references lands) must still land
+        as one complete file: left(tile_qk, 6) on a 4-char string returns
+        the whole string, so the tile is its own partition, not a fragment
+        of one. Mixed with 10-char tile_qks in the same run so partition-dir
+        listing and the sort/flush loop are exercised at both widths, not
+        just the width the real and fake implementations happen to agree on.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        assignments = (
+            [(f"short{i}", "0123") for i in range(5)]
+            + [(f"long{i}", "0123440000") for i in range(3)]
+            + [(f"other{i}", "0198765432") for i in range(2)]
+        )
+        places_pq, ta_pq = _build_overture_tiles_fixture(tmp_path, assignments, "mixed")
+        containment_dir = _build_containment_dir(tmp_path, "cd_mixed")
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+
+        sql_log = _capture_executed_sql(monkeypatch)
+
+        run_dir = stage_export(
+            "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
+            time.monotonic(), export_partition_zoom=6,
+        )
+
+        assert _tile_rkeys(run_dir, "0123") == {f"short{i}" for i in range(5)}, (
+            "the short (4-char) tile must contain exactly its 5 records"
+        )
+        assert _tile_rkeys(run_dir, "0123440000") == {f"long{i}" for i in range(3)}
+        assert _tile_rkeys(run_dir, "0198765432") == {f"other{i}" for i in range(2)}
+
+        # partitions at depth 6: '0123' (short tile is its own whole prefix),
+        # '012344', '019876'
+        _assert_two_pass_query_shape(sql_log, expected_partitions=3)
+
+    def test_partition_boundary_flush_no_leak_no_duplicate(self, tmp_path, monkeypatch):
+        """Input spans two partitions ('011000' and '011002', with the empty
+        '011001' between them) where the last tile of the first partition
+        and the first tile of the second are different tiles. Each tile's
+        file must contain exactly its own records -- no leakage from the
+        neighbouring partition, no duplication.
+
+        Failing to reset current_qk/accumulated per partition would re-flush
+        partition A's last tile (tile_a2) when partition B's cursor starts,
+        corrupting tile_a2's file via a second concurrent write. That second
+        write is byte-identical to the first, so no output assertion can see
+        it -- only a build_tile_payload call count catches it.
+
+        The sparse '011001' gap between the two populated prefixes also
+        covers the requirement that pass 2 enumerate partitions by listing
+        staging_dir rather than synthesising a 4^d prefix list -- a
+        synthesised list would hand read_parquet an empty glob for '011001',
+        which errors on this DuckDB version -- the same hazard stage_export's
+        containment_expr comment records.
+        """
+        import os, time
+        from pathlib import Path
+        from garganorn.stages import stage_export
+
+        tile_a1, tile_a2, tile_b1 = "0110000000", "0110001111", "0110020000"
+        assignments = (
+            [(f"a1_{i}", tile_a1) for i in range(2)]
+            + [(f"a2_{i}", tile_a2) for i in range(1)]
+            + [(f"b1_{i}", tile_b1) for i in range(3)]
+        )
+        places_pq, ta_pq = _build_overture_tiles_fixture(tmp_path, assignments, "boundary")
+        containment_dir = _build_containment_dir(tmp_path, "cd_boundary")
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+
+        spy = _spy_build_tile_payload(monkeypatch)
+
+        run_dir = stage_export(
+            "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
+            time.monotonic(), export_partition_zoom=6,
+        )
+
+        assert _tile_rkeys(run_dir, tile_a1) == {"a1_0", "a1_1"}
+        assert _tile_rkeys(run_dir, tile_a2) == {"a2_0"}
+        assert _tile_rkeys(run_dir, tile_b1) == {"b1_0", "b1_1", "b1_2"}
+
+        gz_files = list(Path(run_dir).rglob("*.json.gz"))
+        assert len(gz_files) == 3, (
+            f"expected exactly 3 tile files (one per tile_qk), got "
+            f"{len(gz_files)}: {gz_files}"
+        )
+        assert spy["count"] == 3, (
+            f"expected exactly one build_tile_payload call per tile (3 "
+            f"tiles); got {spy['count']} -- a missing per-partition "
+            f"current_qk/accumulated reset re-flushes the previous "
+            f"partition's last tile"
+        )
+
+    def test_tile_spanning_two_fetchmany_batches(self, tmp_path):
+        """A single tile with more than 1000 records (the fetchmany chunk
+        size) must be written complete. Ports the intent of
+        TestExportTiles.test_tile_boundary_across_fetchmany_batches to
+        stage_export, where the boundary now also has to be handled inside
+        a single partition's pass-2 sort-and-flush loop.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        tile_qk = "0123000000"
+        n = 1500
+        assignments = [(f"p{i:05d}", tile_qk) for i in range(n)]
+        places_pq, ta_pq = _build_overture_tiles_fixture(tmp_path, assignments, "fetchmany")
+        containment_dir = _build_containment_dir(tmp_path, "cd_fetchmany")
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+
+        run_dir = stage_export(
+            "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
+            time.monotonic(), export_partition_zoom=6,
+        )
+
+        rkeys = _tile_rkeys(run_dir, tile_qk)
+        assert len(rkeys) == n, (
+            f"tile must have all {n} records spanning more than one "
+            f"fetchmany(1000) batch; got {len(rkeys)}"
+        )
+        assert rkeys == {f"p{i:05d}" for i in range(n)}
+
+    @pytest.mark.parametrize("source, builder", [
+        ("overture_place", _build_overture_tiles_fixture),
+        ("osm", _build_osm_tiles_fixture),
+        ("overture_division", _build_division_tiles_fixture),
+    ])
+    def test_partitioned_export_used_by_every_source(
+        self, tmp_path, monkeypatch, source, builder
+    ):
+        """Every source takes the same two-pass partitioned export path --
+        identical mechanism, no per-source branching. Checked against the
+        query shape, not just output rkeys: an implementation that
+        partitions overture_place but special-cases osm/overture_division
+        would pass an output-only check.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        assignments = [(f"{source}_{i}", "0123") for i in range(3)] + [
+            (f"{source}_x", "0201")
+        ]
+        places_pq, ta_pq = builder(tmp_path, assignments, source)
+        containment_dir = _build_containment_dir(tmp_path, f"cd_{source}")
+        tiles_root = str(tmp_path / f"tiles_{source}")
+        os.makedirs(tiles_root)
+
+        sql_log = _capture_executed_sql(monkeypatch)
+
+        run_dir = stage_export(
+            source, places_pq, ta_pq, containment_dir, tiles_root,
+            time.monotonic(), export_partition_zoom=6,
+        )
+
+        assert _tile_rkeys(run_dir, "0123") == {f"{source}_{i}" for i in range(3)}
+        assert _tile_rkeys(run_dir, "0201") == {f"{source}_x"}
+        # partitions at depth 6: '0123', '0201'
+        _assert_two_pass_query_shape(sql_log, expected_partitions=2)
+
+    def test_temp_directory_sentinel_and_root_untouched_after_run(self, tmp_path, monkeypatch):
+        """stage_export's owned staging_dir lives under the caller's
+        temp_directory, exists there DURING the run, and is fully cleaned up
+        by the time the run returns. Anything else pre-existing under
+        temp_directory -- like this sentinel file -- is left alone,
+        mirroring the existing spill_dir contract (stage_covering has the
+        analogous test in test_covering.py). The mid-run check does not
+        assume a name for the staging dir -- the design does not fix one --
+        so an implementation that puts staging next to run_dir instead of
+        under temp_directory is caught here rather than passing vacuously.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        assignments = [(f"exp{i}", "0123") for i in range(3)]
+        places_pq, ta_pq = _build_overture_tiles_fixture(tmp_path, assignments, "tempdir")
+        containment_dir = _build_containment_dir(tmp_path, "cd_tempdir")
+        tiles_root = str(tmp_path / "tiles")
+        os.makedirs(tiles_root)
+
+        temp_dir = tmp_path / "caller_temp"
+        temp_dir.mkdir()
+        sentinel = temp_dir / "sentinel.txt"
+        sentinel.write_text("pre-existing, must survive")
+
+        spy = _spy_build_tile_payload(monkeypatch, snapshot_dir=str(temp_dir))
+
+        stage_export(
+            "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
+            time.monotonic(), temp_directory=str(temp_dir), export_partition_zoom=6,
+        )
+
+        assert spy["snapshot"] is not None, "expected at least one tile flush"
+        # >= 2 new entries, not just 1: DuckDB's own SET temp_directory spill
+        # dir is already created eagerly by existing code regardless of this
+        # feature, so a single new entry there proves nothing about pass 1's
+        # staging_dir specifically -- only a *second*, distinct directory
+        # does.
+        new_entries = set(spy["snapshot"]) - {"sentinel.txt"}
+        assert len(new_entries) >= 2, (
+            "stage_export's owned staging dir must exist under temp_directory "
+            "during the run, alongside (not instead of) the existing DuckDB "
+            f"spill dir; mid-run listing was {spy['snapshot']}"
+        )
+
+        assert sentinel.exists() and sentinel.read_text() == "pre-existing, must survive", (
+            "stage_export must not touch pre-existing content in the caller's temp_directory"
+        )
+        assert os.listdir(temp_dir) == ["sentinel.txt"], (
+            f"stage_export must remove everything it owns under temp_directory "
+            f"by the time it returns; leftover: {os.listdir(temp_dir)}"
+        )
+
+    def test_staging_artifacts_not_leaked_into_next_run_sharing_temp_directory(
+        self, tmp_path, monkeypatch
+    ):
+        """A second run reusing the same caller-supplied temp_directory must
+        not pick up the first run's staging partitions.
+
+        Models 'residue from a prior killed run is cleared at start rather
+        than accumulating' without depending on the staging directory's
+        exact name (the design does not commit to one): if run 1's
+        partition files survived under temp_directory, pass 2's directory
+        listing for run 2 would pick them up as an extra, wrong tile.
+
+        Also confirms run 1 actually created a staging dir under
+        temp_directory (not just that nothing is left afterwards) -- an
+        implementation that stages next to run_dir instead would leave
+        temp_directory empty throughout and still pass a leak-only check.
+        """
+        import os, time
+        from garganorn.stages import stage_export
+
+        temp_dir = tmp_path / "caller_temp"
+        temp_dir.mkdir()
+
+        assignments_a = [(f"a{i}", "0000") for i in range(2)]
+        places_a, ta_a = _build_overture_tiles_fixture(tmp_path, assignments_a, "run1")
+        containment_a = _build_containment_dir(tmp_path, "cd_run1")
+        tiles_root_a = str(tmp_path / "tiles_a")
+        os.makedirs(tiles_root_a)
+
+        spy_a = _spy_build_tile_payload(monkeypatch, snapshot_dir=str(temp_dir))
+
+        run_dir_a = stage_export(
+            "overture_place", places_a, ta_a, containment_a, tiles_root_a,
+            time.monotonic(), temp_directory=str(temp_dir), export_partition_zoom=6,
+        )
+        assert _tile_rkeys(run_dir_a, "0000") == {"a0", "a1"}
+        # >= 2, not just non-empty: DuckDB's own SET temp_directory spill dir
+        # alone would already make temp_dir non-empty regardless of whether
+        # pass 1's staging_dir exists.
+        assert len(spy_a["snapshot"] or []) >= 2, (
+            "run 1 must have created a staging dir under temp_directory, "
+            "distinct from the existing DuckDB spill dir, before its first "
+            f"flush; mid-run listing was {spy_a['snapshot']}"
+        )
+
+        assignments_b = [(f"b{i}", "3333") for i in range(2)]
+        places_b, ta_b = _build_overture_tiles_fixture(tmp_path, assignments_b, "run2")
+        containment_b = _build_containment_dir(tmp_path, "cd_run2")
+        tiles_root_b = str(tmp_path / "tiles_b")
+        os.makedirs(tiles_root_b)
+        run_dir_b = stage_export(
+            "overture_place", places_b, ta_b, containment_b, tiles_root_b,
+            time.monotonic(), temp_directory=str(temp_dir), export_partition_zoom=6,
+        )
+
+        assert _tile_rkeys(run_dir_b, "3333") == {"b0", "b1"}, (
+            "run 2 must contain only its own records"
+        )
+        assert _read_tile(run_dir_b, "0000") is None, (
+            "run 2 must not resurrect run 1's tile '0000' -- staging "
+            "partitions must not leak across runs sharing temp_directory"
+        )
+
+
+_EXPLAIN_ORDER_BY_OP = "ORDER_BY"
+_EXPLAIN_MERGE_JOIN_OP = "PIECEWISE_MERGE_JOIN"
+
+
+class TestExportPlanShape:
+    """Pins the query-plan shape of the pass-1 SELECT off tile_export: no
+    ORDER_BY and no PIECEWISE_MERGE_JOIN. Peak spill is bounded by one
+    partition's slice only if pass 1 does not sort -- a merge join sorts
+    internally and would defeat that guarantee just as an explicit ORDER BY
+    would.
+
+    Operator names pinned empirically against the installed DuckDB (1.4.4):
+    `EXPLAIN SELECT a, b FROM t ORDER BY a, b` produces an ORDER_BY node;
+    `EXPLAIN SELECT ... FROM t JOIN u ON t.a = u.a` (equi-join, no ORDER BY)
+    produces HASH_JOIN, not PIECEWISE_MERGE_JOIN or ORDER_BY;
+    `EXPLAIN SELECT ... FROM t JOIN u ON t.a < u.a` (inequality join, no
+    hash-join shortcut available) produces PIECEWISE_MERGE_JOIN.
+    """
+
+    def test_tile_export_select_plan_has_no_order_by_or_merge_join(self):
+        """Fails RED today: overture_place_export_tiles.sql still has the
+        trailing `ORDER BY ta.tile_qk, ta.place_id`, which the design
+        deletes (ordering becomes pass 2's job)."""
+        conn = duckdb.connect()
+        _make_overture_export_db(conn)
+        raw_sql = _load_sql("overture_place_export_tiles.sql", {"repo": "places.atgeo.org"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+
+        plan = conn.execute(
+            "EXPLAIN SELECT tile_qk, place_id, rkey, record_json FROM tile_export"
+        ).fetchall()[0][1]
+        conn.close()
+
+        assert _EXPLAIN_ORDER_BY_OP not in plan, (
+            "pass 1's SELECT off tile_export must not sort -- peak spill is "
+            "bounded by one partition only if pass 1 streams. Plan:\n" + plan
+        )
+        assert _EXPLAIN_MERGE_JOIN_OP not in plan, (
+            "a merge join sorts internally, defeating the no-sort guarantee "
+            "just as an explicit ORDER BY would. Plan:\n" + plan
+        )
+
+    def test_order_by_detection_fires_on_a_query_that_actually_sorts(self):
+        """Sanity check on the assertion above: the ORDER_BY substring check
+        must be capable of failing, or a typo'd operator name would make the
+        prior test pass vacuously forever."""
+        conn = duckdb.connect()
+        conn.execute("CREATE TABLE t AS SELECT i AS a FROM range(10) t(i)")
+        plan = conn.execute("EXPLAIN SELECT a FROM t ORDER BY a").fetchall()[0][1]
+        conn.close()
+        assert _EXPLAIN_ORDER_BY_OP in plan, (
+            f"expected {_EXPLAIN_ORDER_BY_OP} node in a sorted query's plan:\n{plan}"
+        )
+
+    def test_merge_join_detection_fires_on_a_query_that_actually_merge_joins(self):
+        """Sanity check on the PIECEWISE_MERGE_JOIN assertion above: an
+        inequality join predicate has no hash-join shortcut available, so
+        DuckDB falls back to a merge join -- verified empirically against
+        the installed DuckDB (1.4.4)."""
+        conn = duckdb.connect()
+        conn.execute("CREATE TABLE t AS SELECT i AS a FROM range(10) t(i)")
+        conn.execute("CREATE TABLE u AS SELECT i AS a FROM range(10) t(i)")
+        plan = conn.execute(
+            "EXPLAIN SELECT t.a FROM t JOIN u ON t.a < u.a"
+        ).fetchall()[0][1]
+        conn.close()
+        assert _EXPLAIN_MERGE_JOIN_OP in plan, (
+            f"expected {_EXPLAIN_MERGE_JOIN_OP} node in an inequality "
+            f"join's plan:\n{plan}"
         )

@@ -9,9 +9,7 @@ All tests MUST fail against the current codebase because the current SQL
 still produces uri/value wrappers and tile_reader still uses URI matching.
 """
 
-import gzip
 import json
-import os
 from pathlib import Path
 
 import duckdb
@@ -315,53 +313,3 @@ def test_export_no_uri_value_wrapper(tmp_path, source):
     for (record_json,) in rows:
         parsed = json.loads(record_json)
         _assert_flat_record(parsed)
-
-
-# ---------------------------------------------------------------------------
-# Tests: tile envelope has collection field
-# ---------------------------------------------------------------------------
-
-class TestTileEnvelopeHasCollectionField:
-    """flush_tile in quadtree.py should produce envelope with collection field."""
-
-    def test_tile_envelope_has_collection_field(self, tmp_path):
-        """Tile envelope JSON must contain a 'collection' field.
-
-        This test FAILS against current code because flush_tile in quadtree.py
-        only includes 'attribution' and 'records', not 'collection'.
-        """
-        from garganorn.quadtree import export_tiles
-
-        # Create a minimal Overture places database
-        db_path = tmp_path / "test_tile_env.duckdb"
-        conn = duckdb.connect(str(db_path))
-        _make_export_db(conn, "overture_place")
-
-        # Prepare tile_assignments for export
-        conn.execute("SET enable_progress_bar = false")
-
-        # Run export_tiles to generate tile files
-        output_dir = str(tmp_path / "tiles")
-        export_tiles(conn, output_dir, "overture_place", max_workers=1)
-        conn.close()
-
-        # Read the generated tile file
-        tile_path = os.path.join(output_dir, _EXPORT_TILE_QK[:6], f"{_EXPORT_TILE_QK}.json.gz")
-        assert os.path.exists(tile_path), f"Tile file not created at {tile_path}"
-
-        with gzip.open(tile_path, "rt") as f:
-            envelope = json.load(f)
-
-        # FAIL: current envelope only has 'attribution' and 'records'
-        assert "collection" in envelope, (
-            f"Tile envelope must have 'collection' field. "
-            f"Current envelope has keys: {list(envelope)}. "
-            f"Expected 'collection' to be present with value like 'org.atgeo.places.overture.place'"
-        )
-        assert envelope["collection"] == "org.atgeo.places.overture.place", (
-            f"collection field should be 'org.atgeo.places.overture.place', "
-            f"got {envelope.get('collection')!r}"
-        )
-        assert "source" in envelope, "envelope must still have 'source' field"
-        assert "license" in envelope, "envelope must still have 'license' field"
-        assert "records" in envelope, "envelope must still have 'records' field"

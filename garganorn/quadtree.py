@@ -12,7 +12,6 @@ from .stages import (
     bboxes_intersect,
     _coord_exprs,
     compute_containment,
-    export_tiles,
     write_manifest,
     write_manifest_db,
     stage_import,
