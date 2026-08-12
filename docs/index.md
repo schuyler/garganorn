@@ -14,6 +14,8 @@
 | [design-constraints.md](design-constraints.md) | DuckDB behaviors, pipeline invariants, tradeoffs, normalization constants |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
 | [performance-improvements.md](performance-improvements.md) | Proposed performance work on already-correct code, including correct division tile assignment and containment names (planned, not started) |
+| [overlap-tile-references-design.md](overlap-tile-references-design.md) | Division-to-tile references from real geometry overlap, replacing the single bbox-derived point (designed, not started) |
+| [fragment-containment-design.md](fragment-containment-design.md) | Pre-splitting boundary polygons against the quadtree so the containment edge test costs a fragment's vertex count, not the whole polygon's (designed, not started) |
 | [known-data-quality-issues.md](known-data-quality-issues.md) | Source-data characteristics investigated and deliberately left unfixed |
 
 ## atgeo Protocol
