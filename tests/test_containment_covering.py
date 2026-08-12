@@ -924,20 +924,53 @@ class TestQ3Degradation:
 class TestExportIntegration:
     """Mini end-to-end run_pipeline producing tile JSON with relations."""
 
-    def test_run_pipeline_with_covering_builds_covering_dir(
-        self, simple_boundaries_db, overture_parquet, density_parquet, tmp_path
+    def test_run_pipeline_division_leg_builds_covering_dir(
+        self, division_parquet, tmp_path
     ):
-        """run_pipeline with boundaries_db must build a covering directory next to boundaries.duckdb.
-
-        The new code calls ensure_covering(boundaries_db) before the containment stage,
-        which creates <dirname(boundaries_db)>/covering/.  The old code does not call
-        stage_covering at all, so this directory does not exist.
-
-        Fails behavioral assertion (no covering dir) on old code.
-        """
-        output_dir = str(tmp_path / "integration_out")
+        """The overture_division leg calls stage_covering directly, building
+        covering/ next to boundaries.duckdb."""
+        output_dir = str(tmp_path / "division_out")
         os.makedirs(output_dir)
+        div_parquet, div_area_parquet = division_parquet
 
+        run_pipeline(
+            "overture_division",
+            (div_parquet, div_area_parquet),
+            (-122.55, 37.60, -122.30, 37.85),
+            output_dir,
+            memory_limit="4GB",
+            max_per_tile=100,
+        )
+
+        expected_covering = os.path.join(output_dir, "overture_division", "covering")
+        assert os.path.isdir(expected_covering), (
+            f"overture_division leg should build {expected_covering!r}"
+        )
+
+    def test_run_pipeline_force_does_not_rebuild_fresh_covering(
+        self, overture_parquet, density_parquet, tmp_path
+    ):
+        """force=True must not rebuild an already-fresh covering.
+
+        A forced 'quadtree all' must compute the covering once, in the division
+        leg, not once per place source.
+        """
+        bnd_path = tmp_path / "boundaries.duckdb"
+        _create_simple_boundaries_db(bnd_path)
+        covering_dir = os.path.join(str(tmp_path), "covering")
+        from garganorn.covering import stage_covering
+        stage_covering(str(bnd_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        meta_path = os.path.join(covering_dir, "_meta.json")
+        before = json.loads(open(meta_path).read())
+
+        # Push boundaries_db's mtime into the past so covering is unambiguously
+        # fresh regardless of filesystem mtime resolution.
+        past = time.time() - 100
+        os.utime(bnd_path, (past, past))
+
+        output_dir = str(tmp_path / "out")
+        os.makedirs(output_dir)
         run_pipeline(
             "overture_place",
             overture_parquet,
@@ -945,18 +978,65 @@ class TestExportIntegration:
             output_dir,
             memory_limit="4GB",
             max_per_tile=100,
-            boundaries_db=str(simple_boundaries_db),
+            boundaries_db=str(bnd_path),
             density_parquet=density_parquet,
+            force=True,
         )
 
-        # New orchestration: ensure_covering writes covering/ next to boundaries.duckdb
-        expected_covering = os.path.join(
-            os.path.dirname(str(simple_boundaries_db)), "covering"
+        after = json.loads(open(meta_path).read())
+        assert after == before, (
+            f"covering rebuilt under force=True: "
+            f"{before['generated_at']} -> {after['generated_at']}"
         )
-        assert os.path.isdir(expected_covering), (
-            f"run_pipeline should have called ensure_covering and created {expected_covering!r}; "
-            "old code does not call stage_covering — this fails on the old implementation"
-        )
+
+    def test_run_pipeline_missing_covering_dir_raises(
+        self, overture_parquet, density_parquet, tmp_path
+    ):
+        """boundaries_db supplied with no covering/ built must fail loud."""
+        bnd_path = tmp_path / "boundaries.duckdb"
+        _create_simple_boundaries_db(bnd_path)
+
+        output_dir = str(tmp_path / "out")
+        os.makedirs(output_dir)
+        with pytest.raises(RuntimeError, match="covering"):
+            run_pipeline(
+                "overture_place",
+                overture_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                output_dir,
+                memory_limit="4GB",
+                max_per_tile=100,
+                boundaries_db=str(bnd_path),
+                density_parquet=density_parquet,
+            )
+
+    def test_run_pipeline_stale_covering_dir_raises(
+        self, overture_parquet, density_parquet, tmp_path
+    ):
+        """boundaries_db newer than covering/_meta.json must fail loud."""
+        bnd_path = tmp_path / "boundaries.duckdb"
+        _create_simple_boundaries_db(bnd_path)
+        covering_dir = os.path.join(str(tmp_path), "covering")
+        from garganorn.covering import stage_covering
+        stage_covering(str(bnd_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        # Boundaries newer than the covering meta -> stale.
+        future = time.time() + 100
+        os.utime(bnd_path, (future, future))
+
+        output_dir = str(tmp_path / "out")
+        os.makedirs(output_dir)
+        with pytest.raises(RuntimeError, match="covering"):
+            run_pipeline(
+                "overture_place",
+                overture_parquet,
+                (-122.55, 37.60, -122.30, 37.85),
+                output_dir,
+                memory_limit="4GB",
+                max_per_tile=100,
+                boundaries_db=str(bnd_path),
+                density_parquet=density_parquet,
+            )
 
     def test_place_containment_view_join_compatible_with_export(
         self, simple_boundaries_db, tmp_path

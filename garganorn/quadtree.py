@@ -11,6 +11,7 @@ from .stages import (
     quadkey_to_bbox,
     bboxes_intersect,
     _coord_exprs,
+    _is_output_fresh,
     compute_containment,
     write_manifest,
     write_manifest_db,
@@ -20,7 +21,7 @@ from .stages import (
     stage_tile_assignment,
     stage_export,
 )
-from .covering import stage_covering, ensure_covering
+from .covering import stage_covering
 
 log = logging.getLogger(__name__)
 
@@ -73,13 +74,15 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                        max_temp_directory_size=max_temp_directory_size,
                        force=force)
 
-    # Self-heal covering for non-division sources with boundaries
     covering_dir = None
     if boundaries_db is not None:
-        covering_dir = ensure_covering(boundaries_db, memory_limit=memory_limit,
-                                       temp_directory=temp_directory,
-                                       max_temp_directory_size=max_temp_directory_size,
-                                       force=force)
+        covering_dir = os.path.join(os.path.dirname(boundaries_db), "covering")
+        meta = os.path.join(covering_dir, "_meta.json")
+        if not _is_output_fresh(meta, [boundaries_db]):
+            raise RuntimeError(
+                f"{covering_dir} is missing or older than {boundaries_db}; "
+                f"run the overture_division pipeline, or `quadtree covering`, first"
+            )
 
     # Tile assignment (self-gating)
     stage_tile_assignment(places_parquet, ta_parquet, source,

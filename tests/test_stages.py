@@ -769,8 +769,7 @@ class TestStageExportTempDirectory:
 class TestRunPipelineTempDirectoryThreading:
     """run_pipeline must thread temp_directory into stage_export, matching
     every other stage it already threads it into (stage_import,
-    stage_covering, ensure_covering, stage_tile_assignment,
-    compute_containment)."""
+    stage_covering, stage_tile_assignment, compute_containment)."""
 
     def test_run_pipeline_passes_temp_directory_to_stage_export(
         self, overture_parquet, density_parquet, tmp_path, monkeypatch

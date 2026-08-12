@@ -23,12 +23,11 @@ try:
         lonlat_to_tile,
         bbox_to_quadkeys,
         stage_covering,
-        ensure_covering,
     )
     _COVERING_ERROR = None
 except ImportError as _exc:
     COVER_MIN_ZOOM = COVER_MAX_ZOOM = None
-    lonlat_to_tile = bbox_to_quadkeys = stage_covering = ensure_covering = None
+    lonlat_to_tile = bbox_to_quadkeys = stage_covering = None
     _COVERING_ERROR = _exc
 
 

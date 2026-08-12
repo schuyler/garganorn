@@ -262,25 +262,31 @@ the keep-2 count.
 
 ## How the stages compose
 
-`garganorn.quadtree` has no single fixed stage order — each stage above is
-independently freshness-gated, so the CLI's individual subcommands
-(`density`, `idf`, `covering`, `run`) can be invoked in any sequence and
-simply no-op if their inputs aren't ready yet. `run_pipeline()` sequences
-one source through: `stage_import` (dispatching to
+Each stage above is independently freshness-gated, so the `density`, `idf` and
+`covering` subcommands can be invoked in any sequence and simply no-op if their
+inputs aren't ready yet. `run` is the exception: `run_pipeline()`
+for a source with a `boundaries_db` requires `<dirname(boundaries_db)>/covering/`
+to already exist and be strictly newer than `boundaries_db` — it raises
+`RuntimeError` otherwise rather than building it. So the `overture_division`
+pipeline, or a standalone `quadtree covering`, must run before any other source
+that passes `--boundaries`.
+
+`run_pipeline()` sequences one source through: `stage_import` (dispatching to
 `stage_division_import` for `overture_division`) → `stage_covering`
-(division only, from the `boundaries.duckdb` it just wrote) or
-`ensure_covering` self-heal (other sources, when a `boundaries_db` is
-supplied and its `covering/` isn't already fresh) → `stage_tile_assignment`
-→ `compute_containment` (in `stages.py`, not one of the seven stages above
-— it joins a source's places against the covering artifact and
-`boundaries.duckdb` to write `<source>/containment/*.parquet`, which
-`stage_export` reads for each record's `relations`) → `stage_export`.
+(division only, from the `boundaries.duckdb` it just wrote) → the covering
+freshness check described above (other sources, when a `boundaries_db` is
+supplied) → `stage_tile_assignment` → `compute_containment` (in `stages.py`,
+not one of the seven stages above — it joins a source's places against the
+covering artifact and `boundaries.duckdb` to write
+`<source>/containment/*.parquet`, which `stage_export` reads for each
+record's `relations`) → `stage_export`.
 
 The `all` subcommand (`quadtree.py:_cmd_all`) runs the full set for every
 configured source: `stage_density_extract` once (shared,
 `overture_place`-derived), `stage_idf` once per place source, then
 `run_pipeline("overture_division", ...)` first — since it produces
-`boundaries.duckdb`, which every other source's containment step needs —
-followed by `run_pipeline` for the remaining place sources, now supplied
+`boundaries.duckdb` and `covering/`, which every other source's
+containment step requires — followed by `run_pipeline` for the
+remaining place sources, now supplied
 `boundaries_db`, the shared `density_tiles.parquet`, and each source's own
 `idf.parquet`.

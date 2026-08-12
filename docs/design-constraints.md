@@ -207,15 +207,18 @@ accurate but needs an `ST_Intersection` per tile per locality. The impact is
 negligible — density is one component of a composite importance score, so a
 few percent of noise moves rankings very little.
 
-### P4: Five independent, freshness-gated CLI subcommands (no fixed stage order)
+### P4: Five independent, freshness-gated CLI subcommands
 
 There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes five
 subcommands (`quadtree.py`): `density`, `idf`, `covering`, `run`
 (one source), `all` (every source). Each stage is independently gated by
 artifact freshness, so there's no shared ordered pipeline object — `all`
-sequences density → idf per source → division → remaining sources, but
-`run`/individual subcommands can be invoked in any order and simply no-op
-if their inputs aren't ready. Freshness itself is one mechanism
+sequences density → idf per source → division → remaining sources, while
+`density`, `idf` and `covering` can be invoked in any order and simply no-op
+if their inputs aren't ready. `run` carries the one ordering constraint: with
+`--boundaries` it requires an already-fresh sibling `covering/` and raises
+`RuntimeError` otherwise, since containment computed against a missing or
+stale covering would silently ship tiles with no `relations.within`. Freshness itself is one mechanism
 everywhere: an artifact is fresh iff it exists, its meta sidecar exists
 and parses, the sidecar's recorded `params` matches the caller's exactly,
 the sidecar is strictly newer than every resolved input, and

@@ -72,7 +72,7 @@ Supported sources (for `run --source`):
 Imports Overture Maps administrative boundaries from the `division` and `division_area` parquet themes. Produces two outputs:
 
 - **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, admin_level, wikidata, population).
-- **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries. Used by other sources' tile pipelines via `--boundaries`.
+- **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries, alongside a `covering/` directory of quadtree-to-boundary index parquet. Used by other sources' tile pipelines via `--boundaries`.
 
 ```
 python -m garganorn.quadtree run \
@@ -82,7 +82,7 @@ python -m garganorn.quadtree run \
   --output data
 ```
 
-To enrich another source's tiles with division containment (adds `relations.within` to each record):
+To enrich another source's tiles with division containment (adds `relations.within` to each record), the `overture_division` run above must have already produced `covering/` next to `boundaries.duckdb` — `--boundaries` fails loud if it's missing or stale:
 
 ```
 python -m garganorn.quadtree run \

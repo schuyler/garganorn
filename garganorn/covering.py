@@ -328,15 +328,3 @@ def stage_covering(
         shutil.rmtree(owned_spill_dir, ignore_errors=True)
 
     return stats
-
-
-def ensure_covering(
-    boundaries_db: str, covering_dir: str | None = None, **kwargs
-) -> str:
-    """Derive covering_dir (default: dirname(boundaries_db)/covering),
-    call stage_covering (no-op when fresh), return the dir.
-    """
-    if covering_dir is None:
-        covering_dir = os.path.join(os.path.dirname(boundaries_db), "covering")
-    stage_covering(boundaries_db, covering_dir, **kwargs)
-    return covering_dir
