@@ -1747,6 +1747,7 @@ class TestMaxTempDirectorySizeThreading:
             boundaries=str(tmp_path / "b.duckdb"), output=str(tmp_path / "cov"),
             force=True, memory_limit=None, temp_directory=None,
             max_temp_directory_size="13GB", min_zoom=None, max_zoom=None,
+            min_leaf_zoom=None, vertex_capacity=None,
         )
         quadtree_mod._cmd_covering(args)
 

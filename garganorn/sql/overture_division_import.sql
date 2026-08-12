@@ -76,11 +76,11 @@ division_base AS (
         -- bbox is derived from the merged geometry; used for tile assignment and export
         {'xmin': ST_XMin(ma.geometry), 'ymin': ST_YMin(ma.geometry),
          'xmax': ST_XMax(ma.geometry), 'ymax': ST_YMax(ma.geometry)} AS bbox,
-        -- qk17 placed at the geometry centroid for tile assignment
-        ST_QuadKey(
-            (ST_XMin(ma.geometry) + ST_XMax(ma.geometry)) / 2.0,
-            (ST_YMin(ma.geometry) + ST_YMax(ma.geometry)) / 2.0, 17
-        ) AS qk17,
+        -- qk17 placed at the interior point -- the same point containment
+        -- tests -- so a division's tile and its containment answer agree.
+        -- A bbox midpoint can fall outside a crescent or multipart division
+        -- entirely, which puts the record in a tile it isn't in.
+        ST_QuadKey(ST_X(ma.interior_point), ST_Y(ma.interior_point), 17) AS qk17,
         -- min/max extents stored flat for fast bbox-filter in containment queries
         ST_YMin(ma.geometry) AS min_latitude,
         ST_YMax(ma.geometry) AS max_latitude,

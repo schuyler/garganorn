@@ -254,21 +254,29 @@ without changing the answer, since every candidate in that tile is inside
 it: `ST_Contains(clipped, point) ⟺ ST_Contains(full, point)`.
 
 1. **Covering** (`covering.py` `stage_covering`, `COVER_MIN_ZOOM=4`,
-   `COVER_MAX_ZOOM=12`): level-by-level descent z4→z12 precomputes which
+   `COVER_MAX_ZOOM=16`): level-by-level descent z4→z16 precomputes which
    tiles each boundary fully contains (`interior`, emitted at every level)
-   vs. merely overlaps (`edge`, only at z12), clipping geometry to each
-   tile's own envelope as it descends.
+   vs. merely overlaps (`edge`, emitted between `COVER_MIN_LEAF_ZOOM` and
+   `COVER_MAX_ZOOM` as fragment vertex count falls to
+   `COVER_VERTEX_CAPACITY`), clipping geometry to each tile's own envelope
+   as it descends and storing each edge leaf's clipped fragment.
 2. **Containment join** (`stages.py` `compute_containment`): two arms,
    `UNION ALL`. *Interior arm* — an equi-join of a place's qk17 prefix
-   against interior covering tiles, no geometry test. *Edge arm* — for z12
-   edge tiles only, a bbox-prefiltered full-geometry `ST_Contains`.
+   against interior covering tiles, no geometry test. *Edge arm* — one
+   per-zoom leg over `COVER_MIN_LEAF_ZOOM`..`COVER_MAX_ZOOM`, testing
+   `ST_Covers` against the fragment the covering stored for that leaf, so
+   the test costs the fragment's vertex count rather than the whole
+   boundary's. `ST_Covers` rather than `ST_Contains` because splitting
+   introduces seams that were never the boundary's own edge, and a point
+   exactly on one is inside the boundary but on the fragment's border.
 
 **Applies to**: `covering.py` (`stage_covering`), `stages.py`
 (`compute_containment`)
 
-**Correctness invariant**: interior and edge tile sets are disjoint by
-construction, so a place matches each boundary at most once (no `DISTINCT`
-needed). Verified against an in-suite brute-force `ST_Contains` oracle, not
+**Correctness invariant**: a boundary's emitted leaves form an antichain —
+none is a quadkey-prefix descendant of another — and a place's qk17 has
+exactly one ancestor per zoom, so a place matches each boundary at most
+once (no `DISTINCT` needed). Verified against an in-suite brute-force `ST_Contains` oracle, not
 a captured baseline (the old per-tile code never worked correctly in
 production, so no valid baseline existed to compare against).
 
@@ -318,8 +326,10 @@ derivation is unnecessary.
 | `density_norm` | 10.0 | Importance density component (all place sources) |
 | `idf_norm` | 18.0 | Importance IDF component (Overture, OSM) |
 | `pop_norm` | 20.0 | Importance population component (Overture divisions) |
-| `COVER_MIN_ZOOM` | 4 | Covering descent start level (P6) |
-| `COVER_MAX_ZOOM` | 12 | Covering descent end level; edge tiles emitted here (P6) |
+| `COVER_MIN_ZOOM` | 4 | Covering descent start level |
+| `COVER_MIN_LEAF_ZOOM` | 12 | Shallowest level an edge leaf may be emitted at; bounds edge-join fan-out |
+| `COVER_MAX_ZOOM` | 16 | Covering descent end level; a fragment still over capacity here is emitted anyway |
+| `COVER_VERTEX_CAPACITY` | 5000 | Vertex count at or below which an edge fragment stops recursing |
 | `max_per_tile` | 1000 | Maximum records per export tile |
 | `max_temp_directory_size` | 250GB | Ceiling on DuckDB spill, applied independently of `temp_directory` |
 

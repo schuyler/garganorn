@@ -3,8 +3,10 @@
 -- Parameters substituted by compute_containment() in stages.py (dollar-brace
 -- placeholders; not repeated literally in these comments because substitution
 -- is plain string replacement and would corrupt the comment text):
---   interior_arms     : UNION ALL of interior-arm SELECTs (one per zoom level L)
---   max_zoom          : COVER_MAX_ZOOM for the edge arm tile length
+--   interior_arms     : UNION ALL of interior-arm SELECTs (one per zoom level L
+--                        in [cover_min_zoom, cover_max_zoom])
+--   edge_arms         : UNION ALL of edge-arm SELECTs (one per zoom level L in
+--                        [cover_min_leaf_zoom, cover_max_zoom])
 --   collection_prefix : rkey NSID prefix (org.atgeo.places.overture.division)
 --
 -- Preconditions (set up by compute_containment before executing this):
@@ -22,11 +24,12 @@
 --     planner. Confirmed empirically: identical query, identical output,
 --     ~150MB vs 30GB+ depending on whether `p` is pre-built or inlined.
 --
--- D7: antimeridian-crossing boundaries have min_longitude > max_longitude.
--- The edge arm WHERE clause uses OR-logic for this case so that points in
--- either lobe match.  (The covering seed SQL uses the same D7 condition, so
--- gap tiles are never seeded for antimeridian boundaries, making the CASE
--- exclusion branch structurally unreachable for gap points.)
+-- The edge arm tests the stored fragment (`cov.geom`) with ST_Covers instead
+-- of joining bnd.places -- the fragment IS the geometry to test, at most
+-- tile-sized and at most V vertices, which is the cost bound this stage
+-- exists to establish. This also retires D7's min_longitude CASE: it lived
+-- on the bnd.places bbox pre-filter, which no longer exists here (D7 remains
+-- live on the build side, in covering_seed.sql and bbox_to_quadkeys).
 --
 -- Output: (tile_qk, place_id, relations_json) sorted (tile_qk, place_id).
 -- Written directly to ${output_tmp} via COPY; caller renames to final path.
@@ -34,19 +37,7 @@
 WITH interior AS (
 ${interior_arms}
 ),
-edge AS (
-    SELECT p.place_id, c.boundary_id, c.level
-    FROM p
-    JOIN cov c
-      ON c.kind = 'edge'
-     AND left(p.qk17, ${max_zoom}) = c.tile_qk
-    JOIN bnd.places b ON b.id = c.boundary_id
-    WHERE p.lat BETWEEN b.min_latitude AND b.max_latitude
-      AND (CASE WHEN b.min_longitude <= b.max_longitude
-                THEN p.lon BETWEEN b.min_longitude AND b.max_longitude
-                ELSE p.lon >= b.min_longitude OR p.lon <= b.max_longitude
-           END)
-      AND ST_Contains(b.geometry, ST_Point(p.lon, p.lat))
+edge AS (${edge_arms}
 ),
 matches AS (
     SELECT * FROM interior

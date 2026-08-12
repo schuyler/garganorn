@@ -197,6 +197,10 @@ def _cmd_covering(args):
         kwargs["cover_min_zoom"] = args.min_zoom
     if args.max_zoom is not None:
         kwargs["cover_max_zoom"] = args.max_zoom
+    if args.min_leaf_zoom is not None:
+        kwargs["cover_min_leaf_zoom"] = args.min_leaf_zoom
+    if args.vertex_capacity is not None:
+        kwargs["cover_vertex_capacity"] = args.vertex_capacity
     stage_covering(args.boundaries, output, **kwargs)
 
 
@@ -439,6 +443,10 @@ def main():
                             help="Minimum zoom level for covering")
     covering_p.add_argument("--max-zoom", default=None, type=int, dest="max_zoom",
                             help="Maximum zoom level for covering")
+    covering_p.add_argument("--min-leaf-zoom", default=None, type=int, dest="min_leaf_zoom",
+                            help="Shallowest zoom an edge leaf may be emitted at")
+    covering_p.add_argument("--vertex-capacity", default=None, type=int, dest="vertex_capacity",
+                            help="Max vertex count (V) for an edge leaf before it splits further")
     covering_p.add_argument("--memory-limit", default=None, dest="memory_limit",
                             help="DuckDB memory limit")
     covering_p.add_argument("--temp-directory", default=None, dest="temp_directory",

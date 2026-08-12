@@ -2,22 +2,23 @@
 
 Implementation-level design for the `overlap-tile-references` shippable
 unit described in `performance-improvements.md`'s containment/tiling
-section. That document settles the requirements, the Tier A/Tier B
-policy shape, and the pinned Discovery constants (reference zoom,
-fragment capacity); this document turns that into a concrete plan
-against the current codebase. Reviewed through four rounds of cold
-design review; the last round passed clean.
+section. That document states the requirements and pins the Discovery
+constants (reference zoom, fragment capacity) this design is checked
+against; the Tier A/Tier B policy shape is this document's own.
 
 ## What this replaces
 
-`overture_division_import.sql` computes `qk17` from each division's bbox
-midpoint. `run_pipeline` (`quadtree.py`) calls `stage_tile_assignment`
-(the record-density `max_per_tile` splitter) unconditionally for every
-source, feeding it that single point. This design forks the call:
-`overture_division` routes to a new function; `overture_place` and `osm`
-keep using `stage_tile_assignment` unchanged, since their one-point-per-
-record model is still correct for point data. `qk17` itself is untouched
-by this design — it stays exactly as it is today.
+`overture_division_import.sql` computes `qk17` from each division's
+interior point (`ST_PointOnSurface` of the merged geometry), so the point
+is inside the division — but it is still one point. `run_pipeline`
+(`quadtree.py`) calls `stage_tile_assignment` (the record-density
+`max_per_tile` splitter) unconditionally for every source, feeding it that
+single point, so a division is discoverable only through the one tile
+containing it. This design forks the call: `overture_division` routes to a
+new function; `overture_place` and `osm` keep using
+`stage_tile_assignment` unchanged, since their one-point-per-record model
+is still correct for point data. `qk17` itself is untouched by this
+design.
 
 ## Referencing every cell a division overlaps (Tier A)
 
@@ -47,10 +48,12 @@ deeper, more precise placement), not this coarse truncation.
 
 ## Placement for divisions that fit in one cell (Tier B)
 
-`covering.py` already has `bbox_to_quadkeys`, a D7-aware *touch* test
-(which cells does this bbox intersect at zoom Z, handling antimeridian
-crossings via the two-lobe `min_longitude > max_longitude` case). Tier B
-additionally needs a *size* test that doesn't exist yet: at what's the
+`covering.py` already has `bbox_to_quadkeys`, an antimeridian-aware
+*touch* test (which cells does this bbox intersect at zoom Z, handling
+antimeridian crossings via the two-lobe `min_longitude > max_longitude`
+case; see
+[design-constraints.md](design-constraints.md#d7-antimeridian-bboxes-are-two-lobes)).
+Tier B additionally needs a *size* test that doesn't exist yet: at what's the
 deepest zoom where this bbox still fits inside one cell. Proposed new
 function in `covering.py`:
 

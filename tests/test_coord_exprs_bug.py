@@ -298,17 +298,32 @@ class TestComputeContainmentDivisionCrescent:
     real parent) and County B (its neighbor); its bbox is built so the
     midpoint falls just east of the border, inside County B.
 
-    With the current bbox-midpoint _coord_exprs("overture_division"), the
-    candidate resolves to County B -- wrong. After the interior-point fix
-    lands, _coord_exprs will read interior_lon/interior_lat instead, and
-    this same test (unchanged) must resolve the candidate to County A.
+    _coord_exprs("overture_division") must read interior_lon/interior_lat,
+    so the candidate resolves to County A. Were it to read the bbox midpoint
+    again, the point would land in County B and the containment edge test --
+    which now runs against a fragment clipped to the candidate's own tile --
+    would match nothing at all.
     """
 
     _COUNTY_A_WKT = "POLYGON((0 0, 1 0, 1 2, 0 2, 0 0))"   # west of the x=1 border
     _COUNTY_B_WKT = "POLYGON((1 0, 2 0, 2 2, 1 2, 1 0))"   # east of the x=1 border
-    # bbox midpoint the unfixed code computes for the crescent candidate --
-    # just inside County B, across the border from the candidate's true land.
+    # The crescent candidate's bbox midpoint -- just inside County B, across
+    # the border from the candidate's true land. Reading containment coords
+    # from here is the bug this test guards against.
     _MID_X, _MID_Y = 1.02, 1.0
+    # The candidate's true interior point: inside County A but hard against
+    # the x=1 border. That placement is load-bearing. No quadkey tile edge
+    # ever falls on x=1 (a boundary needs -180 + k*360/2^L == 1, which has no
+    # integer solution), so every tile containing this point straddles the
+    # border and County A classifies all of them 'edge'. The point therefore
+    # has no interior ancestor, and the edge arm -- the only arm that reads
+    # lon/lat -- is the sole path to a match. Move this point deep into
+    # County A and the interior arm matches on qk17 alone, which makes the
+    # test pass no matter what _coord_exprs returns.
+    _INTERIOR_X, _INTERIOR_Y = 0.999, 1.0
+    # bbox spans the crescent's true land and its reach east into County B,
+    # so the midpoint lands at _MID_X while still containing the interior point.
+    _BBOX_XMIN, _BBOX_XMAX = 0.989, 1.051
 
     def _make_boundaries_db(self, path):
         con = duckdb.connect(path)
@@ -348,8 +363,12 @@ class TestComputeContainmentDivisionCrescent:
 
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
-        qk17_mid = con.execute(
-            "SELECT ST_QuadKey(?, ?, 17)", [self._MID_X, self._MID_Y]
+        # qk17 tracks the interior point, matching what
+        # overture_division_import.sql produces. The bbox below still spans
+        # the border with its midpoint inside County B -- that is the
+        # crescent shape being modelled; only the tile key follows the point.
+        qk17 = con.execute(
+            "SELECT ST_QuadKey(?, ?, 17)", [self._INTERIOR_X, self._INTERIOR_Y]
         ).fetchone()[0]
 
         con.execute("""
@@ -362,17 +381,16 @@ class TestComputeContainmentDivisionCrescent:
             )
         """)
         # interior_lon/interior_lat are the candidate's true interior point,
-        # west of the border inside County A -- what the fixed _coord_exprs
-        # will read once it switches from bbox midpoint to these columns.
+        # west of the border inside County A -- what _coord_exprs reads.
         con.execute(
             "INSERT INTO places VALUES ('crescent_child', "
             "{'xmin': ?, 'xmax': ?, 'ymin': ?, 'ymax': ?}, ?, ?, ?)",
-            [self._MID_X - 0.01, self._MID_X + 0.01,
-             self._MID_Y - 0.01, self._MID_Y + 0.01, qk17_mid,
-             0.5, 1.0],
+            [self._BBOX_XMIN, self._BBOX_XMAX,
+             self._MID_Y - 0.01, self._MID_Y + 0.01, qk17,
+             self._INTERIOR_X, self._INTERIOR_Y],
         )
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
-        con.execute("INSERT INTO tile_assignments VALUES ('crescent_child', ?)", [qk17_mid[:6]])
+        con.execute("INSERT INTO tile_assignments VALUES ('crescent_child', ?)", [qk17[:6]])
 
         places_parquet = str(tmp_path / "crescent_places.parquet")
         ta_parquet = str(tmp_path / "crescent_ta.parquet")

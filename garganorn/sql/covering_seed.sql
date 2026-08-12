@@ -5,7 +5,7 @@
 --   - ATTACH boundaries_db READ_ONLY AS bnd
 --   - TEMP TABLE z4_tiles(qk VARCHAR, xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
 --     populated with all cover_min_zoom tiles (256 rows at z4)
---   - TEMP TABLE covering_out(tile_qk, boundary_id, level, kind) created
+--   - TEMP TABLE covering_out(tile_qk, boundary_id, level, kind, geom) created
 --
 -- D7: boundaries whose min_longitude > max_longitude cross the antimeridian;
 -- their bbox is represented as two lobes.  The join condition handles both

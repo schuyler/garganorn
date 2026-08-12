@@ -15,7 +15,9 @@ from garganorn.stages import quadkey_to_bbox, _is_output_fresh
 log = logging.getLogger(__name__)
 
 COVER_MIN_ZOOM = 4
-COVER_MAX_ZOOM = 12
+COVER_MIN_LEAF_ZOOM = 12
+COVER_MAX_ZOOM = 16
+COVER_VERTEX_CAPACITY = 5000
 
 _SQL_DIR = Path(__file__).parent / "sql"
 
@@ -108,15 +110,24 @@ def stage_covering(
     temp_directory: str | None = None,
     max_temp_directory_size: str | None = "250GB",
     cover_min_zoom: int = COVER_MIN_ZOOM,
+    cover_min_leaf_zoom: int = COVER_MIN_LEAF_ZOOM,
     cover_max_zoom: int = COVER_MAX_ZOOM,
+    cover_vertex_capacity: int = COVER_VERTEX_CAPACITY,
     force: bool = False,
 ) -> dict:
     """Build covering/<qk4>.parquet from boundaries.duckdb.
 
-    Returns stats dict: {total, interior, edge, per_level: {z: n}}.
+    Returns stats dict: {total, interior, edge, per_level: {z: n},
+    edge_vertices, over_capacity_leaves}.
+
+    An edge leaf is emitted at zoom z when
+    NOT is_interior AND (z = cover_max_zoom OR
+    (z >= cover_min_leaf_zoom AND npoints <= cover_vertex_capacity));
+    otherwise the cell expands. cover_min_leaf_zoom bounds the edge join's
+    fan-out; cover_vertex_capacity bounds the point-in-polygon test cost.
 
     Freshness: skips when covering_dir/_meta.json is newer than boundaries_db
-    AND the recorded zoom parameters match. force=True always rebuilds.
+    AND the recorded zoom/capacity parameters match. force=True always rebuilds.
 
     Atomicity: builds under covering_dir+'.tmp', then swaps.  At build
     start, any pre-existing .tmp, .old, and .spill dirs are removed (crash
@@ -155,6 +166,8 @@ def stage_covering(
                 if (
                     recorded.get("cover_min_zoom") == cover_min_zoom
                     and recorded.get("cover_max_zoom") == cover_max_zoom
+                    and recorded.get("cover_min_leaf_zoom") == cover_min_leaf_zoom
+                    and recorded.get("cover_vertex_capacity") == cover_vertex_capacity
                 ):
                     log.info("stage_covering: skipping (output is fresh)")
                     return {}
@@ -198,7 +211,8 @@ def stage_covering(
                 tile_qk     VARCHAR,
                 boundary_id VARCHAR,
                 level       INTEGER,
-                kind        VARCHAR
+                kind        VARCHAR,
+                geom        GEOMETRY
             )
         """)
 
@@ -226,36 +240,27 @@ def stage_covering(
         seed_sql = (_SQL_DIR / "covering_seed.sql").read_text()
         con.execute(seed_sql)
 
-        # Level loop
-        level_sql = (_SQL_DIR / "covering_level.sql").read_text()
+        # Level loop: emit a leaf when NOT is_interior AND (${leaf}), where
+        # ${leaf} is FALSE below cover_min_leaf_zoom, `npoints <= V` between
+        # the floor and the cap, and TRUE at cover_max_zoom -- expand
+        # otherwise. Runs uniformly for every zoom in [cover_min_zoom,
+        # cover_max_zoom]; at cover_max_zoom expansion always yields nothing
+        # since NOT (TRUE) is FALSE.
+        level_sql_template = (_SQL_DIR / "covering_level.sql").read_text()
         for z in range(cover_min_zoom, cover_max_zoom + 1):
-            is_last = z == cover_max_zoom
-
-            if is_last:
-                # Terminal level: flag interior/edge and emit both kinds
-                con.execute("""
-                    CREATE TEMP TABLE l_flagged AS
-                    SELECT *, ST_Contains(geom, qk_env(tile_qk)) AS is_interior
-                    FROM l_current
-                """)
-                con.execute("""
-                    INSERT INTO covering_out
-                    SELECT tile_qk, boundary_id, level, 'interior'
-                    FROM l_flagged WHERE is_interior
-                """)
-                con.execute("""
-                    INSERT INTO covering_out
-                    SELECT tile_qk, boundary_id, level, 'edge'
-                    FROM l_flagged WHERE NOT is_interior
-                """)
-                con.execute("DROP TABLE l_flagged")
-                con.execute("DROP TABLE l_current")
+            if z == cover_max_zoom:
+                leaf_expr = "TRUE"
+            elif z >= cover_min_leaf_zoom:
+                leaf_expr = f"npoints <= {cover_vertex_capacity}"
             else:
-                # Non-terminal level: flag, emit interior, expand to children
-                con.execute(level_sql)
+                leaf_expr = "FALSE"
+            level_sql = level_sql_template.replace("${leaf}", leaf_expr)
+            con.execute(level_sql)
 
             row_count = con.execute("SELECT COUNT(*) FROM covering_out").fetchone()[0]
             log.debug("stage_covering: z%d done, covering_out total=%d", z, row_count)
+
+        con.execute("DROP TABLE l_current")
 
         # Write per-qk4 parquet files
         prefixes = [
@@ -270,7 +275,7 @@ def stage_covering(
             con.execute(
                 f"""
                 COPY (
-                    SELECT tile_qk, boundary_id, level, kind
+                    SELECT tile_qk, boundary_id, level, kind, geom
                     FROM covering_out
                     WHERE left(tile_qk, 4) = ?
                     ORDER BY tile_qk, boundary_id
@@ -280,17 +285,25 @@ def stage_covering(
             )
 
         # Compute stats
-        stats_row = con.execute("""
+        stats_row = con.execute(
+            """
             SELECT COUNT(*),
                    SUM(CASE WHEN kind = 'interior' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN kind = 'edge' THEN 1 ELSE 0 END)
+                   SUM(CASE WHEN kind = 'edge' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN kind = 'edge' THEN ST_NPoints(geom) ELSE 0 END),
+                   SUM(CASE WHEN kind = 'edge' AND length(tile_qk) = ?
+                            AND ST_NPoints(geom) > ? THEN 1 ELSE 0 END)
             FROM covering_out
-        """).fetchone()
+            """,
+            [cover_max_zoom, cover_vertex_capacity],
+        ).fetchone()
         stats = {
             "total": stats_row[0],
             "interior": stats_row[1],
             "edge": stats_row[2],
             "per_level": {},
+            "edge_vertices": stats_row[3] or 0,
+            "over_capacity_leaves": stats_row[4] or 0,
         }
         for z_val, n_val in con.execute("""
             SELECT length(tile_qk) AS z, COUNT(*) AS n
@@ -300,15 +313,19 @@ def stage_covering(
             stats["per_level"][z_val] = n_val
 
         log.info(
-            "stage_covering: done (%.1fs, %d total, %d interior, %d edge, %d prefixes)",
+            "stage_covering: done (%.1fs, %d total, %d interior, %d edge, "
+            "%d edge vertices, %d over capacity, %d prefixes)",
             time.monotonic() - t0, stats["total"], stats["interior"],
-            stats["edge"], len(prefixes),
+            stats["edge"], stats["edge_vertices"], stats["over_capacity_leaves"],
+            len(prefixes),
         )
 
         # Write _meta.json last (freshness sentinel)
         meta = {
             "cover_min_zoom": cover_min_zoom,
             "cover_max_zoom": cover_max_zoom,
+            "cover_min_leaf_zoom": cover_min_leaf_zoom,
+            "cover_vertex_capacity": cover_vertex_capacity,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "stats": stats,
         }

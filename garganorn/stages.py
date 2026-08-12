@@ -301,6 +301,30 @@ def _coord_exprs(source, alias=""):
     return f"{prefix}longitude", f"{prefix}latitude"
 
 
+def edge_arms_sql(cover_min_leaf_zoom, cover_max_zoom):
+    """Edge arms for compute_containment: one UNION ALL leg per zoom level.
+
+    Tests the fragment the covering stored for each edge leaf (`cov.geom`)
+    with ST_Covers. There is deliberately no bnd.places join and no bbox
+    pre-filter: the fragment IS the geometry to test, and reintroducing the
+    boundary table here restores the whole-polygon cost this unit removed.
+
+    Joining on `qk17` is only correct because every source derives `qk17`
+    from the same point the predicate tests, so the fragment fetched is the
+    one covering that point.
+
+    Module level so that invariant is testable without running the stage.
+    """
+    return "\nUNION ALL\n".join(
+        f"    SELECT p.place_id, c.boundary_id, c.level\n"
+        f"    FROM p JOIN cov c\n"
+        f"      ON c.kind = 'edge' AND len(c.tile_qk) = {L}\n"
+        f"     AND left(p.qk17, {L}) = c.tile_qk\n"
+        f"    WHERE ST_Covers(c.geom, ST_Point(p.lon, p.lat))"
+        for L in range(cover_min_leaf_zoom, cover_max_zoom + 1)
+    )
+
+
 def compute_containment(
     places_parquet,
     tile_assignments_parquet,
@@ -350,9 +374,20 @@ def compute_containment(
             (default 6, was hardcoded 4). Finer batches bound peak memory per
             batch at the cost of more COPY calls.
     """
-    # Resolve covering zoom range from covering _meta.json (fallback to defaults)
-    cover_min_zoom = 4
-    cover_max_zoom = 12
+    # Resolve covering zoom/capacity params from covering's _meta.json,
+    # falling back to covering.py's constants. covering.py imports from
+    # stages.py, so a module-level import back here would cycle; import
+    # locally instead.
+    from garganorn.covering import (
+        COVER_MIN_ZOOM as _COVER_MIN_ZOOM,
+        COVER_MIN_LEAF_ZOOM as _COVER_MIN_LEAF_ZOOM,
+        COVER_MAX_ZOOM as _COVER_MAX_ZOOM,
+        COVER_VERTEX_CAPACITY as _COVER_VERTEX_CAPACITY,
+    )
+    cover_min_zoom = _COVER_MIN_ZOOM
+    cover_min_leaf_zoom = _COVER_MIN_LEAF_ZOOM
+    cover_max_zoom = _COVER_MAX_ZOOM
+    cover_vertex_capacity = _COVER_VERTEX_CAPACITY
 
     # Build input list for freshness tracking
     inputs = [places_parquet, tile_assignments_parquet]
@@ -365,6 +400,8 @@ def compute_containment(
                     _m = json.load(f)
                 cover_min_zoom = _m.get("cover_min_zoom", cover_min_zoom)
                 cover_max_zoom = _m.get("cover_max_zoom", cover_max_zoom)
+                cover_min_leaf_zoom = _m.get("cover_min_leaf_zoom", cover_min_leaf_zoom)
+                cover_vertex_capacity = _m.get("cover_vertex_capacity", cover_vertex_capacity)
             except Exception:
                 pass
     if boundaries_db is not None:
@@ -374,6 +411,8 @@ def compute_containment(
         "collection_prefix": collection_prefix,
         "cover_min_zoom": cover_min_zoom,
         "cover_max_zoom": cover_max_zoom,
+        "cover_min_leaf_zoom": cover_min_leaf_zoom,
+        "cover_vertex_capacity": cover_vertex_capacity,
         "partition_zoom": partition_zoom,
     }
 
@@ -427,6 +466,8 @@ def compute_containment(
             f"     AND left(p.qk17, {L}) = c.tile_qk"
             for L in range(cover_min_zoom, cover_max_zoom + 1)
         )
+
+        edge_arms = edge_arms_sql(cover_min_leaf_zoom, cover_max_zoom)
 
         template_sql = (_SQL_DIR / "compute_containment.sql").read_text()
 
@@ -521,7 +562,7 @@ def compute_containment(
 
                                 sql = template_sql
                                 sql = sql.replace("${interior_arms}", interior_arms)
-                                sql = sql.replace("${max_zoom}", str(cover_max_zoom))
+                                sql = sql.replace("${edge_arms}", edge_arms)
                                 sql = sql.replace("${collection_prefix}", collection_prefix)
 
                                 con.execute(

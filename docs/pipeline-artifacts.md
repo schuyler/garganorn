@@ -111,23 +111,37 @@ rebuilds both, which is safe because the whole stage is idempotent.
 distinct z4 quadkey prefix present in the output) plus `_meta.json`.
 
 **Schema**: `tile_qk VARCHAR, boundary_id VARCHAR, level INTEGER, kind
-VARCHAR` where `kind` is `'interior'` or `'edge'`.
+VARCHAR, geom GEOMETRY` where `kind` is `'interior'` or `'edge'`. `geom`
+holds the boundary's geometry clipped to that tile, and is NULL for
+`'interior'` rows — an interior tile is covered by definition, so there
+is nothing to test against.
 
 **Sort**: each per-prefix file is `ORDER BY tile_qk, boundary_id` — this
 groups rows the way `compute_containment`'s interior-arm equi-join
 (`left(p.qk17, L) = c.tile_qk`) needs them, and makes per-run output
 deterministic.
 
-**Shape**: Descends z4 → z12 (`COVER_MIN_ZOOM`..`COVER_MAX_ZOOM`),
+**Shape**: Descends z4 → z16 (`COVER_MIN_ZOOM`..`COVER_MAX_ZOOM`),
 clipping each boundary's geometry to each tile's own envelope as it goes.
 At every level, tiles the geometry fully contains are flagged
 `'interior'` and emitted (removed from further descent); the rest are
-split into four children and re-clipped. Only at the terminal level (z12)
-are the remaining non-interior tiles emitted, as `'edge'`. This bounds the
-precomputed tile count without recursing to full place resolution (z17),
-and — because a tile can only ever be interior or, at the terminal level,
-edge — the two `kind`s are disjoint by construction, so a place matches
-each boundary at most once downstream with no `DISTINCT` needed. Output is
+split into four children and re-clipped.
+
+A non-interior tile is emitted as `'edge'` when it reaches
+`COVER_MAX_ZOOM`, or when it is at least `COVER_MIN_LEAF_ZOOM`(12) deep
+and its clipped fragment has no more than `COVER_VERTEX_CAPACITY`(5000)
+vertices. So edge leaves sit at varying depths: complex coastlines
+recurse past z12 until their fragments are small enough, while a simple
+boundary stops at the floor. The floor exists to bound the edge join's
+fan-out — without it a simple division would leaf at z4, and every
+candidate point in that z4 cell would join every division leafed there.
+A fragment still over capacity at `COVER_MAX_ZOOM` is emitted anyway;
+`stats["over_capacity_leaves"]` counts those so the pair can be
+recalibrated from a real run.
+
+Emitted leaves form an antichain — no leaf is a quadkey-prefix
+descendant of another leaf of the same boundary — so a place matches each
+boundary at most once downstream and no `DISTINCT` is needed. Output is
 split per z4 prefix so `compute_containment` can load only the covering
 data relevant to the batch of places it is currently processing, bounding
 memory. The stage never `rmtree`s a caller-supplied `temp_directory`
