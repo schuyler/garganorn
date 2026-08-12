@@ -724,8 +724,9 @@ class TestStageExportTempDirectory:
                      tiles_root, time.monotonic(), memory_limit="4GB",
                      force=True, temp_directory=str(scratch))
 
-        temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
-        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {statements}"
+        before = _statements_before_write_manifest_db(statements)
+        temp_dir_stmts = [s for s in before if "SET temp_directory" in s]
+        assert temp_dir_stmts, f"no SET temp_directory statement recorded: {before}"
         stmt = temp_dir_stmts[0]
         assert str(scratch) in stmt, (
             f"stage_export must SET temp_directory under the caller-supplied "
@@ -819,11 +820,15 @@ class TestRunPipelineTempDirectoryThreading:
 class TestStageImportTempDirectory:
     """stage_import must apply its temp_directory parameter to its own
     DuckDB connection (overture_place/osm branches), matching
-    stage_division_import's precedent (stages.py:766-767) and every other
-    stage."""
+    stage_division_import's precedent and every other stage. Tests below
+    that check temp_dir_stmts[0] omit density_parquet:
+    supplying it opens a second, earlier connection in
+    _assert_density_parquet_unique that emits the same SET statements, and
+    spy_on_duckdb_connect records both connections into one flat list, so
+    indexing [0] could read either one."""
 
     def test_honors_temp_directory_on_its_own_connection(
-        self, overture_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         import garganorn.stages as stages_mod
 
@@ -835,7 +840,7 @@ class TestStageImportTempDirectory:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=density_parquet, temp_directory=str(scratch))
+                     temp_directory=str(scratch))
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, (
@@ -1212,6 +1217,20 @@ def _max_temp_stmts(statements):
     return [s for s in statements if "SET max_temp_directory_size" in s]
 
 
+def _statements_before_write_manifest_db(statements):
+    """Statements recorded before 'SET preserve_insertion_order = false',
+    which stage_export emits after its own temp_directory/
+    max_temp_directory_size SETs. write_manifest_db later opens a second
+    connection and re-emits the same settings into this one flat list, so
+    the cut must land before its statements begin -- it never emits the
+    marker itself."""
+    boundary = next(
+        i for i, s in enumerate(statements)
+        if s == "SET preserve_insertion_order = false"
+    )
+    return statements[:boundary]
+
+
 def _build_export_inputs(overture_parquet, tmp_path, subdir):
     """Run stage_import/stage_tile_assignment/compute_containment; return
     (places_parquet, ta_parquet, containment_dir) for a direct stage_export call."""
@@ -1423,11 +1442,12 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
 
 
 class TestStageImportMaxTempDirectorySize:
-    """stage_import bounds spill on its own connection whenever it redirects
-    spill (stages.py:1006-1009)."""
+    """stage_import bounds spill on its own connection, whether or not it
+    redirects spill. Tests below that check stmts[0] omit density_parquet,
+    for the same reason as TestStageImportTempDirectory above."""
 
     def test_applies_caller_supplied_value(
-        self, overture_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         import garganorn.stages as stages_mod
 
@@ -1437,7 +1457,7 @@ class TestStageImportMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet,
+                     force=True,
                      temp_directory=str(scratch), max_temp_directory_size="7GB")
 
         stmts = _max_temp_stmts(statements)
@@ -1450,7 +1470,7 @@ class TestStageImportMaxTempDirectorySize:
         )
 
     def test_applies_default_when_not_specified(
-        self, overture_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """The default is a real bound, not None -- an unbounded default would
         make the setting opt-in and leave every existing caller exposed."""
@@ -1462,7 +1482,7 @@ class TestStageImportMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_def.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet,
+                     force=True,
                      temp_directory=str(scratch))
 
         stmts = _max_temp_stmts(statements)
@@ -1493,7 +1513,7 @@ class TestStageImportMaxTempDirectorySize:
         )
 
     def test_bound_applied_when_temp_directory_omitted(
-        self, overture_parquet, density_parquet, tmp_path, monkeypatch
+        self, overture_parquet, tmp_path, monkeypatch
     ):
         """max_temp_directory_size must bound spill independently of
         temp_directory: a caller that never redirects spill still gets the
@@ -1507,7 +1527,7 @@ class TestStageImportMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_notd.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True)
 
         stmts = _max_temp_stmts(statements)
         assert stmts, (
@@ -1539,10 +1559,12 @@ class TestStageExportMaxTempDirectorySize:
                      str(tmp_path / "tiles_mtds1"), time.monotonic(),
                      memory_limit="4GB", force=True)
 
-        stmts = _max_temp_stmts(statements)
+        before = _statements_before_write_manifest_db(statements)
+        stmts = _max_temp_stmts(before)
         assert stmts, (
             f"stage_export spills to its own dir on every call and must bound "
-            f"it even when no temp_directory is supplied. Statements: {statements}"
+            f"it even when no temp_directory is supplied. Statements before "
+            f"write_manifest_db: {before}"
         )
         assert "250GB" in stmts[0], f"expected the 250GB default; got: {stmts[0]!r}"
 
@@ -1563,8 +1585,9 @@ class TestStageExportMaxTempDirectorySize:
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
                      max_temp_directory_size="9GB")
 
-        stmts = _max_temp_stmts(statements)
-        assert stmts, f"no bound recorded; statements: {statements}"
+        before = _statements_before_write_manifest_db(statements)
+        stmts = _max_temp_stmts(before)
+        assert stmts, f"no bound recorded; statements before write_manifest_db: {before}"
         assert "9GB" in stmts[0], (
             f"must apply the caller-supplied bound (9GB); got: {stmts[0]!r}"
         )
