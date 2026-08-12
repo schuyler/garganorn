@@ -535,9 +535,13 @@ def compute_containment(
                         continue
 
                     covering_file_sql = covering_file.replace("'", "''")
+                    # The CAST is not a no-op: a z4 partition holding only interior
+                    # cells has an all-NULL geom, so no GeoParquet metadata is written
+                    # and the column reads back as BLOB, which ST_Covers cannot bind.
                     con.execute(f"""
                         CREATE TEMP TABLE cov AS
-                        SELECT * FROM read_parquet('{covering_file_sql}')
+                        SELECT * REPLACE (CAST(geom AS GEOMETRY) AS geom)
+                        FROM read_parquet('{covering_file_sql}')
                     """)
                     try:
                         for prefix, n in group:
