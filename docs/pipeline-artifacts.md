@@ -110,24 +110,25 @@ rebuilds both, which is safe because the whole stage is idempotent.
 **Writes**: `<division>/covering/<qk4-prefix>.parquet` (one file per
 distinct z4 quadkey prefix present in the output) plus `_meta.json`.
 
-**Schema**: `tile_qk VARCHAR, boundary_id VARCHAR, level INTEGER, kind
-VARCHAR, geom GEOMETRY` where `kind` is `'interior'` or `'edge'`. `geom`
-holds the boundary's geometry clipped to that tile, and is NULL for
-`'interior'` rows — an interior tile is covered by definition, so there
-is nothing to test against.
+**Schema**: `tile_qk VARCHAR, boundary_id VARCHAR, level INTEGER, geom
+GEOMETRY`. `geom` is never NULL: an interior tile's `geom` is its own
+tile envelope (`qk_env(tile_qk)`) — the whole tile is already known to be
+inside the boundary, so this is the trivial geometry to test it against —
+and a non-interior tile's `geom` is the boundary's geometry clipped to
+that tile.
 
 **Sort**: each per-prefix file is `ORDER BY tile_qk, boundary_id` — this
-groups rows the way `compute_containment`'s interior-arm equi-join
+groups rows the way `compute_containment`'s per-zoom equi-join
 (`left(p.qk17, L) = c.tile_qk`) needs them, and makes per-run output
 deterministic.
 
 **Shape**: Descends z4 → z16 (`COVER_MIN_ZOOM`..`COVER_MAX_ZOOM`),
 clipping each boundary's geometry to each tile's own envelope as it goes.
-At every level, tiles the geometry fully contains are flagged
-`'interior'` and emitted (removed from further descent); the rest are
-split into four children and re-clipped.
+At every level, tiles the geometry fully contains are flagged interior
+and emitted (removed from further descent); the rest are split into four
+children and re-clipped.
 
-A non-interior tile is emitted as `'edge'` when it reaches
+A non-interior tile is emitted as a leaf when it reaches
 `COVER_MAX_ZOOM`, or when it is at least `COVER_MIN_LEAF_ZOOM`(12) deep
 and its clipped fragment has no more than `COVER_VERTEX_CAPACITY`(5000)
 vertices. So edge leaves sit at varying depths: complex coastlines

@@ -242,33 +242,17 @@ makes IDF cacheable per-dataset.
 
 ### P6: Containment is a precomputed covering joined by quadkey prefix
 
-Replaced the old per-tile recursive containment (adaptive quadtree,
-CROSS JOIN per contained tile, z6 seeds subdividing past a 200-boundary
-threshold to z14) with a two-artifact approach. The reason a plain R-tree
-prefilter isn't enough on its own: `ST_Contains`-style cost scales with
-the boundary polygon's vertex count, not the candidate count, so a
-900K-vertex boundary costs the same per test whether the candidate point
-is a sliver away or on the other side of the tile (see also D10). Clipping
-each boundary to a tile's own envelope during descent trims that cost
-without changing the answer, since every candidate in that tile is inside
-it: `ST_Contains(clipped, point) ⟺ ST_Contains(full, point)`.
-
-1. **Covering** (`covering.py` `stage_covering`, `COVER_MIN_ZOOM=4`,
-   `COVER_MAX_ZOOM=16`): level-by-level descent z4→z16 precomputes which
-   tiles each boundary fully contains (`interior`, emitted at every level)
-   vs. merely overlaps (`edge`, emitted between `COVER_MIN_LEAF_ZOOM` and
-   `COVER_MAX_ZOOM` as fragment vertex count falls to
-   `COVER_VERTEX_CAPACITY`), clipping geometry to each tile's own envelope
-   as it descends and storing each edge leaf's clipped fragment.
-2. **Containment join** (`stages.py` `compute_containment`): two arms,
-   `UNION ALL`. *Interior arm* — an equi-join of a place's qk17 prefix
-   against interior covering tiles, no geometry test. *Edge arm* — one
-   per-zoom leg over `COVER_MIN_LEAF_ZOOM`..`COVER_MAX_ZOOM`, testing
-   `ST_Covers` against the fragment the covering stored for that leaf, so
-   the test costs the fragment's vertex count rather than the whole
-   boundary's. `ST_Covers` rather than `ST_Contains` because splitting
-   introduces seams that were never the boundary's own edge, and a point
-   exactly on one is inside the boundary but on the fragment's border.
+The reason a plain R-tree prefilter isn't enough on its own:
+`ST_Contains`-style cost scales with the boundary polygon's vertex count,
+not the candidate count, so a 900K-vertex boundary costs the same per
+test whether the candidate point is a sliver away or on the other side of
+the tile (see also D10). Clipping each boundary to a tile's own envelope
+during descent trims that cost without changing the answer, since every
+candidate in that tile is inside it: `ST_Contains(clipped, point) ⟺
+ST_Contains(full, point)`. Containment is tested with `ST_Covers` rather
+than `ST_Contains`, because splitting introduces seams that were never
+the boundary's own edge, and a point exactly on one is inside the
+boundary but on the fragment's border.
 
 **Applies to**: `covering.py` (`stage_covering`), `stages.py`
 (`compute_containment`)

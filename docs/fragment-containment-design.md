@@ -7,7 +7,7 @@ checked against, and pins the Discovery constants (`V = 5000`, depth cap
 16); this document turns them into a concrete plan against the current
 codebase.
 
-The unit's goal is a cost bound: the edge arm's point-in-polygon test
+The unit's goal is a cost bound: the arm's point-in-polygon test
 must cost a *fragment's* vertex count, not the whole boundary's. Today a
 point tested against Nunavut pays ~200k vertices; Discovery measured
 `ST_NPoints` up to 345,467.
@@ -29,8 +29,9 @@ re-clip each child to its own envelope, drop degenerate clips, rename
 `npoints <= V` between the floor and `cover_max_zoom`, and `TRUE` at
 `cover_max_zoom` (see "The level SQL is uniform across zooms" below).
 
-`covering_out` is `(tile_qk, boundary_id, level, kind, geom)` — `geom` is
-the edge leaf's clipped fragment, `NULL` for interior rows. It is written
+`covering_out` is `(tile_qk, boundary_id, level, geom)` — `geom` is the
+edge leaf's clipped fragment, or the tile envelope `qk_env(tile_qk)` for
+interior rows. It is written
 per z4 prefix, `ORDER BY tile_qk, boundary_id`, with `_meta.json` written
 last as the freshness sentinel; the whole directory is swapped in
 atomically.
@@ -40,25 +41,23 @@ One property of the output is load-bearing downstream:
 - **Antichain.** A cell is either emitted (interior at any level, edge at
   whatever level the leaf rule fires) or expanded, never both, so no
   boundary's covering row is a quadkey-prefix descendant of another of its
-  rows. `test_no_covering_tile_descends_from_interior_tile` and
-  `test_antichain_generalized_over_all_kinds` assert it, and
+  rows. `test_antichain_over_all_rows` asserts it, and
   `pipeline-artifacts.md` records the consequence: a place matches each
   boundary at most once downstream, so no `DISTINCT` is needed.
 
 Edge leaves are *not* depth-uniform. They sit anywhere in
-`[cover_min_leaf_zoom, cover_max_zoom]`, which is why the edge arm is one
-join per zoom rather than a single fixed-length prefix match. The
-antichain is what keeps that fan of joins from double-counting: a point's
-`qk17` has exactly one ancestor at each zoom, and at most one of those
-ancestors is a leaf of any given boundary.
+`[cover_min_leaf_zoom, cover_max_zoom]`, which is why the arm is one join
+per zoom rather than a single fixed-length prefix match. The antichain is
+what keeps that fan of joins from double-counting: a point's `qk17` has
+exactly one ancestor at each zoom, and at most one of those ancestors is
+a leaf of any given boundary.
 
 `compute_containment` (`stages.py`) reads the covering's `_meta.json` for
-all four zoom/capacity params, generates one interior arm per zoom in
-`[cover_min_zoom, cover_max_zoom]` and one edge arm per zoom in
-`[cover_min_leaf_zoom, cover_max_zoom]` (13 and 5 at the current
-defaults), materializes `cov` (the whole covering parquet for one z4
-prefix) and `p` (one batch of candidate points) as temp tables, and
-substitutes both into `compute_containment.sql`.
+`cover_min_zoom` and `cover_max_zoom`, generates one arm per zoom over
+that range (13 at the current defaults) via `containment_arms_sql`,
+materializes `cov` (the whole covering parquet for one z4 prefix) and `p`
+(one batch of candidate points) as temp tables, and substitutes the arms
+into `compute_containment.sql`.
 
 ## Where recursion stops
 
@@ -114,14 +113,18 @@ SELECT *, ST_Contains(geom, qk_env(tile_qk)) AS is_interior,
 FROM l_current;
 ```
 
-Interior emission carries a `NULL::GEOMETRY`. Edge emission lives in the
+Interior emission carries `qk_env(tile_qk)` — the tile's own envelope —
+rather than `geom`: `is_interior` establishes `qk_env(tile_qk) ⊆ geom`,
+and clipping establishes the reverse, so the two are equal as point sets,
+but `geom` can carry collinear vertices inherited from the boundary while
+`qk_env` is always the 5-point rectangle. Edge emission lives in the
 level SQL, gated on a `${leaf}` predicate that `stage_covering` substitutes
 per level — `FALSE` below `cover_min_leaf_zoom`, `npoints <= ${V}` between
 the floor and the cap, `TRUE` at the cap:
 
 ```sql
 INSERT INTO covering_out
-SELECT tile_qk, boundary_id, level, 'edge', geom
+SELECT tile_qk, boundary_id, level, geom
 FROM l_flagged WHERE NOT is_interior AND (${leaf});
 ```
 
@@ -141,28 +144,31 @@ well as referenced.
 membership:
 
 ```
-tile_qk VARCHAR, boundary_id VARCHAR, level INTEGER, kind VARCHAR, geom GEOMETRY
+tile_qk VARCHAR, boundary_id VARCHAR, level INTEGER, geom GEOMETRY
 ```
 
-`geom` is the edge leaf's clipped fragment, and `NULL` for interior rows
-(an interior cell's geometry is its own envelope; storing it would be
-redundant). It is inline in the existing rows: the covering is keyed
-`(boundary_id, tile_qk)`, sharded per z4 prefix, and the edge arm reads
-those rows directly — no separate file, key, or join. DuckDB 1.4.4's
-parquet writer takes `GEOMETRY` directly: it writes GeoParquet, round-trips
-as `GEOMETRY` when spatial is loaded, decodes as a WKB `BLOB` when it
-isn't, and projections that don't select `geom` work with no spatial
-extension at all.
+`geom` is never NULL: an edge leaf's `geom` is its clipped fragment, and
+an interior row's is `qk_env(tile_qk)`, its own tile envelope (see "The
+level SQL is uniform across zooms" above for why `qk_env(tile_qk)` rather
+than `geom`). It is inline in the existing rows: the covering is keyed
+`(boundary_id, tile_qk)`, sharded per z4 prefix, and the arm reads those
+rows directly — no separate file, key, or join. DuckDB 1.4.4's parquet
+writer takes `GEOMETRY` directly: it writes GeoParquet, round-trips as
+`GEOMETRY` when spatial is loaded, decodes as a WKB `BLOB` when it isn't,
+and projections that don't select `geom` work with no spatial extension
+at all. Because every row carries geometry, every partition's `geom`
+column carries GeoParquet metadata regardless of what rows it holds — a
+partition of only interior cells reads back as `GEOMETRY` the same as a
+mixed one.
 
-Sizing: every edge leaf carries geometry, so the artifact is roughly the
-size of `boundaries.duckdb`'s geometry column plus the vertices clipping
-introduces at cell crossings — not the 4.05M vertices Discovery reports,
-which count only the fragments produced *below* z12 (see "Why it works
-this way" below). `stage_covering`'s returned `stats` dict carries two
-top-level keys alongside `total`/`interior`/`edge`/`per_level`:
-`edge_vertices` (`SUM(ST_NPoints(geom))` over `kind = 'edge'`) and
-`over_capacity_leaves` (edge rows at `cover_max_zoom` with
-`npoints > V`). Both are computed in the stats query block and land in
+Sizing: every row carries geometry, so the artifact is roughly the size
+of `boundaries.duckdb`'s geometry column plus the vertices clipping
+introduces at cell crossings, plus one 5-point envelope per interior row
+— not the 4.05M vertices Discovery reports, which count only the
+fragments produced *below* z12 (see "Why it works this way" below).
+`stage_covering`'s returned `stats` dict carries `total`, `per_level`,
+and `over_capacity_leaves` (edge rows at `cover_max_zoom` with
+`npoints > V`), computed in the stats query block and landed in
 `_meta.json`'s `stats`, so a real run measures the artifact instead of
 estimating it.
 
@@ -176,54 +182,57 @@ sort over the whole payload is the pattern `knowledge/export_sort_spill_ceiling.
 records blowing the 250GB spill cap and that the tile export was moved
 away from.
 
-## The variable-depth edge arm
+## The containment arm
 
-Edge leaves exist at every zoom in
-`[cover_min_leaf_zoom, cover_max_zoom]`, so `compute_containment.sql`'s
-edge arm is a generated `UNION ALL` over that range, mirroring
-`interior_arms`. `compute_containment` builds an `edge_arms` string the
-same way and substitutes it for `${edge_arms}` in the template:
+Every covering row — interior or edge — is tested by the same predicate,
+one arm per zoom over `[cover_min_zoom, cover_max_zoom]` (13 at the
+current defaults). `containment_arms_sql` (`stages.py`, module level so
+the no-boundary-join invariant is testable without running the stage)
+generates it:
 
 ```python
-edge_arms = "\nUNION ALL\n".join(
-    f"    SELECT p.place_id, c.boundary_id, c.level\n"
-    f"    FROM p JOIN cov c\n"
-    f"      ON c.kind = 'edge' AND len(c.tile_qk) = {L}\n"
-    f"     AND left(p.qk17, {L}) = c.tile_qk\n"
-    f"    WHERE ST_Covers(c.geom, ST_Point(p.lon, p.lat))"
-    for L in range(cover_min_leaf_zoom, cover_max_zoom + 1)
-)
+def containment_arms_sql(cover_min_zoom, cover_max_zoom):
+    return "\nUNION ALL\n".join(
+        f"    SELECT p.place_id, c.boundary_id, c.level\n"
+        f"    FROM p JOIN cov c\n"
+        f"      ON len(c.tile_qk) = {L}\n"
+        f"     AND left(p.qk17, {L}) = c.tile_qk\n"
+        f"    WHERE ST_Covers(c.geom, ST_Point(p.lon, p.lat))"
+        for L in range(cover_min_zoom, cover_max_zoom + 1)
+    )
 ```
 
-Interior arms are generated over `[cover_min_zoom, cover_max_zoom]` (4 to
-16) because a deep-split edge cell's children can themselves be interior:
-thirteen interior arms and five edge arms in total.
+An interior row's arm passes exactly when the prefix equi-join already
+matched: `ST_Covers` against its own tile envelope is true for every
+point the join can bring to it, since the join key already confines the
+point to that tile. An edge row's arm is the real geometry test, bounded
+to the fragment's vertex count.
 
-The arm has no `bnd.places` join: the fragment *is* the geometry to test,
-so there is no boundary bbox pre-filter or separate geometry lookup;
-`level` comes directly from `cov`. `bnd.places` is joined once, in the
-final SELECT, for `names."primary"`. There is no fragment-bbox pre-filter
-either: the point is already known to be in the fragment's tile, and the
-fragment is at most tile-sized and at most `V` vertices, which is the
+The arm has no `bnd.places` join: the stored geometry *is* the geometry
+to test, so there is no boundary bbox pre-filter or separate geometry
+lookup; `level` comes directly from `cov`. `bnd.places` is joined once,
+in the final SELECT, for `names."primary"`. There is no geometry-bbox
+pre-filter either: the point is already known to be in the row's tile,
+and the row is at most tile-sized and at most `V` vertices, which is the
 bound this unit exists to establish.
 
 ## `ST_Covers`, and why no dedup
 
-Fragments are tested with `ST_Covers`, not `ST_Contains`. Splitting
-creates interior seams that were never boundaries of the original
-polygon; `ST_Contains` excludes boundaries, so a point on a seam would be
-inside the whole division and inside neither fragment.
+Every covering row is tested with `ST_Covers`, not `ST_Contains`.
+Splitting creates interior seams that were never boundaries of the
+original polygon; `ST_Contains` excludes boundaries, so a point on a seam
+would be inside the whole division and inside neither row's geometry.
 
 With `ST_Covers` the semantics are exact, not approximate. For a point
-`x` and boundary `b`, let `F` be the leaf cell of `b`'s covering that
-contains `x` (the antichain guarantees at most one). If `x` is strictly
-inside `b`, `F` exists and covers `x`. If `x` is on `b`'s boundary, `F`'s
-clip contains that boundary segment, so `ST_Covers` is true. If `x` is
-outside `b`, no fragment can cover it, since every fragment is a subset
-of `b`. So the fragment result equals `ST_Covers(b.geometry, x)` exactly,
-and differs from a whole-polygon `ST_Contains(b.geometry, x)` only on
-`b`'s own boundary — a measure-zero set where that answer is arbitrary
-anyway.
+`x` and boundary `b`, let `F` be the covering row of `b` that contains
+`x` (the antichain guarantees at most one). If `x` is strictly inside
+`b`, `F` exists and covers `x`. If `x` is on `b`'s boundary, `F`'s
+geometry contains that boundary segment, so `ST_Covers` is true. If `x`
+is outside `b`, no row can cover it, since every row's geometry is a
+subset of `b`. So the arm's result equals `ST_Covers(b.geometry, x)`
+exactly, and differs from a whole-polygon `ST_Contains(b.geometry, x)`
+only on `b`'s own boundary — a measure-zero set where that answer is
+arbitrary anyway.
 Everything else is floating-point noise from `ST_Intersection`, order
 1e-15 degrees.
 
@@ -247,17 +256,16 @@ them entirely, so `recorded.get(...)` returns `None`, the comparison
 fails, and the covering rebuilds.
 
 `compute_containment` reads the covering's `_meta.json` for
-`cover_min_zoom`/`cover_max_zoom` and puts them in `params`. It also reads
-`cover_min_leaf_zoom` (needed to generate the edge arms) and
-`cover_vertex_capacity` (not needed for the query, but `params` is the
-artifact's record of what produced it, and mtime-based freshness is
-defeated whenever an artifact directory is copied between hosts with
-timestamps preserved). Both are read from `covering/_meta.json` the same
-way as the two zooms, with the same fallback-to-default-on-missing
-behaviour — never from a `compute_containment` keyword argument.
-`cover_min_leaf_zoom` decides which levels the edge arms cover, so a
-value sourced from anywhere but the artifact that was actually built
-would silently drop arms and lose matches.
+`cover_min_zoom`/`cover_max_zoom`, which feed `containment_arms_sql`
+directly, and puts them in `params`. It also reads `cover_min_leaf_zoom`
+and `cover_vertex_capacity`, neither of which arm generation needs
+anymore — `params` is the artifact's record of what produced the
+covering, and mtime-based freshness is defeated whenever an artifact
+directory is copied between hosts with timestamps preserved. All four are
+read from `covering/_meta.json` the same way, with the same
+fallback-to-default-on-missing behaviour — never from a
+`compute_containment` keyword argument, since a value sourced from
+anywhere but the artifact that was actually built would misdescribe it.
 
 The literal fallback defaults at the top of `compute_containment` must
 track `covering.py`'s constants: a stale `cover_max_zoom = 12` there
@@ -282,7 +290,7 @@ under-capacity edge cells stop earlier.
 
 Three places where a naive implementation violates the bound:
 
-- **Inlining the covering read into the edge arm.**
+- **Inlining the covering read into the arm.**
   `compute_containment.sql`'s header documents a 100x+ memory blowup
   (~150MB vs 30GB+) from letting the planner see a CTE over a full
   backing relation instead of a pre-materialized subset. `cov` must stay
@@ -324,7 +332,7 @@ Two resident sets are large enough to name:
 
 ## Antimeridian
 
-`compute_containment.sql`'s edge arm has no `CASE` on
+`compute_containment.sql`'s arms have no `CASE` on
 `b.min_longitude <= b.max_longitude` with an OR-branch for
 antimeridian-crossing boundaries — that branch belonged to the
 `bnd.places` bbox pre-filter, and the pre-filter is gone with the join.
@@ -351,28 +359,33 @@ reintroduced with the fragment test.
 
 1. *Mass balance, per boundary.* Leaves are pairwise disjoint (antichain
    ⇒ no ancestor relation ⇒ disjoint tiles), so their areas sum; no union
-   is needed. For each boundary,
-   `SUM(ST_Area(qk_env(tile_qk)))` over interior rows plus
-   `SUM(ST_Area(geom))` over edge rows equals
-   `ST_Area(ST_Intersection(b.geometry, merc_extent))` within a relative
-   tolerance of 1e-6, where `merc_extent` is the ±85.05112878 envelope.
-   Clipping to the Mercator extent on the right-hand side is what makes
-   the identity exact for polar boundaries rather than requiring them to
-   be excluded. Catches dropped and duplicated fragments.
+   is needed. For each boundary, `SUM(ST_Area(geom))` over its covering
+   rows equals `ST_Area(ST_Intersection(b.geometry, merc_extent))` within
+   a relative tolerance of 1e-6, where `merc_extent` is the
+   ±85.05112878 envelope. Clipping to the Mercator extent on the
+   right-hand side is what makes the identity exact for polar boundaries
+   rather than requiring them to be excluded. Catches dropped and
+   duplicated fragments.
 2. *No orphaned boundary.* Every boundary whose geometry intersects
    `merc_extent` has at least one covering row.
 3. *Antichain.* No boundary's covering row is a quadkey-prefix descendant
-   of another of its rows. Generalizes
-   `test_no_covering_tile_descends_from_interior_tile`, which today only
-   tests interior ancestors. This is the invariant standing in for the
+   of another of its rows. This is the invariant standing in for the
    absent `DISTINCT`, together with the existing
-   `test_no_duplicate_rkeys_in_within`.
-4. *Leaf depth.* No `'edge'` row is shallower than `cover_min_leaf_zoom`
-   and none is deeper than `cover_max_zoom`. This unit falsifies
-   `test_edge_kind_only_at_max_zoom` in `tests/test_covering.py`; that
-   test is deleted and this one takes its place.
-5. *Capacity.* Every `'edge'` row shallower than `cover_max_zoom` has
-   `ST_NPoints(geom) <= V`. Every `'interior'` row has `geom IS NULL`.
+   `test_no_duplicate_rkeys_in_within`. Asserted by
+   `test_antichain_over_all_rows`.
+4. *Leaf depth.* No fragment row — one whose `geom` differs from its own
+   tile envelope `qk_env(tile_qk)` — is shallower than
+   `cover_min_leaf_zoom` or deeper than `cover_max_zoom`. Asserted by
+   `test_fragment_leaf_depth_within_floor_and_cap`.
+5. *Capacity.* Every fragment row shallower than `cover_max_zoom` has
+   `ST_NPoints(geom) <= V`. No row anywhere has `geom IS NULL`. Asserted
+   by `test_capacity_and_no_row_has_null_geom`.
+6. *No partition reads back as BLOB.* Every row carries geometry, so
+   every partition's `geom` column carries GeoParquet metadata and binds
+   as `GEOMETRY`, including a partition of only interior cells. Asserted
+   by `test_interior_only_partition_reads_back_as_geometry` and, as an
+   end-to-end check via `compute_containment`,
+   `test_boundary_appears_in_within_relations`.
 
 **Sampled behavioral diff** (one-time, at migration). Run the current and
 new containment over a stratified sample — the ~20 known-slow z6 cells
@@ -417,7 +430,6 @@ as it is — its sample points are interior, where the two predicates agree.
 - `boundaries.duckdb`. Unchanged schema, unchanged import path.
 - The containment artifact's schema, batching, dir-swap, or Q3
   degradation path.
-- The interior arms' semantics — only their zoom range.
 - `qk_env_macro.sql`, `covering_seed.sql`'s join conditions, and
   `bbox_to_quadkeys`.
 
@@ -475,7 +487,7 @@ two must be sequenced rather than run as parallel streams.
    345,467 ÷ 5,000: the bound obtained precisely when every leaf's own
    geometry is stored and capped at `V`. So the artifact grows by
    roughly `boundaries.duckdb`'s geometry column plus clip overhead,
-   which is what the `edge_vertices` stat measures on the first run.
+   best measured directly against a real build's output size.
 
 ## Decided
 
@@ -495,10 +507,10 @@ F. Paulus Skiway, and named Antarctic peaks); Overture has none.
 
 - `cover_min_leaf_zoom = 12` is inherited from the pre-split
   `COVER_MAX_ZOOM`, not measured. It trades edge-join fan-out against
-  stored fragment count; the first real run's `edge_vertices` and
-  per-level stats are what would justify moving it. A floor of 12 holds
-  edge-join fan-out at what the pre-split covering already produced, which
-  is known to work.
+  stored fragment count; the first real run's per-level stats and
+  measured artifact size are what would justify moving it. A floor of 12
+  holds edge-join fan-out at what the pre-split covering already
+  produced, which is known to work.
 
 ## Out of scope, but real
 
