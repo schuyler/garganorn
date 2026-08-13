@@ -27,7 +27,7 @@ import time
 import duckdb
 import pytest
 
-from garganorn.stages import compute_containment
+from garganorn.stages import compute_containment, quadkey_to_bbox
 from garganorn.quadtree import run_pipeline
 
 # ---------------------------------------------------------------------------
@@ -1413,6 +1413,96 @@ class TestAntimeridianEdgeArm:
         assert gap_rkey in place_rkeys.get("p_gap", set()), (
             "Gap place (lon=0) should appear with gap_boundary "
             "(confirms the covering was seeded for the gap region)"
+        )
+
+
+class TestInteriorOnlyPartitionContainment:
+    """Containment over a covering whose z4 partition holds only interior
+    rows still returns the boundary.
+
+    Guards the removal of the read-site GEOMETRY cast; its kill is restoring
+    NULL::GEOMETRY to covering_level.sql's interior INSERT.
+    """
+
+    def test_boundary_appears_in_within_relations(self, tmp_path):
+        from garganorn.covering import stage_covering
+
+        qk4 = "0231"
+        xmin, ymin, xmax, ymax = quadkey_to_bbox(qk4)
+        mx, my = 0.2 * (xmax - xmin), 0.2 * (ymax - ymin)
+        bxmin, bxmax = xmin - mx, xmax + mx
+        bymin, bymax = ymin - my, ymax + my
+        wkt = (
+            f"POLYGON(({bxmin} {bymin}, {bxmin} {bymax}, "
+            f"{bxmax} {bymax}, {bxmax} {bymin}, {bxmin} {bymin}))"
+        )
+
+        db_path = tmp_path / "spill_boundaries.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE places (
+                id VARCHAR,
+                geometry GEOMETRY,
+                level INTEGER,
+                names STRUCT("primary" VARCHAR),
+                min_latitude DOUBLE,
+                max_latitude DOUBLE,
+                min_longitude DOUBLE,
+                max_longitude DOUBLE
+            )
+        """)
+        conn.execute(
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
+            ["spill_boundary", wkt, 50, "spill_boundary", bymin, bymax, bxmin, bxmax],
+        )
+        conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
+        conn.close()
+
+        covering_dir = str(tmp_path / "spill_covering")
+        stage_covering(str(db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
+
+        target = os.path.join(covering_dir, f"{qk4}.parquet")
+        con = duckdb.connect(":memory:")
+        con.execute("INSTALL spatial; LOAD spatial;")
+        row_count = con.execute("SELECT COUNT(*) FROM read_parquet(?)", [target]).fetchone()[0]
+        assert row_count == 1, (
+            f"fixture assumption violated: {qk4}.parquet should hold exactly "
+            f"one interior row, got {row_count}"
+        )
+
+        lon, lat = -100.0, 30.0
+        qk17 = con.execute("SELECT ST_QuadKey(?, ?, 17)", [lon, lat]).fetchone()[0]
+        assert qk17[:4] == qk4, "fixture assumption: point must fall in the interior-only z4 tile"
+
+        places_parquet = _make_parquet_places(tmp_path, [("p1", lon, lat)], "spill_places.parquet")
+        ta_parquet = _make_parquet_tile_assignments(
+            tmp_path, [("p1", qk17[:6])], "spill_ta.parquet"
+        )
+
+        containment_dir = str(tmp_path / "spill_containment")
+        compute_containment(
+            places_parquet, ta_parquet, str(db_path),
+            "place_id", "longitude", "latitude", containment_dir,
+            covering_dir=covering_dir,
+            force=True,
+        )
+
+        parquet_files = [
+            os.path.join(containment_dir, f)
+            for f in os.listdir(containment_dir)
+            if f.endswith(".parquet")
+        ]
+        assert len(parquet_files) > 0, "No containment parquets written"
+
+        check_con = duckdb.connect()
+        (rel_json,) = check_con.execute(
+            f"SELECT relations_json FROM read_parquet({parquet_files!r}) WHERE place_id = 'p1'"
+        ).fetchone()
+        rkeys = {e["rkey"] for e in json.loads(rel_json)["within"]}
+        expected_rkey = f"{_COLLECTION_PREFIX}:spill_boundary"
+        assert expected_rkey in rkeys, (
+            f"spill_boundary should appear in p1's within relations; got {rkeys}"
         )
 
 

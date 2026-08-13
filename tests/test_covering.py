@@ -38,7 +38,7 @@ def _check_covering():
         pytest.fail(str(_COVERING_ERROR), pytrace=False)
 
 
-from garganorn.stages import edge_arms_sql, quadkey_to_bbox
+from garganorn.stages import quadkey_to_bbox
 from tests.duckdb_spy import spy_on_duckdb_connect
 
 # ---------------------------------------------------------------------------
@@ -278,11 +278,11 @@ class TestBboxToQuadkeys:
 
 
 # ---------------------------------------------------------------------------
-# stage_covering output schema / sort / kind invariants
+# stage_covering output schema / sort invariants
 # ---------------------------------------------------------------------------
 
 class TestStageCoveringSchema:
-    """Parquet schema, sort, kind='edge' only at max zoom, _meta.json."""
+    """Parquet schema, sort, _meta.json."""
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
@@ -325,7 +325,7 @@ class TestStageCoveringSchema:
         assert "tile_qk" in cols
         assert "boundary_id" in cols
         assert "level" in cols
-        assert "kind" in cols
+        assert "geom" in cols
 
     def test_tile_qk_lengths_in_zoom_range(self, covering_dir):
         _check_covering()
@@ -341,16 +341,6 @@ class TestStageCoveringSchema:
         assert max_len <= 7, (
             f"tile_qk longer than cover_max_zoom=7: max_len={max_len}"
         )
-
-    def test_kind_values_are_interior_or_edge(self, covering_dir):
-        _check_covering()
-        parquets = self._parquet_paths(covering_dir)
-        con = duckdb.connect(":memory:")
-        invalid_kinds = con.execute(
-            "SELECT DISTINCT kind FROM read_parquet(?) WHERE kind NOT IN ('interior', 'edge')",
-            [parquets],
-        ).fetchall()
-        assert len(invalid_kinds) == 0, f"Unexpected kind values: {invalid_kinds}"
 
     def test_rows_sorted_tile_qk_then_boundary_id(self, covering_dir):
         _check_covering()
@@ -429,7 +419,7 @@ class TestStageCoveringProgressBar:
 # ---------------------------------------------------------------------------
 
 class TestCoveringSemanticInvariants:
-    """Interior tiles contained; edge tiles intersect; no prefix chains."""
+    """Every row covered by its boundary and intersects it; no prefix chains."""
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
@@ -457,7 +447,7 @@ class TestCoveringSemanticInvariants:
                 if s:
                     con.execute(s)
 
-    def test_interior_tiles_contained_by_boundary(self, covering_dir, covering_test_db):
+    def test_rows_covered_by_and_intersect_boundary(self, covering_dir, covering_test_db):
         _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
@@ -469,55 +459,13 @@ class TestCoveringSemanticInvariants:
             SELECT c.tile_qk, c.boundary_id
             FROM read_parquet(?) c
             JOIN bnd.places b ON b.id = c.boundary_id
-            WHERE c.kind = 'interior'
-              AND NOT ST_Contains(b.geometry, qk_env(c.tile_qk))
+            WHERE NOT ST_Covers(b.geometry, c.geom)
+               OR NOT ST_Intersects(b.geometry, qk_env(c.tile_qk))
             """,
             [parquets],
         ).fetchall()
         assert len(violations) == 0, (
-            f"Interior tiles not contained by their boundary: {violations[:5]}"
-        )
-
-    def test_edge_tiles_intersect_boundary(self, covering_dir, covering_test_db):
-        _check_covering()
-        parquets = self._parquet_paths(covering_dir)
-        con = duckdb.connect(":memory:")
-        con.execute("INSTALL spatial; LOAD spatial;")
-        con.execute(f"ATTACH '{covering_test_db}' AS bnd (READ_ONLY)")
-        self._load_env_macro(con)
-        violations = con.execute(
-            """
-            SELECT c.tile_qk, c.boundary_id
-            FROM read_parquet(?) c
-            JOIN bnd.places b ON b.id = c.boundary_id
-            WHERE c.kind = 'edge'
-              AND NOT ST_Intersects(b.geometry, qk_env(c.tile_qk))
-            """,
-            [parquets],
-        ).fetchall()
-        assert len(violations) == 0, (
-            f"Edge tiles do not intersect their boundary: {violations[:5]}"
-        )
-
-    def test_no_covering_tile_descends_from_interior_tile(self, covering_dir):
-        _check_covering()
-        parquets = self._parquet_paths(covering_dir)
-        con = duckdb.connect(":memory:")
-        violations = con.execute(
-            """
-            SELECT child.tile_qk, child.boundary_id, parent.tile_qk AS interior_ancestor
-            FROM read_parquet(?) child
-            JOIN read_parquet(?) parent
-              ON child.boundary_id = parent.boundary_id
-             AND parent.kind = 'interior'
-             AND length(child.tile_qk) > length(parent.tile_qk)
-             AND left(child.tile_qk, length(parent.tile_qk)) = parent.tile_qk
-            """,
-            [parquets, parquets],
-        ).fetchall()
-        assert len(violations) == 0, (
-            f"Found {len(violations)} covering tiles descending from interior tiles: "
-            f"{violations[:5]}"
+            f"Covering rows not covered by / intersecting their boundary: {violations[:5]}"
         )
 
 
@@ -526,7 +474,7 @@ class TestCoveringSemanticInvariants:
 # ---------------------------------------------------------------------------
 
 class TestPointClassification:
-    """Covering interior/edge arms ⟺ direct ST_Contains(boundary, point)."""
+    """Covering arm ⟺ direct ST_Contains(boundary, point)."""
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
@@ -547,8 +495,8 @@ class TestPointClassification:
             if f.endswith(".parquet")
         ]
 
-    def test_sf_point_interior_arm_subset_of_direct(self, covering_dir, covering_test_db):
-        """Interior-arm matches for SF point are a subset of direct ST_Contains results."""
+    def test_sf_point_covering_arm_parity(self, covering_dir, covering_test_db):
+        """Covering-arm matches for a deep-interior point equal direct ST_Contains."""
         _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
@@ -558,15 +506,15 @@ class TestPointClassification:
         lat, lon = 37.78, -122.42
         qk17 = con.execute("SELECT ST_QuadKey(?, ?, 17)", [lon, lat]).fetchone()[0]
 
-        interior_ids = {
+        covering_ids = {
             r[0]
             for r in con.execute(
                 """
                 SELECT DISTINCT boundary_id FROM read_parquet(?)
-                WHERE kind = 'interior'
-                  AND left(?, length(tile_qk)) = tile_qk
+                WHERE left(?, length(tile_qk)) = tile_qk
+                  AND ST_Covers(geom, ST_Point(?, ?))
                 """,
-                [parquets, qk17],
+                [parquets, qk17, lon, lat],
             ).fetchall()
         }
         direct_ids = {
@@ -577,9 +525,9 @@ class TestPointClassification:
             ).fetchall()
         }
 
-        spurious = interior_ids - direct_ids
-        assert len(spurious) == 0, (
-            f"Interior arm returned boundaries not confirmed by direct ST_Contains: {spurious}"
+        assert covering_ids == direct_ids, (
+            f"Covering arm {covering_ids} != direct ST_Contains {direct_ids} "
+            f"for point ({lat}, {lon})"
         )
 
     def test_pacific_point_no_covering_match(self, covering_dir):
@@ -601,8 +549,8 @@ class TestPointClassification:
         ).fetchone()[0]
         assert count == 0, f"Pacific point hit {count} covering tiles (expected 0)"
 
-    def test_edge_point_combined_arm_parity(self, covering_dir, covering_test_db):
-        """For a point near a boundary edge, combined interior+edge arm matches direct ST_Contains."""
+    def test_edge_point_covering_arm_parity(self, covering_dir, covering_test_db):
+        """For a point near a boundary edge, the covering arm matches direct ST_Contains."""
         _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
@@ -612,32 +560,17 @@ class TestPointClassification:
         lat, lon = 37.61, -122.40
         qk17 = con.execute("SELECT ST_QuadKey(?, ?, 17)", [lon, lat]).fetchone()[0]
 
-        interior_ids = {
+        covering_ids = {
             r[0]
             for r in con.execute(
                 """
                 SELECT DISTINCT boundary_id FROM read_parquet(?)
-                WHERE kind = 'interior'
-                  AND left(?, length(tile_qk)) = tile_qk
-                """,
-                [parquets, qk17],
-            ).fetchall()
-        }
-        edge_ids = {
-            r[0]
-            for r in con.execute(
-                """
-                SELECT DISTINCT c.boundary_id
-                FROM read_parquet(?) c
-                JOIN bnd.places b ON b.id = c.boundary_id
-                WHERE c.kind = 'edge'
-                  AND left(?, length(c.tile_qk)) = c.tile_qk
-                  AND ST_Contains(b.geometry, ST_Point(?, ?))
+                WHERE left(?, length(tile_qk)) = tile_qk
+                  AND ST_Covers(geom, ST_Point(?, ?))
                 """,
                 [parquets, qk17, lon, lat],
             ).fetchall()
         }
-        covering_ids = interior_ids | edge_ids
 
         direct_ids = {
             r[0]
@@ -648,7 +581,7 @@ class TestPointClassification:
         }
 
         assert covering_ids == direct_ids, (
-            f"Covering combined arm {covering_ids} != direct ST_Contains {direct_ids} "
+            f"Covering arm {covering_ids} != direct ST_Contains {direct_ids} "
             f"for point ({lat}, {lon})"
         )
 
@@ -904,30 +837,25 @@ class TestFragmentContainmentInvariants:
         ]
 
     def test_mass_balance_per_boundary(self, fc_covering_dir, covering_test_db):
-        """interior area + edge fragment area == boundary area clipped to the
-        Mercator extent, within relative tolerance 1e-6. Leaves are pairwise
-        disjoint (antichain), so areas sum -- no ST_Union_Agg, per the
-        design's explicit prohibition."""
+        """Summed row area == boundary area clipped to the Mercator extent,
+        within relative tolerance 1e-6. Leaves are pairwise disjoint
+        (antichain), so areas sum -- no ST_Union_Agg, per the design's
+        explicit prohibition."""
         _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
         con.execute(f"ATTACH '{covering_test_db}' AS bnd (READ_ONLY)")
-        _load_qk_env_macro(con)
 
         rows = con.execute(
             """
             WITH per_boundary AS (
-                SELECT boundary_id,
-                       SUM(CASE WHEN kind = 'interior' THEN ST_Area(qk_env(tile_qk)) ELSE 0 END)
-                           AS interior_area,
-                       SUM(CASE WHEN kind = 'edge' THEN ST_Area(geom) ELSE 0 END)
-                           AS edge_area
+                SELECT boundary_id, SUM(ST_Area(geom)) AS covered_area
                 FROM read_parquet(?)
                 GROUP BY boundary_id
             )
             SELECT pb.boundary_id,
-                   pb.interior_area + pb.edge_area AS covered_area,
+                   pb.covered_area,
                    ST_Area(ST_Intersection(b.geometry,
                        ST_MakeEnvelope(-180, ?, 180, ?))) AS expected_area
             FROM per_boundary pb
@@ -966,11 +894,9 @@ class TestFragmentContainmentInvariants:
         ).fetchall()
         assert orphans == [], f"Boundaries with no covering row: {orphans}"
 
-    def test_antichain_generalized_over_all_kinds(self, fc_covering_dir):
-        """No covering row is a quadkey-prefix descendant of ANY other row of
-        the same boundary. Generalizes
-        test_no_covering_tile_descends_from_interior_tile (above), which only
-        checked interior ancestors; here the parent may be interior or edge."""
+    def test_antichain_over_all_rows(self, fc_covering_dir):
+        """No covering row is a quadkey-prefix descendant of any other row of
+        the same boundary."""
         _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
@@ -990,57 +916,58 @@ class TestFragmentContainmentInvariants:
             f"of the same boundary: {violations[:5]}"
         )
 
-    def test_edge_leaf_depth_within_floor_and_cap(self, fc_covering_dir):
-        """No 'edge' row is shallower than cover_min_leaf_zoom(5) or deeper
-        than cover_max_zoom(7); at least one edge row sits strictly above the
-        floor and below the cap, which is what falsifies the deleted
-        test_edge_kind_only_at_max_zoom's assumption that edges only occur at
-        max_zoom."""
-        _check_covering()
-        parquets = self._parquet_paths(fc_covering_dir)
-        con = duckdb.connect(":memory:")
-        min_len, max_len = con.execute(
-            "SELECT MIN(length(tile_qk)), MAX(length(tile_qk)) FROM read_parquet(?) "
-            "WHERE kind = 'edge'",
-            [parquets],
-        ).fetchone()
-        assert min_len >= 5, f"edge row shallower than cover_min_leaf_zoom=5: {min_len}"
-        assert max_len <= 7, f"edge row deeper than cover_max_zoom=7: {max_len}"
-
-        below_cap = con.execute(
-            "SELECT COUNT(*) FROM read_parquet(?) WHERE kind = 'edge' AND length(tile_qk) < 7",
-            [parquets],
-        ).fetchone()[0]
-        assert below_cap > 0, (
-            "Expected at least one edge row shallower than cover_max_zoom=7 "
-            "(floor-triggered emission); found none"
-        )
-
-    def test_capacity_and_interior_geom_null(self, fc_covering_dir):
-        """Every edge row shallower than cover_max_zoom has ST_NPoints(geom)
-        <= V; every interior row has geom IS NULL."""
+    def test_fragment_leaf_depth_within_floor_and_cap(self, fc_covering_dir):
+        """No fragment row (geom != its own tile envelope) is shallower than
+        cover_min_leaf_zoom(5) or deeper than cover_max_zoom(7); at least one
+        fragment row sits strictly above the floor and below the cap."""
         _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
+        _load_qk_env_macro(con)
+        min_len, max_len = con.execute(
+            "SELECT MIN(length(tile_qk)), MAX(length(tile_qk)) FROM read_parquet(?) "
+            "WHERE NOT ST_Equals(geom, qk_env(tile_qk))",
+            [parquets],
+        ).fetchone()
+        assert min_len >= 5, f"fragment row shallower than cover_min_leaf_zoom=5: {min_len}"
+        assert max_len <= 7, f"fragment row deeper than cover_max_zoom=7: {max_len}"
+
+        below_cap = con.execute(
+            "SELECT COUNT(*) FROM read_parquet(?) "
+            "WHERE NOT ST_Equals(geom, qk_env(tile_qk)) AND length(tile_qk) < 7",
+            [parquets],
+        ).fetchone()[0]
+        assert below_cap > 0, (
+            "Expected at least one fragment row shallower than cover_max_zoom=7 "
+            "(floor-triggered emission); found none"
+        )
+
+    def test_capacity_and_no_row_has_null_geom(self, fc_covering_dir):
+        """Every fragment row shallower than cover_max_zoom has
+        ST_NPoints(geom) <= V; no row anywhere has NULL geom."""
+        _check_covering()
+        parquets = self._parquet_paths(fc_covering_dir)
+        con = duckdb.connect(":memory:")
+        con.execute("INSTALL spatial; LOAD spatial;")
+        _load_qk_env_macro(con)
         over_capacity = con.execute(
             """
             SELECT COUNT(*) FROM read_parquet(?)
-            WHERE kind = 'edge' AND length(tile_qk) < 7 AND ST_NPoints(geom) > 5000
+            WHERE NOT ST_Equals(geom, qk_env(tile_qk)) AND length(tile_qk) < 7
+              AND ST_NPoints(geom) > 5000
             """,
             [parquets],
         ).fetchone()[0]
         assert over_capacity == 0, (
-            f"{over_capacity} edge rows below cover_max_zoom exceed V=5000"
+            f"{over_capacity} fragment rows below cover_max_zoom exceed V=5000"
         )
 
-        interior_with_geom = con.execute(
-            "SELECT COUNT(*) FROM read_parquet(?) WHERE kind = 'interior' AND geom IS NOT NULL",
+        null_geom = con.execute(
+            "SELECT COUNT(*) FROM read_parquet(?) WHERE geom IS NULL",
             [parquets],
         ).fetchone()[0]
-        assert interior_with_geom == 0, (
-            f"{interior_with_geom} interior rows have non-NULL geom"
-        )
+        assert null_geom == 0, f"{null_geom} rows have NULL geom"
 
 
 # ---------------------------------------------------------------------------
@@ -1092,7 +1019,7 @@ class TestFragmentContainmentSynthetics:
         covers_matches = con.execute(
             """
             SELECT COUNT(*) FROM read_parquet(?)
-            WHERE kind = 'edge' AND length(tile_qk) = 6
+            WHERE length(tile_qk) = 6
               AND left(?, 6) = tile_qk
               AND ST_Covers(geom, ST_Point(?, ?))
             """,
@@ -1105,7 +1032,7 @@ class TestFragmentContainmentSynthetics:
         contains_matches = con.execute(
             """
             SELECT COUNT(*) FROM read_parquet(?)
-            WHERE kind = 'edge' AND length(tile_qk) = 6
+            WHERE length(tile_qk) = 6
               AND left(?, 6) = tile_qk
               AND ST_Contains(geom, ST_Point(?, ?))
             """,
@@ -1184,23 +1111,14 @@ class TestFragmentContainmentSynthetics:
         con.execute("INSTALL spatial; LOAD spatial;")
 
         def _matches(lon, lat):
-            """Mirror both of compute_containment's arms: a point matches if
-            its quadkey prefix hits an interior leaf (membership alone, geom
-            is NULL there) or an edge leaf whose stored fragment covers it.
-
-            Restricting this to edge leaves would test nothing: each lobe is
-            wide enough that its sample point falls in a z6 tile lying wholly
-            inside the lobe -- (175, 0) is in 311111, bbox 174.375..180 x
-            -5.616..0 -- which the covering classifies interior by
-            construction, so an edge-only query cannot match either lobe at
-            any correct implementation.
-            """
+            """Mirror compute_containment's single arm: prefix membership
+            plus ST_Covers against the row's stored geometry."""
             qk17 = con.execute("SELECT ST_QuadKey(?, ?, 17)", [lon, lat]).fetchone()[0]
             return con.execute(
                 """
                 SELECT COUNT(*) FROM read_parquet(?)
                 WHERE left(?, length(tile_qk)) = tile_qk
-                  AND (kind = 'interior' OR ST_Covers(geom, ST_Point(?, ?)))
+                  AND ST_Covers(geom, ST_Point(?, ?))
                 """,
                 [parquets, qk17, lon, lat],
             ).fetchone()[0]
@@ -1243,7 +1161,6 @@ class TestFragmentContainmentSynthetics:
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
         con.execute(f"ATTACH '{db_path}' AS bnd (READ_ONLY)")
-        _load_qk_env_macro(con)
 
         row_count = con.execute(
             "SELECT COUNT(*) FROM read_parquet(?) WHERE boundary_id = 'polar_boundary'",
@@ -1257,9 +1174,7 @@ class TestFragmentContainmentSynthetics:
         covered_area, expected_area, full_area = con.execute(
             """
             WITH per_boundary AS (
-                SELECT SUM(CASE WHEN kind = 'interior' THEN ST_Area(qk_env(tile_qk)) ELSE 0 END)
-                       + SUM(CASE WHEN kind = 'edge' THEN ST_Area(geom) ELSE 0 END)
-                           AS covered_area
+                SELECT SUM(ST_Area(geom)) AS covered_area
                 FROM read_parquet(?)
                 WHERE boundary_id = 'polar_boundary'
             )
@@ -1284,14 +1199,14 @@ class TestFragmentContainmentSynthetics:
             f"clipped_expected={expected_area}, full={full_area})"
         )
 
-    def test_edge_arms_have_no_boundary_table_join(self):
-        """Regression guard: the generated edge arms test the stored
-        fragment and never join the boundary table.
+    def test_containment_arms_have_no_boundary_table_join(self):
+        """Regression guard: the generated arms test the stored covering row
+        and never join the boundary table.
 
-        Asserts against `edge_arms_sql`'s output, not against
-        compute_containment.sql -- the template holds only `${edge_arms}`,
-        so a text check there passes no matter what the generator emits.
-        The template's final SELECT does keep a `JOIN bnd.places bp` for
+        Asserts against `containment_arms_sql`'s output, not against
+        compute_containment.sql -- the template holds only `${arms}`, so a
+        text check there passes no matter what the generator emits. The
+        template's final SELECT does keep a `JOIN bnd.places bp` for
         `names."primary"`, which the design retains; scoping to the
         generator's output excludes it without special-casing.
 
@@ -1300,24 +1215,29 @@ class TestFragmentContainmentSynthetics:
         would satisfy a "no min_longitude" grep while keeping the
         whole-polygon test this unit exists to remove. The positive
         assertions below fail the converse case, where the arms stop
-        testing the fragment at all.
+        testing the stored row at all.
         """
-        arms = edge_arms_sql(12, 16)
+        from garganorn.stages import containment_arms_sql
+
+        arms = containment_arms_sql(4, 16)
 
         assert "bnd.places" not in arms, (
-            "edge arms must not join bnd.places -- the fragment stored in "
-            "`cov` IS the geometry to test against, so the boundary table "
-            f"join (and the bbox pre-filter it carries) must not appear:\n{arms}"
+            "arms must not join bnd.places -- the geometry stored in `cov` "
+            "IS the geometry to test against, so the boundary table join "
+            f"(and the bbox pre-filter it carries) must not appear:\n{arms}"
         )
         assert "min_longitude" not in arms, (
-            "edge arms must not reference min_longitude -- the D7 bbox "
+            "arms must not reference min_longitude -- the D7 bbox "
             f"pre-filter is deleted along with the join it lived on:\n{arms}"
         )
         assert "ST_Contains" not in arms, (
-            f"edge arms must test with ST_Covers, not ST_Contains:\n{arms}"
+            f"arms must test with ST_Covers, not ST_Contains:\n{arms}"
         )
-        assert arms.count("ST_Covers(c.geom") == 5, (
-            "expected one ST_Covers arm per zoom over [12, 16]; got "
+        assert "kind" not in arms, (
+            f"arms must not reference the removed kind column:\n{arms}"
+        )
+        assert arms.count("ST_Covers(c.geom") == 13, (
+            "expected one ST_Covers arm per zoom over [4, 16]; got "
             f"{arms.count('ST_Covers(c.geom')}:\n{arms}"
         )
 
@@ -1351,22 +1271,22 @@ class TestFragmentContainmentSynthetics:
         over_cap_rows = con.execute(
             """
             SELECT COUNT(*) FROM read_parquet(?)
-            WHERE kind = 'edge' AND length(tile_qk) = 9 AND ST_NPoints(geom) > 50
+            WHERE length(tile_qk) = 9 AND ST_NPoints(geom) > 50
             """,
             [parquets],
         ).fetchone()[0]
         assert over_cap_rows > 0, (
-            "Expected at least one edge leaf at cover_max_zoom still above V=50"
+            "Expected at least one leaf at cover_max_zoom still above V=50"
         )
         assert stats["over_capacity_leaves"] == over_cap_rows, (
             f"stats['over_capacity_leaves']={stats.get('over_capacity_leaves')} "
             f"!= actual over-capacity row count {over_cap_rows}"
         )
 
-    def test_small_capacity_splits_one_leaf_into_several_all_under_capacity(self, tmp_path):
-        """With a small V, a boundary that would be a single leaf at the
-        design's default V=5000 instead produces several leaves, each under
-        capacity."""
+    def test_small_capacity_splits_one_fragment_into_several_all_under_capacity(self, tmp_path):
+        """With a small V, a boundary that would be a single fragment at the
+        design's default V=5000 instead produces several fragments, each
+        under capacity."""
         _check_covering()
         bxmin, bymin, bxmax, bymax = quadkey_to_bbox("120031")
         cx, cy = (bxmin + bxmax) / 2, (bymin + bymax) / 2
@@ -1390,9 +1310,10 @@ class TestFragmentContainmentSynthetics:
             ]
             con = duckdb.connect(":memory:")
             con.execute("INSTALL spatial; LOAD spatial;")
+            _load_qk_env_macro(con)
             return con.execute(
                 "SELECT length(tile_qk), ST_NPoints(geom) FROM read_parquet(?) "
-                "WHERE kind = 'edge'",
+                "WHERE NOT ST_Equals(geom, qk_env(tile_qk))",
                 [parquets],
             ).fetchall()
 
@@ -1400,14 +1321,14 @@ class TestFragmentContainmentSynthetics:
         small_v_rows = _build(50, "capsplit_small")
 
         assert len(large_v_rows) == 1, (
-            f"At V=5000 expected exactly one edge leaf; got {len(large_v_rows)}: {large_v_rows}"
+            f"At V=5000 expected exactly one fragment; got {len(large_v_rows)}: {large_v_rows}"
         )
         assert len(small_v_rows) > 1, (
-            f"At V=50 expected several edge leaves; got {len(small_v_rows)}: {small_v_rows}"
+            f"At V=50 expected several fragments; got {len(small_v_rows)}: {small_v_rows}"
         )
         over_capacity = [n for _, n in small_v_rows if n > 50]
         assert over_capacity == [], (
-            f"At V=50 every edge leaf must be under capacity; over: {over_capacity}"
+            f"At V=50 every fragment must be under capacity; over: {over_capacity}"
         )
 
     def test_freshness_leaf_zoom_and_vertex_capacity_change_rebuilds(
@@ -1458,3 +1379,52 @@ class TestFragmentContainmentSynthetics:
         )
         mtime4 = os.path.getmtime(meta_path)
         assert mtime4 > mtime3, "Changed cover_min_leaf_zoom must trigger a rebuild"
+
+
+# ---------------------------------------------------------------------------
+# R1: geom is never NULL, even for an interior-only partition
+# ---------------------------------------------------------------------------
+
+class TestInteriorOnlyPartitionGeometry:
+    """A z4 partition holding only interior rows still binds geom as
+    GEOMETRY (docs/tranche2-design.md, R1)."""
+
+    def test_interior_only_partition_reads_back_as_geometry(self, tmp_path):
+        """DESCRIBE reports GEOMETRY for a partition whose sole row is a
+        whole-tile interior row -- today it's all-NULL, so no GeoParquet
+        `geo` metadata key is written and the column reads back as BLOB."""
+        _check_covering()
+        qk4 = "0231"
+        xmin, ymin, xmax, ymax = quadkey_to_bbox(qk4)
+        mx, my = 0.2 * (xmax - xmin), 0.2 * (ymax - ymin)
+        bxmin, bxmax = xmin - mx, xmax + mx
+        bymin, bymax = ymin - my, ymax + my
+        wkt = (
+            f"POLYGON(({bxmin} {bymin}, {bxmin} {bymax}, "
+            f"{bxmax} {bymax}, {bxmax} {bymin}, {bxmin} {bymin}))"
+        )
+        db_path = tmp_path / "spill_boundaries.duckdb"
+        _create_boundaries_db(db_path, [
+            ("spill_boundary", 50, wkt, bymin, bxmin, bymax, bxmax),
+        ])
+
+        out_dir = str(tmp_path / "spill_covering")
+        stage_covering(str(db_path), out_dir, cover_min_zoom=4, cover_max_zoom=7)
+        target = os.path.join(out_dir, f"{qk4}.parquet")
+
+        con = duckdb.connect(":memory:")
+        con.execute("INSTALL spatial; LOAD spatial;")
+        row_count = con.execute(
+            "SELECT COUNT(*) FROM read_parquet(?)", [target]
+        ).fetchone()[0]
+        assert row_count == 1, (
+            f"fixture assumption violated: {qk4}.parquet should hold exactly "
+            f"one interior row, got {row_count}"
+        )
+
+        geom_type = con.execute(
+            "DESCRIBE SELECT geom FROM read_parquet(?)", [target]
+        ).fetchone()[1]
+        assert geom_type == "GEOMETRY", (
+            f"{qk4}.parquet's geom column reads back as {geom_type}, not GEOMETRY"
+        )
