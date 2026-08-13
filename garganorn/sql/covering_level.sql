@@ -9,7 +9,7 @@
 -- Steps:
 --   1. Materialize ST_Contains and ST_NPoints once per row (dominant cost;
 --      do not evaluate twice).
---   2. Emit interior rows to covering_out (geom NULL).
+--   2. Emit interior rows to covering_out (geom = qk_env(tile_qk)).
 --   3. Emit edge leaves -- non-interior rows satisfying ${leaf} -- to
 --      covering_out, with their clipped fragment geometry.
 --   4. Expand rows that are neither interior nor an edge leaf ×4 (children
@@ -22,12 +22,12 @@ SELECT *, ST_Contains(geom, qk_env(tile_qk)) AS is_interior,
 FROM l_current;
 
 INSERT INTO covering_out
-SELECT tile_qk, boundary_id, level, 'interior', NULL::GEOMETRY
+SELECT tile_qk, boundary_id, level, qk_env(tile_qk)
 FROM l_flagged
 WHERE is_interior;
 
 INSERT INTO covering_out
-SELECT tile_qk, boundary_id, level, 'edge', geom
+SELECT tile_qk, boundary_id, level, geom
 FROM l_flagged
 WHERE NOT is_interior AND (${leaf});
 

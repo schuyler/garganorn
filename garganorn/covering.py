@@ -117,14 +117,13 @@ def stage_covering(
 ) -> dict:
     """Build covering/<qk4>.parquet from boundaries.duckdb.
 
-    Returns stats dict: {total, interior, edge, per_level: {z: n},
-    edge_vertices, over_capacity_leaves}.
+    Returns stats dict: {total, per_level: {z: n}, over_capacity_leaves}.
 
     An edge leaf is emitted at zoom z when
     NOT is_interior AND (z = cover_max_zoom OR
     (z >= cover_min_leaf_zoom AND npoints <= cover_vertex_capacity));
-    otherwise the cell expands. cover_min_leaf_zoom bounds the edge join's
-    fan-out; cover_vertex_capacity bounds the point-in-polygon test cost.
+    otherwise the cell expands. cover_min_leaf_zoom bounds the containment
+    join's fan-out; cover_vertex_capacity bounds the point-in-polygon test cost.
 
     Freshness: skips when covering_dir/_meta.json is newer than boundaries_db
     AND the recorded zoom/capacity parameters match. force=True always rebuilds.
@@ -211,7 +210,6 @@ def stage_covering(
                 tile_qk     VARCHAR,
                 boundary_id VARCHAR,
                 level       INTEGER,
-                kind        VARCHAR,
                 geom        GEOMETRY
             )
         """)
@@ -275,7 +273,7 @@ def stage_covering(
             con.execute(
                 f"""
                 COPY (
-                    SELECT tile_qk, boundary_id, level, kind, geom
+                    SELECT tile_qk, boundary_id, level, geom
                     FROM covering_out
                     WHERE left(tile_qk, 4) = ?
                     ORDER BY tile_qk, boundary_id
@@ -288,10 +286,7 @@ def stage_covering(
         stats_row = con.execute(
             """
             SELECT COUNT(*),
-                   SUM(CASE WHEN kind = 'interior' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN kind = 'edge' THEN 1 ELSE 0 END),
-                   SUM(CASE WHEN kind = 'edge' THEN ST_NPoints(geom) ELSE 0 END),
-                   SUM(CASE WHEN kind = 'edge' AND length(tile_qk) = ?
+                   SUM(CASE WHEN length(tile_qk) = ?
                             AND ST_NPoints(geom) > ? THEN 1 ELSE 0 END)
             FROM covering_out
             """,
@@ -299,11 +294,8 @@ def stage_covering(
         ).fetchone()
         stats = {
             "total": stats_row[0],
-            "interior": stats_row[1],
-            "edge": stats_row[2],
             "per_level": {},
-            "edge_vertices": stats_row[3] or 0,
-            "over_capacity_leaves": stats_row[4] or 0,
+            "over_capacity_leaves": stats_row[1] or 0,
         }
         for z_val, n_val in con.execute("""
             SELECT length(tile_qk) AS z, COUNT(*) AS n
@@ -313,10 +305,8 @@ def stage_covering(
             stats["per_level"][z_val] = n_val
 
         log.info(
-            "stage_covering: done (%.1fs, %d total, %d interior, %d edge, "
-            "%d edge vertices, %d over capacity, %d prefixes)",
-            time.monotonic() - t0, stats["total"], stats["interior"],
-            stats["edge"], stats["edge_vertices"], stats["over_capacity_leaves"],
+            "stage_covering: done (%.1fs, %d total, %d over capacity, %d prefixes)",
+            time.monotonic() - t0, stats["total"], stats["over_capacity_leaves"],
             len(prefixes),
         )
 

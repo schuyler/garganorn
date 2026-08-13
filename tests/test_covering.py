@@ -38,7 +38,7 @@ def _check_covering():
         pytest.fail(str(_COVERING_ERROR), pytrace=False)
 
 
-from garganorn.stages import quadkey_to_bbox
+from garganorn.stages import containment_arms_sql, quadkey_to_bbox
 from tests.duckdb_spy import spy_on_duckdb_connect
 
 # ---------------------------------------------------------------------------
@@ -1217,8 +1217,6 @@ class TestFragmentContainmentSynthetics:
         assertions below fail the converse case, where the arms stop
         testing the stored row at all.
         """
-        from garganorn.stages import containment_arms_sql
-
         arms = containment_arms_sql(4, 16)
 
         assert "bnd.places" not in arms, (

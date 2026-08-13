@@ -301,27 +301,28 @@ def _coord_exprs(source, alias=""):
     return f"{prefix}longitude", f"{prefix}latitude"
 
 
-def edge_arms_sql(cover_min_leaf_zoom, cover_max_zoom):
-    """Edge arms for compute_containment: one UNION ALL leg per zoom level.
+def containment_arms_sql(cover_min_zoom, cover_max_zoom):
+    """Containment arms for compute_containment: one UNION ALL leg per zoom level.
 
-    Tests the fragment the covering stored for each edge leaf (`cov.geom`)
-    with ST_Covers. There is deliberately no bnd.places join and no bbox
-    pre-filter: the fragment IS the geometry to test, and reintroducing the
-    boundary table here restores the whole-polygon cost this unit removed.
+    Tests the geometry the covering stored for each row (`cov.geom`) with
+    ST_Covers. There is deliberately no bnd.places join and no bbox
+    pre-filter: the stored geometry IS the geometry to test, and
+    reintroducing the boundary table here restores the whole-polygon cost
+    this unit removed.
 
     Joining on `qk17` is only correct because every source derives `qk17`
-    from the same point the predicate tests, so the fragment fetched is the
-    one covering that point.
+    from the same point the predicate tests, so the row fetched is the one
+    covering that point.
 
     Module level so that invariant is testable without running the stage.
     """
     return "\nUNION ALL\n".join(
         f"    SELECT p.place_id, c.boundary_id, c.level\n"
         f"    FROM p JOIN cov c\n"
-        f"      ON c.kind = 'edge' AND len(c.tile_qk) = {L}\n"
+        f"      ON len(c.tile_qk) = {L}\n"
         f"     AND left(p.qk17, {L}) = c.tile_qk\n"
         f"    WHERE ST_Covers(c.geom, ST_Point(p.lon, p.lat))"
-        for L in range(cover_min_leaf_zoom, cover_max_zoom + 1)
+        for L in range(cover_min_zoom, cover_max_zoom + 1)
     )
 
 
@@ -458,16 +459,7 @@ def compute_containment(
     os.makedirs(tmp_dir)
 
     if not empty:
-        # Generate interior arms SQL (one per zoom level L in [cover_min_zoom, cover_max_zoom])
-        interior_arms = "\nUNION ALL\n".join(
-            f"    SELECT p.place_id, c.boundary_id, c.level\n"
-            f"    FROM p JOIN cov c\n"
-            f"      ON c.kind = 'interior' AND len(c.tile_qk) = {L}\n"
-            f"     AND left(p.qk17, {L}) = c.tile_qk"
-            for L in range(cover_min_zoom, cover_max_zoom + 1)
-        )
-
-        edge_arms = edge_arms_sql(cover_min_leaf_zoom, cover_max_zoom)
+        arms = containment_arms_sql(cover_min_zoom, cover_max_zoom)
 
         template_sql = (_SQL_DIR / "compute_containment.sql").read_text()
 
@@ -535,13 +527,9 @@ def compute_containment(
                         continue
 
                     covering_file_sql = covering_file.replace("'", "''")
-                    # The CAST is not a no-op: a z4 partition holding only interior
-                    # cells has an all-NULL geom, so no GeoParquet metadata is written
-                    # and the column reads back as BLOB, which ST_Covers cannot bind.
                     con.execute(f"""
                         CREATE TEMP TABLE cov AS
-                        SELECT * REPLACE (CAST(geom AS GEOMETRY) AS geom)
-                        FROM read_parquet('{covering_file_sql}')
+                        SELECT * FROM read_parquet('{covering_file_sql}')
                     """)
                     try:
                         for prefix, n in group:
@@ -565,8 +553,7 @@ def compute_containment(
                                 out_path_sql = out_path.replace("'", "''")
 
                                 sql = template_sql
-                                sql = sql.replace("${interior_arms}", interior_arms)
-                                sql = sql.replace("${edge_arms}", edge_arms)
+                                sql = sql.replace("${arms}", arms)
                                 sql = sql.replace("${collection_prefix}", collection_prefix)
 
                                 con.execute(
