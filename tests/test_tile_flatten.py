@@ -257,7 +257,8 @@ def _make_export_db(conn, source, places_rows=None):
     conn.execute("""
         CREATE TABLE place_containment (
             place_id       VARCHAR,
-            relations_json VARCHAR
+            relations_json VARCHAR,
+            tile_qk        VARCHAR
         )
     """)
 
