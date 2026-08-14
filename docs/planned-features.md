@@ -203,8 +203,8 @@ collection entirely. This is a completeness question, not a data-quality
 one — those are real Overture divisions, just not land ones — and it was
 deliberately left open rather than decided: is a body of water a useful
 containment answer for a client, and if so, does it change tile
-assignment or containment-name derivation (see the division tile
-assignment section of `performance-improvements.md`)?
+assignment or containment-name derivation (see `design-constraints.md`'s
+"A record may be referenced by more than one tile")?
 
 ## Audit OSM's Map Features against the import tag whitelist
 

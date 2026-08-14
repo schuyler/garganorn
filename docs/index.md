@@ -14,8 +14,7 @@
 | [design-constraints.md](design-constraints.md) | Pipeline invariants and architectural rules garganorn's own code must satisfy |
 | [gotchas.md](gotchas.md) | Behaviors of third-party tools (DuckDB, GeoParquet, Overture, QuackOSM) that cost real time to learn and aren't discoverable from their documentation |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
-| [performance-improvements.md](performance-improvements.md) | Proposed performance work on already-correct code: the evidence and requirements behind the containment work, plus which pipeline disk writes earn their keep |
-| [overlap-tile-references-design.md](overlap-tile-references-design.md) | Division-to-tile references from real geometry overlap, replacing the single bbox-derived point (designed, not started) |
+| [performance-improvements.md](performance-improvements.md) | One open performance question on already-correct code — division tile-reference fan-out from garbage geometry — plus a settled note on which pipeline disk writes earn their keep |
 | [fragment-containment-design.md](fragment-containment-design.md) | Pre-splitting boundary polygons against the quadtree so the containment edge test costs a fragment's vertex count, not the whole polygon's (shipped) |
 | [known-data-quality-issues.md](known-data-quality-issues.md) | Source-data characteristics investigated and deliberately left unfixed |
 

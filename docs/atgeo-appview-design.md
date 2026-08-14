@@ -147,8 +147,10 @@ lexicon validation are counted and skipped, never partially indexed.
 
 ## Tile assignment
 
-The batch pipeline picks each record's zoom globally: the coarsest tile
-holding no more than `max_per_tile` records. Streaming cannot do a global
+The batch pipeline picks each record's grid zoom globally: the coarsest
+tile holding no more than `max_per_tile` records. (Divisions are then
+referenced from every tile their geometry overlaps, so their exported
+per-tile count is not bounded by the cap.) Streaming cannot do a global
 assignment, so the AppView uses a monotone rule instead. A record lands in the
 tile at the collection's current zoom for its quadkey prefix. When a tile
 exceeds `max_per_tile`, the flush loop splits it — reassigning its records one

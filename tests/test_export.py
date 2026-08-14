@@ -1783,13 +1783,14 @@ class TestBatchedExportPartitioning:
     """
 
     def test_short_and_long_tile_qk_mixed_in_one_run(self, tmp_path, monkeypatch):
-        """A tile_qk shorter than the partition depth (e.g. a z4 division
-        tile reference, once overlap-tile-references lands) must still land
-        as one complete file: left(tile_qk, 6) on a 4-char string returns
-        the whole string, so the tile is its own partition, not a fragment
-        of one. Mixed with 10-char tile_qks in the same run so partition-dir
-        listing and the sort/flush loop are exercised at both widths, not
-        just the width the real and fake implementations happen to agree on.
+        """A tile_qk shorter than the partition depth must still land as one
+        complete file: left(tile_qk, 6) on a 4-char string returns the whole
+        string, so the tile is its own partition, not a fragment of one. No
+        pipeline path produces a sub-6-char key, but the test pins the
+        slicing behavior anyway. Mixed with 10-char tile_qks in the same run
+        so partition-dir listing and the sort/flush loop are exercised at
+        both widths, not just the width the real and fake implementations
+        happen to agree on.
         """
         import os, time
         from garganorn.stages import stage_export

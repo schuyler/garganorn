@@ -44,8 +44,8 @@ partial-result protocol.
 
 ## Tiles
 
-A tile is a set of place records whose locations fall inside one quadkey
-cell, stored as a gzipped JSON file.
+A tile is a set of place records associated with one quadkey cell, stored
+as a gzipped JSON file.
 
 **Quadkey scheme.** Web-Mercator (Bing) quadkeys over WGS84 longitude and
 latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing
@@ -60,12 +60,14 @@ client nothing because a client always asks `getCoverage` again rather than
 remembering URLs. Old releases are eventually retired, so a hoarded URL will
 in time return 404; that is the penalty for remembering.
 
-**Zoom and assignment.** Tiles exist at zooms 6 through 17. Assignment is
-adaptive: a record goes in the coarsest tile holding no more than a
-per-deployment cap of records (1,000 by default), falling back to zoom 17
-when no coarser tile qualifies. Consequences a client must handle: tiles at
-different zooms coexist in one collection, and no fixed zoom may be
-assumed.
+**Zoom and assignment.** Tiles exist at zooms 6 through 17. For point
+records, assignment is adaptive: a record goes in the coarsest tile
+holding no more than a per-deployment cap of records (1,000 by default),
+falling back to zoom 17 when no coarser tile qualifies. Administrative
+divisions are polygons and instead appear in every tile their geometry
+overlaps; a division's per-tile count is not bounded by that cap.
+Consequences a client must handle: tiles at different zooms coexist in
+one collection, and no fixed zoom may be assumed.
 
 **Deduplicate by `rkey`.** A client concatenating `records` arrays from
 more than one tile in the same collection MUST deduplicate by `rkey`.

@@ -275,7 +275,8 @@ class TestForceSemantics:
         containment/
         (tiles/ history is NEVER touched)
       run --force (overture_division):
-        additionally boundaries.duckdb and covering/
+        additionally boundaries.duckdb, covering/, and
+        tile_references.parquet + .meta.json
 
     All tests fail RED because:
       (a) the 'run' subcommand does not exist (SystemExit on parse), OR

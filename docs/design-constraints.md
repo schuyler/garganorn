@@ -116,6 +116,30 @@ once (no `DISTINCT` needed). Verified against an in-suite brute-force `ST_Contai
 a captured baseline (the old per-tile code never worked correctly in
 production, so no valid baseline existed to compare against).
 
+### A record may be referenced by more than one tile
+
+Divisions are polygons: `stage_division_tile_references` references a
+division from every grid tile its geometry overlaps, not just the one
+tile holding its interior point. Places are points and keep the single
+tile `stage_tile_assignment` assigns them.
+
+Every copy of a multi-tile record must be byte-identical across the
+tiles carrying it. The spec's dedup-by-rkey rule keeps one arbitrary
+copy and drops the rest, so a per-tile divergence is data loss with no
+error to surface it.
+
+Any join of the tile-assignment artifact (`tile_assignments.parquet` or
+`tile_references.parquet`) against another per-place artifact that can
+itself carry tile-scoped rows must key on `(place_id, tile_qk)` together,
+never `place_id` alone — `compute_containment` groups by `(tile_qk,
+place_id)`, so a `place_id`-only join fans out to N² rows for an N-tile
+record. `overture_place_export_tiles.sql` and `osm_export_tiles.sql` keep
+the `place_id`-only join deliberately: both sides stay one row per place
+for those sources.
+
+**Applies to**: `stages.py` (`stage_division_tile_references`,
+`compute_containment`), `overture_division_export_tiles.sql`
+
 ### Tile serving uses three distinct, deliberately separate namespaces
 
 NSID dotted (`org.atgeo.places.overture.place`, a config key) → disk
@@ -166,7 +190,7 @@ derivation is unnecessary.
 | `COVER_MIN_LEAF_ZOOM` | 12 | Shallowest level an edge leaf may be emitted at; bounds edge-join fan-out |
 | `COVER_MAX_ZOOM` | 16 | Covering descent end level; a fragment still over capacity here is emitted anyway |
 | `COVER_VERTEX_CAPACITY` | 5000 | Vertex count at or below which an edge fragment stops recursing |
-| `max_per_tile` | 1000 | Maximum records per export tile |
+| `max_per_tile` | 1000 | Maximum records per tile in the assignment grid, every source; does not bound a division tile's exported count |
 | `max_temp_directory_size` | 250GB | Ceiling on DuckDB spill, applied independently of `temp_directory` |
 
 ## Coordinate System

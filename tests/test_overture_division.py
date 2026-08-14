@@ -289,7 +289,9 @@ def _make_division_export_db(conn, places_rows=None):
         conn.execute(f"INSERT INTO tile_assignments VALUES ('{div_id}', '023010')")
 
     conn.execute("""
-        CREATE TABLE place_containment (place_id VARCHAR, relations_json VARCHAR)
+        CREATE TABLE place_containment (
+            place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
+        )
     """)
 
 
@@ -339,6 +341,64 @@ class TestExportStripJsonNulls:
                 assert attrs["subtype"] == "county"
                 assert attrs["level"] == 35  # LEVEL_VOCAB["county"]
                 assert set(attrs.keys()) == {"subtype", "level"}
+
+
+# ---------------------------------------------------------------------------
+# Export: a division referenced by N tiles exports N records, not N squared
+# ---------------------------------------------------------------------------
+
+class TestDivisionMultiTileContainmentJoin:
+    """One record per division per referencing tile, whatever N is.
+
+    Once a division is referenced by every tile its geometry reaches, both
+    tile_assignments and place_containment carry N rows for it — the latter
+    because compute_containment groups by (tile_qk, place_id). A containment
+    join keyed on place_id alone pairs each with each and exports N^2 copies.
+    Nothing else in the suite builds a division with more than one tile
+    reference, so nothing else would notice.
+    """
+
+    def test_three_tile_division_exports_three_records(self, tmp_path):
+        db_path = tmp_path / "test_division_multi_tile.duckdb"
+        conn = duckdb.connect(str(db_path))
+        _make_division_export_db(conn, places_rows=[_DIV_EXPORT_PLACES[0]])
+
+        tile_qks = ["023010", "023011", "023012"]
+        relations = json.dumps({"within": [
+            {"rkey": "org.atgeo.places.overture.division:div000",
+             "name": "Testcontinent", "level": 0}
+        ]})
+
+        # Replace the helper's single assignment with one per tile, and give
+        # each the matching containment row compute_containment would emit —
+        # same place_id, same relations_json, different tile_qk.
+        conn.execute("DELETE FROM tile_assignments")
+        for tile_qk in tile_qks:
+            conn.execute("INSERT INTO tile_assignments VALUES ('div001', ?)", [tile_qk])
+            conn.execute(
+                "INSERT INTO place_containment VALUES ('div001', ?, ?)",
+                [relations, tile_qk],
+            )
+
+        raw_sql = _load_sql("overture_division_export_tiles.sql",
+                            {"repo": "https://example.com"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+
+        rows = conn.execute(
+            "SELECT tile_qk, record_json FROM tile_export ORDER BY tile_qk"
+        ).fetchall()
+        conn.close()
+
+        assert [tile_qk for tile_qk, _ in rows] == tile_qks, (
+            f"expected one row per referencing tile, got {len(rows)} rows: "
+            f"{[t for t, _ in rows]}"
+        )
+        # Every copy must be byte-identical: the spec's dedup-by-rkey rule
+        # drops all but one, so any per-tile divergence is silent data loss.
+        assert len({record_json for _, record_json in rows}) == 1, (
+            "a division's record must be identical in every tile referencing it"
+        )
+        assert json.loads(rows[0][1])["relations"] == json.loads(relations)
 
 
 # ---------------------------------------------------------------------------

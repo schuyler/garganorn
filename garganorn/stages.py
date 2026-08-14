@@ -917,7 +917,9 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
 
         _assert_interior_points(con, "division_all", "overture_division import")
 
-        # Step 2: COPY places artifact (geometry excluded, qk17-sorted)
+        # Step 2: COPY places artifact (geometry excluded, qk17-sorted --
+        # kept deliberately; see the rationale at stage_import's equivalent
+        # COPY).
         con.execute(
             f"COPY ("
             f"  SELECT * EXCLUDE (geometry)"
@@ -1139,6 +1141,10 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
         # Write to a temp file first; finalize_artifact does the atomic rename
         tmp_output = output_path + ".tmp"
         select_clause = "SELECT *" if exclude_col is None else f"SELECT * EXCLUDE ({exclude_col})"
+        # ORDER BY kept deliberately, though nothing prunes this parquet by a
+        # qk17 range. Costs ~160s of a 9,659.8s build (measured 2026-08-13);
+        # dropping it makes places_slim's re-sort real, and plausibly costs
+        # compression here -- that half is unmeasured.
         con.execute(
             f"COPY ("
             f"  {select_clause}"
@@ -1478,6 +1484,114 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     return stats
 
 
+def stage_division_tile_references(covering_dir, tile_assignments_path, output_path, *,
+                                    memory_limit="48GB", temp_directory=None,
+                                    max_temp_directory_size="250GB",
+                                    force=False) -> dict:
+    """Expand division tile assignments to every grid tile a division's
+    covering overlaps, and write tile_references.parquet (Phase 2).
+
+    Reads the covering artifact (covering_dir/*.parquet) and the grid (the
+    distinct tile_qk set of tile_assignments_path), and writes every
+    (place_id, tile_qk) pair where a covering leaf of the division is
+    prefix-related to the grid tile in either direction. Output is sorted
+    by tile_qk, place_id with no duplicate pairs. Skips rebuild when
+    artifact_fresh() returns True unless force=True.
+
+    Args:
+        covering_dir: Directory of covering parquet files + _meta.json
+            (from stage_covering).
+        tile_assignments_path: Path to tile_assignments.parquet; only its
+            distinct tile_qk set is read, not touched.
+        output_path: Destination path for tile_references.parquet artifact.
+        memory_limit: DuckDB memory_limit string. Default "48GB".
+        temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
+        force: Re-build even when the artifact is fresh.
+
+    Returns:
+        dict: {"references": int}
+    """
+    t0 = time.monotonic()
+
+    covering_meta_path = os.path.join(covering_dir, "_meta.json")
+    inputs = [covering_meta_path, tile_assignments_path]
+
+    if not force and artifact_fresh(output_path, inputs, {}):
+        log.info("division_tile_references: skipping (artifact fresh)")
+        return {}
+
+    # Stage-start cleanup: remove stale .tmp from prior crashes
+    tmp_output = output_path + ".tmp"
+    if os.path.exists(tmp_output):
+        os.remove(tmp_output)
+
+    # Escape single quotes in paths for SQL embedding
+    covering_glob_sql = os.path.join(covering_dir, "*.parquet").replace("'", "''")
+    ta_sql = tile_assignments_path.replace("'", "''")
+    tmp_sql = tmp_output.replace("'", "''")
+
+    con = duckdb.connect()
+    try:
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
+
+        # Both arms join against the handful of distinct tile_qk lengths on
+        # each side rather than against the tiles themselves -- a
+        # length-keyed join costs ~50M pair evaluations where the naive
+        # starts_with(cov.tile_qk, grid.tile_qk) is ~21 billion.
+        con.execute(f"""
+            COPY (
+                WITH grid AS (
+                    SELECT DISTINCT tile_qk FROM read_parquet('{ta_sql}')
+                ),
+                grid_len AS (SELECT DISTINCT length(tile_qk) AS n FROM grid),
+                cov AS (
+                    SELECT DISTINCT tile_qk, boundary_id
+                    FROM read_parquet('{covering_glob_sql}')
+                ),
+                cov_len AS (SELECT DISTINCT length(tile_qk) AS n FROM cov),
+                leaf_in_tile AS (
+                    SELECT DISTINCT left(c.tile_qk, g.n) AS tile_qk, c.boundary_id
+                    FROM cov c JOIN grid_len g ON length(c.tile_qk) >= g.n
+                ),
+                tile_in_leaf AS (
+                    SELECT DISTINCT g.tile_qk, c.boundary_id
+                    FROM grid g
+                    JOIN cov_len l ON length(g.tile_qk) > l.n
+                    JOIN cov c ON c.tile_qk = left(g.tile_qk, l.n)
+                )
+                SELECT boundary_id AS place_id, tile_qk FROM (
+                    SELECT t.tile_qk, t.boundary_id FROM leaf_in_tile t JOIN grid USING (tile_qk)
+                    UNION
+                    SELECT tile_qk, boundary_id FROM tile_in_leaf
+                )
+                ORDER BY tile_qk, place_id
+            ) TO '{tmp_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+
+        count = con.execute(
+            f"SELECT count(*) FROM read_parquet('{tmp_sql}')"
+        ).fetchone()[0]
+    finally:
+        con.close()
+
+    stats = {"references": count}
+    finalize_artifact(tmp_output, output_path, params={}, stats=stats, inputs=inputs)
+    log.info(
+        "division_tile_references artifact: done (%.1fs, %d references)",
+        time.monotonic() - t0, count,
+    )
+    return stats
+
+
 def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str,
                  containment_dir: str, tiles_root: str, t0: float,
                  export_workers: int = None,
@@ -1584,9 +1698,12 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         )
         containment_expr = f"read_parquet([{file_list}])"
     else:
-        # Empty subquery with matching column names so LEFT JOIN ON resolves correctly
+        # Empty subquery with matching column names so LEFT JOIN ON resolves
+        # correctly. tile_qk is projected for the division export, whose join
+        # keys on it; the other sources' SQL simply never references it.
         containment_expr = (
-            "(SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)"
+            "(SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json, "
+            "NULL::VARCHAR AS tile_qk WHERE 1=0)"
         )
 
     # Step 4: SQL substitution — replace bare table names with parquet read expressions

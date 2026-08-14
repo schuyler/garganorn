@@ -28,7 +28,7 @@
 -- exists to establish. This also retires the antimeridian min_longitude CASE
 -- (`gotchas.md`, "Antimeridian bboxes are two lobes"): it lived on the
 -- bnd.places bbox pre-filter, which no longer exists here (the two-lobe rule
--- remains live on the build side, in covering_seed.sql and bbox_to_quadkeys).
+-- remains live on the build side, in covering_seed.sql).
 --
 -- Output: (tile_qk, place_id, relations_json) sorted (tile_qk, place_id).
 -- Written directly to ${output_tmp} via COPY; caller renames to final path.

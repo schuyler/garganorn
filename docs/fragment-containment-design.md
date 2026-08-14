@@ -1,11 +1,9 @@
 # Fragment containment: implementation design
 
-Implementation-level design for the `fragment-containment` shippable unit
-described in `performance-improvements.md`'s containment/tiling section.
-That document states the problem and the requirements this design is
-checked against, and pins the Discovery constants (`V = 5000`, depth cap
-16); this document turns them into a concrete plan against the current
-codebase.
+Implementation-level design for the `fragment-containment` shippable unit.
+The constants it rests on — `COVER_VERTEX_CAPACITY` (`V = 5000`) and
+`COVER_MAX_ZOOM` (16) — are defined in `covering.py`; this document turns
+them into a concrete plan against the codebase.
 
 The unit's goal is a cost bound: the arm's point-in-polygon test
 must cost a *fragment's* vertex count, not the whole boundary's. Today a
@@ -343,8 +341,8 @@ The antimeridian two-lobe handling remains live on the build side (see
 [gotchas.md](gotchas.md#antimeridian-bboxes-are-two-lobes)).
 `covering_seed.sql`'s join keeps its own `min_longitude > max_longitude`
 case, which is what stops gap tiles between the lobes from being seeded,
-and `bbox_to_quadkeys` keeps its two-lobe logic for
-`overlap-tile-references`.
+`bbox_to_quadkeys` keeps its own two-lobe logic, though nothing in the
+pipeline calls it.
 
 What a test asserts: with a constructed two-lobe boundary (the
 import-side bbox filter drops ±180-crossers, so the fixture must be
@@ -422,9 +420,9 @@ as it is — its sample points are interior, where the two predicates agree.
 
 ## What this unit does not change
 
-- Tile assignment. `stage_tile_assignment`, `tile_assignments.parquet`,
-  and the division tile-reference policy belong to
-  `overlap-tile-references`.
+- Tile assignment. `stage_tile_assignment` and `tile_assignments.parquet`
+  are untouched; the division tile-reference policy belongs to
+  `stage_division_tile_references`.
 - Tile JSON shape. Fragments never leave the build; no record gains,
   loses, or reshapes a field.
 - `boundaries.duckdb`. Unchanged schema, unchanged import path.
@@ -442,25 +440,14 @@ divisions — `qk17` came from the bbox midpoint while the containment
 point is `ST_PointOnSurface` — and a division whose midpoint fell in a
 different tile lost the match silently.
 
-## Interaction with `overlap-tile-references`
+## Interaction with `stage_division_tile_references`
 
-`fragment-containment` has shipped; `overlap-tile-references` has not
-started. What it will need to know about the covering as it now stands,
-checked against `overlap-tile-references-design.md` rather than assumed:
-
-Tier A truncates the covering to z4 with
-`SELECT boundary_id, left(tile_qk, 4) ... GROUP BY 1, 2`, resting on the
-property that a child quadkey never rewrites its parent's prefix. Leaf
-depth and the added `geom` column don't disturb this: prefix truncation
-is invariant to leaf depth, and the `GROUP BY` collapses rows that now
-exist at more zooms. The query projects named columns and never
-`SELECT *`, so the `geom` column is not read.
-
-Tier B reads `bnd.places` bbox extents and `covering.py`'s
-`bbox_to_quadkeys`/`bbox_fits_in_one_cell`, none of which this unit
-touches. The two units share `covering.py` and `stages.py`, so if
-`overlap-tile-references` work overlaps with further changes here, the
-two must be sequenced rather than run as parallel streams.
+That stage is this covering's only other consumer: a division is
+referenced from a grid tile when a covering leaf and the grid tile are
+prefix-related in either direction. It reads `tile_qk` and `boundary_id`
+by name and never `geom`, so leaf depth and the stored geometry are both
+invisible to it. Both units own `covering.py` and `stages.py`, so changes
+to the two are sequenced rather than run as parallel streams.
 
 ## Why it works this way
 

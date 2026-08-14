@@ -27,7 +27,12 @@ class TileBackedCollection:
         return self._local.con
 
     def get_record(self, _repo: str, _collection: str, rkey: str):
-        """Look up which tile contains this rkey, read the tile, find the record."""
+        """Look up which tile contains this rkey, read the tile, find the record.
+
+        fetchone() picks one row arbitrarily when a division rkey has N
+        record_tiles rows (one per overlapping tile) -- correct only because
+        all copies of a division's record are byte-identical.
+        """
         result = self._con.execute(
             "SELECT tile_qk FROM record_tiles WHERE rkey = ?", [rkey]
         ).fetchone()

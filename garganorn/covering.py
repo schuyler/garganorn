@@ -261,7 +261,10 @@ def stage_covering(
 
         con.execute("DROP TABLE l_current")
 
-        # Write per-qk4 parquet files
+        # Write per-qk4 parquet files. Loops per prefix (up to 256 scans of
+        # the spilled covering_out) rather than one PARTITION_BY copy,
+        # because preserve_insertion_order is set false above, so a
+        # partitioned write can't preserve the per-file ORDER BY.
         prefixes = [
             row[0]
             for row in con.execute(

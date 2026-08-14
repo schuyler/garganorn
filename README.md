@@ -57,7 +57,7 @@ Use a smaller Geofabrik region for local testing — the default `north-america`
 
 `python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, and `density`, `idf`, and `covering` build the shared artifacts the sources depend on. Invoking it with no subcommand is an error — use `run`.
 
-Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes a parquet artifact alongside — `places.parquet`, `tile_assignments.parquet`, `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless.
+Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes a parquet artifact alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless.
 
 Supported sources (for `run --source`):
 
@@ -98,7 +98,7 @@ Optional arguments (`run`, all sources):
 |---|---|---|
 | `--bbox XMIN YMIN XMAX YMAX` | none | Restrict import to a bounding box |
 | `--memory-limit` | `48GB` | DuckDB memory limit |
-| `--max-per-tile` | `1000` | Maximum records per tile |
+| `--max-per-tile` | `1000` | Maximum records per tile in the assignment grid, every source. It does not bound a division tile's exported record count, which follows geometry |
 | `--temp-directory` | DuckDB default | Volume DuckDB spills to when a stage exceeds `--memory-limit` |
 | `--max-temp-directory-size` | `250GB` | Ceiling on that spill; a runaway query fails with "temp directory full" instead of filling the volume |
 | `--export-workers` | CPU count | Threads for tile gzip compression |

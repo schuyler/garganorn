@@ -19,6 +19,7 @@ from .stages import (
     stage_density_extract,
     stage_idf,
     stage_tile_assignment,
+    stage_division_tile_references,
     stage_export,
 )
 from .covering import stage_covering
@@ -34,6 +35,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
     tiles_root = os.path.join(source_dir, "tiles")
     places_parquet = os.path.join(source_dir, "places.parquet")
     ta_parquet = os.path.join(source_dir, "tile_assignments.parquet")
+    tr_parquet = os.path.join(source_dir, "tile_references.parquet")
     containment_dir = os.path.join(source_dir, "containment")
     t0 = time.monotonic()
 
@@ -52,6 +54,11 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         if os.path.exists(containment_dir):
             shutil.rmtree(containment_dir)
         if source == "overture_division":
+            for fname in ["tile_references.parquet",
+                          "tile_references.parquet.meta.json"]:
+                path = os.path.join(source_dir, fname)
+                if os.path.exists(path):
+                    os.remove(path)
             bnd_path = os.path.join(source_dir, "boundaries.duckdb")
             if os.path.exists(bnd_path):
                 os.remove(bnd_path)
@@ -91,10 +98,20 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                           max_temp_directory_size=max_temp_directory_size,
                           force=force)
 
+    # Division-only: expand the grid to every tile each division's covering
+    # overlaps (self-gating).
+    assignments_parquet = ta_parquet
+    if source == "overture_division":
+        stage_division_tile_references(
+            os.path.join(source_dir, "covering"), ta_parquet, tr_parquet,
+            memory_limit=memory_limit, temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size, force=force)
+        assignments_parquet = tr_parquet
+
     # Containment (self-gating, parquet-based)
     pk_expr = SOURCES[source].source_pk
     lon_expr, lat_expr = _coord_exprs(source, alias="p")
-    compute_containment(places_parquet, ta_parquet, boundaries_db,
+    compute_containment(places_parquet, assignments_parquet, boundaries_db,
                         pk_expr, lon_expr, lat_expr, containment_dir,
                         covering_dir=covering_dir, memory_limit=memory_limit,
                         temp_directory=temp_directory,
@@ -102,7 +119,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                         force=force)
 
     # Export (self-gating, manages manifests + symlink + keep-2)
-    stage_export(source, places_parquet, ta_parquet, containment_dir, tiles_root,
+    stage_export(source, places_parquet, assignments_parquet, containment_dir, tiles_root,
                  t0, export_workers=export_workers, memory_limit=memory_limit,
                  temp_directory=temp_directory,
                  max_temp_directory_size=max_temp_directory_size,
@@ -483,7 +500,9 @@ def main():
     run_p.add_argument("--memory-limit", default=None, dest="memory_limit",
                        help="DuckDB memory limit (e.g. 48GB)")
     run_p.add_argument("--max-per-tile", default=None, type=int, dest="max_per_tile",
-                       help="Maximum records per tile")
+                       help="Maximum records per tile in the assignment grid, "
+                            "every source; does not bound a division tile's "
+                            "exported count")
     run_p.add_argument("--boundaries", default=None,
                        help="Path to division boundaries DuckDB for containment enrichment")
     run_p.add_argument("--export-workers", default=None, type=int, dest="export_workers",
