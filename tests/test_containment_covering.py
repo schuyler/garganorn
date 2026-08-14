@@ -15,7 +15,7 @@ Test class mapping:
   4. Containment artifact layout            → TestContainmentArtifacts
   5. Q3 graceful degradation               → TestQ3Degradation
   6. End-to-end export integration          → TestExportIntegration
-  7. Edge-arm D7 antimeridian              → TestAntimeridianEdgeArm
+  7. Antimeridian arm (gotchas.md, "Antimeridian bboxes are two lobes") → TestAntimeridianEdgeArm
 """
 import collections
 import gzip
@@ -1096,37 +1096,38 @@ class TestExportIntegration:
 
 
 # ---------------------------------------------------------------------------
-# Edge-arm antimeridian D7
+# Antimeridian arm
 # ---------------------------------------------------------------------------
 
 class TestAntimeridianEdgeArm:
-    """D7 antimeridian edge-arm tests.
+    """Antimeridian arm tests.
 
     What these tests pin:
 
     (a) LOBE-INCLUSION TESTS (test_east_lobe_place_in_containment,
         test_west_lobe_place_in_containment, and the lobe assertions in
-        test_all_three_places_via_compute_containment): these pin the D7 OR-logic
-        in the edge arm's WHERE clause.  If the CASE used AND instead of OR
+        test_all_three_places_via_compute_containment): these pin the antimeridian
+        OR-logic in the arm's WHERE clause.  If the CASE used AND instead of OR
         (i.e. ``p.lon >= b.min_longitude AND p.lon <= b.max_longitude``), a point
         at lon=175 would evaluate to ``175 >= 170 AND 175 <= -170`` = false,
         wrongly dropping the lobe place.  These tests fail on that bug and are
-        the behaviorally observable test of the D7 predicate.
+        the behaviorally observable test of the antimeridian predicate.
 
     (b) GAP ASSERTIONS (test_gap_place_absent_from_containment and the gap
         assertions in test_all_three_places_via_compute_containment): these are
         end-to-end sanity checks.  The gap place (lon=0) must NOT appear under
-        ami_boundary's rkey — this is guaranteed structurally, not by the D7 CASE
-        branch.  The covering seed SQL uses the same D7 OR-condition on the
-        boundary's bbox; gap tiles (xmax < 170 AND xmin > -170) never pass it, so
+        ami_boundary's rkey — this is guaranteed structurally, not by the antimeridian
+        CASE branch.  The covering seed SQL uses the same antimeridian OR-condition on
+        the boundary's bbox; gap tiles (xmax < 170 AND xmin > -170) never pass it, so
         ami_boundary contributes no covering tiles in the gap region and no
-        (gap_place, ami_boundary) row can enter the edge arm join.  Even if such a
+        (gap_place, ami_boundary) row can enter the arm join.  Even if such a
         row somehow entered the join, ST_Contains(ami_boundary, gap_point) = false
-        (the geometry has no interior in the gap), so the D7 CASE exclusion would
-        be masked by ST_Contains anyway.  The gap assertions therefore test
+        (the geometry has no interior in the gap), so the antimeridian CASE exclusion
+        would be masked by ST_Contains anyway.  The gap assertions therefore test
         end-to-end correctness (gap place gets gap_boundary's rkey, never
-        ami_boundary's), NOT the D7 CASE's exclusion branch, which is structurally
-        unreachable for gap points and masked by ST_Contains even where reachable.
+        ami_boundary's), NOT the antimeridian CASE's exclusion branch, which is
+        structurally unreachable for gap points and masked by ST_Contains even where
+        reachable.
     """
 
     @pytest.fixture(scope="class")
@@ -1180,7 +1181,7 @@ class TestAntimeridianEdgeArm:
         return db_path
 
     def test_east_lobe_place_in_containment(self, antimeridian_boundaries_db, tmp_path):
-        """Place in east lobe (lon=175) is matched by edge arm and appears in containment."""
+        """Place in east lobe (lon=175) is matched by the arm and appears in containment."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "ami_e_covering")
@@ -1224,7 +1225,7 @@ class TestAntimeridianEdgeArm:
         )
 
     def test_west_lobe_place_in_containment(self, antimeridian_boundaries_db, tmp_path):
-        """Place in west lobe (lon=-175) is matched by edge arm and appears in containment."""
+        """Place in west lobe (lon=-175) is matched by the arm and appears in containment."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "ami_w_covering")
@@ -1270,12 +1271,12 @@ class TestAntimeridianEdgeArm:
     def test_gap_place_absent_from_containment(self, antimeridian_boundaries_db, tmp_path):
         """Gap place (lon=0) appears with gap_boundary's rkey; never with ami_boundary's.
 
-        This is an end-to-end sanity check, not a test of the D7 CASE exclusion branch.
-        ami_boundary seeds no covering tiles in the gap region (the seed SQL's D7 condition
-        on the boundary bbox excludes gap tiles entirely), so no (gap_place, ami_boundary)
-        row can enter the edge arm join regardless of the CASE predicate.  gap_boundary
-        provides the gap place's rkey, confirming that covering was built and containment
-        ran successfully for the gap region.
+        This is an end-to-end sanity check, not a test of the antimeridian CASE exclusion
+        branch.  ami_boundary seeds no covering tiles in the gap region (the seed SQL's
+        antimeridian condition on the boundary bbox excludes gap tiles entirely), so no
+        (gap_place, ami_boundary) row can enter the arm join regardless of the CASE
+        predicate.  gap_boundary provides the gap place's rkey, confirming that covering
+        was built and containment ran successfully for the gap region.
         """
         from garganorn.covering import stage_covering
 
@@ -1338,8 +1339,8 @@ class TestAntimeridianEdgeArm:
         Fails with TypeError on old code — right red reason.
 
         What this test pins:
-        - Lobe assertions (p_east, p_west): behaviorally pin the D7 OR-logic in the
-          edge arm CASE.  A buggy AND condition would drop both lobe places.
+        - Lobe assertions (p_east, p_west): behaviorally pin the antimeridian OR-logic
+          in the arm CASE.  A buggy AND condition would drop both lobe places.
         - Gap assertion (p_gap): end-to-end sanity.  ami_boundary has no covering tiles
           in the gap region (structural exclusion by the seed SQL), so the gap place is
           absent from ami_boundary's results regardless of the CASE predicate.
@@ -1408,7 +1409,7 @@ class TestAntimeridianEdgeArm:
         )
         assert ami_rkey not in place_rkeys.get("p_gap", set()), (
             "Gap place (lon=0) must NOT appear with ami_boundary "
-            "(D7 CASE must exclude it even when gap_boundary seeds covering tiles nearby)"
+            "(the antimeridian CASE must exclude it even when gap_boundary seeds covering tiles nearby)"
         )
         assert gap_rkey in place_rkeys.get("p_gap", set()), (
             "Gap place (lon=0) should appear with gap_boundary "

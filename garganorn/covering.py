@@ -61,8 +61,9 @@ def bbox_to_quadkeys(
 ) -> list[str]:
     """Quadkeys at `zoom` whose tiles intersect the bbox.
 
-    D7: min_lon > max_lon means antimeridian crossing; returns the union
-    of the two lobes [min_lon, 180] and [-180, max_lon] with no gap tiles.
+    `gotchas.md`, "Antimeridian bboxes are two lobes": min_lon > max_lon means
+    antimeridian crossing; returns the union of the two lobes [min_lon, 180]
+    and [-180, max_lon] with no gap tiles.
     """
     if min_lon > max_lon:
         # Antimeridian crossing: two lobes

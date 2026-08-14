@@ -8,7 +8,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: S2 was eliminated entirely from the pipeline in favor of quadkeys (Bing tile system). The switch to `ST_QuadKey()` simplified the spatial indexing approach and removed the dependency on the `geography` extension for core operations.
 
-**Successor**: Quadkey-based spatial indexing using `ST_QuadKey()` at z17 for places, z15 for density tiles. See `design-constraints.md` (P1) for the current invariant.
+**Successor**: Quadkey-based spatial indexing using `ST_QuadKey()` at z17 for places, z15 for density tiles. See `design-constraints.md`, "All spatial indexing uses quadkeys" for the current invariant.
 
 ## Pipeline Framework
 
@@ -32,7 +32,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: Added unnecessary pipeline complexity and an extra file to manage. IDF can be computed inline during importance scoring directly from the places table.
 
-**Successor**: Inline IDF computation during importance scoring stage (see `design-constraints.md` P5). The `t_idf` temp table is created and consumed within the same DuckDB session as importance scoring.
+**Successor**: Inline IDF computation during importance scoring stage (see `design-constraints.md`, "IDF is computed from source parquet, not imported places table"). The `t_idf` temp table is created and consumed within the same DuckDB session as importance scoring.
 
 ## Double Metaphone Phonetic Index
 

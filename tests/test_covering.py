@@ -200,7 +200,8 @@ class TestQkEnvMacro:
 # ---------------------------------------------------------------------------
 
 class TestBboxToQuadkeys:
-    """Known bboxes, world=256 tiles, lat clamping, antimeridian (D7)."""
+    """Known bboxes, world=256 tiles, lat clamping, antimeridian
+    (`gotchas.md`, "Antimeridian bboxes are two lobes")."""
 
     def test_whole_world_z4_is_256_tiles(self):
         """bbox_to_quadkeys for the whole world at z4 returns exactly 256 tiles."""
@@ -237,7 +238,7 @@ class TestBboxToQuadkeys:
         assert all(all(c in "0123" for c in t) for t in tiles)
 
     def test_antimeridian_bbox_both_lobes(self):
-        """min_lon > max_lon (D7): returns tiles from BOTH lobes (near ±180°)."""
+        """min_lon > max_lon (the two-lobe rule): returns tiles from BOTH lobes (near ±180°)."""
         _check_covering()
         tiles = bbox_to_quadkeys(170.0, -15.0, -170.0, 15.0, 4)
         assert len(tiles) > 0, "Antimeridian bbox should return tiles"
@@ -1210,7 +1211,7 @@ class TestFragmentContainmentSynthetics:
         `names."primary"`, which the design retains; scoping to the
         generator's output excludes it without special-casing.
 
-        Catches a CASE-only fix: deleting the D7 min_longitude CASE while
+        Catches a CASE-only fix: deleting the antimeridian min_longitude CASE while
         leaving `JOIN bnd.places b ...` and `ST_Contains(b.geometry, ...)`
         would satisfy a "no min_longitude" grep while keeping the
         whole-polygon test this unit exists to remove. The positive
@@ -1225,7 +1226,7 @@ class TestFragmentContainmentSynthetics:
             f"(and the bbox pre-filter it carries) must not appear:\n{arms}"
         )
         assert "min_longitude" not in arms, (
-            "arms must not reference min_longitude -- the D7 bbox "
+            "arms must not reference min_longitude -- the antimeridian bbox "
             f"pre-filter is deleted along with the join it lived on:\n{arms}"
         )
         assert "ST_Contains" not in arms, (

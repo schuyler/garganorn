@@ -224,8 +224,9 @@ class TestOvertureVariantsCteSpillFix:
 
     The ov_base-reference-count and forbidden-helper-CTE checks that used
     to live here have moved to TestImportSqlD6Enforcement below, which
-    parametrizes the same checks over a list of import SQL files (D6)
-    instead of hand-writing them per file. The tests remaining here (no
+    parametrizes the same checks over a list of import SQL files
+    (`gotchas.md`, "No unbounded complex-state aggregation") instead of
+    hand-writing them per file. The tests remaining here (no
     unnest on names.common/rules, no
     GROUP BY id) are specific to how Overture's `variants` column is
     derived and have no OSM equivalent, so they stay Overture-specific.
@@ -304,7 +305,7 @@ class TestOvertureVariantsCteSpillFix:
 
 
 # ---------------------------------------------------------------------------
-# D6 enforcement ledger: no unbounded complex-state aggregation, enforced as
+# Enforcement ledger: no unbounded complex-state aggregation, enforced as
 # a hard review criterion for every SQL file.
 #
 # IMPORT_SQL_FILES below is that list for the two files known to
@@ -357,8 +358,8 @@ EXEMPT_IMPORT_SQL_FILES = [
             "division_density aggregates with a scalar avg(density_score) "
             "over ~1M division rows — not list()/string_agg() over exploded "
             "per-row state. A scalar avg accumulator is O(1) per group and "
-            "spills gracefully, so this does not exhibit the D6 anti-pattern "
-            "(unbounded complex-state aggregation) that overture_place_import.sql "
+            "spills gracefully, so this does not exhibit the unbounded "
+            "complex-state aggregation that overture_place_import.sql "
             "and osm_import.sql have."
         ),
     },
@@ -366,14 +367,14 @@ EXEMPT_IMPORT_SQL_FILES = [
 
 
 class TestImportSqlD6Enforcement:
-    """D6 as executable tests, parametrized over IMPORT_SQL_FILES rather
-    than hand-written per file.
+    """The unbounded-aggregation limit as executable tests, parametrized over
+    IMPORT_SQL_FILES rather than hand-written per file.
     """
 
     def test_all_import_sql_files_are_classified(self):
         """Every garganorn/sql/*_import.sql file must be enforced or exempt.
 
-        Guards against a new import SQL file silently skipping D6 review:
+        Guards against a new import SQL file silently skipping this review:
         adding one requires either adding it to IMPORT_SQL_FILES (enforced)
         or to EXEMPT_IMPORT_SQL_FILES with a stated reason.
         """
@@ -387,7 +388,7 @@ class TestImportSqlD6Enforcement:
         assert not unclassified, (
             f"Import SQL file(s) {sorted(unclassified)} under garganorn/sql/ "
             "are not classified in IMPORT_SQL_FILES or EXEMPT_IMPORT_SQL_FILES. "
-            "D6 requires a deliberate choice for every import SQL file: "
+            "Every import SQL file requires a deliberate choice: "
             "enforce it, or exempt it with a stated reason."
         )
 
@@ -402,7 +403,7 @@ class TestImportSqlD6Enforcement:
         """Every EXEMPT_IMPORT_SQL_FILES entry must state why it's exempt."""
         for entry in EXEMPT_IMPORT_SQL_FILES:
             assert entry.get("reason", "").strip(), (
-                f"{entry['filename']} is exempt from D6 enforcement but has no "
+                f"{entry['filename']} is exempt from complex-state-aggregation enforcement but has no "
                 "stated reason. The exemption list must be a visible ledger of "
                 "known debt, not a silent omission."
             )

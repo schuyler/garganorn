@@ -11,7 +11,8 @@
 | Document | Description |
 |----------|-------------|
 | [pipeline-artifacts.md](pipeline-artifacts.md) | What each pipeline stage writes: artifact format, schema, sort order, and why |
-| [design-constraints.md](design-constraints.md) | DuckDB behaviors, pipeline invariants, tradeoffs, normalization constants |
+| [design-constraints.md](design-constraints.md) | Pipeline invariants and architectural rules garganorn's own code must satisfy |
+| [gotchas.md](gotchas.md) | Behaviors of third-party tools (DuckDB, GeoParquet, Overture, QuackOSM) that cost real time to learn and aren't discoverable from their documentation |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
 | [performance-improvements.md](performance-improvements.md) | Proposed performance work on already-correct code: the evidence and requirements behind the containment work, plus which pipeline disk writes earn their keep |
 | [overlap-tile-references-design.md](overlap-tile-references-design.md) | Division-to-tile references from real geometry overlap, replacing the single bbox-derived point (designed, not started) |

@@ -246,8 +246,9 @@ class TestOsmImport:
 # ---------------------------------------------------------------------------
 # Green-phase characterization tests pinning current osm_import.sql semantics
 #
-# These pin behavior a spill-fix rewrite of osm_import.sql (the D6 fix,
-# see tests/test_regressions.py::TestImportSqlD6Enforcement) must not
+# These pin behavior a spill-fix rewrite of osm_import.sql (the fix for
+# `gotchas.md`, "No unbounded complex-state aggregation" -- see
+# tests/test_regressions.py::TestImportSqlD6Enforcement) must not
 # silently change: the importance arithmetic, variants content, and how
 # node vs. way records get their coordinates. Values below were obtained
 # by RUNNING the current SQL against the existing osm_parquet fixture
@@ -256,7 +257,7 @@ class TestOsmImport:
 
 class TestOsmImportCharacterization:
     """Pins current osm_import.sql semantics; must PASS both before and after
-    the D6 spill fix — the fix must not change what these values compute,
+    the spill fix — the fix must not change what these values compute,
     only how.
     """
 

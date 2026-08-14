@@ -7,9 +7,10 @@
 --     populated with all cover_min_zoom tiles (256 rows at z4)
 --   - TEMP TABLE covering_out(tile_qk, boundary_id, level, geom) created
 --
--- D7: boundaries whose min_longitude > max_longitude cross the antimeridian;
--- their bbox is represented as two lobes.  The join condition handles both
--- the normal (min <= max) and antimeridian (min > max) cases.
+-- `gotchas.md`, "Antimeridian bboxes are two lobes": boundaries whose
+-- min_longitude > max_longitude cross the antimeridian; their bbox is
+-- represented as two lobes.  The join condition handles both the normal
+-- (min <= max) and antimeridian (min > max) cases.
 --
 -- Post-condition: TEMP TABLE l_current(boundary_id, level, tile_qk, geom)
 -- contains one row per (boundary, seed tile) pair where the boundary

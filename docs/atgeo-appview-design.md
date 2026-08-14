@@ -99,8 +99,9 @@ check-in-shaped lexicon is onboarded by editing config rather than code.
 
 **SQLite, not DuckDB.** The workload is single-row upserts and deletes at
 firehose rate, which is precisely what DuckDB's columnar engine is worst at —
-D3 in `design-constraints.md`: every mutation is a table rewrite — and
-precisely what SQLite is built for. DuckDB stays the batch tool. SQLite is the
+`gotchas.md`, "CTAS is fast, UPDATE/ALTER TABLE is slow": every mutation is a
+table rewrite — and precisely what SQLite is built for. DuckDB stays the
+batch tool. SQLite is the
 streaming tool.
 
 ```sql

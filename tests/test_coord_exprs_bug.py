@@ -315,11 +315,13 @@ class TestComputeContainmentDivisionCrescent:
     # the x=1 border. That placement is load-bearing. No quadkey tile edge
     # ever falls on x=1 (a boundary needs -180 + k*360/2^L == 1, which has no
     # integer solution), so every tile containing this point straddles the
-    # border and County A classifies all of them 'edge'. The point therefore
-    # has no interior ancestor, and the edge arm -- the only arm that reads
-    # lon/lat -- is the sole path to a match. Move this point deep into
-    # County A and the interior arm matches on qk17 alone, which makes the
-    # test pass no matter what _coord_exprs returns.
+    # border and County A classifies all of them edge leaves. An edge leaf's
+    # stored geometry is the boundary clipped to the tile, so the arm's
+    # ST_Covers test still depends on the true lon/lat. Move this point deep
+    # into County A and the covering row becomes an interior cell, whose
+    # stored geometry is just the tile's own envelope -- ST_Covers against
+    # that envelope passes for any point in the tile, which makes the test
+    # pass no matter what _coord_exprs returns.
     _INTERIOR_X, _INTERIOR_Y = 0.999, 1.0
     # bbox spans the crescent's true land and its reach east into County B,
     # so the midpoint lands at _MID_X while still containing the interior point.

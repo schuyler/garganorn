@@ -89,7 +89,7 @@ three levels past the former `COVER_MAX_ZOOM = 12` cap.
 **The floor is not optional.** Without it, a simple inland division
 (p50 = 123 vertices) is under capacity at z4 and stops there, so
 `covering/1202.parquet` would hold a z4 edge leaf for each of the 130,269
-divisions Discovery found in that one z4 cell. The edge arm's level-4
+divisions Discovery found in that one z4 cell. The arm's level-4
 join keys on `left(p.qk17, 4) = c.tile_qk`, so every candidate point in
 that cell would join all 130,269 of them — the join emits the cross
 product regardless of how cheap the predicate on top of it is. See
@@ -340,7 +340,7 @@ Correctness comes from the geometry test, `ST_Covers` against a fragment
 whose extent is at most one tile — a two-lobe bbox cannot arise.
 
 The antimeridian two-lobe handling remains live on the build side (see
-[design-constraints.md](design-constraints.md#d7-antimeridian-bboxes-are-two-lobes)).
+[gotchas.md](gotchas.md#antimeridian-bboxes-are-two-lobes)).
 `covering_seed.sql`'s join keeps its own `min_longitude > max_longitude`
 case, which is what stops gap tiles between the lobes from being seeded,
 and `bbox_to_quadkeys` keeps its two-lobe logic for
@@ -435,7 +435,7 @@ as it is — its sample points are interior, where the two predicates agree.
 
 One thing it does change outside the covering: division `qk17` derives
 from the geometry's interior point rather than its bbox midpoint
-(`overture_division_import.sql`). The edge arm fetches the fragment
+(`overture_division_import.sql`). The arm fetches the fragment
 clipped to the leaf `qk17` names and tests the containment point against
 it, so the two must describe the same location. They did not for
 divisions — `qk17` came from the bbox midpoint while the containment

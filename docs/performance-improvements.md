@@ -107,7 +107,7 @@ checked against something:
    whole-polygon × whole-grid in one operation. `ST_Intersection` over
    polygons as large as ~200k vertices is exactly the unbounded,
    whole-relation shape of work that has exhausted memory before (see
-   [design-constraints.md](design-constraints.md)'s notes on unbounded
+   [gotchas.md](gotchas.md)'s notes on unbounded
    complex-state aggregation and `ST_Union_Agg` as a memory-pressure
    point).
 

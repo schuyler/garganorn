@@ -52,7 +52,7 @@ deeper, more precise placement), not this coarse truncation.
 *touch* test (which cells does this bbox intersect at zoom Z, handling
 antimeridian crossings via the two-lobe `min_longitude > max_longitude`
 case; see
-[design-constraints.md](design-constraints.md#d7-antimeridian-bboxes-are-two-lobes)).
+[gotchas.md](gotchas.md#antimeridian-bboxes-are-two-lobes)).
 Tier B additionally needs a *size* test that doesn't exist yet: at what's the
 deepest zoom where this bbox still fits inside one cell. Proposed new
 function in `covering.py`:

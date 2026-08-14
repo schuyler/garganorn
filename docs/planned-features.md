@@ -44,8 +44,9 @@ already present in the parquet.
 
 The original implementation sketch should not be followed. It proposed a
 second pass over the parquet, `ALTER TABLE ADD COLUMN`, and an `UPDATE` to
-backfill — which D3 in `design-constraints.md` exists to forbid, since every
-column mutation on a large table is a full rewrite. The Overture path already
+backfill — which `gotchas.md`, "CTAS is fast, UPDATE/ALTER TABLE is slow"
+exists to forbid, since every column mutation on a large table is a full
+rewrite. The Overture path already
 demonstrates the shape to copy: one per-row `list_transform` expression
 computed inside the import CTAS, no unnest, no re-aggregation, no second
 scan.
