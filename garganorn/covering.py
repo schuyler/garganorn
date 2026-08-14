@@ -24,19 +24,69 @@ _SQL_DIR = Path(__file__).parent / "sql"
 _MERC_LAT_MAX = 85.05112877980659
 
 
+def _lat_to_yfrac(lat: float) -> float:
+    """Web-mercator forward, before the tile grid is applied.
+
+    Returns y as a fraction of the world: 0.0 at the north edge, 1.0 at the
+    south, clamped to ±85.05112878 (the poles are not on a Mercator map).
+    Factored out so the tile lookup and the cell-size test below share one
+    projection rather than two copies of the same arithmetic.
+    """
+    lat = max(-_MERC_LAT_MAX, min(_MERC_LAT_MAX, lat))
+    return (1.0 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2.0
+
+
 def lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[int, int]:
     """Web-mercator forward: clamp lat to ±85.05112878, return (x, y).
 
     y increases southward (tile 0,0 is top-left / NW corner of the world).
     """
-    lat = max(-_MERC_LAT_MAX, min(_MERC_LAT_MAX, lat))
     n = 2 ** zoom
     x = int((lon + 180.0) / 360.0 * n)
     x = max(0, min(x, n - 1))
-    lat_rad = math.radians(lat)
-    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
+    y = int(_lat_to_yfrac(lat) * n)
     y = max(0, min(y, n - 1))
     return (x, y)
+
+
+def _bbox_spans(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float
+) -> tuple[float, float]:
+    """Bbox extent as (longitude degrees, mercator y as a fraction of world).
+
+    Antimeridian-aware: min_lon > max_lon is the two-lobe case
+    (`gotchas.md`, "Antimeridian bboxes are two lobes"), whose real width is
+    the two lobes joined across ±180, not the negative max - min.
+    """
+    if min_lon > max_lon:
+        lon_span = (180.0 - min_lon) + (max_lon + 180.0)
+    else:
+        lon_span = max_lon - min_lon
+    return lon_span, _lat_to_yfrac(min_lat) - _lat_to_yfrac(max_lat)
+
+
+def placement_zoom(
+    min_lon: float, min_lat: float, max_lon: float, max_lat: float,
+    *, min_zoom: int, max_zoom: int,
+) -> int:
+    """Deepest zoom in [min_zoom, max_zoom] where the bbox fits in one cell.
+
+    Falls back to min_zoom when it fits at none, so a feature of any size
+    gets a zoom. Size, not containment: a bbox no larger than a cell still
+    straddles up to four of them, so callers pair this with
+    bbox_to_quadkeys rather than treating the answer as naming one tile.
+
+    Cell size only halves as zoom grows, so the fitting zooms are a prefix
+    of the range and the scan stops at the first miss.
+    """
+    lon_span, y_span = _bbox_spans(min_lon, min_lat, max_lon, max_lat)
+    zoom = min_zoom
+    for candidate in range(min_zoom + 1, max_zoom + 1):
+        cell = 1.0 / 2 ** candidate
+        if lon_span > 360.0 * cell or y_span > cell:
+            break
+        zoom = candidate
+    return zoom
 
 
 def _tile_to_quadkey(x: int, y: int, zoom: int) -> str:

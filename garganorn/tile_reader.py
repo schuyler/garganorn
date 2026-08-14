@@ -27,7 +27,14 @@ class TileBackedCollection:
         return self._local.con
 
     def get_record(self, _repo: str, _collection: str, rkey: str):
-        """Look up which tile contains this rkey, read the tile, find the record."""
+        """Look up which tile contains this rkey, read the tile, find the record.
+
+        A division is carried by every tile its geometry reaches, so any one
+        of them answers: all copies of a record are byte-identical (see
+        design-constraints.md, "A record may be referenced by more than one
+        tile"), which is what makes taking the first row correct rather than
+        arbitrary.
+        """
         result = self._con.execute(
             "SELECT tile_qk FROM record_tiles WHERE rkey = ?", [rkey]
         ).fetchone()
@@ -48,8 +55,9 @@ class TileBackedCollection:
 
     def _read_tile(self, tile_qk: str) -> dict:
         """Read and decompress a tile file. Uses LRU cache to amortize repeated access."""
-        # tile_qk[:6] is the 6-char subdirectory prefix. The export pipeline produces
-        # zoom-6+ keys (always >= 6 chars), so the slice is always a full 6 chars.
+        # tile_qk[:6] is the subdirectory prefix. Division tiles can be as
+        # shallow as z4, where the slice is the whole quadkey -- which is what
+        # stage_export named the directory, so the two still agree.
         tile_path = os.path.join(self.tiles_dir, tile_qk[:6], f"{tile_qk}.json.gz")
         return self._cached_read_tile(tile_path)
 

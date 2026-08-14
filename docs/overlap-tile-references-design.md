@@ -1,10 +1,39 @@
 # Division tile references: implementation design
 
 Implementation-level design for the `overlap-tile-references` shippable
-unit described in `performance-improvements.md`'s containment/tiling
-section. That document states the requirements and pins the Discovery
-constants (reference zoom, fragment capacity) this design is checked
-against; the Tier A/Tier B policy shape is this document's own.
+unit, shipped as `stage_division_tile_references`. `performance-improvements.md`'s
+containment/tiling section states the requirements this design is checked
+against and pins the reference zoom.
+
+## Outcomes
+
+What the unit has to be true of, restated from those requirements as
+things that are either so or not. Each is asserted in
+`tests/test_division_tile_references.py`.
+
+1. **Discoverability.** For every client bbox query B and every division D
+   whose geometry intersects B, at least one tile referencing D intersects
+   B. This is the invariant the single-interior-point assignment violated,
+   and the reason this unit is a correctness fix. Checked against
+   `ST_Intersects` over the real geometry, not against the same bbox
+   arithmetic the stage used.
+2. **Bounded overshoot.** A division may be referenced by a tile its
+   geometry doesn't reach — references are derived from the bbox — but
+   never by one its bbox doesn't touch. There is a floor as well as a
+   ceiling: a division inside one cell is referenced once, since a
+   duplicate reference is a duplicated record in another tile.
+3. **Record shape unchanged.** `tile_assignments.parquet` keeps its schema
+   (`place_id VARCHAR, tile_qk VARCHAR`) and its `(tile_qk, place_id)`
+   sort, which is what `stage_export`'s streaming cursor groups on. A
+   division gains N rows where it had one, and all N copies of its record
+   must be byte-identical across tiles — the spec's dedup-by-rkey rule
+   silently drops all but one, so per-tile divergence is data loss.
+4. **Placement by size.** A division is placed by its own extent, not by
+   record density and not by where a seam happens to fall. The
+   record-density splitter, and `max_per_tile` with it, applies only to
+   the point sources.
+5. **One-time cost.** Re-runs only when its input changes, under the same
+   `artifact_fresh` discipline as every other stage.
 
 ## What this replaces
 
@@ -20,106 +49,83 @@ new function; `overture_place` and `osm` keep using
 is still correct for point data. `qk17` itself is untouched by this
 design.
 
-## Referencing every cell a division overlaps (Tier A)
+## Placement
 
-For divisions bigger than one cell at the reference zoom (z4, pinned by
-Discovery), the tile references come from truncating the division's
-existing covering artifact — no new geometry computation.
+One rule: place the division at the deepest zoom where its bbox still fits
+inside one cell, floored at z4 and capped at z17, then reference every cell
+it touches at that zoom.
 
-The covering (`stage_covering`, `covering_seed.sql`/`covering_level.sql`)
-seeds at z4 and recurses by appending digits to each parent tile's
-quadkey; a child's quadkey never rewrites its parent's prefix. That means
-every row a boundary ever gets in its covering output, at any zoom,
-shares the same leading four characters as its z4 seed tile. So
-`DISTINCT boundary_id, left(tile_qk, 4)` over the covering output is
-exactly "which z4 cells does this division's real geometry intersect":
+`covering.py` already had `bbox_to_quadkeys`, an antimeridian-aware *touch*
+test (which cells does this bbox intersect at zoom Z, handling crossings
+via the two-lobe `min_longitude > max_longitude` case; see
+[gotchas.md](gotchas.md#antimeridian-bboxes-are-two-lobes)). It gains
+`placement_zoom`, the matching *size* test, built on `_bbox_spans` (which
+carries the same two-lobe rule) and `_lat_to_yfrac`, factored out of
+`lonlat_to_tile` so the tile lookup and the size test share one projection
+rather than two copies of the same arithmetic.
 
-```sql
-SELECT boundary_id AS place_id, left(tile_qk, 4) AS tile_qk
-FROM read_parquet('<covering_dir>/*.parquet')
-WHERE boundary_id IN (<Tier A id set>)
-GROUP BY boundary_id, left(tile_qk, 4)
-```
+Size, not containment: a bbox no larger than a cell still straddles up to
+four of them, which is why the zoom is paired with `bbox_to_quadkeys`
+rather than treated as naming one tile. Placing each division in the
+deepest cell that *contains* it would give one reference apiece, but would
+drag a division straddling a shallow seam into a continent-sized tile for
+no reason but a coordinate accident.
 
-The `WHERE` restriction to the Tier A id set matters: a Tier B division
-(small) can still have covering rows spanning more than one z4 cell if
-it straddles a z4 boundary, and that's legitimately Tier B's job (a
-deeper, more precise placement), not this coarse truncation.
+The floor is what handles divisions bigger than a reference cell: they fit
+at no zoom, so they are placed at z4 and reference every z4 cell their
+bbox touches. z4 is the floor because Discovery measured
+cells-touched-per-division there at p99 = 1.67 with total duplication
+under 1.2%, while every zoom from z5 up puts Russia or Canada over the
+client's `max_tiles=50` cap. z17 is the cap, matching `qk17`'s role as the
+finest granularity elsewhere in the pipeline.
 
-## Placement for divisions that fit in one cell (Tier B)
-
-`covering.py` already has `bbox_to_quadkeys`, an antimeridian-aware
-*touch* test (which cells does this bbox intersect at zoom Z, handling
-antimeridian crossings via the two-lobe `min_longitude > max_longitude`
-case; see
-[gotchas.md](gotchas.md#antimeridian-bboxes-are-two-lobes)).
-Tier B additionally needs a *size* test that doesn't exist yet: at what's the
-deepest zoom where this bbox still fits inside one cell. Proposed new
-function in `covering.py`:
-
-```python
-def bbox_fits_in_one_cell(min_lon, min_lat, max_lon, max_lat, zoom):
-    lon_span = (180 - min_lon) + (max_lon + 180) if min_lon > max_lon else max_lon - min_lon
-    if lon_span > 360.0 / 2 ** zoom:
-        return False
-    y_top = _lat_to_yfrac(max_lat)
-    y_bot = _lat_to_yfrac(min_lat)
-    return (y_bot - y_top) <= 1.0 / 2 ** zoom
-```
-
-`_lat_to_yfrac` factors the continuous (pre-floor) half of the existing
-`lonlat_to_tile`'s Web Mercator projection (`asinh(tan(lat))`, clamped to
-`_MERC_LAT_MAX`) into its own function, reused by both the existing
-`lonlat_to_tile` and this new size test — same math, not reimplemented.
-
-Placement search per Tier B division: start at the reference zoom (4),
-descend one zoom at a time while `bbox_fits_in_one_cell` still holds,
-stop at a proposed depth cap of z17 (matches `qk17`'s existing role as
-the finest granularity used elsewhere in the pipeline — proposed, not
-Discovery-pinned). Call the existing `bbox_to_quadkeys` at the final
-zoom to get the (at most four) cells to reference.
-
-Tier assignment: `bbox_fits_in_one_cell(..., zoom=4)` true means Tier B
-(search deeper); false means Tier A.
+**What this gives up, deliberately.** For a division bigger than a
+reference cell, the exact set of cells its *geometry* touches is already
+available — it is the covering artifact, truncated to z4, since the
+covering recurses by appending digits and so every row carries its seed
+cell as a prefix. Reading it would remove the handful of cells a big
+division's bbox touches but its coastline doesn't. That is precisely the
+false positive requirement 2 permits ("a reference derived from the
+division's bbox rather than its geometry can do that... false positives
+cost tile bytes, not correctness"), and buying it back costs a covering
+read, a two-tier split, and a dependency on `stage_covering` having run.
+Not worth it unless a real build shows the extra references mattering; the
+stage logs its busiest tiles so that is measurable rather than assumed.
 
 ## The new tile-reference stage
 
-Proposed function `stage_division_tile_references`, added alongside
-(not replacing) `stage_tile_assignment` in `stages.py`:
+`stage_division_tile_references`, added alongside (not replacing)
+`stage_tile_assignment` in `stages.py`: freshness gate on
+`boundaries_db`, one pass over the flattened bbox extents in `bnd.places`
+applying the rule above, the rows loaded back into DuckDB and written
+`ORDER BY tile_qk, place_id` to match `stage_tile_assignment`'s sort
+convention, then the same atomic tmp-write-then-rename finalize every
+other stage uses. No geometry is read and none is computed.
 
-1. Freshness gate (`artifact_fresh` pattern) keyed on `boundaries_db`
-   and the covering's `_meta.json`.
-2. Read per-division bbox extents from `bnd.places` — already-flattened
-   columns, no geometry touched.
-3. One Python pass over the division set (Discovery measured 617,734
-   divisions) applying the Tier A/B size test and, for Tier B, the
-   placement search above.
-4. Load the Tier A id list and Tier B `(place_id, tile_qk)` rows into
-   DuckDB temp tables (bulk registration — a naive per-row
-   `executemany` is the wrong choice at this row count; the exact
-   registration mechanism is an implementation-time detail).
-5. `COPY` combining Tier A's covering-truncation query (restricted to
-   Tier A ids) `UNION ALL` the Tier B rows, `ORDER BY tile_qk, place_id`
-   — matching `stage_tile_assignment`'s existing sort convention.
-6. The referencing-count guardrail (below), then the same atomic
-   tmp-write-then-rename finalize pattern every other stage uses.
+It logs its busiest tiles: `max_per_tile` no longer bounds a division
+tile's size — geometry does — so nothing else would say how large one
+got. It also logs the widest fan-out and the division responsible, which
+is what surfaces a garbage geometry (`known-data-quality-issues.md`)
+without a threshold anyone has yet calibrated. Divisions with a NULL or
+NaN extent are dropped with a warning.
 
 `run_pipeline`'s `stage_tile_assignment` call becomes a fork:
 
 ```python
 if source == "overture_division":
-    stage_division_tile_references(bnd_path, covering_dir, ta_parquet, ...)
+    stage_division_tile_references(bnd_path, ta_parquet, ...)
 else:
     stage_tile_assignment(places_parquet, ta_parquet, source,
                           max_per_tile=max_per_tile, ...)
 ```
 
-`run_pipeline`'s division branch derives the covering directory path at
-the `stage_covering` call and would otherwise re-derive the same path
-again here; `covering_dir` should be assigned once, at the
-`stage_covering` call, and reused at this fork point instead.
 `max_per_tile` stops being passed to divisions at all — the splitter is
 gone for that source.
+
+Division tiles can now be as shallow as z4 where place tiles bottom out at
+z6. `qk[:6]` is the subdirectory prefix at both the write and the read
+site and returns the whole quadkey for anything shorter, so the two still
+agree and nothing downstream needs to know.
 
 `tile_assignments.parquet`'s schema is unchanged
 (`place_id VARCHAR, tile_qk VARCHAR`); divisions simply gain N rows
@@ -240,27 +246,22 @@ export SQL, and asserts exactly three `tile_export` rows come out — nine
 would mean the old N² join regressed back in; fewer than three would
 mean rows were dropped.
 
-## Guardrail: implausible referencing-cell counts
+## Open items
 
-Open question in `performance-improvements.md`, not fully settled here.
-Proposed shape: after writing the artifact, compute each division's
-reference count, group by `level` (`levels.py`'s `LEVEL_VOCAB`), and log
-(never fail) any division whose count is a large outlier relative to its
-level's typical count — Antarctica (71 cells at z4) and one level-50
-division (27 cells at z7 against a level-50 median of 1) are Discovery's
-two concrete examples this should catch without flagging the mainstream
-distribution. A hard fail isn't proposed: Antarctica is legitimate
-geography, and a fail-based guardrail would need a growing exemption
-list to avoid breaking real builds. Whatever specific threshold gets
-implemented should be treated as provisional and recalibrated against
-measured per-level distributions the first time this stage runs against
-production data, not baked in as a permanent default.
-
-## Open items for implementation
-
-- The z17 depth cap for Tier B's placement search — proposed, not
-  Discovery-pinned.
-- Guardrail threshold values — proposed shape, needs real calibration
-  on first run.
-- Bulk-load mechanism for Tier B's rows into DuckDB — implementation
-  detail, flagged so it isn't rediscovered as a performance surprise.
+- **The referencing-count guardrail is not built.** It remains
+  `performance-improvements.md`'s open question. What ships instead is a
+  log line naming the widest fan-out and the division responsible, which
+  gives an operator the same signal without inventing thresholds nobody
+  has calibrated. Discovery's two concrete cases — Antarctica at 71 cells,
+  and one level-50 division at 27 cells against a level-50 median of 1 —
+  are the calibration data a real guardrail would want, and it wants a
+  production run first. A hard fail is not the answer either way:
+  Antarctica is legitimate geography, and a failing check would need a
+  growing exemption list to keep real builds running.
+- **Per-tile division counts are unbounded by design.** Discovery accepted
+  this (one z4 cell touched by 130,269 divisions, though most of those are
+  small enough to be placed deeper). The busiest-tile log is how a real
+  build would show it mattering.
+- **The bbox-versus-geometry overshoot is unmeasured.** See "What this
+  gives up" above. One query over `bnd.places` extents against the
+  covering would size it, no pipeline run needed.

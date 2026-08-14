@@ -116,6 +116,25 @@ once (no `DISTINCT` needed). Verified against an in-suite brute-force `ST_Contai
 a captured baseline (the old per-tile code never worked correctly in
 production, so no valid baseline existed to compare against).
 
+### A record may be referenced by more than one tile
+
+Divisions are polygons, so each is referenced by every tile its extent
+reaches (`stage_division_tile_references`); places are points and keep one
+tile each. Two consequences bind everything downstream of
+`tile_assignments`. Every copy of a record must be byte-identical across
+the tiles carrying it — the spec's dedup-by-rkey rule keeps one copy and
+drops the rest, so a per-tile difference isn't a duplicate, it's data loss
+with no error. And any join of `tile_assignments` against another
+per-place artifact that can carry tile-scoped rows must key on
+`(place_id, tile_qk)` together: `compute_containment` groups by
+`(tile_qk, place_id)`, so a division with N tiles has N containment rows,
+and a `place_id`-only join pairs each with each and exports N² copies. The
+place and OSM export SQL keep the `place_id`-only join because both sides
+stay one-per-place there.
+
+**Applies to**: `overture_division_export_tiles.sql`, `stage_export`'s
+`containment_expr` placeholder, `write_manifest_db`
+
 ### Tile serving uses three distinct, deliberately separate namespaces
 
 NSID dotted (`org.atgeo.places.overture.place`, a config key) → disk
@@ -166,12 +185,15 @@ derivation is unnecessary.
 | `COVER_MIN_LEAF_ZOOM` | 12 | Shallowest level an edge leaf may be emitted at; bounds edge-join fan-out |
 | `COVER_MAX_ZOOM` | 16 | Covering descent end level; a fragment still over capacity here is emitted anyway |
 | `COVER_VERTEX_CAPACITY` | 5000 | Vertex count at or below which an edge fragment stops recursing |
-| `max_per_tile` | 1000 | Maximum records per export tile |
+| `max_per_tile` | 1000 | Maximum records per export tile (place sources only) |
+| `DIVISION_REFERENCE_ZOOM` | 4 | Shallowest zoom a division tile reference may be placed at |
+| `DIVISION_MAX_ZOOM` | 17 | Deepest zoom a division tile reference may be placed at |
 | `max_temp_directory_size` | 250GB | Ceiling on DuckDB spill, applied independently of `temp_directory` |
 
 ## Coordinate System
 
 - All coordinates are WGS84 (EPSG:4326), longitude/latitude order
-- Quadkey zoom levels: z17 for places, z15 for density, z6-z17 for tiles
+- Quadkey zoom levels: z17 for places, z15 for density, z6-z17 for place
+  tiles, z4-z17 for division tiles (placed by extent, not by density)
 - Coordinate precision in export: `DECIMAL(10,6)` → 6 decimal places (~0.1m)
 - Bbox privacy grid: 0.01° (~1km) enforced by `_check_bbox_precision()`

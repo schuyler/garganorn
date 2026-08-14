@@ -9,6 +9,7 @@ exists because stages.py must not import from quadtree.py (circular import risk)
 and quadtree.py needs to import from stages.py for backward compatibility.
 Consider consolidating in a future refactor.
 """
+import csv
 import glob as glob_module
 import gzip
 import itertools
@@ -1478,6 +1479,154 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     return stats
 
 
+# A division is referenced from every tile its bbox reaches at the zoom it is
+# placed at. z4 is the floor: cells-touched-per-division there has p99 = 1.67
+# and total reference duplication stays under 1.2%, while every zoom from z5
+# up puts Russia or Canada over the client's max_tiles=50 cap. z17 is the cap,
+# matching qk17's role as the finest granularity elsewhere in the pipeline.
+DIVISION_REFERENCE_ZOOM = 4
+DIVISION_MAX_ZOOM = 17
+
+
+def stage_division_tile_references(boundaries_db: str, output_path: str, *,
+                                   memory_limit: str = "48GB",
+                                   temp_directory: str | None = None,
+                                   max_temp_directory_size: str | None = "250GB",
+                                   force: bool = False) -> dict:
+    """Reference each division from every tile its bbox reaches.
+
+    Writes tile_assignments.parquet for the overture_division source, in
+    place of stage_tile_assignment: same schema (place_id, tile_qk) and same
+    (tile_qk, place_id) sort, but a division gets one row per referencing
+    tile rather than the single row its interior point earned. A division
+    larger than the tile it was indexed by was otherwise undiscoverable from
+    any bbox query that missed that one tile.
+
+    One rule: place the division at the deepest zoom where its bbox still
+    fits inside one cell (floored at z4, capped at z17), and reference every
+    cell it touches there. Placing by size rather than by the deepest cell
+    that *contains* it is deliberate — containment would give one reference
+    apiece but would drag a division straddling a shallow seam into a
+    continent-sized tile for no reason but a coordinate accident.
+
+    References come from the bbox, so a division can be referenced by a tile
+    its geometry doesn't quite reach; that costs tile bytes, not
+    correctness, and no tile the geometry does reach can be missed.
+
+    Args:
+        boundaries_db: Path to boundaries.duckdb (read-only; supplies each
+            division's already-flattened bbox extents).
+        output_path: Destination path for tile_assignments.parquet.
+        memory_limit: DuckDB memory_limit string.
+        temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
+        force: Re-build even when the artifact is fresh.
+
+    Returns:
+        dict: {"divisions", "references", "dropped", "widest",
+               "max_divisions_per_tile"}
+    """
+    # covering.py imports from stages.py, so a module-level import back here
+    # would cycle -- import locally, as compute_containment already does.
+    from garganorn.covering import bbox_to_quadkeys, placement_zoom
+
+    t0 = time.monotonic()
+
+    inputs = [str(boundaries_db)]
+    params = {"reference_zoom": DIVISION_REFERENCE_ZOOM,
+              "max_zoom": DIVISION_MAX_ZOOM}
+
+    if not force and artifact_fresh(output_path, inputs, params):
+        log.info("[overture_division] tile_references: skipping (artifact fresh)")
+        return {}
+
+    tmp_output = output_path + ".tmp"
+    if os.path.exists(tmp_output):
+        os.remove(tmp_output)
+
+    bnd_sql = str(boundaries_db).replace("'", "''")
+    tmp_sql = tmp_output.replace("'", "''")
+
+    con = duckdb.connect()
+    try:
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"ATTACH '{bnd_sql}' AS bnd (READ_ONLY)")
+
+        divisions = con.execute("""
+            SELECT id, min_longitude, min_latitude, max_longitude, max_latitude
+            FROM bnd.places
+        """).fetchall()
+
+        rows = []
+        dropped = 0
+        widest = (0, None)
+        for place_id, *extent in divisions:
+            # NaN fails every comparison, so it would silently place the
+            # division at the shallowest zoom instead of being noticed.
+            if any(c is None or c != c for c in extent):
+                dropped += 1
+                continue
+            zoom = placement_zoom(*extent, min_zoom=DIVISION_REFERENCE_ZOOM,
+                                  max_zoom=DIVISION_MAX_ZOOM)
+            tiles = bbox_to_quadkeys(*extent, zoom)
+            widest = max(widest, (len(tiles), place_id))
+            rows.extend((place_id, tile_qk) for tile_qk in tiles)
+
+        # Row-at-a-time binding for a few million rows costs seconds on a
+        # pipeline measured in hours, and holding them costs a few hundred MB
+        # against a 48GB limit. Both are worth not building a bulk-load path
+        # for; revisit if either stops being true.
+        con.execute("CREATE TEMP TABLE refs (place_id VARCHAR, tile_qk VARCHAR)")
+        if rows:
+            con.executemany("INSERT INTO refs VALUES (?, ?)", rows)
+        con.execute(f"""
+            COPY (
+                SELECT place_id, tile_qk FROM refs
+                ORDER BY tile_qk, place_id
+            ) TO '{tmp_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+
+        # max_per_tile no longer bounds a division tile's size -- geometry
+        # does -- so this is the only thing that says how large one got.
+        busiest = con.execute("""
+            SELECT tile_qk, count(*) AS n
+            FROM refs GROUP BY tile_qk ORDER BY n DESC, tile_qk LIMIT 5
+        """).fetchall()
+    finally:
+        con.close()
+
+    if dropped:
+        log.warning(
+            "[overture_division] tile_references: %d divisions dropped "
+            "(NULL or NaN bbox extent)", dropped,
+        )
+
+    stats = {
+        "divisions": len(divisions) - dropped,
+        "references": len(rows),
+        "dropped": dropped,
+        "widest": list(widest),
+        "max_divisions_per_tile": busiest[0][1] if busiest else 0,
+    }
+    finalize_artifact(tmp_output, output_path, params, stats=stats, inputs=inputs)
+    log.info(
+        "[overture_division] tile_references artifact: done (%.1fs, %d "
+        "references for %d divisions; widest %s=%d; busiest tiles %s)",
+        time.monotonic() - t0, len(rows), stats["divisions"],
+        widest[1], widest[0],
+        ", ".join(f"{qk}={n}" for qk, n in busiest),
+    )
+    return stats
+
+
 def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str,
                  containment_dir: str, tiles_root: str, t0: float,
                  export_workers: int = None,
@@ -1584,9 +1733,12 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         )
         containment_expr = f"read_parquet([{file_list}])"
     else:
-        # Empty subquery with matching column names so LEFT JOIN ON resolves correctly
+        # Empty subquery with matching column names so LEFT JOIN ON resolves
+        # correctly. tile_qk is projected for the division export, whose join
+        # keys on it; the other sources' SQL simply never references it.
         containment_expr = (
-            "(SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)"
+            "(SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json, "
+            "NULL::VARCHAR AS tile_qk WHERE 1=0)"
         )
 
     # Step 4: SQL substitution — replace bare table names with parquet read expressions

@@ -19,6 +19,7 @@ from .stages import (
     stage_density_extract,
     stage_idf,
     stage_tile_assignment,
+    stage_division_tile_references,
     stage_export,
 )
 from .covering import stage_covering
@@ -35,6 +36,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
     places_parquet = os.path.join(source_dir, "places.parquet")
     ta_parquet = os.path.join(source_dir, "tile_assignments.parquet")
     containment_dir = os.path.join(source_dir, "containment")
+    bnd_path = os.path.join(source_dir, "boundaries.duckdb")
     t0 = time.monotonic()
 
     os.makedirs(source_dir, exist_ok=True)
@@ -52,7 +54,6 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         if os.path.exists(containment_dir):
             shutil.rmtree(containment_dir)
         if source == "overture_division":
-            bnd_path = os.path.join(source_dir, "boundaries.duckdb")
             if os.path.exists(bnd_path):
                 os.remove(bnd_path)
             cov_path = os.path.join(source_dir, "covering")
@@ -68,7 +69,6 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
     # Division-only: build covering from the just-written boundaries.duckdb
     if source == "overture_division":
-        bnd_path = os.path.join(source_dir, "boundaries.duckdb")
         stage_covering(bnd_path, os.path.join(source_dir, "covering"),
                        memory_limit=memory_limit, temp_directory=temp_directory,
                        max_temp_directory_size=max_temp_directory_size,
@@ -84,12 +84,22 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                 f"run the overture_division pipeline, or `quadtree covering`, first"
             )
 
-    # Tile assignment (self-gating)
-    stage_tile_assignment(places_parquet, ta_parquet, source,
-                          max_per_tile=max_per_tile, memory_limit=memory_limit,
-                          temp_directory=temp_directory,
-                          max_temp_directory_size=max_temp_directory_size,
-                          force=force)
+    # Tile assignment (self-gating). Divisions are polygons, so they are
+    # referenced from every tile their extent reaches rather than from the
+    # single tile holding one interior point; the record-density splitter
+    # (and max_per_tile with it) applies only to the point sources.
+    if source == "overture_division":
+        stage_division_tile_references(bnd_path, ta_parquet,
+                                       memory_limit=memory_limit,
+                                       temp_directory=temp_directory,
+                                       max_temp_directory_size=max_temp_directory_size,
+                                       force=force)
+    else:
+        stage_tile_assignment(places_parquet, ta_parquet, source,
+                              max_per_tile=max_per_tile, memory_limit=memory_limit,
+                              temp_directory=temp_directory,
+                              max_temp_directory_size=max_temp_directory_size,
+                              force=force)
 
     # Containment (self-gating, parquet-based)
     pk_expr = SOURCES[source].source_pk

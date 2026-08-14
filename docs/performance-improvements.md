@@ -8,17 +8,18 @@ scoped for implementation until its section says so.
 
 ## Containment computation: polygon tiling, and correct division tile assignment
 
-Status: two of the three shippable units below have shipped;
-overlap-tile-references remains. What survives here is the evidence the
-design rests on — the two problem statements, the requirements both
-designs are checked against, and the Discovery numbers that pin `V`, the
-depth cap, and the reference zoom. The designs themselves live in
+Status: all three shippable units below have shipped. What survives here
+is the evidence the designs rest on — the two problem statements, the
+requirements both designs are checked against, and the Discovery numbers
+that pin `V`, the depth cap, and the reference zoom. The designs themselves live in
 [fragment-containment-design.md](fragment-containment-design.md) and
 [overlap-tile-references-design.md](overlap-tile-references-design.md),
 which are authoritative wherever this document and they disagree.
 
-This section retires when overlap-tile-references ships. The rest of the
-file does not — the disk-writes section below is independent of it.
+This section is now retirable — its units have all shipped and its
+evidence is cited by name from both design docs, so retiring it means
+finding those numbers a new home rather than deleting them. Left standing
+for now. The rest of the file is independent of it.
 
 ### Problem: containment performance
 
@@ -129,10 +130,12 @@ shipped can be checked against the repo.
   division `qk17` onto the interior point, since testing a fragment
   clipped to the joined tile requires the point to be in that tile. See
   [fragment-containment-design.md](fragment-containment-design.md).
-- **overlap-tile-references** — not started. The correctness fix:
-  division-to-tile references derived from real geometry overlap at
-  reference zoom z4, membership only, no stored fragments; replaces
-  `stage_tile_assignment` for the division source. See
+- **overlap-tile-references** — shipped. The correctness fix: a division
+  is referenced from every tile its bbox reaches at the zoom its own size
+  places it at, floored at reference zoom z4; replaces
+  `stage_tile_assignment` for the division source. Requirement 2's
+  allowance for bbox-derived references is what lets it read no geometry
+  at all. See
   [overlap-tile-references-design.md](overlap-tile-references-design.md).
 
 ### Discovery
@@ -186,6 +189,11 @@ fresh build log this step needed. Three numbers, now pinned:
       into hundreds of tiles silently. Concrete candidates from
       Discovery: Antarctica (71 cells at z4) and a level-50 division
       reaching 27 cells at z7 against a level-50 median of 1.
+      `stage_division_tile_references` ships without one: it logs the
+      widest fan-out and the division responsible, which is the same
+      signal without a threshold anyone has calibrated. Those two
+      Discovery cases are the calibration data a real guardrail wants,
+      and it wants a production run first.
 
 ## Which pipeline disk writes earn their keep
 

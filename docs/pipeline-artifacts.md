@@ -229,6 +229,18 @@ because the join logic should make a place-in-two-tiles outcome
 impossible, but a silent double-export would be a worse failure mode than
 a loud check.
 
+**Applies to**: `overture_place` and `osm` only. One tile per record is
+correct for a point and wrong for a polygon, so `overture_division` writes
+the same artifact — same path, schema and sort — from
+`stage_division_tile_references` instead. That stage reads bbox extents
+from `boundaries.duckdb`, places each division at the deepest zoom where
+its bbox fits one cell (floored at z4, capped at z17), and emits one row
+per cell it touches there, so a division tile can be shallower than a
+place tile's z6 floor. `max_per_tile` does not apply: per-tile division
+counts are bounded by geometry, and the stage logs its busiest tiles
+because nothing else would say how large one got. See
+[overlap-tile-references-design.md](overlap-tile-references-design.md).
+
 ## 7. `stage_export` (`garganorn/stages.py`)
 
 **Writes**: a new timestamped run directory,
@@ -290,7 +302,8 @@ that passes `--boundaries`.
 `stage_division_import` for `overture_division`) → `stage_covering`
 (division only, from the `boundaries.duckdb` it just wrote) → the covering
 freshness check described above (other sources, when a `boundaries_db` is
-supplied) → `stage_tile_assignment` → `compute_containment` (in `stages.py`,
+supplied) → `stage_tile_assignment`, or `stage_division_tile_references`
+for `overture_division` → `compute_containment` (in `stages.py`,
 not one of the seven stages above — it joins a source's places against the
 covering artifact and `boundaries.duckdb` to write
 `<source>/containment/*.parquet`, which `stage_export` reads for each
