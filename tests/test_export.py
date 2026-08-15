@@ -619,9 +619,10 @@ class TestContainmentInExport:
         div_borough_manhattan (level 50) does NOT contain the SF point,
         so exactly 4 entries are expected and no more.
 
-        This test passes NOW (current code uses ST_Contains with no bbox pre-filter)
-        and must continue to pass after a correctly-implemented bbox pre-filter is
-        added. It FAILS if the bbox pre-filter is buggy (false negative).
+        This test passes with the current code, which uses ST_Covers with no bbox
+        pre-filter, and must continue to pass after a correctly-implemented bbox
+        pre-filter is added. It FAILS if the bbox pre-filter is buggy (false
+        negative).
         """
         try:
             from garganorn.quadtree import compute_containment

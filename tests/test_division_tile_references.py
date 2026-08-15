@@ -115,11 +115,11 @@ def _output_rows(output_path):
 
 
 # ---------------------------------------------------------------------------
-# R1: exhaustive completeness against an independent ST_Intersects +
+# Exhaustive completeness against an independent ST_Intersects +
 # positive-area oracle -- not the stage's own prefix arithmetic.
 # ---------------------------------------------------------------------------
 
-class TestR1Completeness:
+class TestCompleteness:
     def test_every_geometry_tile_overlap_appears_in_output(self, tmp_path):
         """div_wide spans two grid tiles (plus a small sliver into the other
         two, via a margin); div_small sits well inside a single tile. Every
@@ -167,7 +167,7 @@ class TestR1Completeness:
         assert len(oracle) == 5, f"fixture drift: expected 5 oracle pairs, got {len(oracle)}"
 
         # Equality, not just containment. Grid depth equals leaf depth here, so
-        # the truncation is the identity and R2 permits no false positive --
+        # the truncation is the identity and no false positive is permitted --
         # which makes over-emission detectable too.
         actual = set(_output_rows(out_path))
         assert actual == oracle, (
@@ -177,11 +177,11 @@ class TestR1Completeness:
 
 
 # ---------------------------------------------------------------------------
-# R1: an interior covering leaf shallower than the grid must appear in
+# An interior covering leaf shallower than the grid must appear in
 # every grid tile beneath it (the tile_in_leaf arm).
 # ---------------------------------------------------------------------------
 
-class TestR1ShallowCoveringArm:
+class TestShallowCoveringArm:
     def test_shallow_interior_leaf_appears_in_every_grid_tile_beneath_it(self, tmp_path):
         """div_shallow's geometry covers its whole z4 tile with margin, so
         stage_covering emits a single interior leaf at z4 -- shallower than
@@ -229,10 +229,10 @@ class TestR1ShallowCoveringArm:
 
 
 # ---------------------------------------------------------------------------
-# R2: overlap is decided by geometry, not bounding box.
+# Overlap is decided by geometry, not bounding box.
 # ---------------------------------------------------------------------------
 
-class TestR2GeometryNotBbox:
+class TestGeometryNotBbox:
     def test_antimeridian_gap_tile_absent_despite_wraparound_bbox(self, tmp_path):
         """A two-lobe antimeridian division: its flattened extent
         (min_longitude=170, max_longitude=-170) reads as spanning the whole
@@ -277,10 +277,10 @@ class TestR2GeometryNotBbox:
 
 
 # ---------------------------------------------------------------------------
-# R5: the output is a SET -- no duplicate (place_id, tile_qk) pairs.
+# The output is a SET -- no duplicate (place_id, tile_qk) pairs.
 # ---------------------------------------------------------------------------
 
-class TestR5SetValuedOutput:
+class TestSetValuedOutput:
     def test_no_duplicate_pair_when_division_has_multiple_leaves_under_one_grid_tile(self, tmp_path):
         """div_l is an L-shape covering three of a z4 tile's four z5
         children (missing the fourth). That's >=2 covering leaves collapsing
@@ -330,10 +330,10 @@ class TestR5SetValuedOutput:
 
 
 # ---------------------------------------------------------------------------
-# R5: schema and sort order.
+# Schema and sort order.
 # ---------------------------------------------------------------------------
 
-class TestR5SchemaAndSort:
+class TestSchemaAndSort:
     def test_columns_and_sort_order_tile_qk_then_place_id(self, tmp_path):
         """Ten references across two tiles, inserted in reverse sort order.
 
@@ -389,10 +389,10 @@ class TestR5SchemaAndSort:
 
 
 # ---------------------------------------------------------------------------
-# R5: freshness -- a second run over unchanged inputs does no work.
+# Freshness -- a second run over unchanged inputs does no work.
 # ---------------------------------------------------------------------------
 
-class TestR5Freshness:
+class TestFreshness:
     def test_second_run_over_unchanged_inputs_is_noop(self, tmp_path):
         covering_dir, ta_path = _two_tile_fixture(tmp_path)
 
@@ -412,10 +412,10 @@ class TestR5Freshness:
 
 
 # ---------------------------------------------------------------------------
-# R3: the tile grid is unchanged by this stage.
+# The tile grid is unchanged by this stage.
 # ---------------------------------------------------------------------------
 
-class TestR3GridUntouched:
+class TestGridUntouched:
     def test_tile_assignments_parquet_unchanged_after_stage_runs(self, tmp_path):
         covering_dir, ta_path = _two_tile_fixture(tmp_path)
 

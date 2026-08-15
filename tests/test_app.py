@@ -214,7 +214,7 @@ def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True, 
 def _point_current(tiles_root, run_dir):
     """(Re)point tiles_root/current at run_dir as a symlink -- never a real
     directory, so the stamp a build resolves to is never the literal string
-    'current' (see R1's fixture trap)."""
+    'current', which would hide any bug in stamp derivation."""
     current = tiles_root / "current"
     if current.exists() or current.is_symlink():
         current.unlink()
@@ -283,8 +283,8 @@ def tile_client_empty(tmp_path):
 
 def test_tile_served_successfully(tile_client):
     """GET /tiles/<slug>/<stamp>/<qk6>/<qk>.json.gz returns 200 with correct
-    headers. tile_client's run is stamped 20260101T000000 (R2: tiles_dir
-    roots at tiles/, one level above the run, so the stamp is part of the
+    headers. tile_client's run is stamped 20260101T000000 (tiles_dir roots
+    at tiles/, one level above the run, so the stamp is part of the
     path)."""
     resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
     assert resp.status_code == 200
@@ -308,7 +308,7 @@ def test_tile_unknown_slug_returns_404(tile_client_empty):
 
 
 def test_tile_cache_control_is_constant_immutable(tile_client):
-    """R5: tiles serve exactly this Cache-Control header, unconditionally,
+    """Tiles serve exactly this Cache-Control header, unconditionally,
     regardless of collection config."""
     resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
     assert resp.status_code == 200
@@ -322,7 +322,7 @@ def test_tile_path_traversal_rejected(tmp_path):
     to a sibling of tiles/ (places.parquet) takes one '..', and escaping
     cross-source takes two.
 
-    Two escapes, deliberately targeting different file types, because R17's
+    Two escapes, deliberately targeting different file types, because the
     suffix guard (tile_path must end in .json.gz) runs in the same handler
     and would 404 a places.parquet request on its own, before safe_join is
     ever consulted:
@@ -359,7 +359,7 @@ def test_tile_path_traversal_rejected(tmp_path):
     app = _build_tile_app(tiles_config)
 
     with app.test_client() as client:
-        # Sibling escape to a non-tile file -- exercises the R17 suffix guard,
+        # Sibling escape to a non-tile file -- exercises the suffix guard,
         # not safe_join containment (see docstring).
         sibling_paths = [
             "/tiles/overture-place/../places.parquet",
@@ -385,11 +385,11 @@ def test_tile_path_traversal_rejected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# R1 -- getCoverage returns run-stamped tile URLs
+# getCoverage returns run-stamped tile URLs
 # ---------------------------------------------------------------------------
 
 def test_consecutive_runs_produce_disjoint_coverage_urls(tmp_path):
-    """R1: getCoverage tile URLs carry the serving run's stamp, so two server
+    """getCoverage tile URLs carry the serving run's stamp, so two server
     builds -- each pinned to a different completed run via 'current' -- emit
     disjoint URL sets."""
     tiles_root = tmp_path / "overture_place" / "tiles"
@@ -424,7 +424,7 @@ def test_consecutive_runs_produce_disjoint_coverage_urls(tmp_path):
 
 
 def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
-    """R1 AC (second half): a URL getCoverage advertised for a run that has
+    """A URL getCoverage advertised for a run that has
     since been superseded must still resolve to that run's own bytes, as
     long as the run is still on disk (keep-two retention)."""
     tiles_root = tmp_path / "overture_place" / "tiles"
@@ -465,7 +465,7 @@ def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# R2 -- tile_dirs[slug] roots at {source}/tiles/
+# tile_dirs[slug] roots at {source}/tiles/
 # ---------------------------------------------------------------------------
 
 def test_tile_route_roots_at_tiles_not_run_dir(tmp_path):
@@ -498,11 +498,11 @@ def test_tile_route_roots_at_tiles_not_run_dir(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# R6 -- getCoverage responses are cached; the lexicon route is not
+# getCoverage responses are cached; the lexicon route is not
 # ---------------------------------------------------------------------------
 
 def test_getcoverage_response_has_cache_control(tile_client):
-    """R6: getCoverage XRPC responses are cached for 1 hour."""
+    """getCoverage XRPC responses are cached for 1 hour."""
     resp = tile_client.get("/xrpc/org.atgeo.getCoverage", query_string={
         "collection": OVERTURE_COLLECTION, "bbox": "-180,-85,180,85",
     })
@@ -511,7 +511,7 @@ def test_getcoverage_response_has_cache_control(tile_client):
 
 
 def test_getcoverage_lexicon_route_lacks_cache_control(tile_client):
-    """R6 regression guard: GET /<nsid> (the lexicon route) matches
+    """Regression guard: GET /<nsid> (the lexicon route) matches
     view_args == {'nsid': 'org.atgeo.getCoverage'}, identical to the XRPC
     route's view_args for the same method -- a hook keyed on view_args alone
     would wrongly cache this lexicon response too. The correct key is
@@ -522,14 +522,15 @@ def test_getcoverage_lexicon_route_lacks_cache_control(tile_client):
 
 
 # ---------------------------------------------------------------------------
-# R17 -- the manifest is not reachable over HTTP
+# The manifest is not reachable over HTTP
 # ---------------------------------------------------------------------------
 
 def test_manifest_files_not_reachable_over_http(tmp_path):
-    """R17: neither manifest.duckdb nor manifest.json may be servable via
+    """Neither manifest.duckdb nor manifest.json may be servable via
     /tiles/<slug>/.... tiles_dir is set directly to the run's parent here
-    (rather than via a 'current' symlink) to isolate this guard from R2's
-    root-relocation, which is covered separately."""
+    (rather than via a 'current' symlink) to isolate this guard from the
+    tiles/-rooted path resolution that
+    test_tile_route_roots_at_tiles_not_run_dir covers."""
     tiles_root = tmp_path / "overture_place" / "tiles"
     stamp = "20260101T000000"
     run_dir = _make_run(tiles_root, stamp)
@@ -551,11 +552,11 @@ def test_manifest_files_not_reachable_over_http(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# R18 -- getRecord reads the run resolved at startup, not 'current' live
+# getRecord reads the run resolved at startup, not 'current' live
 # ---------------------------------------------------------------------------
 
 def test_get_record_reads_run_resolved_at_startup(tmp_path):
-    """R18: getRecord reads tiles from the run getCoverage advertises
+    """getRecord reads tiles from the run getCoverage advertises
     (frozen at startup), not from wherever 'current' points to at request
     time."""
     tiles_root = tmp_path / "overture_place" / "tiles"
@@ -582,7 +583,7 @@ def test_get_record_reads_run_resolved_at_startup(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# A1: completeness guard -- manifest.duckdb alone must not be enough to serve
+# Completeness guard -- manifest.duckdb alone must not be enough to serve
 # ---------------------------------------------------------------------------
 
 def test_incomplete_run_not_served(tmp_path):
@@ -648,9 +649,9 @@ def test_incomplete_run_not_served(tmp_path):
 
 def test_complete_run_served(tmp_path):
     """Positive control: a run with BOTH manifest.duckdb and manifest.json
-    present is served normally -- it locks in the behavior the A1 guard must
-    preserve. Requests the stamped path (R2): tiles_dir roots at tiles/, so
-    the un-stamped path does not resolve.
+    present is served normally -- it locks in the behavior
+    test_incomplete_run_not_served guards. Requests the stamped path:
+    tiles_dir roots at tiles/, so the un-stamped path does not resolve.
     """
     tiles_root = tmp_path / "overture_place" / "tiles"
     stamp = "20260101T000000"
@@ -676,7 +677,7 @@ def test_complete_run_served(tmp_path):
 
 
 def test_no_manifest_key_still_boots(tmp_path):
-    """F4 regression guard: a collection whose config has no 'manifest' key
+    """Regression guard: a collection whose config has no 'manifest' key
     at all must not crash create_app(); the readiness check's short-circuited
     `and` must gracefully treat the collection as tile-less.
     """
