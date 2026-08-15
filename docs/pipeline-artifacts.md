@@ -194,16 +194,25 @@ their referenced nodes' coordinates (`way_centroids`); both the node and
 way pipelines apply the same category allow-list, keeping only named POIs
 in a fixed set of OSM tag categories.
 
-**Variants**: only `overture_place` produces any. They are computed per row
-inside the same CTAS, by concatenating two `list_transform`s — one over
-`map_entries(names.common)`, whose entries are always typed `alternate` with
-the map key as the language, and one over `names.rules`, whose `variant`
-string maps `common` and `alternate` to `alternate`, `official` to
-`official`, `short` to `short`, and anything unrecognized to `alternate`.
-Entries with a NULL or blank name are filtered out; the result is
-`list_sort`ed. Duplicates between the two sources are deliberately not
-deduplicated. `osm` and `overture_division` emit an empty list literal —
-the column exists, the data was never built (see `planned-features.md`).
+**Variants**: `overture_place` and `osm` both produce them; `overture_division`
+still emits an empty list literal — the column exists, the data was never
+built for divisions.
+
+`overture_place` computes them per row inside the same CTAS, by concatenating
+two `list_transform`s — one over `map_entries(names.common)`, whose entries
+are always typed `alternate` with the map key as the language, and one over
+`names.rules`, whose `variant` string maps `common` and `alternate` to
+`alternate`, `official` to `official`, `short` to `short`, and anything
+unrecognized to `alternate`. Entries with a NULL or blank name are filtered
+out; the result is `list_sort`ed. Duplicates between the two sources are
+deliberately not deduplicated.
+
+`osm` computes them per row the same way, from the raw OSM tags map via two
+macros defined in `osm_import.sql` (`osm_dropped_suffix`,
+`osm_variant_type_lang`): `name:{lang}` and six other name-family tags each
+map to a type from a fixed table, an annotation-suffix drop-list is applied,
+values are split on `;`, and a variant equal (after trim) to the primary name
+is dropped. The result is `list_sort`ed the same way as `overture_place`'s.
 
 ## 6. `stage_tile_assignment` (`garganorn/stages.py`)
 

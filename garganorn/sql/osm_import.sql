@@ -3,6 +3,73 @@ DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
 INSTALL spatial; LOAD spatial;
 
+-- osm_dropped_suffix/osm_variant_type_lang derive the `variants` field from
+-- OSM name tags: tag key -> type/language, per the mapping and drop-list
+-- below. OR REPLACE because fixtures that reuse a connection across
+-- multiple import calls would otherwise hit CREATE MACRO's error on a
+-- second definition.
+--
+-- osm_dropped_suffix: annotation suffixes that are not names. Exact match or
+-- an "X:"-prefixed localized form, e.g. 'prefix:ru', for every family except
+-- word_stress, which is a suffix match (regexp, not an unescaped LIKE
+-- '%word_stress' -- DuckDB LIKE treats '_' as a single-character wildcard).
+CREATE OR REPLACE MACRO osm_dropped_suffix(suffix) AS (
+    suffix = 'prefix' OR suffix LIKE 'prefix:%'
+    OR suffix = 'etymology' OR suffix LIKE 'etymology:%'
+    OR suffix = 'signed' OR suffix LIKE 'signed:%'
+    OR suffix = 'pronunciation' OR suffix LIKE 'pronunciation:%'
+    OR suffix = 'adjective' OR suffix LIKE 'adjective:%'
+    OR suffix = 'genitive' OR suffix LIKE 'genitive:%'
+    OR regexp_matches(suffix, 'word_stress$')
+);
+
+-- osm_variant_type_lang: tag key -> STRUCT(type, language), or NULL for any
+-- key that isn't a recognized variant tag. `suffix` is everything after the
+-- first colon (substr, not split_part, so a multi-segment suffix like
+-- name:zh:pinyin isn't truncated before testing against the drop-list).
+CREATE OR REPLACE MACRO osm_variant_type_lang(tag_key) AS (
+    CASE
+        WHEN tag_key = 'alt_name' THEN {'type': 'alternate', 'language': NULL}
+        WHEN tag_key = 'int_name' THEN {'type': 'alternate', 'language': NULL}
+        WHEN tag_key = 'official_name' THEN {'type': 'official', 'language': NULL}
+        WHEN tag_key = 'short_name' THEN {'type': 'short', 'language': NULL}
+        WHEN tag_key = 'loc_name' THEN {'type': 'colloquial', 'language': NULL}
+        WHEN tag_key = 'old_name' THEN {'type': 'historical', 'language': NULL}
+        WHEN tag_key LIKE 'name:%' THEN
+            CASE
+                WHEN osm_dropped_suffix(substr(tag_key, length('name:') + 1)) THEN NULL
+                WHEN substr(tag_key, length('name:') + 1) = 'abbr'
+                    THEN {'type': 'short', 'language': NULL}
+                WHEN regexp_matches(substr(tag_key, length('name:') + 1), '^-\d{4}(-\d{4})?$')
+                    THEN {'type': 'historical', 'language': NULL}
+                WHEN substr(tag_key, length('name:') + 1) = 'carnaval'
+                    THEN {'type': 'colloquial', 'language': NULL}
+                ELSE {'type': 'alternate', 'language': substr(tag_key, length('name:') + 1)}
+            END
+        WHEN tag_key LIKE 'alt_name:%' THEN
+            CASE WHEN osm_dropped_suffix(substr(tag_key, length('alt_name:') + 1)) THEN NULL
+                 ELSE {'type': 'alternate', 'language': substr(tag_key, length('alt_name:') + 1)}
+            END
+        WHEN tag_key LIKE 'official_name:%' THEN
+            CASE WHEN osm_dropped_suffix(substr(tag_key, length('official_name:') + 1)) THEN NULL
+                 ELSE {'type': 'official', 'language': substr(tag_key, length('official_name:') + 1)}
+            END
+        WHEN tag_key LIKE 'short_name:%' THEN
+            CASE WHEN osm_dropped_suffix(substr(tag_key, length('short_name:') + 1)) THEN NULL
+                 ELSE {'type': 'short', 'language': substr(tag_key, length('short_name:') + 1)}
+            END
+        WHEN tag_key LIKE 'loc_name:%' THEN
+            CASE WHEN osm_dropped_suffix(substr(tag_key, length('loc_name:') + 1)) THEN NULL
+                 ELSE {'type': 'colloquial', 'language': substr(tag_key, length('loc_name:') + 1)}
+            END
+        WHEN tag_key LIKE 'old_name:%' THEN
+            CASE WHEN osm_dropped_suffix(substr(tag_key, length('old_name:') + 1)) THEN NULL
+                 ELSE {'type': 'historical', 'language': substr(tag_key, length('old_name:') + 1)}
+            END
+        ELSE NULL
+    END
+);
+
 -- Load density and IDF parquet files as temp tables
 -- When parquet path is None, create empty temp tables (LEFT JOINs produce NULL, importance defaults to 0)
 ${density_cte}
@@ -143,7 +210,23 @@ SELECT
       + 40 * least(coalesce(ni.idf_score, 0) / ${idf_norm}, 1.0)
     )::INTEGER AS importance,
     qk17(f.longitude, f.latitude) AS qk17,
-    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
+    list_sort(flatten(
+        list_transform(
+            list_filter(
+                list_transform(map_entries(f.tags),
+                    e -> {'key': e.key, 'value': e.value,
+                          'tl': osm_variant_type_lang(e.key)}),
+                e -> e.tl IS NOT NULL
+            ),
+            e -> list_transform(
+                list_filter(
+                    list_transform(str_split(e.value, ';'), v -> TRIM(v)),
+                    v -> v != '' AND v != TRIM(f.name)
+                ),
+                v -> {'name': v, 'type': e.tl.type, 'language': e.tl.language}
+            )
+        )
+    )) AS variants
 FROM filtered f
 LEFT JOIN (
     -- Pre-dedupe density_tiles on the join key: without this, a duplicate
@@ -302,7 +385,23 @@ SELECT
       + 40 * least(coalesce(wi.idf_score, 0) / ${idf_norm}, 1.0)
     )::INTEGER AS importance,
     qk17(wb.longitude, wb.latitude) AS qk17,
-    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
+    list_sort(flatten(
+        list_transform(
+            list_filter(
+                list_transform(map_entries(wb.tags),
+                    e -> {'key': e.key, 'value': e.value,
+                          'tl': osm_variant_type_lang(e.key)}),
+                e -> e.tl IS NOT NULL
+            ),
+            e -> list_transform(
+                list_filter(
+                    list_transform(str_split(e.value, ';'), v -> TRIM(v)),
+                    v -> v != '' AND v != TRIM(wb.name)
+                ),
+                v -> {'name': v, 'type': e.tl.type, 'language': e.tl.language}
+            )
+        )
+    )) AS variants
 FROM way_base wb
 LEFT JOIN (
     -- Pre-dedupe density_tiles on the join key for the same reason as the

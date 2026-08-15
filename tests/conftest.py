@@ -713,6 +713,43 @@ def osm_parquet(tmp_path_factory):
         )
     """)
 
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1008,
+            map(['name','amenity','name:prefix','name:prefix:ru','alt_name'],
+                ['Drop Suffix Place','cafe','wieś','город','Kept Name']),
+            37.7780, -122.4170
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1009,
+            map(['name','amenity','alt_name'],
+                ['Semicolon Place','cafe','Foo;Bar']),
+            37.7790, -122.4180
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1010,
+            map(['name','amenity','name:zh'],
+                ['Duplicate Case','cafe','Duplicate Case;真名']),
+            37.7800, -122.4190
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1011,
+            map(['name','amenity','old_name:en','name:abbr','name:-2024','name:carnaval'],
+                ['Extended And Override Place','cafe','Historic English Name','EAOP',
+                 'Renamed 2024','Carnival Name']),
+            37.7810, -122.4200
+        )
+    """)
+
     conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
 
     # --- Way parquet ---
@@ -728,6 +765,15 @@ def osm_parquet(tmp_path_factory):
         INSERT INTO tmp_ways VALUES (
             2001,
             map(['name','bridge','tourism'], ['Golden Gate Bridge','yes','attraction']),
+            [{'ref': 9001}, {'ref': 9002}]::STRUCT(ref BIGINT)[]
+        )
+    """)
+
+    conn.execute("""
+        INSERT INTO tmp_ways VALUES (
+            2002,
+            map(['name','tourism','alt_name','old_name:en'],
+                ['Way Variant Bridge','attraction','Old Bridge Name','Historic Bridge Name']),
             [{'ref': 9001}, {'ref': 9002}]::STRUCT(ref BIGINT)[]
         )
     """)

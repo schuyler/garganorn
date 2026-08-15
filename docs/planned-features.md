@@ -6,75 +6,6 @@ sections here rather than starting another file.
 Each section below is its own proposal with its own status. Nothing in this
 document is scoped for implementation until its section says so.
 
-## OSM name variants
-
-Status: measured; requirements approved 2026-08-15; design not started.
-
-`variants` is populated for Overture places and hardcoded to `[]` for
-everything else. `osm_import.sql` emits an empty list at both the node insert
-and the way insert, and `overture_division_import.sql` does the same. The
-column has always been there; the OSM data behind it never was.
-
-What that costs, measured on the 2026-03-27 planet snapshot: 17.9% of the
-27.3M imported OSM records carry at least one variant tag (14.7% carry
-`name:*`), about 9.9M variant entries in all, and none of it reaches a
-tile. Coverage is highest exactly where primary names are in non-Latin
-scripts — among qualifying nodes, 33.4% in Asia and 23.5% in Africa carry
-`name:*`, against 13.1% in Europe and under 4% in the Americas — so the
-main effect is cross-script findability: a Latin-script search for "Kyoto"
-reaching a record whose primary name is 京都.
-
-The mapping from OSM tags to variant types, which is the part worth not
-re-deriving:
-
-| tag | type | language |
-|---|---|---|
-| `name:{lang}` | `alternate` | `{lang}` |
-| `alt_name` | `alternate` | — |
-| `int_name` | `alternate` | — |
-| `official_name` | `official` | — |
-| `short_name` | `short` | — |
-| `loc_name` | `colloquial` | — |
-| `old_name` | `historical` | — |
-| `name:abbr` | `short` | — |
-| `name:-{yyyy}` (dated, e.g. `name:-2024`) | `historical` | — |
-| `name:carnaval` | `colloquial` | — |
-
-Values are semicolon-delimited and split on `;`, with empty results dropped;
-about 1.5% of variant-bearing records contain a semicolon. No filter change
-is needed upstream: `osmium tags-filter` selects on category tags and
-preserves every tag on a matching element, so the name tags are already
-present in the parquet.
-
-Suffix handling, decided from a census of every `name:*` suffix among
-qualifying elements: **default-keep**. Any suffix not mapped above imports
-as `alternate` with the raw suffix as its language — the long tail is
-overwhelmingly real languages and scripts (~97% of entries), and renderings
-that matter hide behind irregular suffixes (`ja_rm` romaji, 35K; numbered
-second names `ar1`/`en1`/`en2`, 19K; `kn:iso15919` transliterations, 10K).
-The exception is a drop-list of annotation suffixes that are not names:
-`prefix` (60K, settlement-type designators — "wieś", "город"), `etymology`
-(38K, including wikidata Q-ids), `signed` (value is literally "no"),
-`pronunciation` (IPA), `adjective`, `genitive` (56K case inflections), and
-any suffix ending `word_stress` (43K stress-marked near-duplicates).
-Drop-list semantics are "suffix equals X or begins `X:`" — localized forms
-like `prefix:ru` exist. A variant byte-equal to the record's primary name
-is also dropped: about a quarter of all variant entries duplicate the
-primary (`name:zh` equals `name` on 80% of Chinese elements, `name:ja` on
-83% of Japanese).
-
-Requirements (approved 2026-08-15): variants as mapped above reach OSM
-tile entries for nodes and ways (the division import is unchanged), with
-the drop-list applied and duplicates of the primary name removed. Accept:
-fixture records carrying `name:*`, `alt_name`, a dropped suffix, and a
-semicolon-delimited value emit exactly the expected variants in a rebuilt
-tile.
-
-Implementation shape: copy the Overture path — one per-row `list_transform`
-expression computed inside the import CTAS, no unnest, no re-aggregation,
-no second scan. Not a post-hoc `ALTER TABLE`/`UPDATE` backfill, which
-`gotchas.md`'s "CTAS is fast, UPDATE/ALTER TABLE is slow" exists to forbid.
-
 ## Serve tiles uncompressed; let the transport layer own compression
 
 Status: proposed, not started. No design has been reviewed.
@@ -321,10 +252,6 @@ OSM containment stage (674s busy) grows by 40–90s, import gains one small
 parquet scan (~35M rows next to today's 1.8B), export is per-record, and
 the ~2h45m planet build grows by single-digit minutes. Tile payload in
 building-dense cells grows too; that is bytes, not time.
-
-Open question for the design pass: whether this ships with the OSM
-name-variants section as one tranche (they edit the same CTAS sites, and
-one re-filter, rebuild, and acceptance covers both) or sequentially.
 
 ## OSM relations are never imported
 

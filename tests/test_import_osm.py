@@ -257,15 +257,11 @@ class TestOsmImportCharacterization:
     coordinate derivation in osm_import.sql.
     """
 
-    def test_variants_always_empty_for_nodes_and_ways(self, osm_parquet, tmp_path):
-        """osm_import.sql hardcodes variants to an empty list for every
-        record — node and way alike (`[]::STRUCT(name VARCHAR, type VARCHAR,
-        language VARCHAR)[] AS variants` in both the node and way final
-        SELECTs). OSM alternate names (alt_name, name:fr, etc.) live in the
-        `tags` map instead (see test_import_preserves_variant_tags above),
-        not in `variants`. Pinned here so a rewrite doesn't accidentally
-        start deriving variants from tags without an explicit decision to
-        do so.
+    def test_variants_empty_when_no_variant_tags_present(self, osm_parquet, tmp_path):
+        """n1001 and w2001 carry no name-variant tags, so `variants` is empty
+        for both — node and way alike. See tests/test_variants.py's
+        TestOsmVariantsCharacterization for records that do carry variant
+        tags and the type/language mapping those derive.
         """
         db_path = tmp_path / "test_osm_variants_empty.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -387,24 +383,39 @@ class TestOsmImportArtifactPhase2:
         )
 
     def test_null_geom_rows_absent_from_artifact(self, osm_parquet, tmp_path):
-        """Rows where geom IS NULL must not appear in places.parquet (filter before EXCLUDE)."""
+        """Rows where geom IS NULL must not appear in places.parquet.
+
+        Neither import path can currently produce a NULL-geom row to test
+        against directly: nodes require non-NULL lat/lon before `filtered`'s
+        SELECT, and way centroids are excluded by `HAVING avg(...) IS NOT
+        NULL` before reaching way_base. So this pins the DELETE's presence
+        in the SQL source (the only thing standing between a future
+        regression in either of those upstream guards and a NULL-geom row
+        reaching the artifact), plus the artifact's actual exclusions by
+        name/bbox/quality-tag filters, asserted by rkey rather than by a
+        total-count comparison that passes regardless of which filter ran.
+        """
+        osm_import_sql = (REPO_ROOT / "garganorn" / "sql" / "osm_import.sql").read_text()
+        assert "DELETE FROM places WHERE geom IS NULL" in osm_import_sql, (
+            "osm_import.sql must delete NULL-geom rows before the parquet artifact is written"
+        )
+
         output = str(tmp_path / "places.parquet")
         parquet = (osm_parquet["node"], osm_parquet["way"])
         _stages.stage_import("osm", parquet, self._BBOX, output)
-        # OSM fixture node 1003 has no 'name' tag → osm_import filters it; nodes with
-        # no geometry (ways with centroid=NULL) also get filtered. We assert the artifact
-        # has fewer rows than the unfiltered node count (6 nodes in fixture).
         con = duckdb.connect()
-        count = con.execute(
-            f"SELECT COUNT(*) FROM read_parquet('{output}')"
-        ).fetchone()[0]
+        output_rkeys = {r[0] for r in con.execute(
+            f"SELECT rkey FROM read_parquet('{output}')"
+        ).fetchall()}
         con.close()
-        # The fixture has nodes without name (filtered) and nodes outside bbox; after
-        # all filters the row count must be < 6 (total fixture nodes).
-        assert count < 6, (
-            f"Expected filtered row count < 6 nodes; got {count}. "
-            "NULL-geom filter may not be running before EXCLUDE."
-        )
+        for excluded, reason in [
+            ("n1003", "no name tag"),
+            ("n1004", "out of bbox"),
+            ("n1006", "no quality tag"),
+            ("n9001", "no name (way-centroid input only)"),
+            ("n9002", "no name (way-centroid input only)"),
+        ]:
+            assert excluded not in output_rkeys, f"{excluded} should be excluded ({reason})"
 
     def test_places_parquet_qk17_sorted_nulls_last(self, osm_parquet, tmp_path):
         """places.parquet must be sorted by qk17 NULLS LAST."""
