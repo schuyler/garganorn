@@ -597,17 +597,11 @@ class TestContainmentInExport:
                 assert "level" in entry, f"'level' key missing from within entry: {entry}"
 
     # ------------------------------------------------------------------
-    # compute_containment bbox pre-filter regression guard
+    # compute_containment matches every containing boundary
     # ------------------------------------------------------------------
 
     def test_compute_containment_matches_all_containing_boundaries(self, tmp_path, division_db_path):
         """compute_containment must match ALL boundaries that contain a place, not just some.
-
-        This test guards against a future bbox pre-filter incorrectly excluding a
-        boundary whose bbox columns do contain the place's coordinates. A buggy
-        pre-filter that uses wrong bbox values (e.g., inverted min/max, or a bbox
-        that is too small) would produce fewer than the expected 4 containment
-        entries for the SF test point, causing this test to fail.
 
         The SF test point (37.7749, -122.4194) falls inside all four division boundaries
         defined in conftest.py::DIVISION_BOUNDARIES that cover North America:
@@ -617,12 +611,9 @@ class TestContainmentInExport:
           - div_locality_sf  (level 50): bbox [37.6,-122.55] to [37.85,-122.3]
 
         div_borough_manhattan (level 50) does NOT contain the SF point,
-        so exactly 4 entries are expected and no more.
-
-        This test passes with the current code, which uses ST_Covers with no bbox
-        pre-filter, and must continue to pass after a correctly-implemented bbox
-        pre-filter is added. It FAILS if the bbox pre-filter is buggy (false
-        negative).
+        so exactly 4 entries are expected and no more. Any narrowing that drops a
+        boundary whose extent does reach the point yields fewer than 4 and fails
+        here.
         """
         try:
             from garganorn.quadtree import compute_containment
