@@ -81,37 +81,50 @@ exactly this reason
 target, and it has done so. Treat it as a review criterion for new SQL, not a
 thing to discover at scale.
 
-### Join memory is sized off the source relation, not the filtered one
+### A join is sized off the source relation, not the filtered one
 
-A query that filters a large TEMP TABLE inline (`WHERE ... = '${prefix}'`) and
-then joins the result against a relation with expensive per-row cost (a
-GEOS-backed spatial predicate against a complex multi-vertex geometry) can blow
-up memory 100x+ even when the filtered row count is tiny. The join planner
-appears to size against the source relation's full cardinality, not the true
-post-filter selectivity.
+A query that filters a large relation inline and joins the result, leaving the
+filter in a CTE rather than materializing it, is planned against the source
+cardinality rather than the post-filter one. The cost lands as memory or as
+time:
+
+- **memory, 100x+**: a GEOS-backed predicate against Canada/Nunavut's
+  200k-vertex Arctic Archipelago coastlines at global scale, not any data defect.
+- **time, 250x**: 553,249 localities filtered out of a 1,071,108-row CTE and
+  joined to 5,262,549 density tiles on four float comparisons, with no spatial
+  predicate at all — 15.6s with the probe side materialized, ~64 min as a
+  `CTE_SCAN`.
 
 **Applies to**: `stages.py:compute_containment()`, where `p` is materialized as
 its own `CREATE TEMP TABLE` (not left as a CTE over `places_slim`) for exactly
-this reason; hit by Canada/Nunavut's 200k-vertex Arctic Archipelago coastlines at
-global scale, not by any data defect
+this reason; `sql/overture_division_import.sql`'s `division_density` join, which
+currently is not.
 
-**Why it matters**: rewriting the filter for zone-map pruning or reducing thread
-count does not help — only materializing the filtered relation into its own
-`CREATE TEMP TABLE` before the join does. Any new query that filters a large
-relation and then joins it against expensive-per-row predicates needs the same
-treatment. Two open upstream issues make this plausible as an engine limitation:
+**Why it matters**: an expensive per-row predicate is not the trigger — the
+second case has none — so any join whose probe side is a filtered CTE over a
+large relation needs materializing first, and rewriting the filter for zone-map
+pruning or reducing thread count does not substitute. `EXPLAIN` cannot tell the
+two apart: same operator, same conditions, same estimates. Only `EXPLAIN ANALYZE`
+or JSON profiling separates them, and those timings sum across threads — an
+operator can report 4x the query's wall clock on four cores. Two open upstream
+issues make this plausible as an engine limitation:
 [duckdb/duckdb#14087](https://github.com/duckdb/duckdb/issues/14087),
 [duckdb/duckdb#18330](https://github.com/duckdb/duckdb/issues/18330).
 
-### `ST_Union_Agg` is a memory-pressure point
+### `ST_Union_Agg` over single-row groups still costs
 
-`ST_Union_Agg` merges a division's multiple geometry rows into one geometry and
-can consume substantial memory on large multi-part divisions.
+Grouping the division areas by `division_id` costs 30.8s with `ST_Union_Agg`
+against 2.6s with `any_value` over the same decoded input — and every one of the
+1,071,108 groups holds exactly one row, so nothing is merged. Spatially it is a
+no-op: `ST_Equals` holds for every row, vertex counts, validity and geometry
+types are all unchanged. It does re-serialize, normalizing ring order, so the WKB
+bytes differ for all 38,019 MULTIPOLYGONs.
 
 **Applies to**: `sql/overture_division_import.sql` (`merged_areas` CTE)
 
-**Why it matters**: it is a place to look first when the division import runs out
-of memory, alongside the CTAS sort above.
+**Why it matters**: the cost is time, not the memory pressure the shape suggests.
+Any equivalence check on a change here has to compare with `ST_Equals` — a
+checksum reads the re-serialized multipolygons as a regression.
 
 ### Macro bodies are validated eagerly — LOAD extensions first
 

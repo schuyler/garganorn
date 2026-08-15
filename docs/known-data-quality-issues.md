@@ -45,6 +45,24 @@ cells is more likely a defective geometry; and no measurement so far
 separates the two. The global totals above don't either — they say nothing
 about which records make up the tail.
 
+## One `division_area` row per division
+
+The Overture schema permits a division to have many `division_area` rows,
+and non-contiguous territory is the obvious reason to expect them. In
+`2026-07-22.0` it does not happen: 1,071,108 land areas cover 1,071,108
+divisions, one apiece. Non-contiguity is carried inside the geometry
+instead — 38,019 of those areas are MULTIPOLYGON rather than POLYGON. The
+same scan puts `division` at 4,655,003 rows against `division_area`'s
+1,071,108, so the inner join between them drops ~3.6M divisions that carry
+no land geometry at all.
+
+The consequence is that `overture_division_import.sql`'s `ST_Union_Agg`
+has nothing to merge — measured as a spatial no-op on this release, though
+it does normalize ring order and so re-serializes those 38,019
+multipolygons. The disposition is open: whether to keep paying for an
+aggregate that a later release might need is a question for the division
+import's performance work, not a source-data won't-fix.
+
 ## Duplicate boundary records
 
 A global exact-bbox self-join (same admin subtype, identical
