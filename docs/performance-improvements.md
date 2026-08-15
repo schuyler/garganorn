@@ -19,6 +19,17 @@ Antarctica (71 cells at z4) and a level-50 division reaching 27 cells at
 z7 against a level-50 median of 1. Nothing currently bounds or reports
 it.
 
+## `COVER_MIN_LEAF_ZOOM` is unmeasured
+
+Status: open question, not scoped for implementation.
+
+The value 12 was inherited from the pre-split `COVER_MAX_ZOOM`, not
+measured against real data. It trades edge-join fan-out against stored
+fragment count; a real run's `per_level` stats and measured artifact
+size are what would justify moving it either way. A floor of 12 holds
+edge-join fan-out at what the pre-split covering already produced, so the
+unmeasured value is a known-working default rather than a latent risk.
+
 ## Which pipeline disk writes earn their keep
 
 Status: one settled note kept as context (the export staging write).

@@ -22,14 +22,12 @@ try:
     from garganorn.covering import (
         COVER_MIN_ZOOM,
         COVER_MAX_ZOOM,
-        lonlat_to_tile,
-        bbox_to_quadkeys,
         stage_covering,
     )
     _COVERING_ERROR = None
 except ImportError as _exc:
     COVER_MIN_ZOOM = COVER_MAX_ZOOM = None
-    lonlat_to_tile = bbox_to_quadkeys = stage_covering = None
+    stage_covering = None
     _COVERING_ERROR = _exc
 
 
@@ -194,89 +192,6 @@ class TestQkEnvMacro:
         assert xmax == pytest.approx(0.0, abs=0.01)
         assert ymin == pytest.approx(0.0, abs=0.01)
         assert ymax == pytest.approx(90.0, abs=0.01)
-
-
-# ---------------------------------------------------------------------------
-# bbox_to_quadkeys / lonlat_to_tile
-# ---------------------------------------------------------------------------
-
-class TestBboxToQuadkeys:
-    """Known bboxes, world=256 tiles, lat clamping, antimeridian
-    (`gotchas.md`, "Antimeridian bboxes are two lobes")."""
-
-    def test_whole_world_z4_is_256_tiles(self):
-        """bbox_to_quadkeys for the whole world at z4 returns exactly 256 tiles."""
-        _check_covering()
-        tiles = bbox_to_quadkeys(-180.0, -90.0, 180.0, 90.0, 4)
-        assert len(tiles) == 256, f"Expected 256 z4 tiles, got {len(tiles)}"
-        assert all(len(t) == 4 for t in tiles)
-        assert all(c in "0123" for t in tiles for c in t)
-
-    def test_whole_world_z4_all_unique(self):
-        _check_covering()
-        tiles = bbox_to_quadkeys(-180.0, -90.0, 180.0, 90.0, 4)
-        assert len(set(tiles)) == 256
-
-    def test_known_bbox_sf_z4_nonempty(self):
-        """SF bbox at z4 returns at least one tile."""
-        _check_covering()
-        tiles = bbox_to_quadkeys(-122.55, 37.6, -122.3, 37.85, 4)
-        assert len(tiles) >= 1
-        assert all(len(t) == 4 for t in tiles)
-
-    def test_zoom_controls_tile_length(self):
-        _check_covering()
-        tiles_z6 = bbox_to_quadkeys(-10.0, -10.0, 10.0, 10.0, 6)
-        tiles_z9 = bbox_to_quadkeys(-10.0, -10.0, 10.0, 10.0, 9)
-        assert all(len(t) == 6 for t in tiles_z6)
-        assert all(len(t) == 9 for t in tiles_z9)
-
-    def test_latitude_clamped_above_merc_max(self):
-        """Latitudes beyond ±85.05… are clamped; result is non-empty and valid."""
-        _check_covering()
-        tiles = bbox_to_quadkeys(-10.0, 85.1, 10.0, 90.0, 4)
-        assert len(tiles) > 0
-        assert all(all(c in "0123" for c in t) for t in tiles)
-
-    def test_antimeridian_bbox_both_lobes(self):
-        """min_lon > max_lon (the two-lobe rule): returns tiles from BOTH lobes (near ±180°)."""
-        _check_covering()
-        tiles = bbox_to_quadkeys(170.0, -15.0, -170.0, 15.0, 4)
-        assert len(tiles) > 0, "Antimeridian bbox should return tiles"
-        bboxes = [quadkey_to_bbox(t) for t in tiles]
-        has_east_lobe = any(xmin >= 160.0 or xmax > 160.0 for xmin, _, xmax, _ in bboxes)
-        # Unpacking corrected during green (was `for _, _, xmax, _`): xmin was
-        # unbound in this generator, raising NameError. Sanctioned test-defect fix.
-        has_west_lobe = any(xmax <= -160.0 or xmin < -160.0 for xmin, _, xmax, _ in bboxes)
-        assert has_east_lobe, "No tiles near +170° (east lobe missing)"
-        assert has_west_lobe, "No tiles near -170° (west lobe missing)"
-
-    def test_antimeridian_gap_tiles_absent(self):
-        """No tile returned by the [170,-170] bbox is entirely within the gap."""
-        _check_covering()
-        tiles = bbox_to_quadkeys(170.0, -15.0, -170.0, 15.0, 4)
-        for qk in tiles:
-            xmin, ymin, xmax, ymax = quadkey_to_bbox(qk)
-            in_gap = xmax < 170.0 and xmin > -170.0 and xmin < xmax
-            assert not in_gap, (
-                f"Tile {qk!r} (xmin={xmin}, xmax={xmax}) "
-                "appears to be entirely in the antimeridian gap"
-            )
-
-    def test_lonlat_to_tile_sf(self):
-        """lonlat_to_tile for SF at z10 returns a valid (x, y) pair."""
-        _check_covering()
-        x, y = lonlat_to_tile(-122.4194, 37.7749, 10)
-        assert isinstance(x, int)
-        assert isinstance(y, int)
-        assert 0 <= x < 2 ** 10
-        assert 0 <= y < 2 ** 10
-
-    def test_lonlat_to_tile_lat_clamping(self):
-        """lat > 85.05 is clamped; should not raise and should return valid tile."""
-        _check_covering()
-        x, y = lonlat_to_tile(0.0, 90.0, 4)
-        assert 0 <= y < 2 ** 4
 
 
 # ---------------------------------------------------------------------------
@@ -790,7 +705,6 @@ class TestFreshnessAtomicity:
 
 # ---------------------------------------------------------------------------
 # Fragment-containment: shared fixture helpers
-# (docs/fragment-containment-design.md)
 # ---------------------------------------------------------------------------
 
 # The tile pyramid's covered latitude bound: qk_env's outermost rows reach
@@ -821,7 +735,6 @@ def _ellipse_wkt(cx, cy, rx, ry, n):
 
 # ---------------------------------------------------------------------------
 # Fragment-containment structural invariants
-# (docs/fragment-containment-design.md, "Verification" section, items 1-5)
 # ---------------------------------------------------------------------------
 
 class TestFragmentContainmentInvariants:
@@ -857,8 +770,7 @@ class TestFragmentContainmentInvariants:
     def test_mass_balance_per_boundary(self, fc_covering_dir, covering_test_db):
         """Summed row area == boundary area clipped to the Mercator extent,
         within relative tolerance 1e-6. Leaves are pairwise disjoint
-        (antichain), so areas sum -- no ST_Union_Agg, per the design's
-        explicit prohibition."""
+        (antichain), so areas sum -- no ST_Union_Agg."""
         _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
@@ -990,7 +902,6 @@ class TestFragmentContainmentInvariants:
 
 # ---------------------------------------------------------------------------
 # Fragment-containment synthetic unit tests
-# (docs/fragment-containment-design.md, "Verification" section)
 # ---------------------------------------------------------------------------
 
 class TestFragmentContainmentSynthetics:
@@ -1213,7 +1124,7 @@ class TestFragmentContainmentSynthetics:
         compute_containment.sql -- the template holds only `${arms}`, so a
         text check there passes no matter what the generator emits. The
         template's final SELECT does keep a `JOIN bnd.places bp` for
-        `names."primary"`, which the design retains; scoping to the
+        `names."primary"`, which is deliberate; scoping to the
         generator's output excludes it without special-casing.
 
         Catches a CASE-only fix: deleting the antimeridian min_longitude CASE while
@@ -1288,9 +1199,9 @@ class TestFragmentContainmentSynthetics:
         )
 
     def test_small_capacity_splits_one_fragment_into_several_all_under_capacity(self, tmp_path):
-        """With a small V, a boundary that would be a single fragment at the
-        design's default V=5000 instead produces several fragments, each
-        under capacity."""
+        """With a small V, a boundary that would be a single fragment at
+        `COVER_VERTEX_CAPACITY`'s default 5000 instead produces several
+        fragments, each under capacity."""
         _check_covering()
         bxmin, bymin, bxmax, bymax = quadkey_to_bbox("120031")
         cx, cy = (bxmin + bxmax) / 2, (bymin + bymax) / 2
@@ -1341,8 +1252,8 @@ class TestFragmentContainmentSynthetics:
         """Changing either cover_vertex_capacity or cover_min_leaf_zoom alone
         rebuilds the covering; an identical repeat call is a no-op.
 
-        The design's "Params and freshness" section requires BOTH new params
-        in the freshness gate's comparison. An implementation that adds
+        BOTH new params must appear in the freshness gate's comparison.
+        An implementation that adds
         cover_vertex_capacity to the gate but forgets cover_min_leaf_zoom
         would pass a test that only ever varies vertex_capacity -- so this
         test varies each param independently, holding the other fixed.

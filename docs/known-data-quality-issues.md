@@ -20,10 +20,9 @@ Measured directly against the 2026-08-08 production build on `garganorn-1`
 boundaries, 1,106,134 edge-arm tiles at the containment test's terminal
 zoom): distribution of distinct same-level boundaries per tile — mean 3.9,
 median 3, p90=8, p99=16, p999=31, max=490. High-overlap hotspots are a
-disjoint set from the ~20 known-slow cells `fragment-containment-design.md`
-measures against, and are cheap per-boundary despite the
-high count: Taipei/New Taiwan (490
-boundaries in one tile — Taiwan's fine-grained 里/li subdivisions, 5–810
+disjoint set from the cells known to be slow in containment, and are cheap
+per-boundary despite the high count: Taipei/New Taiwan (490 boundaries in
+one tile — Taiwan's fine-grained 里/li subdivisions, 5–810
 vertices each), Guangxi and Shandong China, Java Indonesia, Delhi India,
 Zambia's Copperbelt.
 

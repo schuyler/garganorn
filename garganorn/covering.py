@@ -1,7 +1,6 @@
 """Covering stage: build quadkey covering for boundaries.duckdb."""
 import json
 import logging
-import math
 import os
 import shutil
 import time
@@ -21,23 +20,6 @@ COVER_VERTEX_CAPACITY = 5000
 
 _SQL_DIR = Path(__file__).parent / "sql"
 
-_MERC_LAT_MAX = 85.05112877980659
-
-
-def lonlat_to_tile(lon: float, lat: float, zoom: int) -> tuple[int, int]:
-    """Web-mercator forward: clamp lat to ±85.05112878, return (x, y).
-
-    y increases southward (tile 0,0 is top-left / NW corner of the world).
-    """
-    lat = max(-_MERC_LAT_MAX, min(_MERC_LAT_MAX, lat))
-    n = 2 ** zoom
-    x = int((lon + 180.0) / 360.0 * n)
-    x = max(0, min(x, n - 1))
-    lat_rad = math.radians(lat)
-    y = int((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n)
-    y = max(0, min(y, n - 1))
-    return (x, y)
-
 
 def _tile_to_quadkey(x: int, y: int, zoom: int) -> str:
     """Convert tile (x, y, zoom) to quadkey string.
@@ -54,44 +36,6 @@ def _tile_to_quadkey(x: int, y: int, zoom: int) -> str:
             digit |= 2
         qk.append(str(digit))
     return "".join(qk)
-
-
-def bbox_to_quadkeys(
-    min_lon: float, min_lat: float, max_lon: float, max_lat: float, zoom: int
-) -> list[str]:
-    """Quadkeys at `zoom` whose tiles intersect the bbox.
-
-    `gotchas.md`, "Antimeridian bboxes are two lobes": min_lon > max_lon means
-    antimeridian crossing; returns the union of the two lobes [min_lon, 180]
-    and [-180, max_lon] with no gap tiles.
-    """
-    if min_lon > max_lon:
-        # Antimeridian crossing: two lobes
-        east = bbox_to_quadkeys(min_lon, min_lat, 180.0, max_lat, zoom)
-        west = bbox_to_quadkeys(-180.0, min_lat, max_lon, max_lat, zoom)
-        seen: set[str] = set()
-        result: list[str] = []
-        for qk in east + west:
-            if qk not in seen:
-                seen.add(qk)
-                result.append(qk)
-        return result
-
-    n = 2 ** zoom
-    # NW corner of bbox (min_lon, max_lat) → smallest (x, y)
-    x_min, y_min = lonlat_to_tile(min_lon, max_lat, zoom)
-    # SE corner of bbox (max_lon, min_lat) → largest (x, y)
-    x_max, y_max = lonlat_to_tile(max_lon, min_lat, zoom)
-
-    # Clamp to valid range
-    x_max = min(x_max, n - 1)
-    y_max = min(y_max, n - 1)
-
-    result = []
-    for x in range(x_min, x_max + 1):
-        for y in range(y_min, y_max + 1):
-            result.append(_tile_to_quadkey(x, y, zoom))
-    return result
 
 
 def _load_qk_env_macros(con):

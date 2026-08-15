@@ -213,6 +213,11 @@ The general form: **a parquet artifact's column types are a property of the data
 written, not of the schema that produced it.** Any "the schema is X" claim about a
 parquet artifact needs checking against a file that exercises the all-NULL case.
 
+A read that never selects the geometry column doesn't need the spatial extension
+either: `stage_division_tile_references` opens its connection with no `LOAD
+spatial` and reads `covering/*.parquet` selecting only `tile_qk` and
+`boundary_id`, never `geom`.
+
 ---
 
 ## Geographic data
@@ -224,9 +229,9 @@ Where a bbox filter is derived from a geometry's min/max longitude,
 `BETWEEN` drops it. The correct filter is `(lon >= min OR lon <= max)`, or a
 tile-seed set built as the union of the two lobes.
 
-**Applies to**: `covering.py` (two-lobe split) and `stages.py`
-(`bboxes_intersect` wrap branches) implement this but have no test coverage. The
-import-side bbox filter does not, so features crossing ±180° are dropped there.
+**Applies to**: `stages.py` (`bboxes_intersect` wrap branches) and
+`covering_seed.sql`'s join implement this. The import-side bbox filter
+does not, so features crossing ±180° are dropped there.
 
 **Why it matters**: it affects Pacific data — eastern Russia, Fiji, Antarctica. A
 global build makes it reachable where a CONUS-bounded one did not.

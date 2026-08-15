@@ -116,6 +116,12 @@ once (no `DISTINCT` needed). Verified against an in-suite brute-force `ST_Contai
 a captured baseline (the old per-tile code never worked correctly in
 production, so no valid baseline existed to compare against).
 
+The capacity rule alone would leaf a typical inland division (p50 = 123
+vertices) at z4: the arm's z4 join keys on `left(p.qk17, 4) = c.tile_qk`,
+so every candidate point in that cell pairs with every division leafed
+there — 130,269 of them in cell `1202`, 21% of all divisions — a cross
+product no predicate filters. `COVER_MIN_LEAF_ZOOM` is what stops that.
+
 ### A record may be referenced by more than one tile
 
 Divisions are polygons: `stage_division_tile_references` references a
