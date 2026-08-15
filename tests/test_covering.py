@@ -7,6 +7,7 @@ _check_covering() — pytest reports fixture-setup failures as ERROR, not FAILED
 Collection succeeds so the full existing test suite can still run.
 """
 import json
+import logging
 import math
 import os
 import random
@@ -400,7 +401,8 @@ class TestStageCoveringSchema:
 
 class TestStageCoveringProgressBar:
     """stage_covering's long-running iterative per-zoom loop must disable
-    the DuckDB progress bar so it doesn't pollute build logs."""
+    the DuckDB progress bar so it doesn't pollute build logs, and report its
+    own progress at INFO so the build log shows the loop is alive."""
 
     def test_disables_progress_bar(self, covering_test_db, tmp_path_factory, monkeypatch):
         _check_covering()
@@ -413,6 +415,20 @@ class TestStageCoveringProgressBar:
         assert any("SET enable_progress_bar = false" in s for s in statements), (
             "stage_covering must disable the DuckDB progress bar"
         )
+
+    def test_logs_each_zoom_level_at_info(self, covering_test_db, tmp_path, caplog):
+        _check_covering()
+        out_dir = str(tmp_path / "levelprog")
+
+        with caplog.at_level(logging.INFO, logger="garganorn.covering"):
+            stage_covering(str(covering_test_db), out_dir,
+                           cover_min_zoom=4, cover_max_zoom=6)
+
+        messages = [r.message for r in caplog.records if r.levelno >= logging.INFO]
+        for z in (4, 5, 6):
+            assert any(f"z{z} done" in m for m in messages), (
+                f"expected an INFO progress line for z{z}; got: {messages}"
+            )
 
 
 # ---------------------------------------------------------------------------

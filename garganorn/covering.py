@@ -257,7 +257,7 @@ def stage_covering(
             con.execute(level_sql)
 
             row_count = con.execute("SELECT COUNT(*) FROM covering_out").fetchone()[0]
-            log.debug("stage_covering: z%d done, covering_out total=%d", z, row_count)
+            log.info("stage_covering: z%d done, covering_out total=%d", z, row_count)
 
         con.execute("DROP TABLE l_current")
 
