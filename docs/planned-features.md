@@ -8,19 +8,21 @@ document is scoped for implementation until its section says so.
 
 ## OSM name variants
 
-Status: designed, never built. The design below is salvaged from an
-earlier one written when the pipeline still had a search index and
-shell-script imports.
+Status: measured; requirements approved 2026-08-15; design not started.
 
 `variants` is populated for Overture places and hardcoded to `[]` for
 everything else. `osm_import.sql` emits an empty list at both the node insert
 and the way insert, and `overture_division_import.sql` does the same. The
 column has always been there; the OSM data behind it never was.
 
-What that costs: OSM carries `name:*` tags for a great many places, and none
-of it reaches a tile. A client searching `org.atgeo.places.osm` for "Köln"
-cannot find a record whose primary name is "Cologne", where the same search
-against Overture would work.
+What that costs, measured on the 2026-03-27 planet snapshot: 17.9% of the
+27.3M imported OSM records carry at least one variant tag (14.7% carry
+`name:*`), about 9.9M variant entries in all, and none of it reaches a
+tile. Coverage is highest exactly where primary names are in non-Latin
+scripts — among qualifying nodes, 33.4% in Asia and 23.5% in Africa carry
+`name:*`, against 13.1% in Europe and under 4% in the Americas — so the
+main effect is cross-script findability: a Latin-script search for "Kyoto"
+reaching a record whose primary name is 京都.
 
 The mapping from OSM tags to variant types, which is the part worth not
 re-deriving:
@@ -34,26 +36,44 @@ re-deriving:
 | `short_name` | `short` | — |
 | `loc_name` | `colloquial` | — |
 | `old_name` | `historical` | — |
+| `name:abbr` | `short` | — |
+| `name:-{yyyy}` (dated, e.g. `name:-2024`) | `historical` | — |
+| `name:carnaval` | `colloquial` | — |
 
-Values are semicolon-delimited and split on `;`, with empty results dropped.
-No filter change is needed upstream: `osmium tags-filter` selects on category
-tags and preserves every tag on a matching element, so the name tags are
-already present in the parquet.
+Values are semicolon-delimited and split on `;`, with empty results dropped;
+about 1.5% of variant-bearing records contain a semicolon. No filter change
+is needed upstream: `osmium tags-filter` selects on category tags and
+preserves every tag on a matching element, so the name tags are already
+present in the parquet.
 
-The original implementation sketch should not be followed. It proposed a
-second pass over the parquet, `ALTER TABLE ADD COLUMN`, and an `UPDATE` to
-backfill — which `gotchas.md`, "CTAS is fast, UPDATE/ALTER TABLE is slow"
-exists to forbid, since every column mutation on a large table is a full
-rewrite. The Overture path already
-demonstrates the shape to copy: one per-row `list_transform` expression
-computed inside the import CTAS, no unnest, no re-aggregation, no second
-scan.
+Suffix handling, decided from a census of every `name:*` suffix among
+qualifying elements: **default-keep**. Any suffix not mapped above imports
+as `alternate` with the raw suffix as its language — the long tail is
+overwhelmingly real languages and scripts (~97% of entries), and renderings
+that matter hide behind irregular suffixes (`ja_rm` romaji, 35K; numbered
+second names `ar1`/`en1`/`en2`, 19K; `kn:iso15919` transliterations, 10K).
+The exception is a drop-list of annotation suffixes that are not names:
+`prefix` (60K, settlement-type designators — "wieś", "город"), `etymology`
+(38K, including wikidata Q-ids), `signed` (value is literally "no"),
+`pronunciation` (IPA), `adjective`, `genitive` (56K case inflections), and
+any suffix ending `word_stress` (43K stress-marked near-duplicates).
+Drop-list semantics are "suffix equals X or begins `X:`" — localized forms
+like `prefix:ru` exist. A variant byte-equal to the record's primary name
+is also dropped: about a quarter of all variant entries duplicate the
+primary (`name:zh` equals `name` on 80% of Chinese elements, `name:ja` on
+83% of Japanese).
 
-Open question, and the reason this is a proposal rather than a task: whether
-it is worth building. Overture already supplies multilingual names for places
-that have them, and OSM's `name:*` coverage is thin outside Europe. The
-honest disposition may be "recorded, unlikely to be built." Someone should
-measure the tag coverage in a planet extract before anyone writes SQL.
+Requirements (approved 2026-08-15): variants as mapped above reach OSM
+tile entries for nodes and ways (the division import is unchanged), with
+the drop-list applied and duplicates of the primary name removed. Accept:
+fixture records carrying `name:*`, `alt_name`, a dropped suffix, and a
+semicolon-delimited value emit exactly the expected variants in a rebuilt
+tile.
+
+Implementation shape: copy the Overture path — one per-row `list_transform`
+expression computed inside the import CTAS, no unnest, no re-aggregation,
+no second scan. Not a post-hoc `ALTER TABLE`/`UPDATE` backfill, which
+`gotchas.md`'s "CTAS is fast, UPDATE/ALTER TABLE is slow" exists to forbid.
 
 ## Serve tiles uncompressed; let the transport layer own compression
 
@@ -204,22 +224,129 @@ containment answer for a client, and if so, does it change tile
 assignment or containment-name derivation (see `design-constraints.md`'s
 "A record may be referenced by more than one tile")?
 
-## Audit OSM's Map Features against the import tag whitelist
+## Expand the OSM import tag whitelist
+
+Status: researched; requirements approved 2026-08-15; design not
+started. The whitelist in `osm_import.sql`'s
+`filtered` CTE was audited on 2026-08-15 against OSM's Map Features
+taxonomy (with taginfo and Overpass counts) and against the planet parquet
+cache; this section records the result. This is a data-completeness
+question, not a data-quality one — it doesn't touch how existing records
+are scored or deduplicated, only which categories of real-world named
+places reach the pipeline.
+
+The whitelist itself held up. None of its 84 value-restricted entries is
+deprecated on the wiki, and its exclusions block genuine junk — 153K named
+`man_made=survey_point`, 1.06M named `railway=rail` track segments. The
+amenity exclude list is sound; the one tempting entry, `amenity=shelter`,
+is safe because named mountain shelters carry `tourism=*`, which imports.
+
+What it misses, ranked by named elements. Counts for keys already in the
+parquet are planet nodes+ways; keys the osmium filter drops (`landuse`,
+`waterway`, `power`, `boundary`, and the rest) are global taginfo counts:
+
+| candidate | named | note |
+|---|---|---|
+| `place=locality` | 1.8M | the canonical "named place, no population" gazetteer tag; with `isolated_dwelling` 653K, `farm` 244K, `islet` 128K, `city_block` 85K |
+| `natural=water` | 652K | named lakes and ponds; plus `wood` 95K, `wetland` 55K, `cliff` 37K, `strait` and `peninsula` (~97% named) |
+| `landuse=cemetery` | 269K | new key; also `industrial` 372K, `quarry` 60K, `allotments` 72K, `military` 42K, `winter_sports` (whole ski resorts) |
+| `waterway=dam`, `=waterfall` | 78K / 35K | new key |
+| `man_made=bridge` | 65K | plus `wastewater_plant` 30K, `water_works` 18K, `pumping_station` 14K, `adit`+`mineshaft` 16K |
+| `historic` additions | ~100K | `wayside_shrine` 46K, `tomb` 17K, `citywalls` 7.5K, plus `monastery`, `battlefield`, `aircraft` (52–88% named) |
+| `power=plant` | 59K | new key |
+| long tail | ~70K | `boundary=national_park`/`protected_area`/`aboriginal_lands`, `highway=services`/`rest_area`/`trailhead`, `aeroway=helipad` 15K, `emergency=ambulance_station` 14K, `railway=yard` (96% named), `telecom=data_center` |
+
+Two cost tiers. Adding values under keys already imported is a SQL-only
+change (which no freshness gate notices — a rebuild needs `--force`).
+Adding a key means re-running `osmium tags-filter` over the ~90GB planet
+PBF and regenerating the parquet, because `filtered.osm.pbf` carries only
+the current fourteen keys. Military installations need no new key:
+`military=base` is 99% co-tagged `landuse=military`, and `military=airfield`
+is 80% covered by `aeroway=aerodrome` already.
+
+Relations are excluded from this expansion at every tier: the import has no
+relation pipeline at all (next section), which leaves roughly a million
+named-candidate relations — 41K `leisure=park`, 43K `leisure=nature_reserve`,
+955K `natural=water`, plus most national parks and protected areas —
+invisible until that separate, larger change.
+
+Two decisions closed with the audit. **Transit stops stay out**: stations,
+halts and tram stops remain the transit granularity; `highway=bus_stop`,
+`public_transport=platform`/`stop_position` and `railway=platform`/`stop`
+(3.7M named elements, 87% mutual overlap) are excluded.
+
+**Named buildings come in.** In Manhattan, 2,831 of 5,301 named buildings
+(53%) carry no whitelisted key, and that unreachable set is the landmark
+skyline — Seagram Building, MetLife Building, General Motors Building;
+the Chrysler Building imports today only because someone tagged it
+`tourism=yes`. The landmark class lives in `building=yes`/`tower`/
+`commercial`/`apartments`, so a value allowlist cannot capture it without
+`yes`; the rule is subtractive instead: named buildings import except the
+small-residential/outbuilding values `house`, `detached`,
+`semidetached_house`, `terrace`, `garage`, `garages`, `shed`, `hut`,
+`barn`, `greenhouse`, `static_caravan`, `roof`. A rural-England sample
+puts what the drop-list removes at ~18% of unreachable named buildings
+(private house names — "Meadow Cottage"); the residue that stays includes
+campus blocks and generic labels ("Club House", "Pavillion"), which rank
+down by importance rather than by tag.
+
+Requirements (approved 2026-08-15): named elements of the definite-in
+categories above, plus buildings per the subtractive rule, are findable in
+`org.atgeo.places.osm`, scored by the existing importance formula
+unchanged (new categories receive IDF scores from the data as today).
+Borderline candidates (`natural=tree`/`stone`, the `leisure` long tail,
+`barrier=toll_booth`, `power=substation`) are decided at design time by
+the audit's criteria: a discrete place, commonly named, not already
+reachable through another imported tag. Exclusions are settled: transit
+stops, relations, `leisure=pitch`, the small-residential building values.
+Accept: a spot-list — a named cemetery, waterfall, dam, locality, lake,
+power plant, and the Seagram Building — resolves after a rebuild, and no
+existing category loses records.
+
+Pipeline facts a design must work with. `osmium tags-filter` has no
+conjunction, so a bare `building` selector would pull all 705M buildings
+into `filtered.osm.pbf`; buildings need a chained filter instead — planet
+→ `building` → `name` — whose output (~4M named buildings plus their way
+nodes) converts to its own parquet. The other new keys fit the existing
+filter as value-restricted selectors (`w/landuse=cemetery,...`), keeping
+its output bounded. Either way the planet re-filter runs once per
+snapshot, costing tens of minutes of osmium I/O. Build cost scales at
+worst linearly with records: containment busy-time per record is 18.7µs
+on the 74M-record Overture collection versus 24.7µs on 27.3M-record OSM
+(2026-08-15 build), and within a run the per-record cost falls with
+density — 532µs/record in ~100-record prefixes down to 8.5µs in the
+1.03M-record hottest prefix, a fixed ~0.1s per-batch overhead dominating —
+so building records land in the cheapest buckets. Estimated impact: the
+OSM containment stage (674s busy) grows by 40–90s, import gains one small
+parquet scan (~35M rows next to today's 1.8B), export is per-record, and
+the ~2h45m planet build grows by single-digit minutes. Tile payload in
+building-dense cells grows too; that is bytes, not time.
+
+Open question for the design pass: whether this ships with the OSM
+name-variants section as one tranche (they edit the same CTAS sites, and
+one re-filter, rebuild, and acceptance covers both) or sequentially.
+
+## OSM relations are never imported
 
 Status: proposed, not started. No design has been reviewed.
 
-`garganorn/sql/osm_import.sql`'s `filtered` CTE (nodes) whitelists specific
-tags to decide what counts as a "place": `amenity` (with an exclude list),
-`shop`, `tourism`, `leisure` (specific values), `office`, `craft`,
-`healthcare`, `historic` (specific values), `natural` (specific values),
-`man_made` (specific values), `aeroway`, `railway`, `public_transport`,
-`place`. This list was built by hand, not derived from OSM's canonical tag
-taxonomy.
+`scripts/extract-osm-parquet.sh` passes only node and way selectors to
+`osmium tags-filter`, so relations never reach the parquet — the
+`type=relation` partition holds zero rows — and `osm_import.sql` has no
+relation pipeline. A feature mapped only as a multipolygon or boundary
+relation is invisible no matter what the whitelist says. This bites tags
+already whitelisted — `leisure=park` has 41K relations and
+`leisure=nature_reserve` 43K, which is where the largest named parks and
+reserves live — and it caps any future `natural=water` import (955K water
+relations).
 
-The idea: go through OSM's Map Features wiki page category by category and
-check the whitelist against it, to catch categories of legitimately-named,
-findable POIs that aren't being imported for no better reason than nobody
-thought to add them. This is a data-completeness question, not a
-data-quality one — it doesn't touch how existing records are scored or
-deduplicated, only whether an entire category of real-world named places is
-being silently excluded before it ever reaches the pipeline.
+Fixing it is a pipeline change, not a filter tweak: relations carry member
+lists rather than node refs, so centroid derivation needs member
+resolution, potentially recursive, and the osmium filter and parquet must
+be regenerated with relation selectors.
+
+Open questions: whether a centroid over member-way nodes is an acceptable
+location for a large multipolygon; whether super-relations are worth
+resolving; and what fraction of relation-only places actually carry names,
+which neither the parquet (no rows) nor taginfo (no per-type name splits)
+can answer.
