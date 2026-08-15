@@ -1,18 +1,16 @@
 # Planned features
 
-Tracked separately from `performance-improvements.md` (which optimizes
-code that already works correctly). This document holds new feature ideas
-that haven't been designed or scoped yet. Add new sections here rather
-than starting another file.
+New feature ideas that haven't been designed or scoped yet. Add new
+sections here rather than starting another file.
 
 Each section below is its own proposal with its own status. Nothing in this
 document is scoped for implementation until its section says so.
 
 ## OSM name variants
 
-Status: designed, never built. The design below is salvaged from
-`name-variants-design.md`, which was written when the pipeline still had a
-search index and shell-script imports, and has been deleted.
+Status: designed, never built. The design below is salvaged from an
+earlier one written when the pipeline still had a search index and
+shell-script imports.
 
 `variants` is populated for Overture places and hardcoded to `[]` for
 everything else. `osm_import.sql` emits an empty list at both the node insert

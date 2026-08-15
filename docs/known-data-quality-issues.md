@@ -1,10 +1,12 @@
 # Known data quality issues
 
 Characteristics of the source data (Overture, OSM) that were investigated
-and deliberately left unfixed. Garganorn reports source data as-is; it
-does not adjudicate or correct disagreements between source records. This
-document exists so that stance doesn't have to be re-derived each time a
-scan of the data turns up something that looks like a bug.
+and left unfixed. Garganorn reports source data as-is; it does not
+adjudicate or correct disagreements between source records. This document
+exists so that stance doesn't have to be re-derived each time a scan of
+the data turns up something that looks like a bug. Most entries are
+settled won't-fixes; where a disposition is still open, the section says
+so.
 
 ## Overlapping same-level administrative boundaries
 
@@ -25,6 +27,23 @@ per-boundary despite the high count: Taipei/New Taiwan (490 boundaries in
 one tile — Taiwan's fine-grained 里/li subdivisions, 5–810
 vertices each), Guangxi and Shandong China, Java Indonesia, Delhi India,
 Zambia's Copperbelt.
+
+## Divisions referenced from very many tiles
+
+`stage_division_tile_references` reads a division's tile references
+straight off its covering leaves, so a division with sprawling geometry is
+referenced from every tile it overlaps and nothing bounds or reports the
+count. Measured against the 2026-08-15 build on `garganorn-1`
+(`overture_division/tiles/current/manifest.duckdb`): 1,211,209 references
+over 3,319 distinct tiles, with a single division reaching 505 of them.
+Earlier Discovery cases were Antarctica at 71 cells at z4 and a level-50
+division at 27 cells at z7 against a level-50 median of 1.
+
+The disposition here is not settled. Antarctica's spread is the source's
+correct answer and bounding it would be wrong; a level-50 division at 27
+cells is more likely a defective geometry; and no measurement so far
+separates the two. The global totals above don't either — they say nothing
+about which records make up the tail.
 
 ## Duplicate boundary records
 

@@ -1,9 +1,9 @@
-"""Red tests: polar coordinate->tile clamping (docs/polar-design.md, R1-R4).
+"""Polar coordinate->tile clamping.
 
-All tests fail until qk17(lon, lat) exists as a SQL macro (clamping latitude
-to +/-85.05101030905541 and NULLing impossible coordinates), the 7
-production ST_QuadKey call sites route through it, and quadkey_to_bbox /
-qk_env extend the outermost tile rows to +/-90.
+qk17(lon, lat) clamps latitude to +/-85.05101030905541 and NULLs impossible
+coordinates.  The 7 production call sites use it instead of calling
+ST_QuadKey directly, and quadkey_to_bbox / qk_env extend the outermost tile
+rows to +/-90.
 """
 import pathlib
 import string
@@ -51,18 +51,17 @@ def _strip_memory_limit(sql: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# R1: a valid southern-polar coordinate gets a southern tile
+# a valid southern-polar coordinate gets a southern tile
 # ---------------------------------------------------------------------------
 
 class TestSouthernPolarCoordinateGetsSouthernTile:
-    """R1: overture_place_import.sql's bbox-center qk17 must clamp to the southern outermost z17 row."""
+    """overture_place_import.sql's bbox-center qk17 must clamp to the southern outermost z17 row."""
 
     def test_amundsen_scott_gets_southern_z17_quadkey(self):
-        """docs/polar-design.md's measured south clamp value at z17.
+        """Amundsen-Scott's qk17 must be the southern outermost z17 row.
 
-        Today ST_QuadKey wraps any out-of-Mercator-range latitude to the
-        north row regardless of sign, so this observes '10000000000000000'
-        (north) instead.
+        Unclamped, ST_QuadKey wraps any out-of-Mercator-range latitude to
+        the north row regardless of sign, yielding '10000000000000000'.
         """
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = pathlib.Path(tmpdir)
@@ -108,16 +107,17 @@ class TestSouthernPolarCoordinateGetsSouthernTile:
 
 
 # ---------------------------------------------------------------------------
-# R2: qk17 column and the density join key must agree
+# qk17 column and the density join key must agree
 # ---------------------------------------------------------------------------
 
 class TestQk17AndDensityJoinKeyAgree:
-    """R2: osm_import.sql's qk17 column and its density join key must agree there is no tile for an impossible coordinate."""
+    """osm_import.sql's qk17 column and its density join key must agree there is no tile for an impossible coordinate."""
 
     def test_invalid_latitude_gets_no_density_boost(self):
-        """lat=95 is out of range; qk17 is NULL today, but the density join
-        key still resolves to the wrap-bug's tile and matches a seeded
-        density row, so importance comes back 60 instead of 0."""
+        """lat=95 is out of range, so qk17 is NULL and the density join key
+        must be NULL with it.  An unguarded join key would resolve to the
+        wrap tile, match the seeded density row there, and return
+        importance 60 instead of 0."""
         with tempfile.TemporaryDirectory() as tmpdir:
             tmpdir = pathlib.Path(tmpdir)
             con = duckdb.connect(str(tmpdir / "test.duckdb"))
@@ -140,8 +140,8 @@ class TestQk17AndDensityJoinKeyAgree:
                 "COPY test_ways TO '" + str(tmpdir / "ways.parquet") + "' (FORMAT PARQUET);"
             )
 
-            # Seeded at left(ST_QuadKey(0, 95, 17), 15) -- the wrap-bug's tile,
-            # which today's unguarded join key still computes for lat=95.
+            # Seeded at left(ST_QuadKey(0, 95, 17), 15) -- the wrap tile an
+            # unguarded join key would compute for lat=95.
             density_cte = (
                 "CREATE TEMP TABLE density_tiles AS "
                 "SELECT '100000000000000' AS tile_qk15, 10.0 AS density_score, "
@@ -179,12 +179,12 @@ class TestQk17AndDensityJoinKeyAgree:
 
 
 # ---------------------------------------------------------------------------
-# R4: impossible coordinates get no tile, everywhere -- including sites
+# impossible coordinates get no tile, everywhere -- including sites
 # with no existing BETWEEN guard
 # ---------------------------------------------------------------------------
 
 class TestDensityExtractRejectsImpossibleCoordinates:
-    """R4: density_extract.sql must NULL the tile bucket for an impossible bbox center."""
+    """density_extract.sql must NULL the tile bucket for an impossible bbox center."""
 
     def test_impossible_bbox_center_gets_null_tile_qk15(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -216,11 +216,11 @@ class TestDensityExtractRejectsImpossibleCoordinates:
 
 
 # ---------------------------------------------------------------------------
-# R3: a bbox entirely inside a polar cap returns the tiles there
+# a bbox entirely inside a polar cap returns the tiles there
 # ---------------------------------------------------------------------------
 
 class TestPolarCapBboxQuery:
-    """R3: TileManifest.get_tiles_for_bbox must return a tile whose top row extends to the pole."""
+    """TileManifest.get_tiles_for_bbox must return a tile whose top row extends to the pole."""
 
     def test_bbox_above_merc_limit_matches_outermost_row_tile(self, tmp_path):
         path = tmp_path / "manifest.duckdb"
@@ -240,7 +240,7 @@ class TestPolarCapBboxQuery:
 
 
 class TestQuadkeyToBboxOutermostRowReachesPole:
-    """R3, reverse direction: quadkey_to_bbox's outermost rows must reach +/-90, and qk_env must agree."""
+    """Reverse direction: quadkey_to_bbox's outermost rows must reach +/-90, and qk_env must agree."""
 
     def test_northern_outermost_row_ymax_is_90(self):
         _, _, _, ymax = quadkey_to_bbox("1000")
@@ -269,11 +269,11 @@ class TestQuadkeyToBboxOutermostRowReachesPole:
 
 
 # ---------------------------------------------------------------------------
-# R2 structural guard: ST_QuadKey lives only inside qk17's own definition
+# structural guard: ST_QuadKey lives only inside qk17's own definition
 # ---------------------------------------------------------------------------
 
 class TestStQuadKeyOnlyInsideQk17Macro:
-    """R2 guard: every production ST_QuadKey call lives inside qk17's own definition."""
+    """Guard: every production ST_QuadKey call lives inside qk17's own definition."""
 
     def test_no_direct_st_quadkey_call_outside_qk17_definition(self):
         offending = []

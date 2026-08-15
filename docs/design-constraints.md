@@ -122,6 +122,12 @@ so every candidate point in that cell pairs with every division leafed
 there — 130,269 of them in cell `1202`, 21% of all divisions — a cross
 product no predicate filters. `COVER_MIN_LEAF_ZOOM` is what stops that.
 
+The value 12 is a known-working default rather than a measured one: it
+holds edge-join fan-out at a level the covering has already run at
+safely. Moving it either way trades that fan-out against stored fragment
+count, and wants a real run's `per_level` stats and measured artifact
+size to justify.
+
 ### A record may be referenced by more than one tile
 
 Divisions are polygons: `stage_division_tile_references` references a

@@ -1,11 +1,4 @@
-"""Red tests: garganorn/covering.py.
-
-Until garganorn/covering.py exists and exports the required symbols, tests surface
-as either FAILED (tests that call _check_covering() directly in the test body) or
-ERROR at setup for 14 tests whose class-scoped covering_dir fixture calls
-_check_covering() — pytest reports fixture-setup failures as ERROR, not FAILED.
-Collection succeeds so the full existing test suite can still run.
-"""
+"""Tests for garganorn/covering.py."""
 import json
 import logging
 import math
@@ -666,19 +659,13 @@ class TestFreshnessAtomicity:
     def test_explicit_temp_directory_not_destroyed(self, covering_test_db, tmp_path):
         """A caller-supplied --temp-directory must not be deleted or crash on reuse.
 
-        BUG: stage_covering shutil.rmtree's the caller's temp_directory at build
-        start (leftover-cleanup loop), then os.makedirs(temp_directory) (which
-        silently recreates it as an empty directory, discarding any pre-existing
-        contents), and shutil.rmtree's it again at the end of the build. This
-        destroys any pre-existing, caller-owned directory pointed to by
-        --temp-directory -- including its unrelated contents -- rather than
-        treating it as pipeline-owned scratch space (which is only true of the
-        default `covering_dir + ".spill"` path).
+        stage_covering owns only its own spill dir (`covering_dir + ".spill"`,
+        or `covering.spill` inside a caller-supplied temp_directory); the
+        caller's directory itself is not pipeline-owned scratch space.
+        rmtree-ing it would discard unrelated contents.
 
-        This test creates a pre-existing temp_directory containing a sentinel
-        file, calls stage_covering with that directory as temp_directory, and
-        asserts: (1) no exception is raised, and (2) the sentinel file still
-        exists afterward. It MUST FAIL at Red (currently deletes the sentinel).
+        Creates a temp_directory holding a sentinel file, calls stage_covering
+        with it, and asserts no exception is raised and the sentinel survives.
         """
         _check_covering()
         out_dir = str(tmp_path / "explicit_temp_out")
@@ -739,12 +726,7 @@ def _ellipse_wkt(cx, cy, rx, ry, n):
 
 class TestFragmentContainmentInvariants:
     """Structural invariants: mass balance, no orphaned boundary, generalized
-    antichain, leaf depth, capacity.
-
-    All fail RED because stage_covering does not yet accept
-    cover_min_leaf_zoom/cover_vertex_capacity (TypeError at the fixture's
-    first stage_covering call, before any assertion runs).
-    """
+    antichain, leaf depth, capacity."""
 
     @pytest.fixture(scope="class")
     def fc_covering_dir(self, covering_test_db, tmp_path_factory):
@@ -905,9 +887,8 @@ class TestFragmentContainmentInvariants:
 # ---------------------------------------------------------------------------
 
 class TestFragmentContainmentSynthetics:
-    """Synthetic fixtures built at reduced zoom so a fragment split is
-    reachable in test time.  All fail RED with TypeError (stage_covering does
-    not yet accept cover_min_leaf_zoom/cover_vertex_capacity)."""
+    """Fragment splitting: mostly synthetic fixtures built at reduced zoom so
+    a split is reachable in test time, plus two static guards."""
 
     def test_seam_point_matched_exactly_once_by_covers_not_contains(self, tmp_path):
         """A point on the internal seam introduced by splitting (not on the
@@ -1297,17 +1278,19 @@ class TestFragmentContainmentSynthetics:
 
 
 # ---------------------------------------------------------------------------
-# R1: geom is never NULL, even for an interior-only partition
+# geom is never NULL, even for an interior-only partition
 # ---------------------------------------------------------------------------
 
 class TestInteriorOnlyPartitionGeometry:
     """A z4 partition holding only interior rows still binds geom as
-    GEOMETRY (docs/tranche2-design.md, R1)."""
+    GEOMETRY."""
 
     def test_interior_only_partition_reads_back_as_geometry(self, tmp_path):
         """DESCRIBE reports GEOMETRY for a partition whose sole row is a
-        whole-tile interior row -- today it's all-NULL, so no GeoParquet
-        `geo` metadata key is written and the column reads back as BLOB."""
+        whole-tile interior row.  An all-NULL geom column would write no
+        GeoParquet `geo` metadata key and read back as BLOB -- see
+        gotchas.md, "A column of entirely NULL geometry reads back as
+        BLOB"."""
         _check_covering()
         qk4 = "0231"
         xmin, ymin, xmax, ymax = quadkey_to_bbox(qk4)

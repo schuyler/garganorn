@@ -14,8 +14,7 @@
 | [design-constraints.md](design-constraints.md) | Pipeline invariants and architectural rules garganorn's own code must satisfy |
 | [gotchas.md](gotchas.md) | Behaviors of third-party tools (DuckDB, GeoParquet, Overture, QuackOSM) that cost real time to learn and aren't discoverable from their documentation |
 | [explored-and-discarded.md](explored-and-discarded.md) | Approaches investigated and not adopted |
-| [performance-improvements.md](performance-improvements.md) | Two open performance questions on already-correct code — division tile-reference fan-out from garbage geometry, and whether `COVER_MIN_LEAF_ZOOM` is set right — plus a settled note on which pipeline disk writes earn their keep |
-| [known-data-quality-issues.md](known-data-quality-issues.md) | Source-data characteristics investigated and deliberately left unfixed |
+| [known-data-quality-issues.md](known-data-quality-issues.md) | Source-data characteristics investigated and left unfixed, settled won't-fixes and open dispositions alike |
 
 ## atgeo Protocol
 

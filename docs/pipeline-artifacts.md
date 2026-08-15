@@ -286,6 +286,17 @@ symlink. Retention keeps only the two newest *complete* (manifest.json-
 bearing) run dirs, so an interrupted run never displaces good history from
 the keep-2 count.
 
+**Why the staging write stays**: it runs an estimated 25–40 GiB on a
+global build, and the bar for a pipeline disk write is that spill stays
+bounded — a few dozen GB is fine, hundreds is not. Writing nothing at all
+is reachable for `overture_place` and `osm` by filtering both sides of
+the export join on a quadkey prefix range, since for those sources
+`tile_qk` is always a prefix of the place's own `qk17` and both sides
+prune by zone map. It does not generalise to divisions, whose tile
+references come from the covering artifact rather than their own `qk17`,
+so a places-side filter would drop them silently. A second export
+mechanism is not worth buying back a few dozen GB.
+
 ## How the stages compose
 
 Each stage above is independently freshness-gated, so the `density`, `idf` and
