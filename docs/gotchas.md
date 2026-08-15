@@ -130,6 +130,22 @@ then run the SQL that uses them.
 macros are created is too late, and the error names the function rather than the
 ordering.
 
+### `ST_QuadKey` wraps past the Mercator limit instead of clamping
+
+The bug is southern-only. At -85.05112877980659 the Mercator fraction reaches
+1.0, so the tile row works out to `2**zoom` — one past the last — and DuckDB
+masks it back to row 0: `ST_QuadKey(0, -85.05112877980659, 17)` returns a
+*northern* quadkey, as does any latitude below it. The northern limit lands in
+row 0 too, but there row 0 is the right answer, so nothing looks wrong.
+Coordinates are never rejected, so the failure is silent either way.
+
+**Applies to**: every `ST_QuadKey` call; garganorn routes them all through the
+`qk17` macro in `qk_env_macro.sql`
+
+**Why it matters**: clamping latitude to the Mercator limit does not avoid this —
+the limit is itself the value that wraps. See the Coordinate System entry in
+`design-constraints.md` for the latitude garganorn clamps to instead.
+
 ### No native `json_strip_nulls()`
 
 The custom `strip_json_nulls()` helper exists only because DuckDB has no native

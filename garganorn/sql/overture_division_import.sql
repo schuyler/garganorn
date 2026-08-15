@@ -80,7 +80,7 @@ division_base AS (
         -- tests -- so a division's tile and its containment answer agree.
         -- A bbox midpoint can fall outside a crescent or multipart division
         -- entirely, which puts the record in a tile it isn't in.
-        ST_QuadKey(ST_X(ma.interior_point), ST_Y(ma.interior_point), 17) AS qk17,
+        qk17(ST_X(ma.interior_point), ST_Y(ma.interior_point)) AS qk17,
         -- min/max extents stored flat for fast bbox-filter in containment queries
         ST_YMin(ma.geometry) AS min_latitude,
         ST_YMax(ma.geometry) AS max_latitude,

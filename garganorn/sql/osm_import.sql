@@ -142,10 +142,7 @@ SELECT
         60 * least(coalesce(nd.density_score, 0) / ${density_norm}, 1.0)
       + 40 * least(coalesce(ni.idf_score, 0) / ${idf_norm}, 1.0)
     )::INTEGER AS importance,
-    -- Validate coordinate range before calling ST_QuadKey
-    CASE WHEN f.longitude BETWEEN -180 AND 180 AND f.latitude BETWEEN -90 AND 90
-         THEN ST_QuadKey(f.longitude, f.latitude, 17)
-         ELSE NULL END AS qk17,
+    qk17(f.longitude, f.latitude) AS qk17,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM filtered f
 LEFT JOIN (
@@ -154,7 +151,7 @@ LEFT JOIN (
     SELECT tile_qk15, any_value(density_score) AS density_score
     FROM density_tiles
     GROUP BY tile_qk15
-) nd ON nd.tile_qk15 = left(ST_QuadKey(f.longitude, f.latitude, 17), 15)
+) nd ON nd.tile_qk15 = left(qk17(f.longitude, f.latitude), 15)
 LEFT JOIN (
     -- Pre-dedupe idf_scores on the join key for the same reason.
     SELECT category, any_value(idf_score) AS idf_score
@@ -304,10 +301,7 @@ SELECT
         60 * least(coalesce(wd.density_score, 0) / ${density_norm}, 1.0)
       + 40 * least(coalesce(wi.idf_score, 0) / ${idf_norm}, 1.0)
     )::INTEGER AS importance,
-    -- Validate coordinate range before calling ST_QuadKey
-    CASE WHEN wb.longitude BETWEEN -180 AND 180 AND wb.latitude BETWEEN -90 AND 90
-         THEN ST_QuadKey(wb.longitude, wb.latitude, 17)
-         ELSE NULL END AS qk17,
+    qk17(wb.longitude, wb.latitude) AS qk17,
     []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
 FROM way_base wb
 LEFT JOIN (
@@ -316,7 +310,7 @@ LEFT JOIN (
     SELECT tile_qk15, any_value(density_score) AS density_score
     FROM density_tiles
     GROUP BY tile_qk15
-) wd ON wd.tile_qk15 = left(ST_QuadKey(wb.longitude, wb.latitude, 17), 15)
+) wd ON wd.tile_qk15 = left(qk17(wb.longitude, wb.latitude), 15)
 LEFT JOIN (
     -- Pre-dedupe idf_scores on the join key for the same reason.
     SELECT category, any_value(idf_score) AS idf_score

@@ -142,12 +142,12 @@ DID are, and why there is no `/search` endpoint to call.
 
 **AT Protocol developers arriving at geospatial** need the opposite. Why a
 bounding box and not a radius; what a quadkey is and why tiles come at mixed
-zooms; why longitude comes before latitude; that Web Mercator clamps latitude
-at ±85.05 and the poles simply aren't there; that the antimeridian is a real
-place where naive coordinate comparisons break; what `importance` means and
-why it isn't comparable across collections; and the difference between "near
-me" and "inside this thing," which is distance versus containment and wants
-different data.
+zooms; why longitude comes before latitude; that Web Mercator's projection
+breaks down at the poles, and why garganorn's quadkeys reach them anyway;
+that the antimeridian is a real place where naive coordinate comparisons
+break; what `importance` means and why it isn't comparable across
+collections; and the difference between "near me" and "inside this thing,"
+which is distance versus containment and wants different data.
 
 Open questions: whether these are documents in this repo, posts on
 atgeo.org, or the READMEs of the SDK and a demo app; how much can be carried

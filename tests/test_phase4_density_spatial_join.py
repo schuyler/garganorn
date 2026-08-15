@@ -166,6 +166,14 @@ class TestDivisionDensityJoin:
         for k, v in substitutions.items():
             division_import_sql = division_import_sql.replace(f"${{{k}}}", str(v))
 
+        # overture_division_import.sql calls qk17(); load it onto this
+        # standalone connection, mirroring stages._load_qk_env_macros.
+        qk_env_sql = (Path(__file__).parent.parent / "garganorn" / "sql" / "qk_env_macro.sql").read_text()
+        for stmt in qk_env_sql.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                con.execute(stmt)
+
         con.execute(division_import_sql)
 
         importance = con.execute(

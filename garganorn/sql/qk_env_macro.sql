@@ -24,15 +24,27 @@ CREATE OR REPLACE MACRO qk_tile_y(qk) AS
 CREATE OR REPLACE MACRO qk_env(qk) AS
     ST_MakeEnvelope(
         qk_tile_x(qk) / (2.0 ** length(qk)) * 360.0 - 180.0,
-        degrees(atan(
-            (exp(pi() * (1.0 - 2.0 * (qk_tile_y(qk) + 1.0) / (2.0 ** length(qk))))
-           - exp(-pi() * (1.0 - 2.0 * (qk_tile_y(qk) + 1.0) / (2.0 ** length(qk)))))
-            / 2.0
-        )),
+        CASE WHEN qk_tile_y(qk) = 2.0 ** length(qk) - 1.0 THEN -90.0
+             ELSE degrees(atan(
+                (exp(pi() * (1.0 - 2.0 * (qk_tile_y(qk) + 1.0) / (2.0 ** length(qk))))
+               - exp(-pi() * (1.0 - 2.0 * (qk_tile_y(qk) + 1.0) / (2.0 ** length(qk)))))
+                / 2.0
+            )) END,
         (qk_tile_x(qk) + 1.0) / (2.0 ** length(qk)) * 360.0 - 180.0,
-        degrees(atan(
-            (exp(pi() * (1.0 - 2.0 * qk_tile_y(qk) / (2.0 ** length(qk))))
-           - exp(-pi() * (1.0 - 2.0 * qk_tile_y(qk) / (2.0 ** length(qk)))))
-            / 2.0
-        ))
-    )
+        CASE WHEN qk_tile_y(qk) = 0.0 THEN 90.0
+             ELSE degrees(atan(
+                (exp(pi() * (1.0 - 2.0 * qk_tile_y(qk) / (2.0 ** length(qk))))
+               - exp(-pi() * (1.0 - 2.0 * qk_tile_y(qk) / (2.0 ** length(qk)))))
+                / 2.0
+            )) END
+    );
+
+-- 85.05101030905541 is the measured, twice-verified centre latitude of the
+-- outermost z17 row. Do not substitute the Mercator limit 85.05112877980659:
+-- at -85.05112877980659 the fraction hits 1.0 and ST_QuadKey wraps to the
+-- northern row. See the ST_QuadKey entry in docs/gotchas.md.
+CREATE OR REPLACE MACRO qk17(lon, lat) AS
+    CASE WHEN lon BETWEEN -180 AND 180 AND lat BETWEEN -90 AND 90
+         THEN ST_QuadKey(lon, GREATEST(-85.05101030905541,
+                                LEAST(85.05101030905541, lat)), 17)
+         ELSE NULL END;

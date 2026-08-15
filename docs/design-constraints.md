@@ -199,3 +199,8 @@ derivation is unnecessary.
 - Quadkey zoom levels: z17 for places, z15 for density, z6-z17 for tiles
 - Coordinate precision in export: `DECIMAL(10,6)` → 6 decimal places (~0.1m)
 - Bbox privacy grid: 0.01° (~1km) enforced by `_check_bbox_precision()`
+- Latitude for a quadkey is clamped to ±85.05101030905541, the centre of the
+  outermost z17 row — not the Mercator limit, which wraps (see the
+  `ST_QuadKey` entry in `gotchas.md`). Safe at any zoom ≤ 17: a point inside
+  the outermost z17 row is inside the outermost row at every coarser zoom
+- Outermost tile rows reach ±90, so a bbox inside a polar cap matches a tile

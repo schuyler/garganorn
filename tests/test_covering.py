@@ -192,7 +192,7 @@ class TestQkEnvMacro:
         assert xmin == pytest.approx(-180.0, abs=0.01)
         assert xmax == pytest.approx(0.0, abs=0.01)
         assert ymin == pytest.approx(0.0, abs=0.01)
-        assert ymax == pytest.approx(85.05112877980659, abs=0.01)
+        assert ymax == pytest.approx(90.0, abs=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -777,11 +777,12 @@ class TestFreshnessAtomicity:
 # (docs/fragment-containment-design.md)
 # ---------------------------------------------------------------------------
 
-# Bing's Mercator-projectable latitude bound (docs/fragment-containment-design.md,
-# "Decided"). Pinned as a literal rather than imported from garganorn.covering:
-# an assertion that reads its expected value back out of the code under test
+# The tile pyramid's covered latitude bound: qk_env's outermost rows reach
+# the true pole (garganorn/sql/qk_env_macro.sql), so no boundary is clipped.
+# Pinned as a literal rather than imported from garganorn.covering: an
+# assertion that reads its expected value back out of the code under test
 # cannot catch that code changing the value.
-_MERC_LAT_MAX = 85.05112877980659
+_MERC_LAT_MAX = 90.0
 
 
 def _ellipse_wkt(cx, cy, rx, ry, n):
@@ -1128,20 +1129,19 @@ class TestFragmentContainmentSynthetics:
         assert _matches(-175.0, 0.0) >= 1, "West lobe point (lon=-175) should match"
         assert _matches(0.0, 0.0) == 0, "Gap point (lon=0) should not match"
 
-    def test_polar_boundary_clipped_at_merc_extent(self, tmp_path):
-        """A boundary extending past +/-_MERC_LAT_MAX still produces >=1
-        covering row for its in-extent part, and that part's covered area
-        mass-balances against the boundary clipped to the Mercator extent,
-        not its full area.
+    def test_polar_boundary_covers_full_extent(self, tmp_path):
+        """A boundary reaching to 89N produces >=1 covering row, and the
+        covered area mass-balances against the boundary's full area --
+        qk_env's outermost rows now reach the true pole, so nothing is
+        clipped.
 
         _COVERING_TEST_BOUNDARIES (used by test_mass_balance_per_boundary
-        and test_no_orphaned_boundary) sits entirely within 20-55N, so the
-        +/-_MERC_LAT_MAX clip in those tests' expected-area computation is
-        a no-op -- neither test can catch a broken clip. This builds a
-        dedicated polar fixture via _create_boundaries_db instead of
-        extending _COVERING_TEST_BOUNDARIES, which is a module-scoped
-        fixture shared by every existing covering test; adding a row to it
-        would perturb their row counts and per-level stats.
+        and test_no_orphaned_boundary) sits entirely within 20-55N, so it
+        can't exercise the polar rows. This builds a dedicated polar
+        fixture via _create_boundaries_db instead of extending
+        _COVERING_TEST_BOUNDARIES, which is a module-scoped fixture shared
+        by every existing covering test; adding a row to it would perturb
+        their row counts and per-level stats.
         """
         _check_covering()
         polar_wkt = "POLYGON((-10 70, -10 89, 10 89, 10 70, -10 70))"
@@ -1167,37 +1167,26 @@ class TestFragmentContainmentSynthetics:
             "SELECT COUNT(*) FROM read_parquet(?) WHERE boundary_id = 'polar_boundary'",
             [parquets],
         ).fetchone()[0]
-        assert row_count > 0, (
-            "Polar boundary's in-extent part (lat 70 to _MERC_LAT_MAX) "
-            "produced no covering row"
-        )
+        assert row_count > 0, "Polar boundary produced no covering row"
 
-        covered_area, expected_area, full_area = con.execute(
+        covered_area, full_area = con.execute(
             """
             WITH per_boundary AS (
                 SELECT SUM(ST_Area(geom)) AS covered_area
                 FROM read_parquet(?)
                 WHERE boundary_id = 'polar_boundary'
             )
-            SELECT pb.covered_area,
-                   ST_Area(ST_Intersection(b.geometry, ST_MakeEnvelope(-180, ?, 180, ?))),
-                   ST_Area(b.geometry)
+            SELECT pb.covered_area, ST_Area(b.geometry)
             FROM per_boundary pb, bnd.places b
             WHERE b.id = 'polar_boundary'
             """,
-            [parquets, -_MERC_LAT_MAX, _MERC_LAT_MAX],
+            [parquets],
         ).fetchone()
 
-        assert expected_area < full_area, (
-            "fixture assumption violated: polar_boundary must extend past "
-            "_MERC_LAT_MAX, else this test cannot distinguish a clipped "
-            "mass balance from an unclipped one"
-        )
-        rel_err = abs(covered_area - expected_area) / expected_area
+        rel_err = abs(covered_area - full_area) / full_area
         assert rel_err <= 1e-6, (
             f"polar_boundary: covered area off by relative {rel_err:.2e} "
-            f"from the Mercator-clipped area (covered={covered_area}, "
-            f"clipped_expected={expected_area}, full={full_area})"
+            f"from its full area (covered={covered_area}, full={full_area})"
         )
 
     def test_containment_arms_have_no_boundary_table_join(self):

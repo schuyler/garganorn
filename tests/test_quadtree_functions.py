@@ -16,7 +16,7 @@ from garganorn.quadtree import (
     quadkey_to_bbox,
 )
 
-MERC_YMAX = 85.05112877980659
+POLE_YMAX = 90.0
 _BASE_URL = "https://tiles.example.com"
 
 # Four zoom-6 quadkeys in distinct geographic areas.
@@ -54,8 +54,8 @@ class TestQuadkeyToBbox:
         xmin, ymin, xmax, ymax = quadkey_to_bbox("")
         assert xmin == pytest.approx(-180.0, abs=0.01)
         assert xmax == pytest.approx(180.0, abs=0.01)
-        assert ymin == pytest.approx(-MERC_YMAX, abs=0.01)
-        assert ymax == pytest.approx(MERC_YMAX, abs=0.01)
+        assert ymin == pytest.approx(-POLE_YMAX, abs=0.01)
+        assert ymax == pytest.approx(POLE_YMAX, abs=0.01)
 
     def test_quadkey_0_is_nw_quadrant(self):
         """'0' = northwest quadrant: west hemisphere, upper half."""
@@ -63,14 +63,14 @@ class TestQuadkeyToBbox:
         assert xmin == pytest.approx(-180.0, abs=0.01)
         assert xmax == pytest.approx(0.0, abs=0.01)
         assert ymin == pytest.approx(0.0, abs=0.01)
-        assert ymax == pytest.approx(MERC_YMAX, abs=0.01)
+        assert ymax == pytest.approx(POLE_YMAX, abs=0.01)
 
     def test_quadkey_3_is_se_quadrant(self):
         """'3' = southeast quadrant: east hemisphere, lower half."""
         xmin, ymin, xmax, ymax = quadkey_to_bbox("3")
         assert xmin == pytest.approx(0.0, abs=0.01)
         assert xmax == pytest.approx(180.0, abs=0.01)
-        assert ymin == pytest.approx(-MERC_YMAX, abs=0.01)
+        assert ymin == pytest.approx(-POLE_YMAX, abs=0.01)
         assert ymax == pytest.approx(0.0, abs=0.01)
 
     def test_zoom17_key_is_tiny_region(self):

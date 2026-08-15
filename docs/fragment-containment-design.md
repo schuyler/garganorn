@@ -358,14 +358,10 @@ reintroduced with the fragment test.
 1. *Mass balance, per boundary.* Leaves are pairwise disjoint (antichain
    ⇒ no ancestor relation ⇒ disjoint tiles), so their areas sum; no union
    is needed. For each boundary, `SUM(ST_Area(geom))` over its covering
-   rows equals `ST_Area(ST_Intersection(b.geometry, merc_extent))` within
-   a relative tolerance of 1e-6, where `merc_extent` is the
-   ±85.05112878 envelope. Clipping to the Mercator extent on the
-   right-hand side is what makes the identity exact for polar boundaries
-   rather than requiring them to be excluded. Catches dropped and
-   duplicated fragments.
-2. *No orphaned boundary.* Every boundary whose geometry intersects
-   `merc_extent` has at least one covering row.
+   rows equals `ST_Area(b.geometry)` within a relative tolerance of
+   1e-6 — the root tiles' envelopes reach the poles, so no boundary is
+   clipped or excluded. Catches dropped and duplicated fragments.
+2. *No orphaned boundary.* Every boundary has at least one covering row.
 3. *Antichain.* No boundary's covering row is a quadkey-prefix descendant
    of another of its rows. This is the invariant standing in for the
    absent `DISTINCT`, together with the existing
@@ -476,20 +472,6 @@ to the two are sequenced rather than run as parallel streams.
    roughly `boundaries.duckdb`'s geometry column plus clip overhead,
    best measured directly against a real build's output size.
 
-## Decided
-
-**Points beyond ±85.05° are clipped, and that is accepted.** Fragments
-are clipped at the Mercator extent, so a point outside it inside a polar
-boundary loses its `within` relations, where a whole-polygon `ST_Contains`
-test would still match it. This follows from deriving containment from
-quadtree tiles at all: the Bing tile system defines the map only within
-±85.05112878°, because that bound is what makes the Mercator world square
-and therefore quadkey-subdividable.
-
-The affected population is 200 records across both sources — OSM has 1
-above 85.05°N and 199 below 85.05°S (Amundsen–Scott, IceCube, the Jack
-F. Paulus Skiway, and named Antarctic peaks); Overture has none.
-
 ## Open items
 
 - `cover_min_leaf_zoom = 12` is inherited from the pre-split
@@ -498,15 +480,3 @@ F. Paulus Skiway, and named Antarctic peaks); Overture has none.
   measured artifact size are what would justify moving it. A floor of 12
   holds edge-join fan-out at what the pre-split covering already
   produced, which is known to work.
-
-## Out of scope, but real
-
-Those 199 southern records are not merely excluded today — they are
-misplaced. The import SQL guards `ST_QuadKey` with `latitude BETWEEN -90
-AND 90`, which validates geographic range rather than the range
-`ST_QuadKey` is defined over, and DuckDB's `ST_QuadKey` *wraps* rather
-than clamping. So they currently receive northern-hemisphere quadkeys
-and pollute unrelated Arctic tiles. `covering.py`'s own `lonlat_to_tile`
-clamps correctly, per Bing; the two implementations of the same
-projection disagree. Neither caused nor fixed by this unit; it has its
-own tranche.

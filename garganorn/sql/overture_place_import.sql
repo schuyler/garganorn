@@ -24,13 +24,8 @@ WITH ov_base AS (
     -- costs nothing at small scale but inflates sort/join spill enormously
     -- at full Overture places scale, for zero downstream benefit.
     SELECT * EXCLUDE (geometry),
-           -- Validate coordinate range before calling ST_QuadKey
-           CASE WHEN (LEAST(bbox.xmin, bbox.xmax) + GREATEST(bbox.xmin, bbox.xmax)) / 2.0 BETWEEN -180 AND 180
-                  AND (LEAST(bbox.ymin, bbox.ymax) + GREATEST(bbox.ymin, bbox.ymax)) / 2.0 BETWEEN -90 AND 90
-                THEN ST_QuadKey(
-                    (LEAST(bbox.xmin, bbox.xmax) + GREATEST(bbox.xmin, bbox.xmax)) / 2.0,
-                    (LEAST(bbox.ymin, bbox.ymax) + GREATEST(bbox.ymin, bbox.ymax)) / 2.0, 17)
-                ELSE NULL END AS qk17
+           qk17((LEAST(bbox.xmin, bbox.xmax) + GREATEST(bbox.xmin, bbox.xmax)) / 2.0,
+                (LEAST(bbox.ymin, bbox.ymax) + GREATEST(bbox.ymin, bbox.ymax)) / 2.0) AS qk17
     FROM '${parquet_glob}'
     WHERE bbox.xmax >= ${xmin} AND bbox.xmin <= ${xmax}
       AND bbox.ymax >= ${ymin} AND bbox.ymin <= ${ymax}

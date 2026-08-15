@@ -35,6 +35,18 @@ def _strip_memory_limit(sql: str) -> str:
     return "\n".join(lines)
 
 
+def _load_qk_env_macro(conn):
+    """Load qk_tile_x/qk_tile_y/qk_env/qk17 onto an open connection.
+
+    Mirrors stages._load_qk_env_macros; the import SQL under test calls
+    qk17() and needs it defined on the connection before executing.
+    """
+    for stmt in (REPO_ROOT / "garganorn" / "sql" / "qk_env_macro.sql").read_text().split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            conn.execute(stmt)
+
+
 SF_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
 OV_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
 OSM_SF_BBOX = dict(xmin=-122.55, xmax=-122.30, ymin=37.60, ymax=37.85)
@@ -131,6 +143,7 @@ def run_overture_import(conn, parquet_glob, bbox=None, density_rows=None, idf_ro
     }
     raw_sql = _load_sql("overture_place_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+    _load_qk_env_macro(conn)
     conn.execute(sql)
 
 
@@ -167,6 +180,7 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None,
     }
     raw_sql = _load_sql("osm_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+    _load_qk_env_macro(conn)
     conn.execute(sql)
 
 

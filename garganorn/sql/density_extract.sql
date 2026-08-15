@@ -8,8 +8,8 @@ INSTALL spatial; LOAD spatial;
 DROP TABLE IF EXISTS density_tiles;
 CREATE TABLE density_tiles AS
 WITH density AS (
-    SELECT left(ST_QuadKey((bbox.xmin + bbox.xmax) / 2.0,
-                           (bbox.ymin + bbox.ymax) / 2.0, 17), 15) AS tile_qk15,
+    SELECT left(qk17((bbox.xmin + bbox.xmax) / 2.0,
+                     (bbox.ymin + bbox.ymax) / 2.0), 15) AS tile_qk15,
            ln(1 + count(*)) AS density_score
     FROM '${parquet_glob}'
     GROUP BY tile_qk15

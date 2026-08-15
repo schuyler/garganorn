@@ -43,6 +43,18 @@ def _strip_memory_limit(sql: str) -> str:
     return "\n".join(lines)
 
 
+def _load_qk_env_macro(con):
+    """Load qk_tile_x/qk_tile_y/qk_env/qk17 into an open connection.
+
+    Mirrors stages._load_qk_env_macros; the import SQL under test calls
+    qk17() and needs it defined on the connection before executing.
+    """
+    for stmt in (REPO_ROOT / "garganorn" / "sql" / "qk_env_macro.sql").read_text().split(";"):
+        stmt = stmt.strip()
+        if stmt:
+            con.execute(stmt)
+
+
 # ---------------------------------------------------------------------------
 # Coordinate range validation before ST_QuadKey()
 # ---------------------------------------------------------------------------
@@ -85,6 +97,7 @@ class TestCoordinateRangeValidation:
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+            _load_qk_env_macro(con)
 
             # This should not raise an error, but qk17 should be NULL
             con.execute(sql)
@@ -132,6 +145,7 @@ class TestCoordinateRangeValidation:
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+            _load_qk_env_macro(con)
 
             # This should not raise an error, but qk17 should be NULL
             con.execute(sql)
@@ -150,13 +164,7 @@ class TestCoordinateRangeValidation:
             db_path = pathlib.Path(tmpdir) / "test.duckdb"
             con = duckdb.connect(str(db_path))
             con.execute("INSTALL spatial; LOAD spatial;")
-            # density_extract.sql computes tile bounds via the qk_env() scalar
-            # macro (garganorn/sql/qk_env_macro.sql); load it into this
-            # standalone connection, mirroring stages._load_qk_env_macros.
-            for stmt in (REPO_ROOT / "garganorn" / "sql" / "qk_env_macro.sql").read_text().split(";"):
-                stmt = stmt.strip()
-                if stmt:
-                    con.execute(stmt)
+            _load_qk_env_macro(con)
 
             # Create a test parquet with some out-of-range coordinates
             con.execute("""
@@ -244,6 +252,7 @@ class TestBboxOverlapFilter:
             }
             raw_sql = _load_sql("overture_division_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+            _load_qk_env_macro(con)
 
             con.execute(sql)
 
@@ -288,6 +297,7 @@ class TestBboxOverlapFilter:
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+            _load_qk_env_macro(con)
 
             con.execute(sql)
 
@@ -340,6 +350,7 @@ class TestOsmWayEmptyNodeGuard:
             }
             raw_sql = _load_sql("osm_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+            _load_qk_env_macro(con)
 
             con.execute(sql)
 
@@ -392,6 +403,7 @@ class TestBboxNormalization:
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
+            _load_qk_env_macro(con)
 
             con.execute(sql)
 

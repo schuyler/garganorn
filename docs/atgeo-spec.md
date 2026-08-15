@@ -49,8 +49,8 @@ as a gzipped JSON file.
 
 **Quadkey scheme.** Web-Mercator (Bing) quadkeys over WGS84 longitude and
 latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing
-southward. Latitude is clamped to ±85.05112878. Zoom is the length of the
-quadkey string.
+southward. The outermost row at every zoom reaches the pole (±90°), so
+every latitude is covered. Zoom is the length of the quadkey string.
 
 **Tile URLs are opaque.** A client never constructs one; it receives whole
 URLs from `getCoverage` and fetches them. A tile URL is permanently

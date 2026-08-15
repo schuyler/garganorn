@@ -690,11 +690,11 @@ def quadkey_to_bbox(quadkey: str) -> tuple[float, float, float, float]:
             x |= mask
         if digit & 2:
             y |= mask
-    n = 2 ** level if level > 0 else 1
+    n = 2 ** level
     lon_min = x / n * 360 - 180
     lon_max = (x + 1) / n * 360 - 180
-    lat_max = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n)))) if n > 0 else 85.05112877980659
-    lat_min = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n)))) if n > 0 else -85.05112877980659
+    lat_max = 90.0 if y == 0 else math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * y / n))))
+    lat_min = -90.0 if y == n - 1 else math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 1) / n))))
     return (lon_min, lat_min, lon_max, lat_max)
 
 
@@ -877,6 +877,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET preserve_insertion_order = false")
         con.execute("SET enable_progress_bar = false")
+        con.execute("INSTALL spatial; LOAD spatial")
+        _load_qk_env_macros(con)
 
         # Step 1: Create division_all TEMP TABLE (geometry included for boundaries export)
         log.info("[overture_division] import: starting")
@@ -1104,6 +1106,8 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute("SET enable_progress_bar = false")
+        con.execute("INSTALL spatial; LOAD spatial")
+        _load_qk_env_macros(con)
 
         # Load the lookup tables as a standalone step, ahead of the import
         # SQL, so their join key uniqueness can be asserted before any join
