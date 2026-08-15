@@ -452,7 +452,7 @@ def overture_parquet(tmp_path_factory):
     # ------------------------------------------------------------------
     # Rows below characterize the `variants` column derivation in
     # overture_place_import.sql (names.common + names.rules -> variants).
-    # Added for the ov_base/variants CTE-spill fix; do not alter rows above.
+    # Do not alter rows above; other assertions depend on them.
     # ------------------------------------------------------------------
 
     # ov010 — names.rules populated, names.common IS NULL (SQL NULL, not empty map).

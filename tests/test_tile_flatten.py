@@ -1,12 +1,5 @@
-"""Failing tests for flattened tile record structure (RED phase).
-
-These tests assert the new flattened structure where:
-1. SQL export views emit flat records (no `uri`/`value` wrapper) — rkey becomes top-level
-2. Tile envelope gets a `collection` field
-3. `tile_reader.get_record()` uses rkey matching instead of URI suffix matching
-
-All tests MUST fail against the current codebase because the current SQL
-still produces uri/value wrappers and tile_reader still uses URI matching.
+"""Tests that SQL export views emit flat place records: no `uri`/`value`
+wrapper, `rkey` and `$type` at the top level.
 """
 
 import json
@@ -270,12 +263,10 @@ def _make_export_db(conn, source, places_rows=None):
 def _assert_flat_record(parsed):
     """Assert a record has flat structure (no uri/value wrapper)."""
     assert "uri" not in parsed, (
-        f"Record should NOT have 'uri' key at top level. "
-        f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
+        f"Record should NOT have 'uri' key at top level. Got keys: {list(parsed)}"
     )
     assert "value" not in parsed, (
-        f"Record should NOT have 'value' key at top level. "
-        f"Current structure has uri/value wrapper. Got keys: {list(parsed)}"
+        f"Record should NOT have 'value' key at top level. Got keys: {list(parsed)}"
     )
     assert "$type" in parsed, (
         f"Flat record must have '$type' at top level. Got keys: {list(parsed)}"
@@ -291,9 +282,6 @@ def _assert_flat_record(parsed):
 @pytest.mark.parametrize("source", ["osm", "overture_place", "overture_division"])
 def test_export_no_uri_value_wrapper(tmp_path, source):
     """Export SQL must produce flat records without uri/value wrapper.
-
-    This test FAILS against current code because the export SQL files
-    still produce the nested uri/value structure.
 
     Parametrized to test all three sources: osm, overture_place, overture_division.
     """

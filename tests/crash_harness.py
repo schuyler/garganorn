@@ -6,10 +6,11 @@ It reads GARGANORN_CRASH_POINT from the environment and either:
   (b) Monkeypatches os.replace so the kill fires at a deterministic call-site
       (used for crash points that require production code to be partially executed).
 
-Strategy (a) is used for import:mid-copy because Phase 1 production code does not
-call os.replace with "places.parquet" as the destination.  Planting the stale .tmp
-directly and killing guarantees returncode -9 so the test can proceed to the
-RECOVERY assertion (which fails RED because Phase 2 recovery is not implemented).
+Strategy (a) is used for import:mid-copy because the crash moment falls inside
+DuckDB's COPY execution, which has no Python-level os.replace/os.rename call
+to hook. Planting the stale .tmp directly and killing guarantees returncode
+-9 so the test can proceed to the recovery assertion, which reruns the
+pipeline in-process and checks the resulting tiles against a control run.
 
 GARGANORN_CRASH_POINT values (format: <stage>:<moment>):
   import:mid-copy       — plant stale places.parquet.tmp then SIGKILL
@@ -42,9 +43,9 @@ def _make_crash_hook(crash_point, original_fn):
     """Return a monkeypatched version of original_fn that kills the process
     when the crash_point matches the target path in the arguments.
 
-    Keys on args[1] (the DESTINATION) not args[0] (the source temp path).
-    C1/C2 fix: the old code keyed on args[0] which never matched the final
-    artifact name (it was always the .tmp source), so the kill never fired.
+    Keys on args[1] (the destination), not args[0] (the source temp path):
+    os.replace(src, dst) is called as os.replace(tmp_path, artifact), so the
+    artifact name to match against is the second positional argument.
     """
 
     def _hooked(*args, **kwargs):
@@ -79,15 +80,13 @@ def main():
     parquet = args.parquet or ""
 
     if crash_point == "import:mid-copy":
-        # Phase 1 production code does NOT call os.replace/os.rename with
-        # "places.parquet" as the destination (it writes to DuckDB in-memory and
-        # does not yet atomically rename a .tmp artifact).  A hook on os.replace
-        # would never fire.
+        # The crash moment is inside DuckDB's COPY execution, which has no
+        # Python-level os.replace/os.rename call to hook.
         #
         # Strategy: plant the stale crash-state file directly, then SIGKILL.
         # This gives returncode -9 (the kill assertion passes) and leaves a
-        # places.parquet.tmp on disk (the recovery assertion then fails because
-        # Phase 2 recovery logic is not yet implemented).
+        # places.parquet.tmp on disk for the recovery assertion to rebuild
+        # over.
         source_dir = pathlib.Path(args.output) / args.source
         source_dir.mkdir(parents=True, exist_ok=True)
         (source_dir / "places.parquet.tmp").write_bytes(b"GARGANORN_CRASH_SENTINEL")

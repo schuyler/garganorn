@@ -24,7 +24,7 @@ class TestOvertureImport:
     """Tests for garganorn/sql/overture_place_import.sql."""
 
     def test_sql_file_exists(self):
-        """The SQL file must exist on disk (will fail until Green phase)."""
+        """The SQL file must exist on disk."""
         sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
@@ -294,15 +294,11 @@ class TestOvertureImport:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 import artifact tests (RED — overture_place)
+# Import artifact tests (overture_place)
 # ---------------------------------------------------------------------------
 
 class TestOvertureImportArtifactPhase2:
-    """stage_import must write places.parquet without 'geometry' column.
-
-    All tests fail in Red phase because stage_import still takes 'con'
-    as its first positional argument.
-    """
+    """stage_import must write places.parquet without 'geometry' column."""
 
     _BBOX = (-122.55, 37.60, -122.30, 37.85)
 

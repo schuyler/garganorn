@@ -1,25 +1,16 @@
-"""Tests for stage_import() freshness-meta contract (density/idf inputs+params).
-
-Freshness-via-meta-sidecars contract:
-
-    | `<src>/places.parquet` | `bbox, density_norm, idf_norm` | source parquet, density, idf |
+"""Tests for stage_import()'s density/idf freshness-meta contract.
 
 For a non-division source (overture_place/osm), stage_import's places.parquet
-.meta.json must record:
+.meta.json records:
   - inputs: source parquet paths + resolved density_parquet path + resolved
     idf_parquet path (when those are provided)
-  - params: bbox, density_norm, idf_norm (in addition to source)
+  - params: source, bbox, density_norm, idf_norm
 
-stage_division_import already does this correctly (garganorn/stages.py ~656-668)
-and is the reference shape. stage_import (~891-898) currently only records
-input_files = source parquet glob and params = {"source", "bbox"}, omitting
-density_parquet/idf_parquet entirely. This means rebuilding density_tiles.parquet
-(which feeds importance scoring for ALL sources, including osm which doesn't
-own it) does not invalidate a source's places.parquet: artifact_fresh() returns
-True and stale importance scores are silently reused.
-
-These tests encode the CONTRACT (the meta shape + the invalidation behavior it
-must produce), not the current implementation.
+This mirrors stage_division_import's meta shape. Rebuilding
+density_tiles.parquet, which feeds importance scoring for every source
+including osm (which doesn't own it), must invalidate a source's
+places.parquet via artifact_fresh() rather than silently reusing stale
+importance scores.
 """
 import json
 import logging
@@ -56,9 +47,9 @@ def _make_overture_parquet(tmp_path, name="overture_data.parquet"):
 def _make_density_parquet(tmp_path, name="density.parquet"):
     """Minimal density_tiles parquet, function-scoped and private to a single test.
 
-    Schema matches stage_density_extract's output (garganorn/stages.py ~1040-1046:
-    tile_qk15 VARCHAR, density_score DOUBLE, tile_xmin/ymin/xmax/ymax DOUBLE),
-    which is what stage_import's ${density_cte} reads via read_parquet(...).
+    Schema matches stage_density_extract's output (tile_qk15 VARCHAR,
+    density_score DOUBLE, tile_xmin/ymin/xmax/ymax DOUBLE), which is what
+    stage_import's ${density_cte} reads via read_parquet(...).
 
     A dedicated per-test parquet (rather than the shared session-scoped
     `density_parquet` fixture) is used in the mtime-invalidation tests below
@@ -85,10 +76,10 @@ def _make_density_parquet(tmp_path, name="density.parquet"):
 def _make_idf_parquet(tmp_path, name="idf_scores.parquet"):
     """Minimal idf_scores parquet with schema (category VARCHAR, idf_score DOUBLE).
 
-    This is the schema stage_import's ${idf_cte} reads from (garganorn/stages.py
-    ~918-922: 'CREATE TEMP TABLE idf_scores AS SELECT * FROM read_parquet(...)').
-    Built directly rather than via the full stage_idf pipeline since only the
-    two consumed columns matter here.
+    This is the schema stage_import's ${idf_cte} reads from ('CREATE TEMP
+    TABLE idf_scores AS SELECT * FROM read_parquet(...)'). Built directly
+    rather than via the full stage_idf pipeline since only the two consumed
+    columns matter here.
     """
     path = tmp_path / name
     conn = duckdb.connect(":memory:")
@@ -119,11 +110,9 @@ def _source_parquet_and_glob(source, overture_parquet, osm_parquet):
 class TestStageImportFreshnessMetaShape:
     """places.parquet .meta.json must record density/idf inputs and norm params.
 
-    Reference shape: stage_division_import records
+    Mirrors stage_division_import's shape:
         input_files = division parquet + division_area parquet + density_parquet
         params = {"source", "bbox", "density_norm", "pop_norm"}
-    (garganorn/stages.py ~656-668). stage_import must do the analogous thing
-    for density_parquet AND idf_parquet, per the design doc freshness table.
     """
 
     @pytest.mark.parametrize("source", ["overture_place", "osm"])
@@ -203,14 +192,9 @@ class TestStageImportFreshnessInvalidation:
     """A newer density_parquet or idf_parquet must invalidate places.parquet.
 
     Mirrors the mtime-manipulation pattern in tests/test_idf_stage.py's
-    TestStageIdfCaching (lines ~476-680): move artifact+meta to the past,
-    leave the input at its current (newer) mtime via os.utime, and assert
-    the stage logs a "start" (rebuild) rather than "skip" message.
-
-    Currently these fail because stage_import's params/inputs never include
-    density_parquet/idf_parquet at all, so artifact_fresh() compares against
-    a params/inputs list that doesn't mention them — mutating those files'
-    mtimes has no effect on the freshness decision and the stage always skips.
+    TestStageIdfCaching: move artifact+meta to the past, leave the input at
+    its current (newer) mtime via os.utime, and assert the stage logs a
+    "start" (rebuild) rather than "skip" message.
     """
 
     def test_newer_density_parquet_triggers_rebuild(self, tmp_path, caplog):

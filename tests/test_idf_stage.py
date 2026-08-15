@@ -15,7 +15,6 @@ import time
 import duckdb
 import pytest
 
-# This import will fail until stage_idf is implemented
 from garganorn.stages import stage_idf
 
 
@@ -584,8 +583,7 @@ class TestStageIdfUnsupportedSource:
 
 class TestIdfSortPin:
     """idf.parquet must be non-decreasing on 'category' (zone maps require
-    sorted columns for prefix-filter pushdown). If the current
-    implementation produces an unsorted parquet, this test fails in Red phase.
+    sorted columns for prefix-filter pushdown).
     """
 
     def test_idf_sorted_by_category(self, overture_idf_parquet, tmp_path):
@@ -604,24 +602,18 @@ class TestIdfSortPin:
 
 
 # ---------------------------------------------------------------------------
-# RED: TestStageIdfMetaSidecar — crash-safety via finalize_artifact
+# TestStageIdfMetaSidecar — crash-safety via finalize_artifact
 # ---------------------------------------------------------------------------
 
 
 class TestStageIdfMetaSidecar:
-    """Prove that stage_idf must adopt finalize_artifact crash-safety discipline.
+    """stage_idf uses finalize_artifact crash-safety discipline.
 
-    All four tests fail RED because the current stage_idf:
-      - writes output in-place via COPY … TO '{output_path}' (no .tmp step)
-      - calls _is_output_fresh() (mtime-only) instead of artifact_fresh()
-      - never calls finalize_artifact, so no .meta.json sidecar is produced
-
-    The green implementer must:
-      1. Remove the stale <output_path>.tmp at stage start.
-      2. Write to <output_path>.tmp via COPY.
-      3. Call finalize_artifact(tmp, output_path, params={}, inputs=resolved_inputs)
-         which atomically renames .tmp → artifact and writes .meta.json LAST.
-      4. Replace _is_output_fresh() gate with artifact_fresh() (meta-aware).
+    stage_idf writes to <output_path>.tmp, then calls
+    finalize_artifact(tmp, output_path, params={}, inputs=resolved_inputs),
+    which atomically renames .tmp → artifact and writes .meta.json LAST.
+    Freshness is gated by artifact_fresh() (meta-aware), not raw mtime
+    comparison.
     """
 
     @pytest.fixture
@@ -653,8 +645,6 @@ class TestStageIdfMetaSidecar:
         meta.json must contain:
           - 'params': {} (idf stage has no named parameters)
           - 'inputs': a non-empty list of resolved source parquet paths
-
-        Fails RED because current stage_idf uses direct COPY (no finalize_artifact).
         """
         output = tmp_path / "idf.parquet"
         meta_path = tmp_path / "idf.parquet.meta.json"
@@ -663,8 +653,7 @@ class TestStageIdfMetaSidecar:
 
         assert output.exists(), "idf.parquet must be written"
         assert meta_path.exists(), (
-            "idf.parquet.meta.json must be written by finalize_artifact; "
-            "fails RED because current stage_idf uses direct COPY with no meta sidecar"
+            "idf.parquet.meta.json must be written by finalize_artifact"
         )
         meta = json.loads(meta_path.read_text())
         assert "params" in meta, (
@@ -683,11 +672,7 @@ class TestStageIdfMetaSidecar:
         )
 
     def test_stale_tmp_clobbered(self, small_overture_parquet, tmp_path):
-        """A stale <output_path>.tmp is removed before building; meta.json is written after.
-
-        Fails RED because current stage_idf never writes .meta.json, so the
-        meta_path.exists() assertion fails even though .tmp removal may already work.
-        """
+        """A stale <output_path>.tmp is removed before building; meta.json is written after."""
         output = tmp_path / "idf.parquet"
         tmp_file = tmp_path / "idf.parquet.tmp"
         meta_path = tmp_path / "idf.parquet.meta.json"
@@ -703,18 +688,11 @@ class TestStageIdfMetaSidecar:
             ".tmp file must be cleaned up by stage_idf before building"
         )
         assert meta_path.exists(), (
-            "idf.parquet.meta.json must exist after stage; "
-            "fails RED because current implementation does not call finalize_artifact"
+            "idf.parquet.meta.json must exist after stage"
         )
 
     def test_freshness_meta_driven(self, small_overture_parquet, tmp_path):
-        """artifact_fresh(output, resolved_inputs, {}) must return True after a run.
-
-        Fails RED because:
-          - current code never writes .meta.json
-          - artifact_fresh() returns False (missing meta)
-          - the assertion that artifact_fresh returns True therefore fails
-        """
+        """artifact_fresh(output, resolved_inputs, {}) must return True after a run."""
         from garganorn.stages import artifact_fresh, _resolve_glob_paths
 
         output = tmp_path / "idf.parquet"
@@ -726,11 +704,9 @@ class TestStageIdfMetaSidecar:
         assert resolved_inputs, "small_overture_parquet fixture must resolve to at least one file"
 
         # artifact_fresh must return True for the just-built fresh artifact.
-        # Fails RED because current code never writes .meta.json (artifact_fresh returns False).
         assert artifact_fresh(str(output), resolved_inputs, {}), (
             "artifact_fresh(idf.parquet, resolved_inputs, {}) must return True "
-            "after a successful stage_idf; "
-            "fails RED because no .meta.json is written by the current implementation"
+            "after a successful stage_idf"
         )
 
     def test_partial_write_not_reused(self, small_overture_parquet, tmp_path, caplog):
@@ -746,10 +722,6 @@ class TestStageIdfMetaSidecar:
           3. Assert artifact_fresh returns False (meta-absent check fires).
           4. Run stage_idf again WITHOUT force and assert it RE-RUNS
              (logs "start", does NOT log "skip" only).
-
-        Fails RED on step 3 because current code uses _is_output_fresh() which
-        checks only mtime(output) vs mtime(inputs) — it does not check for a
-        missing .meta.json — so the artifact appears fresh and is silently reused.
         """
         from garganorn.stages import artifact_fresh, _resolve_glob_paths
 
@@ -769,9 +741,7 @@ class TestStageIdfMetaSidecar:
         # Step 3: meta-absent state must be detected.
         resolved_inputs = _resolve_glob_paths(small_overture_parquet)
         assert not artifact_fresh(str(output), resolved_inputs, {}), (
-            "artifact_fresh must return False when .meta.json is absent; "
-            "fails RED because _is_output_fresh() does not check for meta and "
-            "returns True (mtime(output) > mtime(inputs)), silently reusing the artifact"
+            "artifact_fresh must return False when .meta.json is absent"
         )
 
         # Step 4: a non-forced re-run must detect the missing meta and re-run.
@@ -781,9 +751,8 @@ class TestStageIdfMetaSidecar:
 
         logged_messages = [r.message.lower() for r in caplog.records]
         assert any("start" in msg for msg in logged_messages), (
-            "stage_idf must re-run (log 'start') when .meta.json is absent; "
-            f"fails RED because current code uses _is_output_fresh() which sees "
-            f"output as fresh and logs 'skip' instead. Logged: {logged_messages}"
+            f"stage_idf must re-run (log 'start') when .meta.json is absent. "
+            f"Logged: {logged_messages}"
         )
         skip_only = (
             any("skip" in msg for msg in logged_messages)
@@ -798,26 +767,21 @@ class TestStageIdfMetaSidecar:
     ):
         """Crash between rename and meta-write: artifact newer than meta → not reused.
 
-        Scenario: finalize_artifact completed the atomic rename (artifact exists)
-        but was killed before it could write .meta.json.  In the GREEN implementation
-        this never produces an artifact-newer-than-meta state because meta is written
-        AFTER rename — but a subsequent run might restore the meta and leave the
-        artifact mtime ahead of it (e.g. via manual repair or partial re-run).
+        finalize_artifact writes .meta.json AFTER the atomic rename, so an
+        artifact-newer-than-meta state signals a crash between those two
+        steps (e.g. via manual repair or partial re-run leaving the artifact
+        mtime ahead of meta).
 
         This test exercises artifact_fresh rule 6:
           if mtime(artifact) > mtime(meta) → return False
 
         Steps:
           1. Run stage_idf once so BOTH idf.parquet and idf.parquet.meta.json exist.
-          2. Assert meta exists (RED failure if stage_idf never writes meta).
+          2. Assert meta exists.
           3. Advance the ARTIFACT's mtime to be strictly newer than meta's mtime,
              leaving the meta file untouched (simulates the crash window).
           4. Assert artifact_fresh returns False (artifact-newer-than-meta guard).
           5. Run stage_idf again WITHOUT force; assert it RE-RUNS (logs "start").
-
-        Fails RED because:
-          - current stage_idf never writes .meta.json (step 2 fails immediately)
-          - even if a meta somehow existed, _is_output_fresh() ignores it
         """
         from garganorn.stages import artifact_fresh, _resolve_glob_paths
 
@@ -828,10 +792,9 @@ class TestStageIdfMetaSidecar:
         stage_idf("overture_place", small_overture_parquet, str(output), time.monotonic())
         assert output.exists(), "first run must produce idf.parquet"
 
-        # Step 2: meta must exist — RED failure if finalize_artifact is not called.
+        # Step 2: meta must exist.
         assert meta_path.exists(), (
-            "idf.parquet.meta.json must exist after stage_idf; "
-            "fails RED because current implementation uses direct COPY with no finalize_artifact"
+            "idf.parquet.meta.json must exist after stage_idf"
         )
 
         # Step 3: advance artifact mtime to be strictly newer than meta.
@@ -858,9 +821,8 @@ class TestStageIdfMetaSidecar:
 
         logged_messages = [r.message.lower() for r in caplog.records]
         assert any("start" in msg for msg in logged_messages), (
-            "stage_idf must re-run (log 'start') when artifact is newer than meta; "
-            f"fails RED because current code uses _is_output_fresh() which does not "
-            f"check artifact vs meta ordering. Logged: {logged_messages}"
+            f"stage_idf must re-run (log 'start') when artifact is newer than meta. "
+            f"Logged: {logged_messages}"
         )
         skip_only = (
             any("skip" in msg for msg in logged_messages)

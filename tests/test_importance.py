@@ -1,9 +1,4 @@
-"""Tests for importance INTEGER schema and tiebreaking behavior.
-
-Red phase: these tests FAIL against the current code (importance DOUBLE,
-uniform value 1.0) and PASS after the Green phase changes fixtures to
-INTEGER with varied values.
-"""
+"""Tests for importance INTEGER schema and tiebreaking behavior."""
 import pytest
 import duckdb
 
@@ -39,15 +34,14 @@ def test_overture_places_importance_is_integer(overture_parquet, tmp_path):
 # the actual arithmetic:
 #     round(60 * least(density_score / density_norm, 1.0)
 #         + 40 * least(idf_score / idf_norm, 1.0))::INTEGER
-# so a rewrite that folds the density/idf joins into the final SELECT
-# (garganorn/sql/overture_place_import.sql Fix 5, ov_base CTE-spill fix)
-# could silently change the computed value without any test noticing.
-# This test pins one exact value for known density_score/idf_score inputs
-# and known density_norm/idf_norm.
+# so a rewrite that folds the density/idf joins into the final SELECT could
+# silently change the computed value without any test noticing. This test
+# pins one exact value for known density_score/idf_score inputs and known
+# density_norm/idf_norm.
 # ---------------------------------------------------------------------------
 
 class TestOvertureImportanceCharacterization:
-    """Green-phase characterization test pinning an exact `importance` value."""
+    """Characterization test pinning an exact `importance` value."""
 
     def test_importance_exact_value_for_known_density_and_idf(self, tmp_path):
         from tests.quadtree_helpers import run_overture_import, write_minimal_overture_parquet

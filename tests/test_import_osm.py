@@ -23,7 +23,7 @@ class TestOsmImport:
     """Tests for garganorn/sql/osm_import.sql."""
 
     def test_sql_file_exists(self):
-        """The SQL file must exist on disk (will fail until Green phase)."""
+        """The SQL file must exist on disk."""
         sql_path = REPO_ROOT / "garganorn" / "sql" / "osm_import.sql"
         assert sql_path.exists(), f"SQL file not found: {sql_path}"
 
@@ -244,21 +244,17 @@ class TestOsmImport:
 
 
 # ---------------------------------------------------------------------------
-# Green-phase characterization tests pinning current osm_import.sql semantics
+# Characterization tests pinning current osm_import.sql semantics
 #
-# These pin behavior a spill-fix rewrite of osm_import.sql (the fix for
-# `gotchas.md`, "No unbounded complex-state aggregation" -- see
-# tests/test_regressions.py::TestImportSqlD6Enforcement) must not
-# silently change: the importance arithmetic, variants content, and how
-# node vs. way records get their coordinates. Values below were obtained
-# by RUNNING the current SQL against the existing osm_parquet fixture
-# (tests/conftest.py), not guessed.
+# These pin the importance arithmetic, variants content, and how node vs.
+# way records get their coordinates. Values below were obtained by RUNNING
+# the current SQL against the existing osm_parquet fixture (tests/conftest.py),
+# not guessed.
 # ---------------------------------------------------------------------------
 
 class TestOsmImportCharacterization:
-    """Pins current osm_import.sql semantics; must PASS both before and after
-    the spill fix — the fix must not change what these values compute,
-    only how.
+    """Pins the importance arithmetic, variants content, and node vs. way
+    coordinate derivation in osm_import.sql.
     """
 
     def test_variants_always_empty_for_nodes_and_ways(self, osm_parquet, tmp_path):
@@ -354,14 +350,9 @@ class TestOsmImportCharacterization:
         )
 
 
-# ---------------------------------------------------------------------------
-# Phase 2 import artifact tests (RED — osm)
-# ---------------------------------------------------------------------------
-
 class TestOsmImportArtifactPhase2:
-    """stage_import must write places.parquet for OSM without 'geom' column.
+    """stage_import writes places.parquet for OSM without a 'geom' column.
 
-    Fails in Red phase because stage_import still takes 'con' as first arg.
     OSM-specific: DELETE WHERE geom IS NULL runs before EXCLUDE.
     """
 
@@ -430,7 +421,7 @@ class TestOsmImportArtifactPhase2:
 
 
 class TestOsmJoinNoFanOut:
-    """Red-phase regression guard: no lookup join may multiply rows.
+    """Regression guard: no lookup join may multiply rows.
 
     osm_import.sql has four join sites with the same defect the Overture
     guards cover (TestOvertureDensityJoinNoFanOut / ...IdfJoinNoFanOut in
@@ -441,9 +432,7 @@ class TestOsmJoinNoFanOut:
     which the final `LEFT JOIN ... ON rkey = ...` then fans back out into
     duplicate `places` rows for one input record.
 
-    Parametrized over all four sites rather than written per site: the
-    Overture guards were added one join at a time and the OSM half was
-    missed, which is the failure this class exists to not repeat.
+    Parametrized over all four join sites so none is left unguarded.
 
     Expected values are read from a baseline run rather than hardcoded, so
     the test calibrates itself against whatever the fixture currently holds.

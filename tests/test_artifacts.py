@@ -1,16 +1,9 @@
-"""Red tests for artifact_fresh / finalize_artifact helpers (Phase 2).
+"""Tests for artifact_fresh / finalize_artifact and related staging behavior.
 
-Tests in TestArtifactFresh and TestFinalizeArtifact fail with
-AttributeError until artifact_fresh and finalize_artifact are implemented
-in garganorn/stages.py.
-
-Item mapping:
-  1. artifact_fresh truth table        → TestArtifactFresh
-  2. finalize_artifact behavior        → TestFinalizeArtifact
-  3. Stale-.tmp clobber                → TestStaleTmpClobber
-  4. Directory-artifact recovery       → covered by existing covering tests
-  5. DuckDB construct pinning          → TestDuckDBConstructPinning (passes immediately)
-  6. Sort pins                         → TestDensitySortPin, TestIdfSortPin
+TestArtifactFresh and TestFinalizeArtifact cover the freshness/promotion
+helpers used by every pipeline stage. TestStaleTmpClobber covers
+stage_density_extract's stale-.tmp cleanup. TestDuckDBConstructPinning
+smoke-tests DuckDB syntax the pipeline relies on.
 """
 import json
 import os
@@ -28,11 +21,7 @@ import garganorn.stages as _stages
 # ---------------------------------------------------------------------------
 
 class TestArtifactFresh:
-    """Truth table for artifact_fresh.
-
-    Every test here fails with AttributeError: module 'garganorn.stages'
-    has no attribute 'artifact_fresh' until production code implements it.
-    """
+    """Truth table for artifact_fresh."""
 
     def _write_parquet(self, path):
         """Write a minimal parquet file (1 row)."""
@@ -165,11 +154,7 @@ class TestArtifactFresh:
 # ---------------------------------------------------------------------------
 
 class TestFinalizeArtifact:
-    """finalize_artifact: artifact and meta land atomically.
-
-    Fails with AttributeError: module 'garganorn.stages' has no attribute
-    'finalize_artifact' until production code implements it.
-    """
+    """finalize_artifact: artifact and meta land atomically."""
 
     def _write_tmp(self, tmp_path, name="artifact.parquet.tmp"):
         """Write a minimal parquet .tmp file and return its path."""
@@ -231,11 +216,7 @@ class TestFinalizeArtifact:
 # ---------------------------------------------------------------------------
 
 class TestStaleTmpClobber:
-    """stage_density_extract must delete a stale .tmp before building.
-
-    In Red phase the stage does not delete stale .tmp files, so
-    the assertion on the .tmp's non-existence fails.
-    """
+    """stage_density_extract must delete a stale .tmp before building."""
 
     def test_stale_tmp_deleted_before_build(self, tmp_path, overture_parquet):
         """A pre-existing garbage .tmp must be deleted before the stage writes its output."""
@@ -255,11 +236,10 @@ class TestStaleTmpClobber:
 # ---------------------------------------------------------------------------
 
 class TestDuckDBConstructPinning:
-    """Smoke-test DuckDB constructs used in Phase 2 SQL on the running interpreter.
+    """Smoke-test DuckDB constructs used in stage SQL on the running interpreter.
 
-    These tests pass regardless of production code state — they document
-    the DuckDB syntax that both 1.2.1 (pytest venv) and 1.5.1 (app .venv)
-    must support.
+    Documents the DuckDB syntax that both 1.2.1 (pytest venv) and 1.5.1
+    (app .venv) must support.
     """
 
     def test_attach_read_only_form(self, tmp_path):

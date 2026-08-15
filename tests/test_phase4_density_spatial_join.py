@@ -1,14 +1,11 @@
-"""Tests for Phase 4: Fix density tile spatial join.
+"""Tests for density-tile spatial join and division import.
 
-These tests FAIL because the density extract changes don't exist yet.
-This is TDD red phase.
-
-Phase 4 changes:
-- density_extract.sql output has tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax)
-- density_extract.sql output does NOT have centroid_lon or centroid_lat
-- Tile bounds are computed using quadkey_to_bbox() in Python (not pure SQL)
-- Small localities (bbox smaller than z15 tile) receive non-zero density score
-- overture_division_import.sql uses bbox-overlap join (no centroid references)
+density_extract.sql's output carries tile bounds (tile_xmin, tile_ymin,
+tile_xmax, tile_ymax) instead of centroid columns; bounds are computed in
+SQL via the qk_env() macro. overture_division_import.sql joins on bbox
+overlap between division and tile bounds (not a centroid-in-bbox check),
+so small localities smaller than a z15 tile still receive a non-zero
+density score.
 """
 
 import time
@@ -25,27 +22,20 @@ from garganorn.stages import (
 
 
 # ---------------------------------------------------------------------------
-# TestDensityTileBounds (Phase 4)
+# TestDensityTileBounds
 # ---------------------------------------------------------------------------
 
 class TestDensityTileBounds:
-    """Tests for density tile bounds in density_extract.sql (Phase 4).
+    """Tests for density tile bounds in density_extract.sql's output.
 
-    After Phase 4, density_extract.sql output should have:
-    - tile_qk15, density_score (existing)
-    - tile_xmin, tile_ymin, tile_xmax, tile_ymax (new, computed via Python)
-    - NO centroid_lon or centroid_lat (removed)
+    density_extract.sql's output has:
+    - tile_qk15, density_score
+    - tile_xmin, tile_ymin, tile_xmax, tile_ymax
+    - no centroid columns
     """
 
     def test_density_has_tile_bounds_columns(self, overture_parquet, tmp_path):
-        """Density parquet must have tile bounds columns.
-
-        This test FAILS because density_extract.sql doesn't output tile bounds yet.
-
-        Expected columns after Phase 4:
-        - tile_qk15, density_score (existing)
-        - tile_xmin, tile_ymin, tile_xmax, tile_ymax (new)
-        """
+        """Density parquet has tile bounds columns."""
         output = tmp_path / "density.parquet"
         stage_density_extract(overture_parquet, str(output), time.monotonic())
 
@@ -54,19 +44,15 @@ class TestDensityTileBounds:
         cols = {row[0] for row in conn.execute("DESCRIBE density").fetchall()}
         conn.close()
 
-        # Check for new tile bounds columns
+        # Check for tile bounds columns
         assert "tile_xmin" in cols, f"tile_xmin column missing; found: {cols}"
         assert "tile_ymin" in cols, f"tile_ymin column missing; found: {cols}"
         assert "tile_xmax" in cols, f"tile_xmax column missing; found: {cols}"
         assert "tile_ymax" in cols, f"tile_ymax column missing; found: {cols}"
 
     def test_density_no_centroid_columns(self, overture_parquet, tmp_path):
-        """Density parquet must NOT have centroid columns.
-
-        This test FAILS because density_extract.sql still outputs centroids.
-
-        After Phase 4, centroid_lon and centroid_lat should be removed.
-        Tile bounds are used instead for spatial joins.
+        """Density parquet has no centroid columns; tile bounds are used for
+        spatial joins instead.
         """
         output = tmp_path / "density.parquet"
         stage_density_extract(overture_parquet, str(output), time.monotonic())
@@ -81,12 +67,10 @@ class TestDensityTileBounds:
         assert "centroid_lat" not in cols, f"centroid_lat should not exist; found: {cols}"
 
     def test_tile_bounds_match_quadkey_function(self, overture_parquet, tmp_path):
-        """Tile bounds in density parquet must match quadkey_to_bbox() for known quadkey.
+        """Tile bounds in density parquet match quadkey_to_bbox() for a known quadkey.
 
-        This test FAILS because density_extract.sql doesn't output tile bounds yet.
-
-        Verifies that the Python post-processing in stage_density_extract
-        correctly computes tile bounds using the existing quadkey_to_bbox() function.
+        Cross-checks the SQL-computed tile bounds (qk_env macro) against
+        Python's independent quadkey_to_bbox() implementation.
         """
         output = tmp_path / "density.parquet"
         stage_density_extract(overture_parquet, str(output), time.monotonic())
@@ -118,16 +102,15 @@ class TestDensityTileBounds:
 
 
 # ---------------------------------------------------------------------------
-# TestDivisionDensityJoin (Phase 4)
+# TestDivisionDensityJoin
 # ---------------------------------------------------------------------------
 
 class TestDivisionDensityJoin:
-    """Tests for division density join in overture_division_import.sql (Phase 4).
+    """Tests for the division density join in overture_division_import.sql.
 
-    After Phase 4, overture_division_import.sql should:
-    - Use bbox-overlap join condition (tile bounds intersect division bbox)
-    - NOT reference centroid_lon or centroid_lat
-    - Give non-zero density score to small localities
+    overture_division_import.sql joins on bbox overlap (tile bounds
+    intersecting the division's bbox), not centroid columns, so small
+    localities receive a non-zero density score.
     """
 
     def test_small_locality_gets_density(self, small_density_parquet, division_parquet, division_area_parquet, tmp_path):
@@ -187,11 +170,8 @@ class TestDivisionDensityJoin:
         )
 
     def test_division_import_no_centroid_references(self):
-        """overture_division_import.sql must NOT reference centroid_lon or centroid_lat.
-
-        This test FAILS because overture_division_import.sql still uses centroid columns.
-
-        After Phase 4, the density join should use tile bounds, not centroids.
+        """overture_division_import.sql's density join uses tile bounds, not
+        centroid columns.
         """
         division_import_path = Path(__file__).parent.parent / "garganorn" / "sql" / "overture_division_import.sql"
         sql = division_import_path.read_text()
@@ -207,17 +187,12 @@ class TestDivisionDensityJoin:
         assert "tile_ymax" in sql, "overture_division_import.sql should use tile_ymax"
 
     def test_division_import_bbox_overlap_join(self):
-        """overture_division_import.sql must use bbox-overlap join condition.
+        """overture_division_import.sql's density join uses a bbox-overlap condition:
 
-        This test FAILS because overture_division_import.sql still uses centroid-point-in-bbox.
-
-        After Phase 4, the join should be:
             d.tile_xmin <= p.max_longitude
             AND d.tile_xmax >= p.min_longitude
             AND d.tile_ymin <= p.max_latitude
             AND d.tile_ymax >= p.min_latitude
-
-        This ensures bbox overlap, not point-in-bbox.
         """
         division_import_path = Path(__file__).parent.parent / "garganorn" / "sql" / "overture_division_import.sql"
         sql = division_import_path.read_text()
@@ -236,19 +211,13 @@ class TestDivisionDensityJoin:
 
 @pytest.fixture
 def small_density_parquet(tmp_path):
-    """Create a minimal density parquet with tile bounds.
-
-    This fixture simulates the post-Phase 4 density parquet format:
-    - tile_qk15, density_score
-    - tile_xmin, tile_ymin, tile_xmax, tile_ymax
-    - NO centroid columns
-    """
+    """Create a minimal density parquet with tile bounds (no centroid columns)."""
     parquet_path = tmp_path / "small_density.parquet"
 
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
 
-    # Create density table with tile bounds (post-Phase 4 format)
+    # Create density table with tile bounds
     conn.execute("""
         CREATE TABLE density AS
         SELECT '021230132303312' AS tile_qk15,

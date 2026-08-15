@@ -18,21 +18,9 @@ from garganorn.stages import write_manifest_db
 
 
 class TestOSMRkeyFormat:
-    """Tests for OSM rkey format mismatch between export and manifest.
-
-    Bug: Export tiles write JSON with rkey `node:12345`, but manifest stores
-    `n12345`. When client calls get_record("node:12345"), manifest lookup
-    fails → 404.
-
-    The export SQL (osm_export_tiles.sql) transforms rkeys:
-    - n12345 → node:12345
-    - w67890 → way:67890
-    - r11111 → relation:11111
-
-    But write_manifest_db() stores the original n12345 format in record_tiles.
-
-    Fix spec: In write_manifest_db(), transform OSM rkeys to match export format
-    when writing manifest: n12345 → node:12345, w67890 → way:67890.
+    """manifest.record_tiles.rkey uses the same node:/way:/relation: prefix
+    as the export tiles' JSON rkey, so get_record lookups by the exported
+    rkey succeed.
     """
 
     @pytest.fixture
@@ -142,14 +130,7 @@ class TestOSMRkeyFormat:
         return manifest_db_path, tiles_dir, rkey_mapping
 
     def test_get_record_with_reformatted_node_rkey(self, osm_manifest_db):
-        """Test that get_record works with reformatted node rkey.
-
-        After export, tiles contain rkey="node:12345".
-        The manifest should also store "node:12345" so lookup works.
-
-        Current behavior: Manifest stores "n12345", lookup fails → None.
-        Expected behavior: Manifest stores "node:12345", lookup succeeds.
-        """
+        """get_record finds a place by its reformatted node rkey "node:12345"."""
         manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
 
         # Create TileBackedCollection to test get_record
@@ -164,17 +145,11 @@ class TestOSMRkeyFormat:
         # Try to get record with reformatted rkey (as tile has it)
         result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "node:12345")
 
-        # Current: returns None (manifest has n12345, not node:12345)
-        # Expected: returns the record
         assert result is not None, "get_record should find record with reformatted rkey 'node:12345'"
         assert result["name"] == "Node Place"
 
     def test_get_record_with_reformatted_way_rkey(self, osm_manifest_db):
-        """Test that get_record works with reformatted way rkey.
-
-        Current behavior: Manifest stores "w67890", lookup for "way:67890" fails.
-        Expected behavior: Manifest stores "way:67890", lookup succeeds.
-        """
+        """get_record finds a place by its reformatted way rkey "way:67890"."""
         manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
 
         tbc = TileBackedCollection(
@@ -191,11 +166,7 @@ class TestOSMRkeyFormat:
         assert result["name"] == "Way Place"
 
     def test_get_record_with_reformatted_relation_rkey(self, osm_manifest_db):
-        """Test that get_record works with reformatted relation rkey.
-
-        Current behavior: Manifest stores "r11111", lookup for "relation:11111" fails.
-        Expected behavior: Manifest stores "relation:11111", lookup succeeds.
-        """
+        """get_record finds a place by its reformatted relation rkey "relation:11111"."""
         manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
 
         tbc = TileBackedCollection(
@@ -227,13 +198,11 @@ class TestOSMRkeyFormat:
         # Check that rkeys are in reformatted format
         rkeys_in_manifest = [row[0] for row in rows]
 
-        # Current: ["n12345", "w67890", "r11111"]
-        # Expected: ["node:12345", "way:67890", "relation:11111"]
         assert "node:12345" in rkeys_in_manifest, "Manifest should contain reformatted rkey 'node:12345'"
         assert "way:67890" in rkeys_in_manifest, "Manifest should contain reformatted rkey 'way:67890'"
         assert "relation:11111" in rkeys_in_manifest, "Manifest should contain reformatted rkey 'relation:11111'"
 
-        # Old format should NOT be present
-        assert "n12345" not in rkeys_in_manifest, "Manifest should not contain old format 'n12345'"
-        assert "w67890" not in rkeys_in_manifest, "Manifest should not contain old format 'w67890'"
-        assert "r11111" not in rkeys_in_manifest, "Manifest should not contain old format 'r11111'"
+        # Raw place_id prefixes must not leak into the manifest rkey
+        assert "n12345" not in rkeys_in_manifest, "Manifest should not contain raw place_id 'n12345'"
+        assert "w67890" not in rkeys_in_manifest, "Manifest should not contain raw place_id 'w67890'"
+        assert "r11111" not in rkeys_in_manifest, "Manifest should not contain raw place_id 'r11111'"

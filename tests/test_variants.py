@@ -1,9 +1,8 @@
-"""Tests for the still-live `variants` field: schema presence and derivation
-from Overture's names.common/names.rules (garganorn/sql/overture_place_import.sql).
+"""Tests for the `variants` field: schema presence and derivation from
+Overture's names.common/names.rules (garganorn/sql/overture_place_import.sql).
 
-OSM's import SQL always emits an empty variants array (no tag-based
-derivation survives in the current pipeline), and FSQ is dropped entirely,
-so those cases are covered only at the schema level.
+OSM's import SQL always emits an empty variants array, and FSQ is dropped
+entirely, so those cases are covered only at the schema level.
 """
 import json
 from pathlib import Path

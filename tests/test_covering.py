@@ -9,27 +9,11 @@ import time
 import duckdb
 import pytest
 
-# Attempt module-level import; if garganorn.covering does not exist, record the
-# error and define None stubs. Tests call _check_covering() to surface the error.
-try:
-    from garganorn.covering import (
-        COVER_MIN_ZOOM,
-        COVER_MAX_ZOOM,
-        stage_covering,
-    )
-    _COVERING_ERROR = None
-except ImportError as _exc:
-    COVER_MIN_ZOOM = COVER_MAX_ZOOM = None
-    stage_covering = None
-    _COVERING_ERROR = _exc
-
-
-def _check_covering():
-    """Call at the start of every test; fails with the ImportError if module is absent."""
-    if _COVERING_ERROR is not None:
-        pytest.fail(str(_COVERING_ERROR), pytrace=False)
-
-
+from garganorn.covering import (
+    COVER_MIN_ZOOM,
+    COVER_MAX_ZOOM,
+    stage_covering,
+)
 from garganorn.stages import containment_arms_sql, quadkey_to_bbox
 from tests.duckdb_spy import spy_on_duckdb_connect
 
@@ -135,7 +119,6 @@ class TestQkEnvMacro:
 
     def test_qk_env_agrees_with_python_10k_quadkeys(self):
         """All four envelope coordinates agree to 1e-9 for 10,000 random quadkeys."""
-        _check_covering()
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
         _load_qk_env_macro(con)
@@ -172,7 +155,6 @@ class TestQkEnvMacro:
 
     def test_qk_env_z1_sanity(self):
         """qk_env('0') covers the NW quadrant; spot-check x/y bounds."""
-        _check_covering()
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
         _load_qk_env_macro(con)
@@ -196,7 +178,6 @@ class TestStageCoveringSchema:
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
-        _check_covering()
         out_dir = str(tmp_path_factory.mktemp("schema_cov") / "covering")
         stage_covering(
             str(covering_test_db),
@@ -214,7 +195,6 @@ class TestStageCoveringSchema:
         ]
 
     def test_files_named_qk4_parquet(self, covering_dir):
-        _check_covering()
         parquets = [f for f in os.listdir(covering_dir) if f.endswith(".parquet")]
         assert len(parquets) > 0, "No parquet files written by stage_covering"
         for fname in parquets:
@@ -223,7 +203,6 @@ class TestStageCoveringSchema:
             assert all(c in "0123" for c in stem), f"{fname!r} contains non-quadkey chars"
 
     def test_parquet_has_required_columns(self, covering_dir):
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         cols = {
@@ -238,7 +217,6 @@ class TestStageCoveringSchema:
         assert "geom" in cols
 
     def test_tile_qk_lengths_in_zoom_range(self, covering_dir):
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         min_len, max_len = con.execute(
@@ -253,7 +231,6 @@ class TestStageCoveringSchema:
         )
 
     def test_rows_sorted_tile_qk_then_boundary_id(self, covering_dir):
-        _check_covering()
         parquet_files = sorted(
             f for f in os.listdir(covering_dir) if f.endswith(".parquet")
         )
@@ -278,7 +255,6 @@ class TestStageCoveringSchema:
         covering-seed copy must reproduce them verbatim, with no admin_level
         involved anywhere in the path.
         """
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         con.execute(f"ATTACH '{covering_test_db}' AS bnd (READ_ONLY)")
@@ -296,7 +272,6 @@ class TestStageCoveringSchema:
         )
 
     def test_meta_json_written_last_with_params(self, covering_dir):
-        _check_covering()
         meta_path = os.path.join(covering_dir, "_meta.json")
         assert os.path.exists(meta_path), "_meta.json not found in covering_dir"
         with open(meta_path) as f:
@@ -313,7 +288,6 @@ class TestStageCoveringProgressBar:
     own progress at INFO so the build log shows the loop is alive."""
 
     def test_disables_progress_bar(self, covering_test_db, tmp_path_factory, monkeypatch):
-        _check_covering()
         import garganorn.covering as covering_mod
 
         statements = spy_on_duckdb_connect(monkeypatch, covering_mod)
@@ -325,7 +299,6 @@ class TestStageCoveringProgressBar:
         )
 
     def test_logs_each_zoom_level_at_info(self, covering_test_db, tmp_path, caplog):
-        _check_covering()
         out_dir = str(tmp_path / "levelprog")
 
         with caplog.at_level(logging.INFO, logger="garganorn.covering"):
@@ -348,7 +321,6 @@ class TestCoveringSemanticInvariants:
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
-        _check_covering()
         out_dir = str(tmp_path_factory.mktemp("sem_cov") / "covering")
         stage_covering(
             str(covering_test_db),
@@ -373,7 +345,6 @@ class TestCoveringSemanticInvariants:
                     con.execute(s)
 
     def test_rows_covered_by_and_intersect_boundary(self, covering_dir, covering_test_db):
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -403,7 +374,6 @@ class TestPointClassification:
 
     @pytest.fixture(scope="class")
     def covering_dir(self, covering_test_db, tmp_path_factory):
-        _check_covering()
         out_dir = str(tmp_path_factory.mktemp("ptcls_cov") / "covering")
         stage_covering(
             str(covering_test_db),
@@ -422,7 +392,6 @@ class TestPointClassification:
 
     def test_sf_point_covering_arm_parity(self, covering_dir, covering_test_db):
         """Covering-arm matches for a deep-interior point equal direct ST_Contains."""
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -457,7 +426,6 @@ class TestPointClassification:
 
     def test_pacific_point_no_covering_match(self, covering_dir):
         """Point in the Pacific Ocean (outside all test boundaries) hits no covering tiles."""
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -476,7 +444,6 @@ class TestPointClassification:
 
     def test_edge_point_covering_arm_parity(self, covering_dir, covering_test_db):
         """For a point near a boundary edge, the covering arm matches direct ST_Contains."""
-        _check_covering()
         parquets = self._parquet_paths(covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -519,7 +486,6 @@ class TestZoomParameters:
     """cover_min_zoom / cover_max_zoom overrides honored."""
 
     def test_cover_max_zoom_7_limits_depth(self, covering_test_db, tmp_path):
-        _check_covering()
         out_dir = str(tmp_path / "z7")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=7)
         parquets = [
@@ -532,7 +498,6 @@ class TestZoomParameters:
         assert max_len == 7, f"cover_max_zoom=7 but max tile_qk length is {max_len}"
 
     def test_cover_min_zoom_5_respected(self, covering_test_db, tmp_path):
-        _check_covering()
         out_dir = str(tmp_path / "z5")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=5, cover_max_zoom=7)
         parquets = [
@@ -546,7 +511,6 @@ class TestZoomParameters:
         assert min_len >= 5, f"cover_min_zoom=5 but shortest tile_qk is length {min_len}"
 
     def test_meta_json_records_overridden_params(self, covering_test_db, tmp_path):
-        _check_covering()
         out_dir = str(tmp_path / "z46")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=6)
         meta = json.load(open(os.path.join(out_dir, "_meta.json")))
@@ -554,7 +518,6 @@ class TestZoomParameters:
         assert meta["cover_max_zoom"] == 6
 
     def test_higher_max_zoom_produces_more_rows(self, covering_test_db, tmp_path):
-        _check_covering()
         out_z6 = str(tmp_path / "hz6")
         out_z8 = str(tmp_path / "hz8")
         stage_covering(str(covering_test_db), out_z6, cover_min_zoom=4, cover_max_zoom=6)
@@ -578,7 +541,6 @@ class TestFreshnessAtomicity:
 
     def test_second_call_is_noop(self, covering_test_db, tmp_path):
         """Second stage_covering call with same params is a no-op (no mtime change)."""
-        _check_covering()
         out_dir = str(tmp_path / "noop")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=6)
         meta_path = os.path.join(out_dir, "_meta.json")
@@ -591,7 +553,6 @@ class TestFreshnessAtomicity:
 
     def test_force_true_rebuilds(self, covering_test_db, tmp_path):
         """force=True rebuilds even when fresh."""
-        _check_covering()
         out_dir = str(tmp_path / "force")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=6)
         meta_path = os.path.join(out_dir, "_meta.json")
@@ -605,7 +566,6 @@ class TestFreshnessAtomicity:
 
     def test_changed_zoom_param_triggers_rebuild(self, covering_test_db, tmp_path):
         """Changed cover_max_zoom (with fresh source) forces a rebuild."""
-        _check_covering()
         out_dir = str(tmp_path / "param_change")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=6)
         meta1 = json.load(open(os.path.join(out_dir, "_meta.json")))
@@ -618,7 +578,6 @@ class TestFreshnessAtomicity:
 
     def test_leftover_tmp_dir_removed_at_build_start(self, covering_test_db, tmp_path):
         """Stale .tmp directory from a crashed previous run is removed at build start."""
-        _check_covering()
         out_dir = str(tmp_path / "stale_tmp")
         tmp_dir = out_dir + ".tmp"
         os.makedirs(tmp_dir)
@@ -640,7 +599,6 @@ class TestFreshnessAtomicity:
         rename(.tmp → covering_dir): .old exists, covering_dir does not.
         Next call should remove .old at build start and rebuild from scratch.
         """
-        _check_covering()
         out_dir = str(tmp_path / "old_crash")
         stage_covering(str(covering_test_db), out_dir, cover_min_zoom=4, cover_max_zoom=6)
         old_dir = out_dir + ".old"
@@ -667,7 +625,6 @@ class TestFreshnessAtomicity:
         Creates a temp_directory holding a sentinel file, calls stage_covering
         with it, and asserts no exception is raised and the sentinel survives.
         """
-        _check_covering()
         out_dir = str(tmp_path / "explicit_temp_out")
         explicit_temp_dir = str(tmp_path / "caller_owned_temp")
         os.makedirs(explicit_temp_dir)
@@ -730,7 +687,6 @@ class TestFragmentContainmentInvariants:
 
     @pytest.fixture(scope="class")
     def fc_covering_dir(self, covering_test_db, tmp_path_factory):
-        _check_covering()
         out_dir = str(tmp_path_factory.mktemp("fc_invariants") / "covering")
         stage_covering(
             str(covering_test_db),
@@ -753,7 +709,6 @@ class TestFragmentContainmentInvariants:
         """Summed row area == boundary area clipped to the Mercator extent,
         within relative tolerance 1e-6. Leaves are pairwise disjoint
         (antichain), so areas sum -- no ST_Union_Agg."""
-        _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -789,7 +744,6 @@ class TestFragmentContainmentInvariants:
 
     def test_no_orphaned_boundary(self, fc_covering_dir, covering_test_db):
         """Every boundary intersecting the Mercator extent has >=1 covering row."""
-        _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -809,7 +763,6 @@ class TestFragmentContainmentInvariants:
     def test_antichain_over_all_rows(self, fc_covering_dir):
         """No covering row is a quadkey-prefix descendant of any other row of
         the same boundary."""
-        _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         violations = con.execute(
@@ -832,7 +785,6 @@ class TestFragmentContainmentInvariants:
         """No fragment row (geom != its own tile envelope) is shallower than
         cover_min_leaf_zoom(5) or deeper than cover_max_zoom(7); at least one
         fragment row sits strictly above the floor and below the cap."""
-        _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -858,7 +810,6 @@ class TestFragmentContainmentInvariants:
     def test_capacity_and_no_row_has_null_geom(self, fc_covering_dir):
         """Every fragment row shallower than cover_max_zoom has
         ST_NPoints(geom) <= V; no row anywhere has NULL geom."""
-        _check_covering()
         parquets = self._parquet_paths(fc_covering_dir)
         con = duckdb.connect(":memory:")
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -894,7 +845,6 @@ class TestFragmentContainmentSynthetics:
         """A point on the internal seam introduced by splitting (not on the
         boundary's own true edge) is matched by ST_Covers via the tile-prefix
         join, exactly once; ST_Contains would miss it entirely."""
-        _check_covering()
         tile_a = quadkey_to_bbox("120030")  # NW child of a common z5 parent
         tile_b = quadkey_to_bbox("120031")  # NE child -- shares tile_a's east edge
         axmin, aymin, axmax, aymax = tile_a
@@ -957,7 +907,6 @@ class TestFragmentContainmentSynthetics:
         """A boundary edge that lies exactly along a cell edge stores no
         zero-area fragment for the neighboring cell, and produces no covering
         row there."""
-        _check_covering()
         tile_a = quadkey_to_bbox("120030")
         tile_b_qk = "120031"
         axmin, aymin, axmax, aymax = tile_a
@@ -998,7 +947,6 @@ class TestFragmentContainmentSynthetics:
         """Two-lobe boundary: a point in each lobe matches via the tile-prefix
         + ST_Covers join; a point in the gap does not (the import-side bbox
         filter drops ±180-crossers, so this fixture is built, not found)."""
-        _check_covering()
         ami_wkt = (
             "MULTIPOLYGON("
             "((170 -15, 180 -15, 180 15, 170 15, 170 -15)),"
@@ -1051,7 +999,6 @@ class TestFragmentContainmentSynthetics:
         by every existing covering test; adding a row to it would perturb
         their row counts and per-level stats.
         """
-        _check_covering()
         polar_wkt = "POLYGON((-10 70, -10 89, 10 89, 10 70, -10 70))"
         db_path = tmp_path / "polar_boundaries.duckdb"
         _create_boundaries_db(db_path, [
@@ -1141,7 +1088,6 @@ class TestFragmentContainmentSynthetics:
         """A high-vertex fragment that still exceeds V at cover_max_zoom is
         emitted anyway (no error path); stats['over_capacity_leaves'] counts
         it."""
-        _check_covering()
         bxmin, bymin, bxmax, bymax = quadkey_to_bbox("120031")
         cx, cy = (bxmin + bxmax) / 2, (bymin + bymax) / 2
         rx, ry = (bxmax - bxmin) * 0.35, (bymax - bymin) * 0.35
@@ -1183,7 +1129,6 @@ class TestFragmentContainmentSynthetics:
         """With a small V, a boundary that would be a single fragment at
         `COVER_VERTEX_CAPACITY`'s default 5000 instead produces several
         fragments, each under capacity."""
-        _check_covering()
         bxmin, bymin, bxmax, bymax = quadkey_to_bbox("120031")
         cx, cy = (bxmin + bxmax) / 2, (bymin + bymax) / 2
         rx, ry = (bxmax - bxmin) * 0.35, (bymax - bymin) * 0.35
@@ -1239,7 +1184,6 @@ class TestFragmentContainmentSynthetics:
         would pass a test that only ever varies vertex_capacity -- so this
         test varies each param independently, holding the other fixed.
         """
-        _check_covering()
         out_dir = str(tmp_path / "params_freshness")
         stage_covering(
             str(covering_test_db), out_dir,
@@ -1291,7 +1235,6 @@ class TestInteriorOnlyPartitionGeometry:
         GeoParquet `geo` metadata key and read back as BLOB -- see
         gotchas.md, "A column of entirely NULL geometry reads back as
         BLOB"."""
-        _check_covering()
         qk4 = "0231"
         xmin, ymin, xmax, ymax = quadkey_to_bbox(qk4)
         mx, my = 0.2 * (xmax - xmin), 0.2 * (ymax - ymin)

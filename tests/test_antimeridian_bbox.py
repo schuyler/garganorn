@@ -14,11 +14,8 @@ class TestParseBboxAntimeridian:
     """Tests for Server._parse_bbox with antimeridian-crossing bboxes."""
 
     def test_parse_bbox_accepts_antimeridian_crossing(self):
-        """_parse_bbox should accept bbox with xmin > xmax (antimeridian crossing).
-
-        Current behavior: raises InvalidBbox
-        Expected behavior: returns tuple with xmin > xmax
-        """
+        """_parse_bbox accepts bbox with xmin > xmax (antimeridian crossing)
+        and returns the tuple as-is."""
         server = Server("places.atgeo.org", [], None)
 
         # Fiji-like bbox crossing the antimeridian
@@ -163,7 +160,7 @@ class TestAntimeridianEdgeCases:
 
         Test case: bbox=(179, -1, -179, 1) - a 2-degree-wide box crossing the dateline.
         """
-        # Helper function that computes the CORRECT antimeridian-aware centroid
+        # Antimeridian-aware centroid: normalizes xmax into 0-360 range before averaging
         def compute_bbox_centroid(bbox):
             """Compute centroid of a bbox, handling antimeridian crossing.
 
@@ -182,7 +179,6 @@ class TestAntimeridianEdgeCases:
         # Small bbox: 179°E to 179°W (i.e., 179 to 181 normalized)
         bbox = (179, -1, -179, 1)
 
-        # Expected centroid using correct formula
         expected_lon, expected_lat = compute_bbox_centroid(bbox)
 
         # The centroid should be at ±180° (the antimeridian)
@@ -194,9 +190,10 @@ class TestAntimeridianEdgeCases:
             f"Centroid latitude should be (-1 + 1) / 2 = 0, got {expected_lat}"
         )
 
-        # Verify the current (broken) implementation would give the wrong answer
+        # A naive (xmin + xmax) / 2 average, with no antimeridian handling, is wrong
         xmin, ymin, xmax, ymax = bbox
-        current_broken_lon = (xmin + xmax) / 2  # This gives 0, which is wrong
+        current_broken_lon = (xmin + xmax) / 2
         assert current_broken_lon == 0.0, (
-            f"Current implementation gives {current_broken_lon}, which is incorrect"
+            f"naive (xmin + xmax) / 2 average gives {current_broken_lon}, "
+            "which is wrong for an antimeridian-crossing bbox"
         )

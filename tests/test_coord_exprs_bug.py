@@ -1,14 +1,9 @@
-"""Red-phase tests for the _coord_exprs table-alias bug.
+"""Tests for _coord_exprs's alias parameter.
 
-Bug: _coord_exprs("overture_place") returns "(bbox.xmin + bbox.xmax) / 2.0" with no
-table prefix. compute_containment interpolates these as `p.{lon_expr}` / `p.{lat_expr}`,
-producing invalid SQL `p.(bbox.xmin + bbox.xmax) / 2.0`.
-
-Approved fix: add alias parameter to _coord_exprs so struct field references
-are qualified as `alias.bbox.xmin` etc., and drop the hard-coded `p.` prefix
-from the compute_containment f-string interpolation sites.
-
-These tests MUST FAIL against the current (unfixed) code. That is the point.
+_coord_exprs(source, alias=...) qualifies struct field references as
+`alias.bbox.xmin` etc. for overture sources, and as a table prefix for
+column-based sources like osm -- so compute_containment's f-string
+interpolation sites produce valid SQL.
 """
 import json
 import os
@@ -138,12 +133,12 @@ class TestComputeContainmentOverture:
     def test_overture_bbox_struct_does_not_raise_parser_error(self, tmp_path):
         """compute_containment with overture bbox struct places must not raise.
 
-        The fix adds an alias parameter to _coord_exprs so struct field references
-        are qualified as alias.bbox.*, and drops the hard-coded `p.` prefix from
-        compute_containment interpolation sites.
+        _coord_exprs's alias parameter qualifies struct field references as
+        alias.bbox.*, avoiding the hard-coded `p.` prefix in compute_containment's
+        interpolation sites.
 
         Fixture provides a valid 17-char qk17, tile_assignments, and covering_dir
-        (preconditions the fixed code does not fall back to building itself).
+        (preconditions the code does not fall back to building itself).
         """
         division_path = str(tmp_path / "division.duckdb")
         _make_division_db(division_path)
@@ -181,7 +176,7 @@ class TestComputeContainmentOverture:
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         con.execute("INSERT INTO tile_assignments VALUES ('ovr001', ?)", [qk17[:6]])
 
-        # Write places and tile_assignments to parquet for Phase 2 API
+        # Write places and tile_assignments to parquet
         places_parquet = str(tmp_path / "ovr001_places.parquet")
         ta_parquet = str(tmp_path / "ovr001_ta.parquet")
         con.execute(f"COPY (SELECT id, bbox, qk17 FROM places) TO '{places_parquet}' (FORMAT PARQUET)")
@@ -247,7 +242,7 @@ class TestComputeContainmentOverture:
         con.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         con.execute("INSERT INTO tile_assignments VALUES ('ovr002', ?)", [qk17[:6]])
 
-        # Write places and tile_assignments to parquet for Phase 2 API
+        # Write places and tile_assignments to parquet
         places_parquet = str(tmp_path / "ovr002_places.parquet")
         ta_parquet = str(tmp_path / "ovr002_ta.parquet")
         con.execute(f"COPY (SELECT id, bbox, qk17 FROM places) TO '{places_parquet}' (FORMAT PARQUET)")

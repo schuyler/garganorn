@@ -88,7 +88,7 @@ def _run_cli(*args):
 
 
 # ---------------------------------------------------------------------------
-# Task 1: canonical_tile
+# canonical_tile
 # ---------------------------------------------------------------------------
 
 def test_canonical_tile_equal_when_records_reordered(tmp_path):
@@ -125,7 +125,7 @@ def test_canonical_tile_no_records_key(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 1: canonical_manifest
+# canonical_manifest
 # ---------------------------------------------------------------------------
 
 def test_canonical_manifest_strips_generated_at(tmp_path):
@@ -144,7 +144,7 @@ def test_canonical_manifest_differs_on_quadkeys(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task 4: end-to-end CLI (subprocess) integration
+# End-to-end CLI (subprocess) integration
 # ---------------------------------------------------------------------------
 
 def test_cli_diff_identical_exits_zero(tmp_path):
@@ -199,7 +199,7 @@ def test_cli_diff_difference_exits_nonzero(tmp_path):
 
 def _write_envelope_tile(tiles_dir, qk, wrapped_records, source="src", license_="lic",
                          collection="col", generated_at="2026-07-09T18:00:00Z"):
-    """Write a new-shape (atgeo v1) .json.gz tile.
+    """Write an atgeo v1 .json.gz tile.
 
     wrapped_records: list of {"uri": ..., "cid": None, "value": {...}} dicts.
     """
@@ -224,30 +224,18 @@ class TestCanonicalTileNewEnvelope:
     """canonical_tile() must strip tile-level generated_at and key records by value.rkey."""
 
     def test_canonical_tile_strips_tile_level_generated_at(self, tmp_path):
-        """Two tiles identical except for tile-level generated_at canonicalize equal.
-
-        FAILS against current canonical_tile(): it has no knowledge of a
-        tile-level 'generated_at' key (only manifest.json's is stripped
-        elsewhere), so the differing timestamps make the canonical strings
-        differ.
-        """
+        """Two tiles identical except for tile-level generated_at canonicalize equal."""
         a = _write_envelope_tile(str(tmp_path / "a"), "023130",
                                  [_wrapped("r1", "one")], generated_at="2026-01-01T00:00:00Z")
         b = _write_envelope_tile(str(tmp_path / "b"), "023130",
                                  [_wrapped("r1", "one")], generated_at="2099-12-31T23:59:59Z")
         assert tile_parity.canonical_tile(a) == tile_parity.canonical_tile(b), (
             "canonical_tile must strip the tile-level 'generated_at' field so two "
-            "tiles differing only in run timestamp canonicalize identically "
-            "(per the envelope decisions above)"
+            "tiles differing only in run timestamp canonicalize identically"
         )
 
     def test_canonical_tile_sorts_by_value_rkey_when_reordered(self, tmp_path):
-        """Records reordered but keyed by value.rkey canonicalize equal.
-
-        FAILS against current canonical_tile(): it sorts by r.get("rkey", ""),
-        which is always "" for wrapped records (rkey lives at value.rkey), so
-        the sort is a no-op and reordering is not neutralized.
-        """
+        """Records reordered but keyed by value.rkey canonicalize equal."""
         a = _write_envelope_tile(str(tmp_path / "a"), "023130",
                                  [_wrapped("r1", "one"), _wrapped("r2", "two")])
         b = _write_envelope_tile(str(tmp_path / "b"), "023130",
@@ -264,15 +252,11 @@ class TestCanonicalTileNewEnvelope:
 
 
 class TestCliDiffNewEnvelope:
-    """End-to-end capture/diff round trip against new-envelope tiles."""
+    """End-to-end capture/diff round trip against atgeo v1 tiles."""
 
     def test_cli_diff_identical_new_envelope_tiles_exits_zero(self, tmp_path):
-        """Two runs with identical new-envelope content but different
+        """Two runs with identical envelope content but different
         tile-level generated_at and record order must diff as identical.
-
-        FAILS against the current script for the same reasons as the unit
-        tests above: tile-level generated_at is not stripped and records
-        are not keyed by value.rkey.
         """
         src_a = str(tmp_path / "a_tiles")
         src_b = str(tmp_path / "b_tiles")

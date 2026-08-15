@@ -1,15 +1,11 @@
-"""Red tests: compute_containment covering rewrite + Phase 2 relocation.
+"""Tests for compute_containment: places within covering-derived boundaries.
 
-Contains existing Phase-1 red tests and Phase-2 containment relocation tests.
-
-Tests call compute_containment with the new Phase-1 signature (covering_dir,
-containment_dir instead of max_boundaries, max_zoom).  Against the current
-implementation they fail with TypeError.  Tests that also need garganorn.covering
-to build a real covering directory import it inside the test body and fail with
-ModuleNotFoundError.
+compute_containment takes places_parquet, tile_assignments_parquet, and a
+boundaries DuckDB, plus covering_dir/containment_dir, and writes containment
+parquet files keyed by tile_qk.
 
 Test class mapping:
-  1. Ports of surviving behavior tests      → TestContainmentBehaviorPorts
+  1. Rkey/name/level relation shape         → TestContainmentBehaviorPorts
   2. Ordering (within by level ASC)         → TestContainmentOrdering
   3. Brute-force oracle parity              → TestBruteForceOracle
   4. Containment artifact layout            → TestContainmentArtifacts
@@ -42,7 +38,7 @@ _COLLECTION_PREFIX = "org.atgeo.places.overture.division"
 # have no vocabulary entry among this fixture's modeled subtypes (continent has no
 # producer entry in the containment level vocabulary; this fixture's "borough" is a locality-shaped
 # boundary used only to test partial containment, not vocabulary mapping) -- 0 and 50
-# respectively are chosen to preserve pre-existing ascending/partial-containment
+# respectively are chosen to preserve ascending/partial-containment
 # behavior without asserting a specific subtype mapping for them.
 _SIMPLE_BOUNDARIES = [
     # (id, level, wkt, min_lat, min_lon, max_lat, max_lon)
@@ -143,36 +139,31 @@ def _make_places_con(places, tile_qk_map=None):
 
 class TestContainmentBehaviorPorts:
     """Rkey-only relations, division prefix, SF point expected IDs,
-    collection_prefix kwarg.  All fail TypeError with old compute_containment signature.
+    collection_prefix kwarg.
     """
 
     def test_new_signature_has_covering_dir_not_max_boundaries(self):
-        """New compute_containment must have covering_dir/containment_dir, not max_boundaries."""
+        """compute_containment takes covering_dir/containment_dir, not max_boundaries/max_zoom."""
         sig = inspect.signature(compute_containment)
         assert "covering_dir" in sig.parameters, (
-            f"compute_containment missing 'covering_dir' in new signature: {sig}"
+            f"compute_containment missing 'covering_dir' parameter: {sig}"
         )
         assert "containment_dir" in sig.parameters, (
-            f"compute_containment missing 'containment_dir' in new signature: {sig}"
+            f"compute_containment missing 'containment_dir' parameter: {sig}"
         )
         assert "max_boundaries" not in sig.parameters, (
-            f"compute_containment should NOT have 'max_boundaries' (old recursion removed): {sig}"
+            f"compute_containment should not have 'max_boundaries': {sig}"
         )
         assert "max_zoom" not in sig.parameters, (
-            f"compute_containment should NOT have 'max_zoom' (old recursion removed): {sig}"
+            f"compute_containment should not have 'max_zoom': {sig}"
         )
 
     def test_collection_prefix_default_and_new_signature(self):
-        """collection_prefix default unchanged; covering_dir/containment_dir present in new sig.
-
-        Fails on old code because covering_dir is asserted first (which old code lacks).
-        """
+        """collection_prefix default unchanged; covering_dir/containment_dir present in the signature."""
         sig = inspect.signature(compute_containment)
-        # The following assertion fails on old code (new signature not yet written)
         assert "covering_dir" in sig.parameters, (
-            f"covering_dir missing — new signature not implemented: {sig}"
+            f"covering_dir missing from compute_containment signature: {sig}"
         )
-        # These should both hold in the new code too
         assert "collection_prefix" in sig.parameters, "collection_prefix param missing"
         default = sig.parameters["collection_prefix"].default
         assert default == _COLLECTION_PREFIX, (
@@ -263,26 +254,18 @@ class TestContainmentBehaviorPorts:
 
 
 # ---------------------------------------------------------------------------
-# Ordering: within by level ASC (Phase 2 sig).
+# Ordering: within by level ASC.
 #
 # The containment level vocabulary is total by construction
 # (garganorn.levels.LEVEL_VOCAB covers every subtype the fail-loud guard
-# admits), so "NULL levels sort last" is no longer a live case -- there are no
-# NULL levels to sort. See TestNoNullLevels below, which replaces the old
-# NULL-levels-last test.
+# admits), so boundaries never have a NULL level. See TestNoNullLevels below.
 # ---------------------------------------------------------------------------
 
 class TestContainmentOrdering:
-    """Within list ordered by level ASC, ties broken by id.
-
-    Ported to Phase 2 signature.  Fails RED with TypeError.
-    """
+    """Within list ordered by level ASC, ties broken by id."""
 
     def test_within_ordered_by_level_asc(self, simple_boundaries_db, tmp_path):
-        """The within list is sorted by level ASC (continent=0 first, locality=3 last).
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
-        """
+        """The within list is sorted by level ASC (continent=0 first, locality=50 last)."""
         from garganorn.covering import stage_covering
         ord_covering = str(tmp_path / "ord_covering")
         stage_covering(str(simple_boundaries_db), ord_covering, cover_min_zoom=4, cover_max_zoom=12)
@@ -295,7 +278,6 @@ class TestContainmentOrdering:
         )
         containment_dir = str(tmp_path / "ord_containment")
 
-        # Fails RED with TypeError (Phase 2 signature not yet implemented)
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -334,16 +316,14 @@ class TestContainmentOrdering:
             )
 
     def test_no_null_levels_in_boundaries_db(self, tmp_path):
-        """No boundary ever has a NULL level (repurposed from the old NULL-levels-last test).
+        """No boundary ever has a NULL level in production, but downstream
+        containment code must not special-case NULL levels regardless.
 
-        "NULL levels sort last" is void because level
-        is total by construction (`count(*) WHERE level IS
-        NULL = 0` in `places`). A boundaries DB built directly (bypassing the
-        import CTAS + fail-loud guard) could still contain a NULL level if
-        hand-constructed, as this one deliberately does, to prove downstream
-        containment code must not special-case NULL levels: this boundary set
-        still resolves and orders correctly even though the level vocabulary
-        can never actually put a NULL there in production.
+        level is total by construction (`count(*) WHERE level IS NULL = 0` in
+        `places`) once the import CTAS + fail-loud guard build the boundaries
+        DB. This fixture bypasses that pipeline and hand-constructs a NULL
+        level to prove containment still resolves and orders correctly even
+        though the vocabulary can never actually produce one.
         """
         null_db_path = tmp_path / "null_level.duckdb"
         conn = duckdb.connect(str(null_db_path))
@@ -387,7 +367,6 @@ class TestContainmentOrdering:
         )
         containment_dir = str(tmp_path / "null_containment")
 
-        # Fails RED with TypeError
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -426,9 +405,8 @@ class TestNoNullLevels:
     Exercises the real overture_division import pipeline (division_parquet fixture,
     tests/conftest.py) end to end: LEVEL_VOCAB maps every observed subtype
     (country, region, locality in this fixture), so the resulting boundaries.duckdb
-    `places.level` column must be total -- zero NULLs -- once garganorn/levels.py
-    exists and the import CTAS derives level from subtype instead of carrying
-    raw (96%-NULL) admin_level through.
+    `places.level` column is total -- zero NULLs. The import CTAS derives level
+    from subtype instead of carrying raw (96%-NULL) admin_level through.
     """
 
     def test_places_level_has_no_nulls(self, division_parquet, tmp_path):
@@ -451,22 +429,14 @@ class TestNoNullLevels:
 
 
 # ---------------------------------------------------------------------------
-# Brute-force oracle parity (Phase 2 signature)
+# Brute-force oracle parity
 # ---------------------------------------------------------------------------
 
 class TestBruteForceOracle:
-    """compute_containment pair set == brute-force ST_Contains.
-
-    Ported to Phase 2 signature: compute_containment(places_parquet,
-    tile_assignments_parquet, ...).  Fails RED because the current
-    implementation still takes 'con' as its first argument.
-    """
+    """compute_containment pair set == brute-force ST_Contains."""
 
     def test_parity_with_direct_st_contains_simple_boundaries(self, simple_boundaries_db, tmp_path):
-        """(place_id, boundary_id) pairs from compute_containment match direct ST_Contains.
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError (wrong signature).
-        """
+        """(place_id, boundary_id) pairs from compute_containment match direct ST_Contains."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "oracle_covering")
@@ -503,8 +473,6 @@ class TestBruteForceOracle:
         )
 
         containment_dir = str(tmp_path / "oracle_containment")
-        # Phase 2 signature: places_parquet, tile_assignments_parquet, boundaries_db, ...
-        # Fails RED with TypeError because current implementation takes 'con' first.
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -552,10 +520,7 @@ class TestBruteForceOracle:
         )
 
     def test_no_duplicate_rkeys_in_within(self, simple_boundaries_db, tmp_path):
-        """Each boundary appears at most once in a place's within list.
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
-        """
+        """Each boundary appears at most once in a place's within list."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "nodup_covering")
@@ -574,7 +539,6 @@ class TestBruteForceOracle:
         )
         containment_dir = str(tmp_path / "nodup_containment")
 
-        # Fails RED with TypeError (wrong signature)
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -606,20 +570,14 @@ class TestBruteForceOracle:
 
 
 # ---------------------------------------------------------------------------
-# Containment artifact layout (Phase 2 signature)
+# Containment artifact layout
 # ---------------------------------------------------------------------------
 
 class TestContainmentArtifacts:
-    """containment/<qk4>.parquet written, schema and sort correct.
-
-    Ported to Phase 2 signature.  Fails RED with TypeError.
-    """
+    """containment/<tile_qk>.parquet written, schema and sort correct."""
 
     def test_containment_parquets_written(self, simple_boundaries_db, tmp_path):
-        """compute_containment writes containment/<qk6>.parquet files (default partition_zoom).
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
-        """
+        """compute_containment writes containment/<qk6>.parquet files (default partition_zoom)."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "art_covering")
@@ -633,7 +591,6 @@ class TestContainmentArtifacts:
         )
         containment_dir = str(tmp_path / "art_containment")
 
-        # Fails RED with TypeError (Phase 2 signature not yet implemented)
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -654,10 +611,7 @@ class TestContainmentArtifacts:
             assert all(c in "0123" for c in stem), f"{fname!r}: non-quadkey chars"
 
     def test_containment_parquet_schema(self, simple_boundaries_db, tmp_path):
-        """Each containment parquet has columns (tile_qk, place_id, relations_json).
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
-        """
+        """Each containment parquet has columns (tile_qk, place_id, relations_json)."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "sch_covering")
@@ -671,7 +625,6 @@ class TestContainmentArtifacts:
         )
         containment_dir = str(tmp_path / "sch_containment")
 
-        # Fails RED with TypeError
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -701,10 +654,7 @@ class TestContainmentArtifacts:
         assert "relations_json" in cols
 
     def test_containment_parquet_sorted_tile_qk_place_id(self, simple_boundaries_db, tmp_path):
-        """Each containment parquet is sorted by (tile_qk, place_id).
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
-        """
+        """Each containment parquet is sorted by (tile_qk, place_id)."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "srt_covering")
@@ -722,7 +672,6 @@ class TestContainmentArtifacts:
         )
         containment_dir = str(tmp_path / "srt_containment")
 
-        # Fails RED with TypeError
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -744,10 +693,7 @@ class TestContainmentArtifacts:
             assert rows == sorted(rows), f"{fname}: not sorted by (tile_qk, place_id)"
 
     def test_tile_qk_in_parquet_matches_tile_assignments(self, simple_boundaries_db, tmp_path):
-        """tile_qk in containment parquets agrees with tile_assignments for each place.
-
-        Uses Phase 2 parquet inputs.  Fails RED with TypeError.
-        """
+        """tile_qk in containment parquets agrees with tile_assignments for each place."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "tqk_covering")
@@ -762,7 +708,6 @@ class TestContainmentArtifacts:
         )
         containment_dir = str(tmp_path / "tqk_containment")
 
-        # Fails RED with TypeError
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -1335,9 +1280,6 @@ class TestAntimeridianEdgeArm:
     ):
         """Lobe places appear with ami_boundary; gap place appears with gap_boundary only.
 
-        Runs compute_containment with the new signature (covering_dir + containment_dir).
-        Fails with TypeError on old code — right red reason.
-
         What this test pins:
         - Lobe assertions (p_east, p_west): behaviorally pin the antimeridian OR-logic
           in the arm CASE.  A buggy AND condition would drop both lobe places.
@@ -1508,7 +1450,7 @@ class TestInteriorOnlyPartitionContainment:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 containment relocation tests (RED)
+# Parquet fixture helpers
 # ---------------------------------------------------------------------------
 
 def _make_parquet_places(tmp_path, places, filename="places.parquet"):
@@ -1546,11 +1488,7 @@ def _make_parquet_tile_assignments(tmp_path, assignments, filename="tile_assignm
 
 
 class TestContainmentRelocationPhase2:
-    """compute_containment must use parquet inputs and write to <src>/containment/.
-
-    All tests fail in Red phase because compute_containment still takes 'con'
-    as its first parameter.
-    """
+    """compute_containment must use parquet inputs and write to <src>/containment/."""
 
     _SF_PLACES = [
         ("p001", -122.4194, 37.7749),
@@ -1561,8 +1499,7 @@ class TestContainmentRelocationPhase2:
         """compute_containment must not take 'con' as its first parameter."""
         params = list(inspect.signature(compute_containment).parameters.keys())
         assert params[0] != "con", (
-            f"compute_containment must not have 'con' as first param; got {params[0]!r}. "
-            "Phase 2 drops the connection argument."
+            f"compute_containment must not have 'con' as first param; got {params[0]!r}."
         )
 
     def test_compute_containment_has_places_parquet_param(self):
@@ -1662,8 +1599,6 @@ class TestContainmentDirSwapAtomicity:
       1. Leftover .tmp before build → clobbered, correct output
       2. Leftover .old with dir missing → cleared, correct output
       3. Partial .tmp (no _meta.json) from crash → next build correct
-
-    All tests fail RED because compute_containment does not yet accept parquet inputs.
     """
 
     _SF_PLACES = [("p001", -122.4194, 37.7749)]
@@ -1675,7 +1610,6 @@ class TestContainmentDirSwapAtomicity:
         tile_assignments_parquet = _make_parquet_tile_assignments(
             tmp_path, self._SF_ASSIGNMENTS, ta_file
         )
-        # Fails RED: wrong signature (con expected, not places_parquet)
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
@@ -1690,10 +1624,7 @@ class TestContainmentDirSwapAtomicity:
     def test_leftover_tmp_before_build_is_clobbered(
         self, simple_boundaries_db, tmp_path
     ):
-        """Leftover containment.tmp/ before build must be clobbered, not reused.
-
-        Fails RED with TypeError (Phase 2 signature not yet implemented).
-        """
+        """Leftover containment.tmp/ before build must be clobbered, not reused."""
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "at_covering")
         stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1717,10 +1648,7 @@ class TestContainmentDirSwapAtomicity:
     def test_leftover_old_with_dir_missing_is_cleared(
         self, simple_boundaries_db, tmp_path
     ):
-        """Leftover containment.old/ (containment/ missing) → build must clear and succeed.
-
-        Fails RED with TypeError.
-        """
+        """Leftover containment.old/ (containment/ missing) → build must clear and succeed."""
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "at2_covering")
         stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1742,10 +1670,7 @@ class TestContainmentDirSwapAtomicity:
     def test_partial_tmp_from_crash_is_rebuilt(
         self, simple_boundaries_db, tmp_path
     ):
-        """Partial containment.tmp/ (no _meta.json) from crash → next build correct.
-
-        Fails RED with TypeError.
-        """
+        """Partial containment.tmp/ (no _meta.json) from crash → next build correct."""
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "at3_covering")
         stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
@@ -1773,16 +1698,11 @@ class TestContainmentDirSwapAtomicity:
 # ---------------------------------------------------------------------------
 
 class TestContainmentQ3ExportAndIdempotency:
-    """Q3 empty containment → relations:{} in export; idempotency.
-
-    Uses Phase 2 signature.  All tests fail RED with TypeError.
-    """
+    """Q3 empty containment → relations:{} in export; idempotency."""
 
     def test_compute_containment_idempotent_q3(self, tmp_path):
         """Calling compute_containment twice (boundaries_db=None) must not error; second call
         is a no-op (containment dir already fresh).
-
-        Fails RED with TypeError (Phase 2 signature not yet implemented).
         """
         places_parquet = _make_parquet_places(
             tmp_path, [("p001", -122.4, 37.7)], "idem_places.parquet"
@@ -1825,11 +1745,7 @@ class TestContainmentQ3ExportAndIdempotency:
     def test_compute_containment_idempotent_with_boundaries(
         self, simple_boundaries_db, tmp_path
     ):
-        """compute_containment is idempotent even with boundaries_db.
-
-        Ported from TestComputeContainmentIdempotency::test_compute_containment_with_boundaries_idempotent.
-        Fails RED with TypeError.
-        """
+        """compute_containment is idempotent even with boundaries_db."""
         from garganorn.covering import stage_covering
         covering_dir = str(tmp_path / "idem2_covering")
         stage_covering(
@@ -1876,10 +1792,7 @@ class TestContainmentQ3ExportAndIdempotency:
         )
 
     def test_q3_containment_dir_only_has_meta_json(self, tmp_path):
-        """Q3: boundaries_db=None → containment/ contains only _meta.json (no parquets).
-
-        Fails RED with TypeError.
-        """
+        """Q3: boundaries_db=None → containment/ contains only _meta.json (no parquets)."""
         places_parquet = _make_parquet_places(
             tmp_path, [("p001", 0.0, 0.0)], "q3_places.parquet"
         )
@@ -1917,22 +1830,16 @@ class TestContainmentQ3ExportAndIdempotency:
 
 
 # ---------------------------------------------------------------------------
-# compute_containment OOM fix: partition_zoom kwarg
+# partition_zoom kwarg: containment output partition granularity
 # ---------------------------------------------------------------------------
 
 class TestContainmentPartitionZoom:
-    """RED tests for the new partition_zoom kwarg (default 6, was hardcoded z4).
-
-    All three tests fail against current code with TypeError: the current
-    compute_containment signature has no partition_zoom parameter at all.
+    """partition_zoom controls the quadkey-stem length of containment output
+    parquet filenames; default 6.
     """
 
     def test_partition_zoom_param_accepted(self, simple_boundaries_db, tmp_path):
-        """compute_containment accepts partition_zoom=4 (explicit opt-in to old behavior).
-
-        Fails RED with TypeError: unexpected keyword argument 'partition_zoom' --
-        the current code has no such parameter.
-        """
+        """compute_containment accepts partition_zoom=4."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "pz4_covering")
@@ -1963,12 +1870,7 @@ class TestContainmentPartitionZoom:
             )
 
     def test_partition_zoom_default_produces_finer_stems(self, simple_boundaries_db, tmp_path):
-        """With no partition_zoom argument, output stems default to 6 chars, not 4.
-
-        Fails RED for two reasons: current code produces 4-char stems
-        unconditionally (so asserting 6 fails), and there is no partition_zoom
-        kwarg yet for a default to apply to.
-        """
+        """With no partition_zoom argument, output stems default to 6 chars, not 4."""
         from garganorn.covering import stage_covering
 
         covering_dir = str(tmp_path / "pzdef_covering")
@@ -2008,10 +1910,6 @@ class TestContainmentPartitionZoom:
         div_country_us's, and div_region_ca's bboxes; p_a additionally falls
         inside div_locality_sf's bbox, p_e does not -- so both produce
         non-trivial, comparable containment relations.
-
-        Fails RED with TypeError: partition_zoom is not a recognized keyword
-        argument on the current compute_containment signature (fails on the
-        first, partition_zoom=4, sub-run).
         """
         from garganorn.covering import stage_covering
 

@@ -57,11 +57,11 @@ class TestSources:
 
 
 # ---------------------------------------------------------------------------
-# ATTRIBUTION registration (deprecated - replaced by SOURCES)
+# overture_division attribution checks
 # ---------------------------------------------------------------------------
 
 class TestAttribution:
-    """overture_division must be registered in ATTRIBUTION (deprecated)."""
+    """overture_division must be registered in SOURCES with its attribution URL."""
 
     def test_overture_division_key_exists(self):
         from garganorn.quadtree import SOURCES
@@ -113,8 +113,8 @@ class TestCoordExprs:
         )
 
     def test_differs_from_overture_place_expressions(self):
-        """overture_division must no longer share overture_place's bbox
-        midpoint expression -- that shared expression is the bug."""
+        """overture_division's coordinate expressions must differ from
+        overture_place's bbox midpoint expression -- sharing it is the bug."""
         from garganorn.quadtree import _coord_exprs
         ov_lon, ov_lat = _coord_exprs("overture_place")
         div_lon, div_lat = _coord_exprs("overture_division")
@@ -145,35 +145,32 @@ class TestSQLFiles:
 
 
 # ---------------------------------------------------------------------------
-# Pipeline computes importance/variants inline for all sources (Phase 2)
+# Pipeline computes importance/variants inline for all sources
 # ---------------------------------------------------------------------------
 
 class TestPipelineSkipsImportanceVariants:
-    """run_pipeline computes importance/variants inline for all sources (Phase 2).
+    """run_pipeline computes importance/variants inline for all sources.
 
-    Phase 2 eliminated separate importance and variants stages. All sources
-    now compute these values inline during import. overture_division uses
-    a hybrid formula (density+population) and sets variants=[] inline in
-    its import SQL.
+    All sources compute these values inline during import; there is no
+    separate importance or variants stage. overture_division uses a hybrid
+    formula (density+population) and sets variants=[] inline in its import
+    SQL.
     """
 
     def test_importance_computed_inline_for_overture_division(self):
         """run_pipeline computes importance inline during import for all sources.
 
-        Phase 2 eliminated separate importance/variants stages. We verify this
-        by checking that run_pipeline passes density_parquet and idf_parquet
-        to stage_import (which computes importance inline in the SQL CTAS).
+        We verify this by checking that run_pipeline passes density_parquet
+        and idf_parquet to stage_import (which computes importance inline in
+        the SQL CTAS).
         """
         import inspect
         from garganorn.quadtree import run_pipeline
 
         source_code = inspect.getsource(run_pipeline)
 
-        # The import call (which computes importance inline) must pass density_parquet
-        # and idf_parquet.  The call is currently routed through the transitional
-        # helper (_transitional_import_phase1) until G7 rewrites quadtree.py; the
-        # behavioral invariant — that importance is computed inline in the import SQL
-        # rather than via a separate stage — is unchanged.
+        # The import call computes importance inline and must pass
+        # density_parquet and idf_parquet to stage_import.
         assert "density_parquet=" in source_code, (
             "run_pipeline must pass density_parquet to the import call for inline importance"
         )
@@ -185,22 +182,21 @@ class TestPipelineSkipsImportanceVariants:
     def test_variants_computed_inline_for_overture_division(self):
         """run_pipeline computes variants inline during import for all sources.
 
-        Phase 2 eliminated the separate variants stage. We verify this by
-        checking that run_pipeline no longer calls a separate variants stage.
-        overture_division sets variants=[] inline in its import SQL.
+        We verify this by checking that run_pipeline does not call a
+        separate variants stage. overture_division sets variants=[] inline
+        in its import SQL.
         """
         import inspect
         from garganorn.quadtree import run_pipeline
 
         source_code = inspect.getsource(run_pipeline)
 
-        # Phase 2: run_pipeline must NOT call a separate variants stage
+        # run_pipeline must not call a separate variants stage
         assert "stage_variants" not in source_code, (
-            "run_pipeline must not call stage_variants (Phase 2 eliminated this stage)"
+            "run_pipeline must not call stage_variants; variants are computed inline"
         )
-        # Variants are computed inline in the import SQL.  The import call is
-        # currently routed through _transitional_import_phase1 (TEMPORARY, until
-        # G7 rewrites quadtree.py); verify no separate variants stage exists.
+        # Variants are computed inline in the import SQL; verify no separate
+        # variants stage exists.
         assert "stage_variants(" not in source_code, (
             "run_pipeline must not call stage_variants (variants computed inline)"
         )
@@ -402,14 +398,12 @@ class TestDivisionMultiTileContainmentJoin:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 division import artifact tests (RED)
+# Division import artifact tests
 # ---------------------------------------------------------------------------
 
 class TestDivisionImportArtifactPhase2:
     """stage_import for overture_division must write both places.parquet
     and boundaries.duckdb with unchanged schema.
-
-    Fails in Red phase because stage_import still takes 'con' as first arg.
     """
 
     _BBOX = (-122.55, 37.60, -122.30, 37.85)
@@ -523,7 +517,7 @@ class TestDivisionImportArtifactPhase2:
 
 
 # ---------------------------------------------------------------------------
-# _assert_interior_points (representative-candidate-point fix, RED)
+# _assert_interior_points raises on non-interior points
 # ---------------------------------------------------------------------------
 
 class TestAssertInteriorPoints:

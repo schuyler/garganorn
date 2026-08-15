@@ -1,8 +1,5 @@
 """Tests for quadtree Python functions: quadkey_to_bbox, bboxes_intersect,
 BboxTooLarge, and TileManifest.
-
-Red phase: these names don't exist in garganorn/quadtree.py yet, so the
-module-level import raises ImportError at pytest collection time.
 """
 import math
 

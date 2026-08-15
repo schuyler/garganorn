@@ -1,4 +1,4 @@
-"""RED tests for crash recovery (Phase 2).
+"""Tests for crash recovery.
 
 State-based matrix: construct each disk state directly, run run_pipeline,
 assert the final output equals a clean-run control. No subprocess sleeps;
@@ -7,9 +7,6 @@ SIGKILL test uses a harness script.
 Test class mapping:
   State matrix (deterministic, no subprocess) → TestCrashStateMatrix
   Subprocess kill-9 (miniature acceptance)     → TestKillNineAcceptance
-
-All state-matrix tests fail in Red phase because run_pipeline does not
-produce artifacts at the expected Phase-2 paths (places.parquet, tiles/current).
 """
 import gzip
 import json
@@ -30,23 +27,20 @@ import garganorn.stages as _stages
 
 
 # ---------------------------------------------------------------------------
-# Helper: canonical tile comparison (Phase 2 acceptance, miniature)
+# Helper: canonical tile comparison
 # ---------------------------------------------------------------------------
 
 def _canonical_tile(gz_path):
     """Read a .json.gz tile, sort records, strip the run-scoped generated_at,
     return canonical JSON string.
 
-    Tiles carry a top-level `generated_at`
-    that is run-scoped (derived from the export run's timestamp) and legitimately
-    differs between the control run and a recovery run executed at a different
-    wall-clock time -- it is not a crash-recovery correctness signal, so it must
-    be stripped here the same way scripts/tile_parity.py's canonicalizer does,
-    or every crash-recovery comparison in this module would spuriously fail on
-    timestamp drift alone. Records are {uri, cid, value}-wrapped (per the
-    envelope decisions above); the sort/dedup key is value.rkey, not a
-    top-level rkey (which no longer exists
-    on wrapped records).
+    generated_at is derived from the export run's timestamp and legitimately
+    differs between the control run and a recovery run executed at a
+    different wall-clock time, so it is stripped here the same way
+    scripts/tile_parity.py's canonicalizer does; otherwise every
+    crash-recovery comparison would spuriously fail on timestamp drift alone.
+    Records are {uri, cid, value}-wrapped, so the sort/dedup key is
+    value.rkey, not a top-level rkey.
     """
     with gzip.open(gz_path) as f:
         obj = json.load(f)
@@ -72,7 +66,7 @@ def _collect_tiles(tiles_dir):
 
 
 def _find_tiles_current(output_dir, source):
-    """Find the <output>/<src>/tiles/current directory (Phase 2 layout)."""
+    """Find the <output>/<src>/tiles/current directory."""
     return pathlib.Path(output_dir) / source / "tiles" / "current"
 
 
@@ -108,11 +102,8 @@ class TestCrashStateMatrix:
     Each test:
     1. Runs a clean pipeline to build artifacts.
     2. Simulates a crash by planting the expected leftover state.
-    3. Reruns run_pipeline (which must recover and produce clean output).
+    3. Reruns run_pipeline, which must recover and produce clean output.
     4. Compares result against control_run canonical tiles.
-
-    All tests fail in Red phase because run_pipeline does not produce
-    tiles at <src>/tiles/current/ (Phase 2 layout).
     """
 
     def _run_and_collect(self, overture_parquet, density_parquet, output_dir):
@@ -217,7 +208,7 @@ class TestCrashStateMatrix:
         kills it without clean shutdown — leaving the WAL behind.  On next ATTACH,
         DuckDB would replay the WAL and find a 'places' table already present, which
         causes 'CREATE TABLE bnd.places AS …' to fail with "table already exists".
-        Phase 2 avoids this by deleting both .tmp and .wal BEFORE the ATTACH.
+        The pipeline avoids this by deleting both .tmp and .wal before the ATTACH.
 
         Returns (db_path, wal_path) after verifying the WAL exists.
         """
@@ -246,22 +237,13 @@ class TestCrashStateMatrix:
     ):
         """Stale boundaries.duckdb.tmp + genuine .wal must be explicitly deleted before ATTACH.
 
-        The pipeline deletes both .tmp and
-        .wal at stage start so DuckDB does not replay a stale WAL against a
-        fresh empty DB (which would fail with "table already exists" because
-        the WAL records the old CREATE TABLE).
+        The pipeline deletes both .tmp and .wal at stage start so DuckDB does
+        not replay a stale WAL against a fresh empty DB (which would fail
+        with "table already exists" because the WAL records the old CREATE
+        TABLE).
 
         Planted state: a genuine stale WAL produced by opening
         boundaries.duckdb.tmp, writing a 'places' table, then kill-9ing the writer.
-
-        Test fails RED because:
-          - Phase 1 code does NOT delete the WAL before ATTACH.
-          - DuckDB replays the WAL → bnd.places already exists when the import tries to
-            CREATE TABLE bnd.places AS … → exception.
-          - boundaries.duckdb is therefore NOT created.
-          - The assertion 'final_bnd.exists()' fails — right reason.
-
-        Test passes GREEN because Phase 2 explicitly deletes .tmp + .wal before ATTACH.
         """
         output_dir = tmp_path / "out"
         output_dir.mkdir()
@@ -276,9 +258,8 @@ class TestCrashStateMatrix:
 
         # Track os.remove calls to detect EXPLICIT WAL deletion.
         # DuckDB 1.2.1 handles orphaned WALs gracefully (no table-already-exists
-        # error), so we cannot rely on a runtime exception to distinguish Phase 1
-        # from Phase 2.  Instead we verify that Phase 2 explicitly calls
-        # os.remove(wal_path) before ATTACH — something Phase 1 does NOT do.
+        # error), so a runtime exception can't confirm explicit deletion;
+        # verify os.remove(wal_path) is called before ATTACH instead.
         removed_paths = []
         _real_remove = os.remove
 
@@ -299,20 +280,17 @@ class TestCrashStateMatrix:
             except Exception:
                 pass  # Pipeline may fail for other reasons; we check explicit WAL deletion
 
-        # Phase 2 must explicitly call os.remove(wal_path) BEFORE ATTACH so that
+        # os.remove(wal_path) must be called explicitly before ATTACH so that
         # DuckDB starts from a clean slate without replaying the stale WAL.
-        # Phase 1 only calls os.remove(boundaries_tmp) — it never removes the .wal.
-        # This assertion fails RED because Phase 1 does not explicitly delete the WAL.
         assert str(wal_path) in removed_paths, (
-            f"Phase 2 must explicitly call os.remove on the stale WAL "
+            f"os.remove must be called explicitly on the stale WAL "
             f"({wal_path.name}) before ATTACH. "
-            f"Fails RED: phase 1 calls os.remove only on .tmp, not .wal. "
             f"(Paths removed: {[os.path.basename(p) for p in removed_paths]})"
         )
 
 
 # ---------------------------------------------------------------------------
-# Subprocess kill-9 test (Phase 2 acceptance)
+# Subprocess kill-9 test
 # ---------------------------------------------------------------------------
 
 class TestKillNineAcceptance:
@@ -349,7 +327,7 @@ class TestKillNineAcceptance:
             f"got {result.returncode}. Crash harness may not have killed the process."
         )
         assert control_tiles, (
-            "Control run must produce tiles at <src>/tiles/current (Phase 2 layout)."
+            "Control run must produce tiles at <src>/tiles/current."
         )
         # Rerun in-process — must recover and produce correct output
         run_pipeline(

@@ -349,8 +349,8 @@ class TestGeneratedAtDeterminismAndCoherence:
 
     Seam under test: stage_export accepts an optional `now: datetime` keyword
     argument (aware, UTC). When provided, it is used BOTH to name the run
-    directory (`now.strftime("%Y%m%dT%H%M%S")`, replacing the internal
-    `datetime.now(timezone.utc)` call at stages.py:1278) AND to derive the
+    directory (`now.strftime("%Y%m%dT%H%M%S")`, in place of stage_export's
+    internal `datetime.now(timezone.utc)` call) AND to derive the
     shared `generated_at` RFC 3339 Z string stamped into every tile,
     manifest.json, and manifest.duckdb metadata. When omitted, stage_export
     defaults to the current wall-clock time. One timestamp covers an entire
@@ -807,13 +807,9 @@ class TestRunPipelineTempDirectoryThreading:
 # stage_division_import's own `if temp_directory: con.execute(f"SET
 # temp_directory = '{temp_directory}'")` precedent.
 #
-# Production incident: a global run configured with
-# temp_directory=/home/sderle/garganorn-global-tiles/tmp crashed at 506 GiB
-# -- free space on the root filesystem, not the configured scratch volume.
-# After the crash the configured temp_directory measured 4.0K (empty): the
-# spill never went there. max_temp_directory_size defaults to available disk
-# on whatever volume temp_directory actually resolves to, so the ceiling hit
-# belonged to the wrong filesystem.
+# max_temp_directory_size defaults to available disk on whatever volume
+# temp_directory actually resolves to, so an unapplied temp_directory
+# silently spills to the wrong filesystem with the wrong capacity ceiling.
 # ---------------------------------------------------------------------------
 
 class TestStageImportTempDirectory:
@@ -877,15 +873,14 @@ class TestStageImportTempDirectory:
 
 
 # ---------------------------------------------------------------------------
-# Fix 2 -- density_tiles and idf_scores lookup tables built by stage_import
-# from --density-parquet/--idf-parquet are not checked for key uniqueness
-# anywhere. The import SQL LEFT JOINs them on tile_qk15 and category
+# density_tiles and idf_scores, built by stage_import from
+# --density-parquet/--idf-parquet, are LEFT JOINed on tile_qk15 and category
 # respectively; a duplicate key multiplies the matching place's row through
-# the join at every join site. Production data is clean today (density_tiles
-# is GROUP BY-guaranteed unique by its producer, density_extract.sql), but
-# --density-parquet/--idf-parquet accept arbitrary files, so the guarantee is
-# convention, not contract. stage_import must fail loudly, before running the
-# import SQL, when either lookup table's key isn't unique.
+# the join at every join site. density_tiles is GROUP BY-guaranteed unique by
+# its producer, density_extract.sql, but --density-parquet/--idf-parquet
+# accept arbitrary files, so the guarantee is convention, not contract.
+# stage_import fails loudly, before running the import SQL, when either
+# lookup table's key isn't unique.
 # ---------------------------------------------------------------------------
 
 def _write_null_key_density_parquet(path):
@@ -1074,7 +1069,7 @@ class TestStageImportLookupKeyUniqueness:
         """A single NULL tile_qk15 key (and zero duplicates among the
         non-NULL keys) must not trip the uniqueness guard -- this is exactly
         the production shape density_extract.sql produces for a NULL-bbox
-        row (see IMPORTANT 1 in the review that motivated this test)."""
+        row."""
         density_path = tmp_path / "null_density.parquet"
         _write_null_key_density_parquet(density_path)
         places_parquet = str(tmp_path / "places_null_density.parquet")
@@ -1357,10 +1352,9 @@ class TestConfiguredSourceGlobPreflight:
 
 class TestAssertDensityParquetUniqueMaxTempDirectorySize:
     """_assert_density_parquet_unique opens its own duckdb.connect(":memory:")
-    ahead of stage_import's dispatch (I3's single-placement guard) and must
-    bound its spill the same way every other import-pipeline connection
-    does, threaded from stage_import's own temp_directory/
-    max_temp_directory_size."""
+    ahead of stage_import's dispatch and must bound its spill the same way
+    every other import-pipeline connection does, threaded from
+    stage_import's own temp_directory/max_temp_directory_size."""
 
     @staticmethod
     def _statements_before_density_check(statements):
@@ -1405,8 +1399,8 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
     ):
         """max_temp_directory_size is an independent DuckDB setting: it must
         bound spill even when temp_directory is never redirected, since spill
-        then goes to DuckDB's own default location -- unbounded there is
-        exactly the incident this setting exists to prevent."""
+        then goes to DuckDB's own default location, which is otherwise
+        unbounded."""
         import garganorn.stages as stages_mod
 
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
@@ -1517,9 +1511,7 @@ class TestStageImportMaxTempDirectorySize:
         """max_temp_directory_size must bound spill independently of
         temp_directory: a caller that never redirects spill still gets the
         bound applied, so DuckDB's own default temp location is capped
-        rather than limited only by free disk -- the exact shape of the
-        production incident (506 GiB filled on /) this setting exists to
-        prevent."""
+        rather than limited only by free disk."""
         import garganorn.stages as stages_mod
 
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
@@ -1758,9 +1750,10 @@ class TestMaxTempDirectorySizeThreading:
         )
 
     def test_config_file_value_reaches_run_pipeline(self, tmp_path, monkeypatch):
-        """`_cmd_all` is the global-run entry point -- the one that crashed at
-        506 GiB. Its bound comes from the config file, so a dropped value there
-        is the highest-consequence version of this defect."""
+        """`_cmd_all` is the global-run entry point, driving the full
+        production build. Its bound comes from the config file, so a dropped
+        value there is the highest-consequence way this guarantee could
+        fail."""
         import garganorn.quadtree as quadtree_mod
 
         config = tmp_path / "config.yaml"
@@ -1938,10 +1931,10 @@ class TestMaxTempDirectorySizeThreading:
     def test_cmd_run_empty_string_cli_flag_disables_bound(
         self, tmp_path, monkeypatch
     ):
-        """C3: `--max-temp-directory-size ""` must disable the bound, not
-        silently become 250GB. The `or "250GB"` form in _cmd_run treated
-        empty string as falsy; `is not None` (matching _cmd_density,
-        _cmd_idf, _cmd_covering) preserves the caller's explicit choice."""
+        """`--max-temp-directory-size ""` must disable the bound, not
+        silently become 250GB: an explicit empty string is the caller's
+        deliberate opt-out, matching _cmd_density, _cmd_idf, and
+        _cmd_covering."""
         import garganorn.quadtree as quadtree_mod
 
         calls = []

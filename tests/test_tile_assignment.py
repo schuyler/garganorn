@@ -12,7 +12,7 @@ import garganorn.stages as _stages
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 tile-assignment artifact tests
+# tile-assignment artifact tests
 # ---------------------------------------------------------------------------
 
 def _make_places_parquet(tmp_path, places):
@@ -35,10 +35,7 @@ def _make_places_parquet(tmp_path, places):
 
 
 class TestTileAssignmentArtifactPhase2:
-    """stage_tile_assignment must read places.parquet and write sorted artifact.
-
-    Fails in Red phase because stage_tile_assignment still takes 'con' as first arg.
-    """
+    """stage_tile_assignment must read places.parquet and write sorted artifact."""
 
     _PLACES = [
         ("sf001", 37.7749, -122.4194),
@@ -118,9 +115,6 @@ class TestTileAssignmentArtifactPhase2:
 class TestTileAssignmentParity:
     """stage_tile_assignment must produce the same (place_id, tile_qk) pairs
     as compute_tile_assignments.sql against the same fixture data.
-
-    Fails RED because stage_tile_assignment still takes 'con' as its first parameter,
-    not places_parquet.
     """
 
     _PLACES = [
@@ -131,11 +125,8 @@ class TestTileAssignmentParity:
     ]
 
     def test_place_id_tile_qk_parity_vs_old_sql(self, tmp_path):
-        """stage_tile_assignment must produce identical (place_id, tile_qk) set as old SQL.
-
-        Fails RED because stage_tile_assignment does not yet accept places_parquet.
-        """
-        # Reference: old SQL-based approach via run_tile_assignments helper
+        """stage_tile_assignment must produce identical (place_id, tile_qk) set as compute_tile_assignments.sql."""
+        # Reference: SQL-based approach via run_tile_assignments helper
         from tests.quadtree_helpers import run_tile_assignments, make_tile_assignment_db
         ref_conn = duckdb.connect()
         make_tile_assignment_db(ref_conn, self._PLACES)
@@ -147,10 +138,8 @@ class TestTileAssignmentParity:
             ).fetchall()
         }
 
-        # New: stage_tile_assignment reads places.parquet and writes artifact
         places_parquet = _make_places_parquet(tmp_path, self._PLACES)
         output = str(tmp_path / "ta_parity.parquet")
-        # Fails RED: current stage_tile_assignment takes 'con' as first arg
         _stages.stage_tile_assignment(places_parquet, output, "overture_place",
                                       max_per_tile=100, min_zoom=6, max_zoom=17)
 
@@ -160,9 +149,9 @@ class TestTileAssignmentParity:
             ).fetchall()
         )
         assert new_pairs == ref_pairs, (
-            f"stage_tile_assignment (place_id, tile_qk) set != old SQL.\n"
-            f"  In new but not old: {new_pairs - ref_pairs}\n"
-            f"  In old but not new: {ref_pairs - new_pairs}"
+            f"stage_tile_assignment (place_id, tile_qk) set must match compute_tile_assignments.sql.\n"
+            f"  In stage_tile_assignment only: {new_pairs - ref_pairs}\n"
+            f"  In compute_tile_assignments.sql only: {ref_pairs - new_pairs}"
         )
 
 
@@ -172,16 +161,11 @@ class TestTileAssignmentParity:
 
 class TestTileAssignmentDiagnostics:
     """Dropped-place warning and duplicate-place warning
-    must still be emitted (as log messages) from stage_tile_assignment in Phase 2.
-
-    Fails RED because stage_tile_assignment does not yet accept places_parquet.
+    must be emitted (as log messages) from stage_tile_assignment.
     """
 
     def test_dropped_place_warning_emitted_for_null_qk17(self, tmp_path, caplog):
-        """Dropped-place warning emitted when a place has NULL qk17.
-
-        Fails RED because stage_tile_assignment does not yet accept places_parquet.
-        """
+        """Dropped-place warning emitted when a place has NULL qk17."""
         import logging
         # Write places.parquet with one NULL-qk17 row
         parquet_path = str(tmp_path / "null_qk17_places.parquet")
@@ -197,7 +181,6 @@ class TestTileAssignmentDiagnostics:
 
         output = str(tmp_path / "ta_dropped.parquet")
         with caplog.at_level(logging.WARNING):
-            # Fails RED: wrong signature
             _stages.stage_tile_assignment(parquet_path, output, "overture_place", max_per_tile=100)
 
         # Diagnostic: must log a warning about dropped places
@@ -210,14 +193,11 @@ class TestTileAssignmentDiagnostics:
         ]
         assert dropped_warnings, (
             "stage_tile_assignment must log a warning for places with NULL qk17 "
-            "(dropped places diagnostic) — fails RED because signature not yet updated"
+            "(dropped places diagnostic)"
         )
 
     def test_duplicate_place_warning_emitted(self, tmp_path, caplog):
-        """Duplicate-place-id warning emitted when a place appears in multiple tiles.
-
-        Fails RED because stage_tile_assignment does not yet accept places_parquet.
-        """
+        """Duplicate-place-id warning emitted when a place appears in multiple tiles."""
         import logging
         # Note: In the normal case, each place gets exactly one tile.
         # This test verifies the diagnostic is wired up; the actual
@@ -228,37 +208,19 @@ class TestTileAssignmentDiagnostics:
         ])
         output = str(tmp_path / "ta_dupes.parquet")
         with caplog.at_level(logging.WARNING):
-            # Fails RED: wrong signature
             _stages.stage_tile_assignment(places_parquet, output, "overture_place", max_per_tile=1)
-        # Test merely verifies stage_tile_assignment runs the diagnostic query;
-        # the exact message content is checked in GREEN when the implementation exists.
+        # This test verifies stage_tile_assignment runs the diagnostic query;
+        # it does not check the exact duplicate-warning message content.
         assert output  # Stage must produce the output artifact
 
 
 # ---------------------------------------------------------------------------
-# BUG: ambiguous `level` column crash in stage_tile_assignment
+# stage_tile_assignment with an input `level` column (overture_division)
 #
-# The tile_counts query in stage_tile_assignment (garganorn/stages.py, around
-# lines 1211-1220) does:
-#
-#     SELECT level, left(qk17, level) AS qk, count(*) AS cnt
-#     FROM read_parquet('{pq_sql}'),
-#          generate_series({min_zoom}, {max_zoom}) AS t(level)
-#     ...
-#     GROUP BY level, left(qk17, level)
-#
-# The bare `level` is meant to reference the generate_series alias t(level),
-# but overture_division (and other boundary-shaped) records also carry a
-# `level` column (Phase 2b). When the input parquet has its own `level`
-# column, DuckDB cannot resolve the bare identifier and raises:
-#
-#     duckdb.BinderException: Binder Error: Ambiguous reference to column
-#     name "level" (use: "read_parquet.level" or "t.level")
-#
-# This test builds a places.parquet WITH a `level` column (as
-# overture_division records have) and calls stage_tile_assignment for the
-# "overture_division" source. It must complete without raising
-# BinderException and must produce the expected tile_assignments artifact.
+# overture_division records carry their own `level` column (the atgeo
+# containment vocabulary value). stage_tile_assignment's tile_counts query
+# also generates a level series via generate_series AS t(level); every
+# reference to it is qualified as t.level, so the two columns never collide.
 # ---------------------------------------------------------------------------
 
 def _make_places_parquet_with_level(tmp_path, places, pk_col="id"):
@@ -284,15 +246,11 @@ def _make_places_parquet_with_level(tmp_path, places, pk_col="id"):
 
 
 class TestTileAssignmentAmbiguousLevelColumn:
-    """Reproduces the ambiguous-`level`-column BinderException crash.
+    """stage_tile_assignment must not crash when input parquet has a `level` column.
 
     overture_division records carry a `level` column (the atgeo containment
-    vocabulary value, Phase 2b). stage_tile_assignment's tile_counts query
-    uses a bare `level` identifier that collides with this input column,
-    causing DuckDB to raise BinderException instead of completing.
-
-    This test MUST FAIL at Red with duckdb.BinderException until the query
-    is fixed to qualify `level` as `t.level`.
+    vocabulary value). tile_counts qualifies its own level reference as
+    t.level, so the two columns never collide.
     """
 
     _PLACES_WITH_LEVEL = [
@@ -309,8 +267,6 @@ class TestTileAssignmentAmbiguousLevelColumn:
         )
         output = str(tmp_path / "tile_assignments_div.parquet")
 
-        # Currently raises duckdb.BinderException: Ambiguous reference to
-        # column name "level" (use: "read_parquet.level" or "t.level").
         _stages.stage_tile_assignment(
             places_parquet, output, "overture_division", max_per_tile=100
         )

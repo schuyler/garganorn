@@ -219,12 +219,7 @@ class TestOvertureExportTiles:
         )
 
     def test_no_null_fields_in_locations(self, overture_parquet, density_parquet, tmp_path):
-        """No location in any record must contain a key with a None/null value.
-
-        Fails against current code: list_concat unions geo and address struct types,
-        so geo locations get spurious null address fields (country, region, etc.) and
-        address locations get spurious null geo fields (latitude, longitude).
-        """
+        """No location in any record may contain a key with a None/null value."""
         db_path = tmp_path / "test_ov_no_null_loc.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -292,11 +287,7 @@ class TestOvertureExportTiles:
         )
 
     def test_overture_export_latlon_matches_bbox_mean(self, overture_parquet, density_parquet, tmp_path):
-        """Exported latitude/longitude must equal bbox center coordinates.
-
-        Regression guard: passes against both old (st_centroid) and new (bbox mean)
-        code because ov001's geometry point coincides with its bbox center.
-        """
+        """Exported latitude/longitude must equal bbox center coordinates."""
         db_path = tmp_path / "test_ov_export_latlon.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -366,28 +357,21 @@ def _create_place_containment(conn, entries):
 # ---------------------------------------------------------------------------
 
 class TestContainmentInExport:
-    """Tests specifying division containment in tile export output.
-
-    All tests in this class FAIL in the Red phase because:
-      - Tests 3-4: the export SQL files do not yet LEFT JOIN place_containment,
-        so relations.within is never populated.
-      - Tests 5-8: compute_containment() does not exist, run_pipeline() does not
-        accept boundaries_db, and main() does not accept --boundaries.
+    """Tests division containment in tile export output: the export SQL
+    LEFT JOINs place_containment to populate relations.within, and
+    compute_containment()/run_pipeline()/main() wire the boundaries DB
+    through the pipeline.
     """
 
     _OV_SUBS = {"repo": "places.atgeo.org"}
     _OSM_SUBS = {"repo": "places.atgeo.org"}
 
     # ------------------------------------------------------------------
-    # Test 3: Overture export includes relations.within when containment present
+    # Overture export includes relations.within when containment present
     # ------------------------------------------------------------------
 
     def test_overture_relations_with_containment(self, overture_parquet, density_parquet, tmp_path):
-        """Overture export must include relations.within when place_containment populated.
-
-        Fails in Red phase because overture_place_export_tiles.sql has `relations: '{{}}'::JSON`
-        and does not LEFT JOIN place_containment.
-        """
+        """Overture export must include relations.within when place_containment populated."""
         db_path = tmp_path / "ov_containment_with.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -432,15 +416,11 @@ class TestContainmentInExport:
             assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
 
     # ------------------------------------------------------------------
-    # Test 4: OSM export includes relations.within when containment present
+    # OSM export includes relations.within when containment present
     # ------------------------------------------------------------------
 
     def test_osm_relations_with_containment(self, osm_parquet, density_parquet, tmp_path):
-        """OSM export must include relations.within when place_containment populated.
-
-        Fails in Red phase because osm_export_tiles.sql has `relations: '{{}}'::JSON`
-        and does not LEFT JOIN place_containment.
-        """
+        """OSM export must include relations.within when place_containment populated."""
         db_path = tmp_path / "osm_containment_with.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -501,25 +481,19 @@ class TestContainmentInExport:
             assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
 
     # ------------------------------------------------------------------
-    # Test 5: compute_containment import
+    # compute_containment import
     # ------------------------------------------------------------------
 
     def test_compute_containment_function_exists(self):
-        """compute_containment must be importable from garganorn.quadtree.
-
-        Fails in Red phase because the function does not exist yet.
-        """
+        """compute_containment must be importable from garganorn.quadtree."""
         from garganorn.quadtree import compute_containment  # noqa: F401
 
     # ------------------------------------------------------------------
-    # Test 6: compute_containment produces place_containment table
+    # compute_containment produces place_containment table
     # ------------------------------------------------------------------
 
     def test_compute_containment_produces_table(self, tmp_path, division_db_path):
-        """compute_containment must create place_containment with correct columns and rows.
-
-        Fails in Red phase because compute_containment does not exist yet.
-        """
+        """compute_containment must create place_containment with correct columns and rows."""
         try:
             from garganorn.quadtree import compute_containment
         except (ImportError, AttributeError):
@@ -552,7 +526,7 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
-        # Export to parquet for Phase 2 API
+        # compute_containment takes parquet paths, not a connection
         import os
         places_pq = str(tmp_path / "places_produces.parquet")
         ta_pq = str(tmp_path / "ta_produces.parquet")
@@ -623,7 +597,7 @@ class TestContainmentInExport:
                 assert "level" in entry, f"'level' key missing from within entry: {entry}"
 
     # ------------------------------------------------------------------
-    # Test 6b: compute_containment bbox pre-filter regression guard
+    # compute_containment bbox pre-filter regression guard
     # ------------------------------------------------------------------
 
     def test_compute_containment_matches_all_containing_boundaries(self, tmp_path, division_db_path):
@@ -677,7 +651,7 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
-        # Export to parquet for Phase 2 API
+        # compute_containment takes parquet paths, not a connection
         import os
         places_pq = str(tmp_path / "places_bbox.parquet")
         ta_pq = str(tmp_path / "ta_bbox.parquet")
@@ -738,14 +712,11 @@ class TestContainmentInExport:
         )
 
     # ------------------------------------------------------------------
-    # Test 7: run_pipeline accepts boundaries_db keyword argument
+    # run_pipeline accepts boundaries_db keyword argument
     # ------------------------------------------------------------------
 
     def test_run_pipeline_accepts_boundaries_db(self):
-        """run_pipeline must accept a boundaries_db keyword argument.
-
-        Fails in Red phase because run_pipeline has no boundaries_db parameter.
-        """
+        """run_pipeline must accept a boundaries_db keyword argument."""
         from garganorn.quadtree import run_pipeline
         sig = inspect.signature(run_pipeline)
         assert "boundaries_db" in sig.parameters, (
@@ -754,14 +725,11 @@ class TestContainmentInExport:
         )
 
     # ------------------------------------------------------------------
-    # Test 8: main() accepts --boundaries CLI argument
+    # main() accepts --boundaries CLI argument
     # ------------------------------------------------------------------
 
     def test_main_accepts_boundaries_arg(self):
-        """main() argparse must accept a --boundaries CLI argument.
-
-        Fails in Red phase because main() does not define --boundaries.
-        """
+        """main() argparse must accept a --boundaries CLI argument."""
         import argparse
         import sys
         from unittest.mock import patch
@@ -808,7 +776,7 @@ class TestContainmentInExport:
                 raise  # Don't swallow unexpected exceptions
 
     # ------------------------------------------------------------------
-    # Test 9: compute_containment with None boundaries_db creates empty table
+    # compute_containment with None boundaries_db creates empty table
     # ------------------------------------------------------------------
 
     def test_compute_containment_none_boundaries(self, tmp_path):
@@ -873,7 +841,7 @@ class TestContainmentInExport:
         )
 
     # ------------------------------------------------------------------
-    # Test 10: place outside all boundaries produces no containment row
+    # Place outside all boundaries produces no containment row
     # ------------------------------------------------------------------
 
     def test_compute_containment_place_outside_all_boundaries(self, tmp_path, division_db_path):
@@ -907,7 +875,7 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
-        # Export to parquet for Phase 2 API
+        # compute_containment takes parquet paths, not a connection
         import os
         places_pq = str(tmp_path / "places_ocean.parquet")
         ta_pq = str(tmp_path / "ta_ocean.parquet")
@@ -949,12 +917,8 @@ class TestContainmentInExport:
             f"got {len(rows)} containment rows"
         )
 
-    # Tests 11, 13-17 deleted: asserted internals of the removed tile_boundaries/
-    # two-phase recursive machinery (the design replaces that with the covering
-    # stage + quadkey-prefix joins).  Authorized deletions per Green TDD phase.
-
     # ------------------------------------------------------------------
-    # Test 12: place near tile edge with boundary straddling the edge
+    # Place near tile edge with boundary straddling the edge
     # ------------------------------------------------------------------
 
     def test_compute_containment_place_near_tile_edge(self, tmp_path, division_db_path):
@@ -967,8 +931,8 @@ class TestContainmentInExport:
           - A point just outside the SW corner: (37.59, -122.56) — should NOT be in SF
             but should still be in NA, US, CA (the z6 tile is the same: 023010)
 
-        Both points are in the same z6 tile, so the two-phase optimization must
-        correctly distinguish between them using per-point ST_Contains in phase 2.
+        Both points are in the same z6 tile, so containment must be resolved
+        by testing the point against the boundary polygon itself, not the tile.
         """
         from garganorn.quadtree import compute_containment
 
@@ -998,7 +962,7 @@ class TestContainmentInExport:
         conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
         conn.execute("INSERT INTO tile_assignments SELECT place_id, left(qk17, 6) FROM places")
 
-        # Export to parquet for Phase 2 API
+        # compute_containment takes parquet paths, not a connection
         import os
         places_pq = str(tmp_path / "places_edge.parquet")
         ta_pq = str(tmp_path / "ta_edge.parquet")
@@ -1066,36 +1030,29 @@ class TestContainmentInExport:
 
 
 # ---------------------------------------------------------------------------
-# Record JSON byte-identical per source (Phase 2 export)
+# Record JSON byte-identical per source
 # ---------------------------------------------------------------------------
 
 class TestExportRecordParityPhase2:
-    """Stage 2 export from parquet artifacts must produce byte-identical
-    record JSON per source, compared to the Phase 1 view-based output.
-
-    Two forced exports from the same artifacts must produce
-    gunzip-byte-identical tile files (pins the ORDER BY tile_qk, place_id invariant).
-
-    Both fail RED because stage_export does not yet accept parquet artifact paths.
+    """stage_export takes places/tile_assignments parquet paths, not a
+    connection, and two forced exports from the same artifacts produce
+    gunzip-byte-identical tile files (pins the ORDER BY tile_qk, place_id
+    invariant).
     """
 
     def test_stage_export_has_parquet_signature(self):
         """stage_export must accept (source, places_parquet, tile_assignments_parquet,
-        containment_dir, tiles_root, ...) — Phase 2 signature.
-
-        Fails RED because current stage_export takes 'con' as first argument.
-        """
+        containment_dir, tiles_root, ...)."""
         import inspect
         from garganorn.stages import stage_export
         sig = inspect.signature(stage_export)
         params = list(sig.parameters.keys())
         assert params[0] != "con", (
-            f"stage_export must not take 'con' as first param (Phase 2); "
-            f"got {params[0]!r} — fails RED because Phase 2 signature not yet implemented"
+            f"stage_export's first param must not be 'con' — it takes a "
+            f"parquet path; got {params[0]!r}"
         )
         assert "places_parquet" in params, (
-            f"stage_export missing 'places_parquet' param; got {params} — "
-            "fails RED because Phase 2 signature not yet implemented"
+            f"stage_export missing 'places_parquet' param; got {params}"
         )
 
     def test_two_forced_overture_exports_byte_identical(
@@ -1143,7 +1100,7 @@ class TestExportRecordParityPhase2:
             )
             tiles_current = root / "overture_place" / "tiles" / "current"
             assert tiles_current.exists(), (
-                f"Phase 2 tiles must be at {tiles_current}"
+                f"tiles must be at {tiles_current}"
             )
             tiles = {}
             for p in tiles_current.rglob("*.json.gz"):
@@ -1168,29 +1125,24 @@ class TestExportRecordParityPhase2:
 
 
 # ---------------------------------------------------------------------------
-# write_manifest_db from tile_assignments.parquet (Phase 2)
+# write_manifest_db from tile_assignments.parquet
 # ---------------------------------------------------------------------------
 
 class TestWriteManifestDbPhase2:
-    """write_manifest_db must read tile_assignments from parquet (Phase 2),
-    produce the same rkey/tile_qk rows as the current implementation, and
-    preserve the OSM rkey transform (n12345 → node:12345).
-
-    Fails RED because write_manifest_db still takes 'con' as first argument.
+    """write_manifest_db reads tile_assignments from parquet, producing the
+    same rkey/tile_qk rows and preserving the OSM rkey transform
+    (n12345 → node:12345).
     """
 
     def test_write_manifest_db_accepts_parquet_path(self):
-        """write_manifest_db must accept tile_assignments_parquet as first arg (Phase 2).
-
-        Fails RED because current signature is write_manifest_db(con, output_dir, source).
-        """
+        """write_manifest_db must accept tile_assignments_parquet as first arg."""
         import inspect
         from garganorn.stages import write_manifest_db
         sig = inspect.signature(write_manifest_db)
         params = list(sig.parameters.keys())
         assert params[0] != "con", (
-            f"write_manifest_db must not take 'con' first (Phase 2); "
-            f"got {params[0]!r} — fails RED because Phase 2 signature not yet implemented"
+            f"write_manifest_db's first param must not be 'con' — it takes "
+            f"a parquet path; got {params[0]!r}"
         )
         assert "tile_assignments_parquet" in params or "parquet" in params[0].lower(), (
             f"write_manifest_db must accept parquet path; got params: {params}"
@@ -1199,8 +1151,6 @@ class TestWriteManifestDbPhase2:
     def test_osm_rkey_transform_preserved_in_parquet_path(self, tmp_path):
         """OSM rkey transform (n12345→node:12345, w12345→way:12345) must be preserved
         when write_manifest_db reads from tile_assignments.parquet.
-
-        Fails RED because write_manifest_db still takes 'con' as first arg.
         """
         from garganorn.stages import write_manifest_db
 
@@ -1220,8 +1170,7 @@ class TestWriteManifestDbPhase2:
         import os as _os
         _os.makedirs(run_dir)
 
-        # Phase 2 signature: write_manifest_db(tile_assignments_parquet, output_dir, source)
-        # Fails RED with TypeError
+        # write_manifest_db(tile_assignments_parquet, output_dir, source)
         write_manifest_db(ta_path, run_dir, "osm")
 
         manifest_db = tmp_path / "run" / "manifest.duckdb"
@@ -1245,20 +1194,15 @@ class TestWriteManifestDbPhase2:
 
 
 # ---------------------------------------------------------------------------
-# stage_export Phase 2 body (tests 1a–1d)
+# stage_export body
 # ---------------------------------------------------------------------------
 
 class TestStageExportPhase2Body:
-    """Tests for the body of stage_export (Phase 2 export from parquet artifacts).
-
-    All tests fail RED because stage_export currently raises NotImplementedError
-    ('stage_export Phase 2 body not yet wired; call _transitional_export_phase1 …').
-
-    stage_export actual signature (garganorn/stages.py:1542):
+    """Tests for the body of stage_export:
         stage_export(source, places_parquet, tile_assignments_parquet,
                      containment_dir, tiles_root, t0, export_workers=None)
 
-    The `t0` positional parameter is intentional (matches how run_pipeline calls it).
+    The `t0` positional parameter matches how run_pipeline calls it.
     """
 
     # ------------------------------------------------------------------
@@ -1269,8 +1213,7 @@ class TestStageExportPhase2Body:
         """Build minimal overture places.parquet + tile_assignments.parquet.
 
         Uses _make_overture_export_db to populate tables matching
-        overture_place_export_tiles.sql, then COPYs them to parquet files
-        for Phase 2 input.
+        overture_place_export_tiles.sql, then COPYs them to parquet files.
         """
         import os
         places_pq = str(tmp_path / "places.parquet")
@@ -1283,11 +1226,7 @@ class TestStageExportPhase2Body:
         return places_pq, ta_pq
 
     # ------------------------------------------------------------------
-    # Test 1a: Record-JSON parity
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
-    # Test 1b: Empty-containment substitution
+    # Empty-containment substitution
     # ------------------------------------------------------------------
 
     def test_empty_containment_gives_empty_relations(self, tmp_path):
@@ -1330,7 +1269,7 @@ class TestStageExportPhase2Body:
                 )
 
     # ------------------------------------------------------------------
-    # Test 1c: Determinism
+    # Determinism
     # ------------------------------------------------------------------
 
     def test_determinism_two_exports_byte_identical(self, tmp_path, monkeypatch):
@@ -1339,8 +1278,8 @@ class TestStageExportPhase2Body:
 
         Pins ordering determinism end to end: fixture data spans three
         export_partition_zoom partitions ('000000', '000111', '000222'), so
-        this exercises pass 2's per-partition sort producing the same result
-        as the old single global sort, not just within-tile ordering. Also
+        this exercises pass 2's per-partition sort producing a total order
+        across partitions, not just within-tile ordering. Also
         pins the query shape (one PARTITION_BY pass-1 statement, one sorted
         pass-2 SELECT per partition) independently for each of the two runs
         -- a fake implementation that keeps a single global sorted cursor
@@ -1428,7 +1367,7 @@ class TestStageExportPhase2Body:
             )
 
     # ------------------------------------------------------------------
-    # Tests 1d: Run-dir lifecycle
+    # Run-dir lifecycle
     # ------------------------------------------------------------------
 
     def test_run_dir_leftover_incomplete_deleted(self, tmp_path):
@@ -1437,8 +1376,6 @@ class TestStageExportPhase2Body:
         A run dir is complete iff manifest.json exists (written last).
         Stage must scan tiles/ at step 2 and delete any incomplete dirs (no manifest.json,
         not the current symlink target) before creating the new run.
-
-        Fails RED because stage_export raises NotImplementedError.
         """
         import os, time
         from garganorn.stages import stage_export
@@ -1459,10 +1396,9 @@ class TestStageExportPhase2Body:
 
         t0 = time.monotonic()
 
-        # FAILS RED: NotImplementedError
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
-        # After implementation: the incomplete leftover run dir must be deleted
+        # The incomplete leftover run dir must be deleted
         leftover_run_dir = os.path.join(tiles_root, leftover_ts)
         assert not os.path.exists(leftover_run_dir), (
             f"Incomplete run dir {leftover_run_dir!r} must be deleted by stage_export "
@@ -1472,10 +1408,8 @@ class TestStageExportPhase2Body:
     def test_manifest_json_written_after_manifest_duckdb(self, tmp_path):
         """manifest.json mtime must be >= manifest.duckdb mtime.
 
-        manifest.json is written LAST as the run-dir completeness marker.
-        After implementation, manifest.duckdb is written first, then manifest.json.
-
-        Fails RED because stage_export raises NotImplementedError.
+        manifest.json is written LAST as the run-dir completeness marker;
+        manifest.duckdb is written first, then manifest.json.
         """
         import os, time
         from garganorn.stages import stage_export
@@ -1486,10 +1420,9 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        # FAILS RED: NotImplementedError
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
-        # After implementation: find run dir via tiles/current symlink
+        # Find run dir via tiles/current symlink
         current = os.path.join(tiles_root, "current")
         assert os.path.islink(current), "tiles/current symlink must exist after stage_export"
         run_dir = os.path.realpath(current)
@@ -1507,8 +1440,6 @@ class TestStageExportPhase2Body:
         """tiles/current symlink is updated to the new timestamp dir.
 
         The symlink must target a valid, existing timestamp dir containing manifest.json.
-
-        Fails RED because stage_export raises NotImplementedError.
         """
         import os, time
         from garganorn.stages import stage_export
@@ -1519,7 +1450,6 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        # FAILS RED: NotImplementedError
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
         current = os.path.join(tiles_root, "current")
@@ -1542,8 +1472,6 @@ class TestStageExportPhase2Body:
 
         Complete = has manifest.json. Incomplete dirs are already deleted at step 2.
         Keep-2 sweep at step 5 removes complete run dirs older than the newest 2.
-
-        Fails RED because stage_export raises NotImplementedError.
         """
         import os, time
         from garganorn.stages import stage_export
@@ -1563,10 +1491,9 @@ class TestStageExportPhase2Body:
 
         t0 = time.monotonic()
 
-        # FAILS RED: NotImplementedError
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
 
-        # After implementation: at most 2 complete run dirs should survive (keep-2)
+        # At most 2 complete run dirs survive (keep-2)
         complete_dirs = sorted([
             d for d in os.listdir(tiles_root)
             if re.match(r"^\d{8}T\d{6}$", d)
@@ -1581,13 +1508,8 @@ class TestStageExportPhase2Body:
 
 
 # ---------------------------------------------------------------------------
-# Prefix-batched export (two-pass: unsorted COPY ... PARTITION_BY, then a
-# sort-and-flush per partition) -- see the prefix-batched export design doc.
-#
-# export_partition_zoom is a new stage_export parameter. Every test in
-# TestBatchedExportPartitioning passes it explicitly, so all of them fail RED
-# today with TypeError: stage_export() got an unexpected keyword argument
-# 'export_partition_zoom' -- a missing-feature failure, not a fixture bug.
+# Prefix-batched export: pass 1 materialises tile_export unsorted via COPY
+# ... PARTITION_BY, pass 2 sorts and flushes one partition at a time.
 # ---------------------------------------------------------------------------
 
 def _build_containment_dir(tmp_path, name):
@@ -1725,8 +1647,8 @@ _PRESERVE_INSERTION_ORDER_FALSE = "preserve_insertion_order = false"
 def _assert_two_pass_query_shape(sql_log, expected_partitions):
     """Assert pass 1 materialises unsorted via exactly one COPY ...
     PARTITION_BY statement and pass 2 issues one ORDER BY tile_qk, place_id
-    SELECT per partition found -- the mechanism R2's bounded-peak-spill claim
-    rests on, not just output correctness.
+    SELECT per partition found -- the mechanism the bounded-peak-spill
+    guarantee rests on, not just output correctness.
     """
     partition_by_stmts = [s for s in sql_log if _PARTITION_BY_MARKER in s]
     assert len(partition_by_stmts) == 1, (
@@ -1883,9 +1805,7 @@ class TestBatchedExportPartitioning:
 
     def test_tile_spanning_two_fetchmany_batches(self, tmp_path):
         """A single tile with more than 1000 records (the fetchmany chunk
-        size) must be written complete. Ports the intent of
-        TestExportTiles.test_tile_boundary_across_fetchmany_batches to
-        stage_export, where the boundary now also has to be handled inside
+        size) must be written complete: the batch boundary is handled inside
         a single partition's pass-2 sort-and-flush loop.
         """
         import os, time
@@ -2086,9 +2006,8 @@ class TestExportPlanShape:
     """
 
     def test_tile_export_select_plan_has_no_order_by_or_merge_join(self):
-        """Fails RED today: overture_place_export_tiles.sql still has the
-        trailing `ORDER BY ta.tile_qk, ta.place_id`, which the design
-        deletes (ordering becomes pass 2's job)."""
+        """tile_export's SELECT plan must contain no ORDER_BY or
+        PIECEWISE_MERGE_JOIN operator -- ordering is pass 2's job."""
         conn = duckdb.connect()
         _make_overture_export_db(conn)
         raw_sql = _load_sql("overture_place_export_tiles.sql", {"repo": "places.atgeo.org"})

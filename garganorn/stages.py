@@ -1,12 +1,8 @@
-"""Pipeline stage functions extracted from quadtree.py for testability.
-
-This module contains individual stage functions that were previously part of
-the monolithic run_pipeline() function. Each stage corresponds to a logical
-step in the import-assign-containment-export pipeline.
+"""Pipeline stage functions for the import-assign-containment-export pipeline.
 
 TODO: The _SOURCES dict here duplicates SOURCES in quadtree.py. This duplication
 exists because stages.py must not import from quadtree.py (circular import risk),
-and quadtree.py needs to import from stages.py for backward compatibility.
+and quadtree.py imports from stages.py.
 Consider consolidating in a future refactor.
 """
 import glob as glob_module
@@ -236,11 +232,10 @@ def _assert_density_parquet_unique(density_parquet, *, temp_directory=None,
     stage_import dispatch.
 
     stage_import has three destinations for density_parquet: overture_place
-    and osm build their own density_tiles TEMP TABLE directly (and used to
-    assert uniqueness there); overture_division dispatches to
-    stage_division_import and RETURNS before that point is ever reached, so
-    it was invisible to the guard even though it is on the global run path
-    and does receive density_parquet (quadtree.py _cmd_all). A duplicate
+    and osm build their own density_tiles TEMP TABLE directly; overture_division
+    dispatches to stage_division_import and RETURNS before that point is ever
+    reached, though it is on the global run path and does receive
+    density_parquet (quadtree.py _cmd_all). A duplicate
     tile_qk15 there does not fan out any join row count (division_density's
     avg(density_score) just double-counts the duplicate), so it produces a
     silently wrong importance value rather than an error -- exactly the
@@ -343,7 +338,7 @@ def compute_containment(
     force=False,
     partition_zoom: int = 6,
 ) -> None:
-    """Write <src>/containment/ with per-prefix parquet files and _meta.json (Phase 2).
+    """Write <src>/containment/ with per-prefix parquet files and _meta.json.
 
     Sequence:
     - Reads places and tile_assignments from parquet artifacts.
@@ -372,8 +367,8 @@ def compute_containment(
             temp_directory is also supplied.
         force: Re-build even when the artifact is fresh.
         partition_zoom: Quadkey prefix depth used to batch the containment query
-            (default 6, was hardcoded 4). Finer batches bound peak memory per
-            batch at the cost of more COPY calls.
+            (default 6). Finer batches bound peak memory per batch at the cost
+            of more COPY calls.
     """
     # Resolve covering zoom/capacity params from covering's _meta.json,
     # falling back to covering.py's constants. covering.py imports from
@@ -599,7 +594,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
                       *, generated_at: str = None,
                       temp_directory: str | None = None,
                       max_temp_directory_size: str | None = "250GB") -> None:
-    """Phase 2: write manifest.duckdb from a tile_assignments parquet file.
+    """Write manifest.duckdb from a tile_assignments parquet file.
 
     Reads tile_assignments from parquet (no open working connection required).
     Atomic: builds in .tmp, renames into place. The CREATE TABLE ... ORDER BY
@@ -614,7 +609,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         source: Source key (overture_place, osm, overture_division).
         generated_at: RFC 3339 Z run-scoped timestamp shared with the tiles and
             manifest.json. Defaults to the current time if omitted
-            (legacy/test callers that don't thread a run timestamp).
+            (test callers that don't thread a run timestamp).
         temp_directory: DuckDB temp_directory for spill (optional). Callers
             reached via stage_export should pass its own temp_directory so
             the manifest step spills where the export did.
@@ -728,7 +723,7 @@ def bboxes_intersect(a, b):
     return True
 
 
-# Geometry column name per source, excluded from Phase 2 Parquet output.
+# Geometry column name per source, excluded from Parquet output.
 # overture_place is None: overture_place_import.sql drops geometry inside
 # ov_base (before any join/materialization), so `places` never carries it —
 # unlike osm, there is no column left to EXCLUDE at COPY time.
@@ -744,7 +739,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
                           density_parquet=None,
                           density_norm=10.0, pop_norm=20.0,
                           force=False) -> None:
-    """Write places.parquet + boundaries.duckdb for overture_division (Phase 2).
+    """Write places.parquet + boundaries.duckdb for overture_division.
 
     One ephemeral in-memory DuckDB connection. Sequence:
       1. Run overture_division_import.sql transformed to CREATE TEMP TABLE division_all.
@@ -840,7 +835,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     # fail-loud validator below.
     level_case = level_case_sql()
 
-    # Read and transform import SQL for Phase 2:
+    # Read and transform import SQL:
     #   - Remove "DROP TABLE IF EXISTS places;" (no places table on fresh connection)
     #   - Rename "CREATE TABLE places AS" → "CREATE TEMP TABLE division_all AS"
     #   - Trailing "DROP TABLE density_tiles;" is left in place (harmless cleanup)
@@ -974,7 +969,7 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
                  density_parquet=None, idf_parquet=None,
                  density_norm=10.0, idf_norm=18.0, pop_norm=20.0,
                  force=False) -> None:
-    """Write a places.parquet artifact for the given source (Phase 2).
+    """Write a places.parquet artifact for the given source.
 
     Writes places.parquet (geometry column excluded, ORDER BY qk17 NULLS LAST)
     plus a .meta.json sidecar to output_path. Uses an ephemeral in-memory
@@ -1190,13 +1185,13 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     ln(1 + count) as density_score. Output is written to output_path
     and reused in importance computation across all place sources.
 
-    Phase 2: Uses tmp+rename + finalize_artifact for atomicity; freshness
-    gate uses artifact_fresh() (meta-aware). Output sorted by tile_qk15 so
-    zone-map pruning works on tile-prefix filters downstream.
+    Uses tmp+rename + finalize_artifact for atomicity; freshness gate uses
+    artifact_fresh() (meta-aware). Output sorted by tile_qk15 so zone-map
+    pruning works on tile-prefix filters downstream.
 
-    Phase 4: Tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax) are
-    computed in SQL using the qk_env() macro (garganorn/sql/qk_env_macro.sql),
-    which matches quadkey_to_bbox() to within 1e-9. This ensures bbox-overlap
+    Tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax) are computed
+    in SQL using the qk_env() macro (garganorn/sql/qk_env_macro.sql), which
+    matches quadkey_to_bbox() to within 1e-9. This ensures bbox-overlap
     joins work correctly for small localities.
 
     Args:
@@ -1342,7 +1337,7 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
                           memory_limit="48GB", temp_directory=None,
                           max_temp_directory_size="250GB",
                           force=False) -> dict:
-    """Assign places to quadtree tiles and write tile_assignments.parquet (Phase 2).
+    """Assign places to quadtree tiles and write tile_assignments.parquet.
 
     Reads places_parquet, assigns each place to its coarsest quadtree tile where
     the tile contains no more than max_per_tile places, and writes the result to
@@ -1493,7 +1488,7 @@ def stage_division_tile_references(covering_dir, tile_assignments_path, output_p
                                     max_temp_directory_size="250GB",
                                     force=False) -> dict:
     """Expand division tile assignments to every grid tile a division's
-    covering overlaps, and write tile_references.parquet (Phase 2).
+    covering overlaps, and write tile_references.parquet.
 
     Reads the covering artifact (covering_dir/*.parquet) and the grid (the
     distinct tile_qk set of tile_assignments_path), and writes every
@@ -1605,7 +1600,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                  max_temp_directory_size: str | None = "250GB",
                  force: bool = False,
                  now: datetime | None = None) -> str:
-    """Phase 2: export tiles from parquet artifacts.
+    """Export tiles from parquet artifacts.
 
     Reads places and tile_assignments from parquet artifacts. Builds a
     timestamped run dir under tiles_root with per-tile .json.gz files,

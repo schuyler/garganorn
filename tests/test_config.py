@@ -117,7 +117,7 @@ def test_slug_base_url_consistency(tmp_path):
 def test_phase2_tiles_dir_and_manifest_path_doubling(tmp_path):
     """tiles_dir and manifest must carry the doubled '<source>/tiles/current' segment.
 
-    The Phase 2 on-disk layout writes tiles to
+    The on-disk layout writes tiles to
     <output_dir>/<source>/tiles/current/<qk6>/<qk>.json.gz. The config must
     point manifest and tiles_dir at that path, which means the string
     'tiles/current' appears *inside* the path (after the source dir component).
@@ -194,7 +194,7 @@ def test_url_contract_base_url_slug_and_tile_path_shape():
         f"expected {expected_tile_path!r}"
     )
 
-    # base_url must end with the slug (the new route invariant).
+    # base_url must end with the slug (the route invariant).
     assert base_url.rstrip("/").endswith("/" + slug), (
         f"base_url {base_url!r} must end with '/{slug}'"
     )

@@ -33,7 +33,7 @@ def _make_manifest_db(tmp_path, entries):
 
 
 def _write_envelope_tile(tiles_dir, tile_qk, values, generated_at="2026-07-09T18:00:00Z"):
-    """Write a gzipped JSON tile file in the NEW atgeo v1 {uri, cid, value} shape.
+    """Write a gzipped JSON tile file in the atgeo v1 {uri, cid, value} shape.
 
     `values` is a list of record value dicts (e.g. {"rkey": ..., "name": ...});
     each is wrapped as {"uri": ..., "cid": None, "value": <value>}.
@@ -64,7 +64,7 @@ class TestTileBackedCollectionNewEnvelope:
         TileBackedCollection._cached_read_tile.cache_clear()
 
     def test_get_record_returns_value_not_wrapper(self, tmp_path):
-        """get_record on a new-shape tile returns the value dict, not {uri, cid, value}."""
+        """get_record returns the value dict, not the {uri, cid, value} wrapper."""
         tile_qk = "023010"
         rkey = "place001"
         manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
@@ -93,7 +93,7 @@ class TestTileBackedCollectionNewEnvelope:
         assert result["importance"] == 75
 
     def test_get_record_missing_rkey_returns_none_new_shape(self, tmp_path):
-        """rkey not in manifest → None, against a new-shape tile."""
+        """rkey not in manifest → None."""
         tile_qk = "023010"
         manifest_db = _make_manifest_db(tmp_path, [("place001", tile_qk)])
         _write_envelope_tile(tmp_path, tile_qk, [
@@ -139,8 +139,7 @@ class TestTileBackedCollectionNewEnvelope:
     def test_get_record_mutation_does_not_corrupt_cache(self, tmp_path):
         """Popping a key from the returned value (as the server layer does with
         'importance') must not corrupt the lru_cache-held tile dict — the
-        shallow-copy contract (per the envelope decisions above) must hold for the
-        value sub-object too."""
+        shallow-copy contract must hold for the value sub-object too."""
         tile_qk = "023010"
         rkey = "place001"
         manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])

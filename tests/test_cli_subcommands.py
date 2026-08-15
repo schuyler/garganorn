@@ -1,18 +1,8 @@
-"""RED tests for CLI subcommand grammar (Phase 2).
+"""Tests for the CLI subcommand grammar: density, idf, covering, run, all.
 
-The current CLI uses a flat flag model (--source, --output, etc.).
-Phase 2 restructures it into subcommands: density, idf, covering, run, all.
-
-All tests here fail in Red phase because the subcommand parser does not
-exist. Failures manifest as:
-  - SystemExit(2) when the subcommand name is passed to the current flat
-    argparse (treated as an unrecognized positional).
-  - AssertionError when checking that the subcommand was dispatched.
-
-Test class mapping:
-  1. Each subcommand parses              → TestSubcommandParsing
-  2. 'all' stage-call order             → TestAllSubcommandOrder
-  3. --force deletion sets              → TestForceSemantics
+TestSubcommandParsing  -- each subcommand is accepted by the parser.
+TestAllSubcommandOrder -- 'all' calls stages in dependency order.
+TestForceSemantics     -- 'run --force' deletes the correct artifact set.
 """
 import os
 import sys
@@ -20,7 +10,6 @@ from unittest.mock import patch, MagicMock, call
 
 import pytest
 
-# garganorn.quadtree.main exists in Red phase; it just lacks subparsers.
 from garganorn import quadtree as _qt
 
 
@@ -277,19 +266,12 @@ class TestForceSemantics:
       run --force (overture_division):
         additionally boundaries.duckdb, covering/, and
         tile_references.parquet + .meta.json
-
-    All tests fail RED because:
-      (a) the 'run' subcommand does not exist (SystemExit on parse), OR
-      (b) run_pipeline does not implement force deletion for Phase 2 artifacts.
     """
 
     def test_run_force_flag_recognized_by_cli(
         self, tmp_path, overture_parquet, monkeypatch
     ):
-        """'run --force' must not raise SystemExit (flag must be accepted by parser).
-
-        Fails RED because the 'run' subcommand parser does not exist.
-        """
+        """'run --force' must not raise SystemExit (flag must be accepted by parser)."""
         monkeypatch.setattr(sys, "argv", [
             "qt", "run",
             "--source", "overture_place",
@@ -311,15 +293,13 @@ class TestForceSemantics:
     ):
         """run with force=True must delete places.parquet+meta, tile_assignments.parquet+meta,
         containment/; tiles/ history must survive.
-
-        Fails RED because run_pipeline does not implement Phase 2 force deletion.
         """
         from garganorn.quadtree import run_pipeline as _run_pipeline
 
         src_dir = tmp_path / "overture_place"
         src_dir.mkdir()
 
-        # Plant stale Phase 2 artifacts
+        # Plant stale run artifacts
         for name in [
             "places.parquet", "places.parquet.meta.json",
             "tile_assignments.parquet", "tile_assignments.parquet.meta.json",
@@ -336,7 +316,8 @@ class TestForceSemantics:
         tile_marker = ts_dir / "manifest.json"
         tile_marker.write_bytes(b"{}")
 
-        # Run with force=True; stages may fail in RED — deletion must happen first
+        # Deletion must happen before rebuild, even if the stage itself raises
+        # on the fake test data.
         try:
             _run_pipeline(
                 "overture_place",
@@ -348,12 +329,11 @@ class TestForceSemantics:
                 force=True,
             )
         except Exception:
-            pass  # Phase 2 stages may fail; that is expected in RED
+            pass
 
         # Stale containment parquet must be gone (deleted by force before rebuild)
         assert not stale_containment_parquet.exists(), (
-            "run with force=True must delete containment/ before rebuilding — "
-            "fails RED because Phase 2 force deletion is not implemented"
+            "run with force=True must delete containment/ before rebuilding"
         )
 
         # tiles/ history must be untouched
@@ -365,16 +345,12 @@ class TestForceSemantics:
         self, tmp_path, division_parquet
     ):
         """For overture_division, force=True must explicitly delete boundaries.duckdb
-        before rebuilding it (PRE-deletion requirement).
+        before rebuilding it.
 
-        Strengthened from vacuous: Phase 1 already overwrites boundaries.duckdb via
-        ATTACH (content changes), so a content-only check passes with no pressure.
-        This version tracks os.remove calls and asserts boundaries.duckdb was
-        explicitly removed before export_boundaries_db recreated it.
-
-        Phase 1 calls os.remove only on the working DB — never on boundaries.duckdb.
-        Phase 2 must call os.remove on boundaries.duckdb as part of force deletion.
-        Fails RED until Phase 2 implements the explicit pre-deletion step.
+        stage_division_import rebuilds boundaries.duckdb in place via ATTACH,
+        so a content-only check would pass even without the pre-delete. This
+        test spies on os.remove to confirm boundaries.duckdb is explicitly
+        removed before the rebuild.
         """
         from garganorn.quadtree import run_pipeline as _run_pipeline
 
@@ -391,8 +367,7 @@ class TestForceSemantics:
         div_parquet, div_area_parquet = division_parquet
 
         # Spy on os.remove to verify boundaries.duckdb is explicitly deleted
-        # before the pipeline rebuilds it.  Phase 1 never calls os.remove on it;
-        # Phase 2 must (deletion-before-rebuild requirement).
+        # before the pipeline rebuilds it.
         removed_paths = []
         _orig_remove = os.remove
 
@@ -413,12 +388,9 @@ class TestForceSemantics:
             except Exception:
                 pass
 
-        # Phase 2 requirement: boundaries.duckdb must be explicitly deleted
-        # (via os.remove) BEFORE the pipeline rebuilds it.  Phase 1 only calls
-        # os.remove on the working DB — it overwrites boundaries.duckdb in place
-        # via ATTACH without ever removing the file first.
+        # boundaries.duckdb must be explicitly deleted (via os.remove) before
+        # the pipeline rebuilds it via ATTACH.
         assert any(p == boundaries_db_path for p in removed_paths), (
             "force=True for overture_division must call os.remove on boundaries.duckdb "
-            "before rebuilding — fails RED because Phase 2 force deletion is not "
-            "yet implemented. os.remove calls seen: " + repr(removed_paths)
+            "before rebuilding. os.remove calls seen: " + repr(removed_paths)
         )

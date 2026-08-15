@@ -1,12 +1,5 @@
-"""Failing tests for removing print() statements from production code.
-
-Debug print statements in production code should be replaced with
-logging calls or removed. This module contains tests that FAIL against the
-current code and PASS after the fix is applied.
-
-Affected locations:
-- garganorn/server.py:15,27,25,56
-- garganorn/database.py:143,255
+"""Tests that garganorn/server.py and garganorn/database.py use logging,
+not print(), for production diagnostics.
 """
 
 import ast
@@ -24,22 +17,10 @@ REPO_ROOT = pathlib.Path(__file__).parent.parent
 
 
 class TestNoPrintCalls:
-    """Red-phase tests for no print() calls in production modules.
-
-    Each test FAILES against the current code and PASSES after print() statements
-    are replaced with logging calls or removed.
-    """
+    """server.py and database.py contain no print() calls in production code."""
 
     def test_server_py_no_print_calls(self):
-        """server.py must not contain any print() calls.
-
-        Currently contains:
-        - Line 15: print("Warning: No lexicon directory found")
-        - Line 27: print(f"Error: Failed to parse {file_path.name} as JSON")
-
-        After fix, these should be replaced with logging.warning() and
-        logging.error() respectively. FAILS until all print() calls are removed.
-        """
+        """server.py must not contain any print() calls."""
         server_path = REPO_ROOT / "garganorn" / "server.py"
         source = server_path.read_text()
 
@@ -64,14 +45,8 @@ class TestNoPrintCalls:
         )
 
     def test_database_py_no_print_calls(self):
-        """database.py must not contain any print() calls.
-
-        Currently contains:
-        - Line 143: print(f"Warning: Could not remove temp directory {self.temp_dir}: {e}")
-        - Line 255: print(f"Searching with params: {params}")
-
-        After fix, these should be replaced with log.warning() and log.debug()
-        respectively. FAILS until all print() calls are removed.
+        """database.py must not contain any print() calls in production code
+        (the __main__ block is exempt).
         """
         database_path = REPO_ROOT / "garganorn" / "database.py"
         source = database_path.read_text()
@@ -98,14 +73,7 @@ class TestNoPrintCalls:
         )
 
     def test_server_py_no_commented_print_calls(self):
-        """server.py must not contain commented-out print() statements.
-
-        Currently contains:
-        - Line 25: #print(f"Loaded lexicon: {lexicon_data['id']} from {file_path.name}")
-        - Line 56: #print(f"Registering {name} to {method}")
-
-        These should be removed entirely. FAILS until all commented print() lines are removed.
-        """
+        """server.py must not contain commented-out print() statements."""
         server_path = REPO_ROOT / "garganorn" / "server.py"
         source = server_path.read_text()
 
@@ -124,20 +92,13 @@ class TestNoPrintCalls:
 
 
 class TestLoggingUsage:
-    """Red-phase tests verifying logging is used instead of print().
-
-    After the fix, server.py should use logging.warning() and logging.error(),
-    and database.py should use log.warning() and log.debug() (the module logger
-    is already defined as `log` on line 9).
+    """server.py uses logging.warning()/logging.error(), and database.py uses
+    its module-level `log` logger, instead of print().
     """
 
     def test_server_py_has_module_logger(self):
-        """server.py must have a module-level logger defined.
-
-        After the fix, server.py should have a line like:
-        _log = logging.getLogger(__name__)
-
-        FAILS until the module logger is added.
+        """server.py defines a module-level logger, e.g.
+        `_log = logging.getLogger(__name__)`.
         """
         server_path = REPO_ROOT / "garganorn" / "server.py"
         source = server_path.read_text()
@@ -171,13 +132,7 @@ class TestLoggingUsage:
         )
 
     def test_server_py_uses_logging_for_lexicon_warning(self):
-        """server.py must use logging.warning() for missing lexicon directory.
-
-        Currently line 15: print("Warning: No lexicon directory found")
-        After fix: _log.warning("No lexicon directory found") or similar.
-
-        FAILS until print() is replaced with logging.warning().
-        """
+        """server.py must use logging.warning() for a missing lexicon directory."""
         server_path = REPO_ROOT / "garganorn" / "server.py"
         source = server_path.read_text()
 
@@ -205,18 +160,11 @@ class TestLoggingUsage:
 
         # After the fix, we should have both logging call AND the message (not in print)
         assert has_logging_warning and has_no_lexicon_msg, (
-            "server.py does not use logging.warning() for missing lexicon directory. "
-            "The current print() call should be replaced with logging.warning()."
+            "server.py does not use logging.warning() for missing lexicon directory."
         )
 
     def test_server_py_uses_logging_for_json_error(self):
-        """server.py must use logging.error() for JSON parse failures.
-
-        Currently line 27: print(f"Error: Failed to parse {file_path.name} as JSON")
-        After fix: _log.error("Failed to parse %s as JSON", file_path.name) or similar.
-
-        FAILS until print() is replaced with logging.error().
-        """
+        """server.py must use logging.error() for JSON parse failures."""
         server_path = REPO_ROOT / "garganorn" / "server.py"
         source = server_path.read_text()
 
@@ -243,17 +191,12 @@ class TestLoggingUsage:
         has_json_error_msg = "Failed to parse" in source and "as JSON" in source
 
         assert has_logging_error and has_json_error_msg, (
-            "server.py does not use logging.error() for JSON parse failures. "
-            "The current print() call should be replaced with logging.error()."
+            "server.py does not use logging.error() for JSON parse failures."
         )
 
     def test_database_py_uses_log_for_temp_dir_warning(self):
-        """database.py must use log.warning() for temp directory cleanup failure.
-
-        Currently line 143: print(f"Warning: Could not remove temp directory {self.temp_dir}: {e}")
-        After fix: log.warning("Could not remove temp directory %s: %s", self.temp_dir, e)
-
-        The module logger 'log' is already defined on line 9. FAILS until print() is replaced.
+        """database.py must use log.warning() for temp directory cleanup
+        failure in close(), via the module-level `log` logger.
         """
         database_path = REPO_ROOT / "garganorn" / "database.py"
         source = database_path.read_text()
@@ -268,24 +211,17 @@ class TestLoggingUsage:
                 break
 
         assert not has_print_with_temp_dir, (
-            "database.py still uses print() for temp directory cleanup failure in close() method. "
-            "The print() call should be replaced with log.warning()."
+            "database.py must not use print() for temp directory cleanup "
+            "failure in close(); use log.warning() instead."
         )
 
 
 class TestRuntimeBehavior:
-    """Red-phase tests verifying no stdout output at runtime.
-
-    These tests verify that the production code paths do not write to stdout.
-    They FAIL against the current code (which uses print()) and PASS after
-    the fix (which uses logging).
-    """
+    """Production code paths write to logging, not stdout."""
 
     def test_load_lexicons_no_stdout(self):
-        """load_lexicons() must not print to stdout.
-
-        Currently prints to stdout when lexicon directory is missing or JSON fails.
-        After fix, should use logging instead. FAILS until print() is replaced.
+        """load_lexicons() must not print to stdout when the lexicon
+        directory is missing or JSON parsing fails.
         """
         # Mock the lexicon directory to not exist
         with patch("garganorn.server.files") as mock_files:
@@ -306,10 +242,8 @@ class TestRuntimeBehavior:
                 )
 
     def test_database_close_no_stdout_on_error(self):
-        """Database.close() must not print to stdout when cleanup fails.
-
-        Currently prints a warning when temp directory removal fails.
-        After fix, should use log.warning() instead. FAILS until print() is replaced.
+        """Database.close() must not print to stdout when temp directory
+        removal fails.
         """
         # Create a mock database that will fail on cleanup
         db = Database(":memory:")

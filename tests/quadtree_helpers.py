@@ -56,8 +56,8 @@ def _density_cte_sql(density_rows):
     """Build the density_tiles temp-table SQL fragment.
 
     density_rows=None (the default used by every *_import helper below)
-    creates an empty table, exactly matching prior behavior — importance
-    defaults to 0 and the density LEFT JOIN never matches.
+    creates an empty table — importance defaults to 0 and the density
+    LEFT JOIN never matches.
 
     density_rows: optional list of (tile_qk15, density_score, tile_xmin,
         tile_ymin, tile_xmax, tile_ymax) tuples to populate density_tiles
@@ -90,7 +90,7 @@ def _idf_cte_sql(idf_rows):
     """Build the idf_scores temp-table SQL fragment.
 
     idf_rows=None (the default used by every *_import helper below) creates
-    an empty table, exactly matching prior behavior.
+    an empty table.
 
     idf_rows: optional list of (category, idf_score) tuples to populate
         idf_scores with real rows (including deliberately duplicate
@@ -115,7 +115,7 @@ def run_overture_import(conn, parquet_glob, bbox=None, density_rows=None, idf_ro
     """Run overture_place_import.sql against `parquet_glob`.
 
     By default (density_rows=None, idf_rows=None) density_tiles/idf_scores are
-    created empty, exactly as before — existing callers are unaffected.
+    created empty.
 
     density_rows: optional list of (tile_qk15, density_score, tile_xmin,
         tile_ymin, tile_xmax, tile_ymax) tuples to populate density_tiles with
@@ -152,7 +152,7 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None,
     """Run osm_import.sql against node_glob/way_glob.
 
     By default (density_rows=None, idf_rows=None) density_tiles/idf_scores are
-    created empty, exactly as before — existing callers are unaffected.
+    created empty.
 
     density_rows/idf_rows: see _density_cte_sql/_idf_cte_sql docstrings.
     """

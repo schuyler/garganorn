@@ -318,16 +318,16 @@ def test_tile_cache_control_is_constant_immutable(tile_client):
 def test_tile_path_traversal_rejected(tmp_path):
     """safe_join blocks paths that escape tiles_dir.
 
-    Root is now {source}/tiles/ (R2), one level above the run directory --
-    escaping to a sibling of tiles/ (places.parquet) now takes ONE '..', not
-    two; escaping cross-source takes two, not three.
+    Root is {source}/tiles/, one level above the run directory -- so escaping
+    to a sibling of tiles/ (places.parquet) takes one '..', and escaping
+    cross-source takes two.
 
     Two escapes, deliberately targeting different file types, because R17's
     suffix guard (tile_path must end in .json.gz) runs in the same handler
     and would 404 a places.parquet request on its own, before safe_join is
     ever consulted:
-      - places.parquet doesn't end in .json.gz, so once R17 lands this case
-        proves the suffix guard, not containment.
+      - places.parquet doesn't end in .json.gz, so this case proves the
+        suffix guard, not containment.
       - the cross-source target DOES end in .json.gz, so it's the one that
         actually proves safe_join blocks the escape.
     """
@@ -359,8 +359,8 @@ def test_tile_path_traversal_rejected(tmp_path):
     app = _build_tile_app(tiles_config)
 
     with app.test_client() as client:
-        # Sibling escape to a non-tile file -- exercises the R17 suffix guard
-        # once it lands, not safe_join containment (see docstring).
+        # Sibling escape to a non-tile file -- exercises the R17 suffix guard,
+        # not safe_join containment (see docstring).
         sibling_paths = [
             "/tiles/overture-place/../places.parquet",
             "/tiles/overture-place/%2e%2e/places.parquet",
@@ -469,10 +469,9 @@ def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_tile_route_roots_at_tiles_not_run_dir(tmp_path):
-    """R2: tile_dirs[slug] roots at {source}/tiles/, one level above the run
+    """tile_dirs[slug] roots at {source}/tiles/, one level above the run
     directory, so a tile request must include the run's stamp segment to
-    resolve -- and the old un-stamped path, which resolved directly against
-    the run dir under today's root, must stop resolving."""
+    resolve; a path without that segment does not resolve."""
     tiles_root = tmp_path / "overture_place" / "tiles"
     stamp = "20260101T000000"
     run_dir = _make_run(tiles_root, stamp,
@@ -493,9 +492,8 @@ def test_tile_route_roots_at_tiles_not_run_dir(tmp_path):
 
         resp = client.get("/tiles/overture-place/012301/012301.json.gz")
         assert resp.status_code == 404, (
-            "the un-stamped path resolved directly against the run dir under "
-            f"today's root; once tiles_dir is tiles/ it must stop resolving; "
-            f"got {resp.status_code}"
+            "the un-stamped path must not resolve, since tiles_dir roots at "
+            f"tiles/, one level above the run dir; got {resp.status_code}"
         )
 
 
@@ -618,9 +616,9 @@ def test_incomplete_run_not_served(tmp_path):
     )
     app = _build_tile_app(tiles_config)
     with app.test_client() as client:
-        # Stamped path -- if this were unstamped, once R2 lands it would
-        # 404 on path resolution alone, masking whether the completeness
-        # gate itself still withholds tile_dirs[slug].
+        # Stamped path -- an unstamped path would 404 on path resolution
+        # alone (tiles_dir roots at tiles/), masking whether the
+        # completeness gate itself withholds tile_dirs[slug].
         resp = client.get(f"/tiles/overture-place/{stamp}/012301/012301.json.gz")
         assert resp.status_code == 404, (
             "incomplete run (manifest.duckdb without manifest.json) must not "
@@ -650,9 +648,9 @@ def test_incomplete_run_not_served(tmp_path):
 
 def test_complete_run_served(tmp_path):
     """Positive control: a run with BOTH manifest.duckdb and manifest.json
-    present is served normally -- it locks in the behavior the A1 fix must
-    preserve. Requests the stamped path (R2): once tiles_dir roots at
-    tiles/, the un-stamped path no longer resolves at all.
+    present is served normally -- it locks in the behavior the A1 guard must
+    preserve. Requests the stamped path (R2): tiles_dir roots at tiles/, so
+    the un-stamped path does not resolve.
     """
     tiles_root = tmp_path / "overture_place" / "tiles"
     stamp = "20260101T000000"

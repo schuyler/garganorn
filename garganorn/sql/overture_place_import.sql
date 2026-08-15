@@ -8,7 +8,7 @@ INSTALL spatial; LOAD spatial;
 ${density_cte}
 ${idf_cte}
 
--- Import Overture places and compute importance + variants in one pass (Phase 2: density+IDF+importance+variants unified in import CTAS)
+-- Import Overture places and compute importance + variants in one pass
 -- ov_base is scanned exactly
 -- once beyond its own definition (the final SELECT below). Density/idf are
 -- joined directly against pre-deduplicated lookup tables instead of via a
@@ -37,14 +37,12 @@ SELECT b.*,
            60 * least(coalesce(od.density_score, 0) / ${density_norm}, 1.0)
          + 40 * least(coalesce(oi.idf_score, 0) / ${idf_norm}, 1.0)
        )::INTEGER AS importance,
-       -- Compute variants from names.common and names.rules per-row
-       -- (absorbed from overture_place_variants.sql). names.common entries
-       -- are always typed 'alternate'; names.rules entries are mapped by
-       -- their `variant` string. Concatenating the two lists and filtering
-       -- out NULL/empty names replaces the old unnest -> UNION ALL ->
-       -- GROUP BY id pipeline with a single per-row expression -- no
-       -- explosion, no re-aggregation. Duplicates are NOT deduped, matching
-       -- prior behavior (list_concat with no DISTINCT).
+       -- Compute variants from names.common and names.rules per-row.
+       -- names.common entries are always typed 'alternate'; names.rules
+       -- entries are mapped by their `variant` string. Concatenating the
+       -- two lists and filtering out NULL/empty names avoids unnest and
+       -- GROUP BY, so there is no explosion or re-aggregation. Duplicates
+       -- are not deduped (list_concat has no DISTINCT).
        list_sort(list_filter(
            list_concat(
                coalesce(list_transform(map_entries(b.names.common),

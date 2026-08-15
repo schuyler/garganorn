@@ -30,7 +30,7 @@ SOURCES = {cls.source_key: cls for cls in [OverturePlaces, OpenStreetMap, Overtu
 
 
 def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB"):
-    """Phase 2 orchestrator: import → covering → tile-assign → containment → export."""
+    """Orchestrates import → covering → tile-assign → containment → export."""
     source_dir = os.path.join(output_dir, source)
     tiles_root = os.path.join(source_dir, "tiles")
     places_parquet = os.path.join(source_dir, "places.parquet")
@@ -41,7 +41,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
 
     os.makedirs(source_dir, exist_ok=True)
 
-    # Force deletion: delete Phase 2 artifacts before stages rebuild them.
+    # Force deletion: delete stage artifacts before stages rebuild them.
     # Never touches tiles/ history.
     if force:
         for fname in [

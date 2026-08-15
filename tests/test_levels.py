@@ -1,10 +1,5 @@
 """Tests for garganorn.levels.LEVEL_VOCAB and the atgeo containment level vocabulary.
 
-Tests are structured so an ImportError from garganorn.levels is legible: a
-module-level try/except records it and _check_levels() surfaces it as a
-clear pytest.fail rather than an opaque collection error, mirroring the
-pattern tests/test_covering.py uses for garganorn.covering.
-
 Covers:
   1. Vocabulary correctness -- LEVEL_VOCAB covers exactly the 9 observed
      subtypes + borough; fail-loud raises on an injected unknown subtype.
@@ -22,25 +17,11 @@ import inspect
 import duckdb
 import pytest
 
-try:
-    from garganorn.levels import LEVEL_VOCAB
-    _LEVELS_ERROR = None
-except ImportError as _exc:
-    LEVEL_VOCAB = None
-    _LEVELS_ERROR = _exc
-
-
-def _check_levels():
-    """Call at the start of every test that needs LEVEL_VOCAB; surfaces the ImportError."""
-    if _LEVELS_ERROR is not None:
-        pytest.fail(
-            f"garganorn.levels.LEVEL_VOCAB not importable: {_LEVELS_ERROR}",
-            pytrace=False,
-        )
+from garganorn.levels import LEVEL_VOCAB
 
 
 # ---------------------------------------------------------------------------
-# Acceptance checklist item 1 — vocabulary correctness
+# Vocabulary correctness
 # ---------------------------------------------------------------------------
 
 class TestLevelVocabCorrectness:
@@ -66,7 +47,6 @@ class TestLevelVocabCorrectness:
 
     def test_level_vocab_importable(self):
         """garganorn.levels.LEVEL_VOCAB must exist and be importable."""
-        _check_levels()
         assert LEVEL_VOCAB is not None
 
     def test_level_vocab_keys_are_exactly_the_ten_subtypes(self):
@@ -78,23 +58,19 @@ class TestLevelVocabCorrectness:
         atgeo-spec.md, "Containment levels", though absent from current
         Overture data).
         """
-        _check_levels()
         assert set(LEVEL_VOCAB.keys()) == self._EXPECTED_SUBTYPES, (
             f"LEVEL_VOCAB keys {set(LEVEL_VOCAB.keys())} != "
             f"expected {self._EXPECTED_SUBTYPES}"
         )
 
     def test_level_vocab_values_match_stride_five_table(self):
-        """Each subtype maps to its stride-5 value (per the level-vocabulary
-        decisions above); no admin_level involved."""
-        _check_levels()
+        """Each subtype maps to its stride-5 value; no admin_level involved."""
         assert LEVEL_VOCAB == self._EXPECTED_VALUES, (
             f"LEVEL_VOCAB {LEVEL_VOCAB} != expected {self._EXPECTED_VALUES}"
         )
 
     def test_level_vocab_values_are_unique(self):
         """No two subtypes share a level value (each subtype sorts distinctly)."""
-        _check_levels()
         values = list(LEVEL_VOCAB.values())
         assert len(values) == len(set(values)), (
             f"LEVEL_VOCAB has duplicate level values: {LEVEL_VOCAB}"
@@ -102,7 +78,6 @@ class TestLevelVocabCorrectness:
 
     def test_level_vocab_values_ascending_in_hierarchy_order(self):
         """Values increase monotonically from country (most general) to microhood (most specific)."""
-        _check_levels()
         hierarchy_order = [
             "country", "dependency", "region", "county", "localadmin",
             "locality", "borough", "macrohood", "neighborhood", "microhood",
@@ -218,18 +193,18 @@ class TestFailLoudUnmappedSubtype:
 
 
 # ---------------------------------------------------------------------------
-# Acceptance checklist item 3 — filter delta: localadmin + admin_level=3 counties included, hoods excluded
+# Filter delta: localadmin and admin_level=3 counties are included, hoods too
 # ---------------------------------------------------------------------------
 
 class TestBoundaryFilterDelta:
     """boundaries.duckdb carries every LEVEL_VOCAB level, no cutoff.
 
-    country through microhood are all included — there is no level filter
-    on `bnd.places` any more, since the level vocabulary is already the
-    full set of levels the pipeline knows how to produce. Uses a synthetic
-    division_parquet fixture covering one subtype per level tier to
-    exercise row inclusion directly, rather than empirical row-count
-    reconciliation numbers (not a unit-testable invariant).
+    country through microhood are all included — `bnd.places` has no level
+    filter, since the level vocabulary is already the full set of levels
+    the pipeline knows how to produce. Uses a synthetic division_parquet
+    fixture covering one subtype per level tier to exercise row inclusion
+    directly, rather than empirical row-count reconciliation numbers (not
+    a unit-testable invariant).
     """
 
     _BBOX = (-180, -90, 180, 90)
@@ -300,7 +275,7 @@ class TestBoundaryFilterDelta:
         return (str(division_path), str(division_area_path))
 
     def test_localadmin_included_in_boundaries_db(self, tmp_path):
-        """localadmin must appear in boundaries.duckdb (was excluded by the old admin_level filter)."""
+        """localadmin must appear in boundaries.duckdb (level 45, no cutoff excludes it)."""
         from garganorn import stages
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
@@ -354,15 +329,12 @@ class TestBoundaryFilterDelta:
 
 
 # ---------------------------------------------------------------------------
-# Acceptance checklist item 5 — no NULL levels in places (import-time, covers the
-# level-vocabulary decisions directly)
+# No NULL levels in places (import-time)
 #
-# Note: tests/test_containment_covering.py::TestNoNullLevels covers the same
-# acceptance item against boundaries.duckdb via the division_parquet conftest
-# fixture (country/region/locality only). This class additionally exercises
-# the full 9-subtype spread (including the hoods) to confirm LEVEL_VOCAB
-# leaves nothing NULL even for subtypes the boundaries.duckdb filter later
-# excludes -- the guarantee is at the `places` CTAS, before the filter runs.
+# tests/test_containment_covering.py::TestNoNullLevels covers the same
+# invariant against boundaries.duckdb via the division_parquet conftest
+# fixture (country/region/locality only). This class exercises the full
+# 9-subtype spread, including the hoods.
 # ---------------------------------------------------------------------------
 
 class TestNoNullLevelsAllSubtypes:
@@ -400,8 +372,8 @@ class TestCountyCollapse:
     """All county-subtype divisions get level=35; admin_level is not a secondary discriminator.
 
     County collapses to a single level value. This test feeds two county
-    divisions with different (now-vestigial) division_area admin_level
-    values and confirms both land on level=35.
+    divisions with different division_area admin_level values and confirms
+    both land on level=35.
     """
 
     _BBOX = (-180, -90, 180, 90)
@@ -434,9 +406,9 @@ class TestCountyCollapse:
                 bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
             )
         """)
-        # county_al2 mimics the common case (admin_level=2, 38,674 of 38,903 per
-        # the level-vocabulary decisions above); county_al3 mimics the
-        # arbitrarily-excluded-today case (admin_level=3, same decisions' delta).
+        # county_al2 mimics the common case (admin_level=2, 38,674 of 38,903
+        # counties); county_al3 mimics the rarer admin_level=3 case. Both
+        # collapse to the same county level regardless of admin_level.
         counties = [("county_al2", 2, -170.0), ("county_al3", 3, -150.0)]
         for div_id, admin_level, x0 in counties:
             conn.execute(

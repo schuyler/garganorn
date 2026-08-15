@@ -1,13 +1,10 @@
-"""Phase 1 migration tests: lexicon schema cleanup and Overture collection rename.
-
-These tests are written RED — they FAIL against the current codebase and
-PASS once Phase 1 changes are implemented.
+"""Lexicon schema cleanup and Overture collection naming.
 
 Part 1: Lexicon schema (garganorn/lexicon/place.json)
   - rkey description must use a generic example format (not WoF-specific)
 
-Part 2: Collection rename
-  - OvertureMaps.collection must equal "org.atgeo.places.overture.place"
+Part 2: Collection naming
+  - OverturePlaces.collection must equal "org.atgeo.places.overture.place"
   - config.yaml must have key "org.atgeo.places.overture.place"
 """
 import json
@@ -43,9 +40,8 @@ def _load_config_yaml():
 def test_relation_rkey_description_is_generic():
     """rkey description in #relation must use a generic example, not WoF-specific.
 
-    The current description references `org.atgeo.places.wof:85922583`, which
-    couples the generic relation schema to a specific data source.
-    FAILS until the rkey description uses a source-neutral example.
+    The relation schema is source-neutral, so its rkey description must not
+    name a specific data source.
     """
     schema = _load_place_json()
     rkey_desc = schema["defs"]["relation"]["properties"]["rkey"]["description"]
@@ -57,50 +53,44 @@ def test_relation_rkey_description_is_generic():
 
 
 # ---------------------------------------------------------------------------
-# Part 2: Collection rename
+# Part 2: Collection naming
 # ---------------------------------------------------------------------------
 
 def test_overture_places_collection_attribute():
     """OverturePlaces.collection must equal 'org.atgeo.places.overture.place'.
 
-    The Overture collection is being renamed from 'org.atgeo.places.overture'
-    to 'org.atgeo.places.overture.place' to align with the Overture divisions
-    migration naming convention.
-    FAILS until OverturePlaces.collection is updated in garganorn/database.py.
+    Matches the Overture divisions collection's naming convention
+    ('org.atgeo.places.overture.division').
     """
     from garganorn.database import OverturePlaces
     db = OverturePlaces(":memory:")
     assert db.collection == "org.atgeo.places.overture.place", (
-        f"OverturePlaces.collection should be 'org.atgeo.places.overture.place'. "
-        f"Got: {db.collection!r}. "
-        "Update the collection class attribute in garganorn/database.py."
+        f"OverturePlaces.collection must equal 'org.atgeo.places.overture.place'; "
+        f"got {db.collection!r}"
     )
 
 
 def test_config_yaml_has_overture_place_key():
     """config.yaml must have key 'org.atgeo.places.overture.place' under tiles.collections.
 
-    The tile collection config key must match the renamed collection identifier.
-    FAILS until config.yaml is updated to use 'org.atgeo.places.overture.place'.
+    The tile collection config key must match OverturePlaces.collection.
     """
     config = _load_config_yaml()
     tile_collections = config.get("tiles", {}).get("collections", {})
     assert "org.atgeo.places.overture.place" in tile_collections, (
         f"config.yaml tiles.collections must have key 'org.atgeo.places.overture.place'. "
-        f"Found keys: {list(tile_collections.keys())}. "
-        "Rename 'org.atgeo.places.overture' to 'org.atgeo.places.overture.place'."
+        f"Found keys: {list(tile_collections.keys())}"
     )
 
 
 def test_config_yaml_old_overture_key_gone():
-    """config.yaml must NOT have the old key 'org.atgeo.places.overture' under tiles.collections.
+    """config.yaml must not have the bare key 'org.atgeo.places.overture' under tiles.collections.
 
-    After the rename, the old key should be removed to avoid ambiguity.
-    FAILS until the old key is removed from config.yaml.
+    Only 'org.atgeo.places.overture.place' identifies the Overture places collection.
     """
     config = _load_config_yaml()
     tile_collections = config.get("tiles", {}).get("collections", {})
     assert "org.atgeo.places.overture" not in tile_collections, (
-        "config.yaml tiles.collections must not contain the old key 'org.atgeo.places.overture'. "
-        "Remove it after adding 'org.atgeo.places.overture.place'."
+        "config.yaml tiles.collections must not contain the bare key "
+        "'org.atgeo.places.overture' (only 'org.atgeo.places.overture.place' is valid)"
     )

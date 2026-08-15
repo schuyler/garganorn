@@ -19,8 +19,8 @@
 -- The bbox filter applies to division_area (which has bbox columns), not division.
 -- Divisions with no matching land area after filtering are dropped via INNER JOIN.
 --
--- Phase 2: importance and variants are computed inline during import (density+population+importance unified in import CTAS).
--- Divisions use a hybrid formula: density avg for localities, population log for all divisions.
+-- Importance and variants are computed inline during import. Divisions use a
+-- hybrid formula: density avg for localities, population log for all divisions.
 
 DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';

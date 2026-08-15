@@ -34,7 +34,7 @@ def create_app():
             # Completeness guard: a run is only ready to serve when BOTH
             # manifest.duckdb AND its sibling manifest.json (the completeness
             # marker, written last) exist. `and` short-circuits so
-            # os.path.dirname never sees manifest_path=None (F4).
+            # os.path.dirname never sees manifest_path=None.
             ready = (
                 bool(manifest_path)
                 and os.path.isfile(manifest_path)

@@ -19,13 +19,10 @@ import pytest
 # ---------------------------------------------------------------------------
 
 class TestRunPipeline:
-    """Tests for garganorn.quadtree.run_pipeline().
-
-    All tests fail at Red phase: garganorn.quadtree does not exist yet.
-    """
+    """Tests for garganorn.quadtree.run_pipeline()."""
 
     def test_import(self):
-        """Importing run_pipeline must raise ImportError in Red phase."""
+        """run_pipeline is importable from garganorn.quadtree."""
         from garganorn.quadtree import run_pipeline  # noqa: F401
 
     def test_overture_pipeline_smoke(self, overture_parquet, density_parquet, tmp_path):
@@ -216,14 +213,14 @@ class TestWriteManifest:
 
     write_manifest(output_dir, *, generated_at) -- generated_at is a required
     keyword-only arg (no default) -- and manifest.json's field set is exactly
-    {generated_at} (per the envelope decisions above). Fixed generated_at
-    value matches the convention used elsewhere in this suite.
+    {generated_at}. Fixed generated_at value matches the convention used
+    elsewhere in this suite.
     """
 
     _GENERATED_AT = "2026-07-09T18:00:00Z"
 
     def test_import(self):
-        """Importing write_manifest must raise ImportError in Red phase."""
+        """write_manifest is importable from garganorn.quadtree."""
         from garganorn.quadtree import write_manifest  # noqa: F401
 
     def test_creates_manifest_json(self, tmp_path):
@@ -237,7 +234,7 @@ class TestWriteManifest:
         assert (tmp_path / "manifest.json").exists(), "manifest.json not found"
 
     def test_manifest_structure(self, tmp_path):
-        """manifest.json must match the manifest field set exactly (per the envelope decisions above)."""
+        """manifest.json must match the manifest field set exactly."""
         try:
             from garganorn.quadtree import write_manifest
         except (ImportError, ModuleNotFoundError):
@@ -704,9 +701,9 @@ class TestRunPipelineStaleDb:
       2. Calls run_pipeline with the real parquet fixtures and a small bbox.
       3. Asserts the call completes without raising an exception.
 
-    These tests FAIL in the Red phase because the import SQL files do not yet
-    contain `DROP TABLE IF EXISTS places;`, so DuckDB raises CatalogException
-    when it tries to CREATE TABLE places on the second run.
+    Both import SQL files open with `DROP TABLE IF EXISTS places;`, so a
+    stale table left by a crashed run does not raise CatalogException on
+    the next CREATE TABLE places.
     """
 
     def test_overture_pipeline_succeeds_with_stale_places_table(self, overture_parquet, density_parquet, tmp_path):
@@ -763,15 +760,12 @@ class TestRunPipelineStaleDb:
 
 
 # ---------------------------------------------------------------------------
-# Tests: atomic tile export with timestamped directories (Red phase)
+# Tests: atomic tile export with timestamped directories
 # ---------------------------------------------------------------------------
 
 class TestTimestampedExport:
     """run_pipeline must write tiles into a timestamped subdirectory and maintain
     a `current` symlink pointing to the latest run.
-
-    All tests FAIL in the Red phase because run_pipeline writes directly into
-    output_dir/source/ without creating a timestamped subdirectory or symlink.
     """
 
     _TIMESTAMP_RE = re.compile(r"^\d{8}T\d{6}$")
@@ -801,7 +795,7 @@ class TestTimestampedExport:
         ov_dir = output_dir / "overture_place"
         assert ov_dir.exists(), f"output_dir/overture_place/ must exist; got {list(output_dir.iterdir())}"
 
-        # Phase 2: timestamped dirs live under overture_place/tiles/
+        # timestamped dirs live under overture_place/tiles/
         tiles_dir = ov_dir / "tiles"
         assert tiles_dir.exists(), f"overture_place/tiles/ must exist; got {list(ov_dir.iterdir())}"
         ts_dirs = [
@@ -825,7 +819,7 @@ class TestTimestampedExport:
         self._run(overture_parquet, density_parquet, output_dir)
 
         ov_dir = output_dir / "overture_place"
-        # Phase 2: canonical symlink is overture_place/tiles/current → <timestamp>
+        # canonical symlink is overture_place/tiles/current → <timestamp>
         current = ov_dir / "tiles" / "current"
         assert os.path.islink(str(current)), (
             f"output_dir/overture_place/tiles/current must be a symlink; "
@@ -872,7 +866,7 @@ class TestTimestampedExport:
         self._run(overture_parquet, density_parquet, output_dir)
 
         ov_dir = output_dir / "overture_place"
-        # Phase 2: use tiles/current symlink (target is a bare timestamp)
+        # use tiles/current symlink (target is a bare timestamp)
         tiles_dir = ov_dir / "tiles"
         first_target = os.readlink(str(tiles_dir / "current"))
 
@@ -955,7 +949,7 @@ class TestTimestampedExport:
         ov_dir = output_dir / "overture_place"
         assert ov_dir.exists(), "source dir must exist even after failed run"
 
-        # Phase 2: partial timestamped dir is under overture_place/tiles/
+        # partial timestamped dir is under overture_place/tiles/
         tiles_dir = ov_dir / "tiles"
         assert tiles_dir.exists(), "overture_place/tiles/ must exist even after failed run"
         ts_dirs = [
@@ -967,7 +961,7 @@ class TestTimestampedExport:
             f"found: {[d.name for d in ts_dirs]}"
         )
 
-        # Phase 2 canonical symlink must NOT exist — swap didn't happen
+        # canonical symlink must NOT exist — swap didn't happen
         current_link = tiles_dir / "current"
         assert not current_link.is_symlink(), (
             "tiles/current symlink must not exist after a failed run"
@@ -996,11 +990,7 @@ class TestTimestampedExport:
 
 
 class TestRunPipelineMtime:
-    """Tests for mtime-based caching in run_pipeline().
-
-    These tests FAIL because the force parameter and mtime skip logic
-    don't exist yet. This is TDD red phase.
-    """
+    """Tests for mtime-based caching in run_pipeline()."""
 
     @pytest.fixture
     def small_overture_parquet(self, tmp_path):
@@ -1101,10 +1091,7 @@ class TestRunPipelineMtime:
         return str(parquet_path)
 
     def test_skips_when_manifest_fresh(self, small_overture_parquet, small_density_parquet, tmp_path, caplog):
-        """run_pipeline skips when manifest.json mtime is newer than input.
-
-        This test FAILS because mtime skip logic doesn't exist yet.
-        """
+        """run_pipeline skips when manifest.json mtime is newer than input."""
         import logging
         from garganorn.quadtree import run_pipeline
 
@@ -1158,10 +1145,7 @@ class TestRunPipelineMtime:
         )
 
     def test_runs_when_manifest_missing(self, small_overture_parquet, small_density_parquet, tmp_path, caplog):
-        """run_pipeline runs normally when manifest.json doesn't exist.
-
-        This test FAILS because mtime skip logic doesn't exist yet.
-        """
+        """run_pipeline runs normally when manifest.json doesn't exist."""
         import logging
         from garganorn.quadtree import run_pipeline
 
@@ -1191,10 +1175,7 @@ class TestRunPipelineMtime:
         assert manifest_path.exists()
 
     def test_runs_when_input_newer(self, small_overture_parquet, small_density_parquet, tmp_path, caplog):
-        """run_pipeline re-runs when input parquet is newer than manifest.json.
-
-        This test FAILS because mtime skip logic doesn't exist yet.
-        """
+        """run_pipeline re-runs when input parquet is newer than manifest.json."""
         import logging
         from garganorn.quadtree import run_pipeline
 
@@ -1251,10 +1232,7 @@ class TestRunPipelineMtime:
         )
 
     def test_force_overrides_fresh(self, small_overture_parquet, small_density_parquet, tmp_path, caplog):
-        """run_pipeline with force=True re-runs even when manifest is fresh.
-
-        This test FAILS because the force parameter doesn't exist yet.
-        """
+        """run_pipeline with force=True re-runs even when manifest is fresh."""
         import logging
         from garganorn.quadtree import run_pipeline
 
@@ -1302,17 +1280,14 @@ class TestRunPipelineMtime:
 
 
 # ---------------------------------------------------------------------------
-# Phase 2 export/pipeline tests (RED)
+# Tests: export layout — tiles under <src>/tiles/current/, manifests written last
 # ---------------------------------------------------------------------------
 
 class TestExportPhase2:
-    """Phase 2 export layout — tiles under <src>/tiles/current/, manifests written last.
+    """Export layout — tiles under <src>/tiles/current/, manifests written last.
 
     Run-dir lifecycle: tiles relocate to <src>/tiles/, manifest.json written last,
     symlink swap, keep-2.
-
-    Fails in Red phase because run_pipeline still writes tiles under
-    <src>/<timestamp>/ (Phase 1 layout) instead of <src>/tiles/<timestamp>/.
     """
 
     def test_tiles_under_tiles_subdir(self, overture_parquet, density_parquet, tmp_path):
@@ -1329,10 +1304,10 @@ class TestExportPhase2:
             max_per_tile=100,
             density_parquet=density_parquet,
         )
-        # Phase 2 layout: tiles under <src>/tiles/current/
+        # tiles live under <src>/tiles/current/
         tiles_current = output_dir / "overture_place" / "tiles" / "current"
         assert tiles_current.exists(), (
-            f"Phase 2: tiles must be at <src>/tiles/current/, not found at {tiles_current}"
+            f"tiles must be at <src>/tiles/current/, not found at {tiles_current}"
         )
         gz_files = list(tiles_current.rglob("*.json.gz"))
         assert gz_files, (
@@ -1369,8 +1344,7 @@ class TestExportPhase2:
         from garganorn.stages import stage_export
         params = list(inspect.signature(stage_export).parameters.keys())
         assert params[0] != "con", (
-            f"stage_export must not have 'con' as first param; got {params[0]!r}. "
-            "Phase 2 drops the connection argument."
+            f"stage_export must not have 'con' as first param; got {params[0]!r}."
         )
 
     def test_no_working_duckdb_after_pipeline(self, overture_parquet, density_parquet, tmp_path):

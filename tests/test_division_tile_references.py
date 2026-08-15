@@ -13,22 +13,8 @@ import os
 import time
 
 import duckdb
-import pytest
 
-try:
-    from garganorn.stages import stage_division_tile_references
-    _STAGE_ERROR = None
-except ImportError as _exc:
-    stage_division_tile_references = None
-    _STAGE_ERROR = _exc
-
-
-def _check_stage():
-    """Call at the start of every test; fails with the ImportError if absent."""
-    if _STAGE_ERROR is not None:
-        pytest.fail(str(_STAGE_ERROR), pytrace=False)
-
-
+from garganorn.stages import stage_division_tile_references
 from garganorn.covering import stage_covering
 from garganorn.stages import quadkey_to_bbox
 
@@ -139,7 +125,6 @@ class TestR1Completeness:
         two, via a margin); div_small sits well inside a single tile. Every
         true overlap the independent oracle finds must appear in the
         stage's output."""
-        _check_stage()
         parent_qk = "1230"
         children = {d: quadkey_to_bbox(parent_qk + d) for d in "0123"}
         nw, ne, sw = children["0"], children["1"], children["2"]
@@ -201,7 +186,6 @@ class TestR1ShallowCoveringArm:
         """div_shallow's geometry covers its whole z4 tile with margin, so
         stage_covering emits a single interior leaf at z4 -- shallower than
         the z6 grid beneath it. It must appear in all 16 of those z6 tiles."""
-        _check_stage()
         parent_qk = "1230"
         xmin, ymin, xmax, ymax = quadkey_to_bbox(parent_qk)
         mx, my = 0.2 * (xmax - xmin), 0.2 * (ymax - ymin)
@@ -255,7 +239,6 @@ class TestR2GeometryNotBbox:
         globe under a bbox-only test, but the real geometry occupies only
         two thin strips near +-180. The gap tile (lon~0) -- which that
         wraparound bbox touches -- must be absent; both lobe tiles present."""
-        _check_stage()
         ami_wkt = (
             "MULTIPOLYGON("
             "((170 -15, 180 -15, 180 15, 170 15, 170 -15)),"
@@ -303,7 +286,6 @@ class TestR5SetValuedOutput:
         children (missing the fourth). That's >=2 covering leaves collapsing
         under the single z4 grid tile; the output must still hold exactly
         one (div_l, z4-tile) pair."""
-        _check_stage()
         parent_qk = "1230"
         children = {d: quadkey_to_bbox(parent_qk + d) for d in "0123"}
         nw, se, sw = children["0"], children["3"], children["2"]
@@ -359,7 +341,6 @@ class TestR5SchemaAndSort:
         off, an unordered DuckDB result lands in sorted order by chance
         often enough at three rows to let a dropped ORDER BY pass.
         """
-        _check_stage()
         qk_a, qk_b = "31", "02"
 
         boundaries = []
@@ -413,7 +394,6 @@ class TestR5SchemaAndSort:
 
 class TestR5Freshness:
     def test_second_run_over_unchanged_inputs_is_noop(self, tmp_path):
-        _check_stage()
         covering_dir, ta_path = _two_tile_fixture(tmp_path)
 
         out_path = str(tmp_path / "tile_references.parquet")
@@ -437,7 +417,6 @@ class TestR5Freshness:
 
 class TestR3GridUntouched:
     def test_tile_assignments_parquet_unchanged_after_stage_runs(self, tmp_path):
-        _check_stage()
         covering_dir, ta_path = _two_tile_fixture(tmp_path)
 
         with open(ta_path, "rb") as f:

@@ -25,10 +25,9 @@
 -- Each arm tests the stored geometry (`cov.geom`) with ST_Covers instead of
 -- joining bnd.places -- the stored geometry IS the geometry to test, at most
 -- tile-sized and at most V vertices, which is the cost bound this stage
--- exists to establish. This also retires the antimeridian min_longitude CASE
--- (`gotchas.md`, "Antimeridian bboxes are two lobes"): it lived on the
--- bnd.places bbox pre-filter, which no longer exists here (the two-lobe rule
--- remains live on the build side, in covering_seed.sql).
+-- exists to establish. Antimeridian handling (`gotchas.md`, "Antimeridian
+-- bboxes are two lobes") lives on the build side, in covering_seed.sql, not
+-- here: this stage has no bbox pre-filter to need it.
 --
 -- Output: (tile_qk, place_id, relations_json) sorted (tile_qk, place_id).
 -- Written directly to ${output_tmp} via COPY; caller renames to final path.

@@ -9,10 +9,9 @@ from garganorn.stages import stage_tile_assignment
 
 
 class TestNullQK17Logging:
-    """NULL qk17 places are silently dropped from tile assignments.
-
-    stage_tile_assignment must compare count(places) vs count(tile_assignments)
-    after tile assignment and log a warning if places were dropped.
+    """stage_tile_assignment logs a warning when places are dropped because
+    their qk17 is NULL, comparing count(places) against count(tile_assignments)
+    after tile assignment.
     """
 
     def test_null_qk17_logs_warning(self, tmp_path, caplog):
@@ -44,7 +43,7 @@ class TestNullQK17Logging:
             ('null001', 'Null QK17 Place', 37.7751, -122.4201, NULL)
         """)
 
-        # Export places to parquet for Phase 2 API
+        # Export places to parquet, the stage_tile_assignment input format
         places_parquet = str(tmp_path / "places_null_qk17.parquet")
         ta_parquet = str(tmp_path / "ta_null_qk17.parquet")
         total_places = con.execute("SELECT count(*) FROM places").fetchone()[0]
@@ -100,7 +99,7 @@ class TestNullQK17Logging:
             ('valid002', 'Valid Place 2', 37.7750, -122.4200, '02301020333300321')
         """)
 
-        # Export places to parquet for Phase 2 API
+        # Export places to parquet, the stage_tile_assignment input format
         places_parquet = str(tmp_path / "places_all_valid.parquet")
         ta_parquet = str(tmp_path / "ta_all_valid.parquet")
         con.execute(f"COPY places TO '{places_parquet}' (FORMAT PARQUET)")
@@ -125,10 +124,8 @@ class TestNullQK17Logging:
 
 
 class TestTileAssignmentUniqueness:
-    """No uniqueness validation on tile assignments.
-
-    stage_tile_assignment must check for duplicate place_ids post-assignment
-    and log an error if duplicates are found.
+    """stage_tile_assignment checks the written artifact for duplicate
+    place_ids and logs an error if any place was assigned to multiple tiles.
     """
 
     def test_normal_assignment_no_duplicates(self, tmp_path, caplog):

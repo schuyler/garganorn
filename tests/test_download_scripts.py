@@ -27,22 +27,11 @@ def _run(script_name: str, args: list[str], env: dict | None = None) -> subproce
     )
 
 
-# ---------------------------------------------------------------------------
-# Tests 4-7: download scripts (don't exist yet)
-#
-# These fail with FileNotFoundError or non-zero exit because the scripts have
-# not been created.
-# ---------------------------------------------------------------------------
-
-
 class TestDownloadOvertureUsage:
     """download-overture.sh --help exits 0 with usage information."""
 
     def test_download_overture_usage(self):
-        """Running download-overture.sh --help exits 0 and prints usage.
-
-        Red: scripts/download-overture.sh does not exist yet.
-        """
+        """Running download-overture.sh --help exits 0 and prints usage."""
         result = _run("download-overture.sh", ["--help"])
 
         assert result.returncode == 0, (
@@ -60,10 +49,7 @@ class TestDownloadOsmUsage:
     """download-osm.sh --help exits 0 with usage information."""
 
     def test_download_osm_usage(self):
-        """Running download-osm.sh --help exits 0 and prints usage.
-
-        Red: scripts/download-osm.sh does not exist yet.
-        """
+        """Running download-osm.sh --help exits 0 and prints usage."""
         result = _run("download-osm.sh", ["--help"])
 
         assert result.returncode == 0, (
@@ -77,10 +63,7 @@ class TestDownloadOsmUsage:
         )
 
     def test_download_osm_unknown_option(self):
-        """Running download-osm.sh --bogus exits 1 and mentions 'Unknown option'.
-
-        Red: scripts/download-osm.sh does not exist yet.
-        """
+        """Running download-osm.sh --bogus exits 1 and mentions 'Unknown option'."""
         result = _run("download-osm.sh", ["--bogus"])
 
         assert result.returncode == 1, (
@@ -94,31 +77,12 @@ class TestDownloadOsmUsage:
         )
 
 
-# ---------------------------------------------------------------------------
-# Tests 8-11: Overture cache directory layout restructure
-#
-# These originally verified a places/ subdirectory + flat division naming
-# restructure. 2026-08-03: the places/ subdirectory was reverted — it never
-# matched the quadtree pipeline's config glob (db/cache/overture/*/part-*.parquet),
-# which expects places parquet directly at cache_dir root, same as
-# division/division_area. Only the places-layout tests changed below; the
-# divisions flat-naming tests (no type= nesting) are unaffected.
-# ---------------------------------------------------------------------------
-
-
 class TestOvertureCacheLayout:
     """Overture cache should use a flat layout for places (matching the
     quadtree pipeline's config glob) and flat division naming."""
 
     def test_download_script_no_equals_in_local_paths(self):
-        """download-overture.sh should not use S3 type= naming in local directory paths.
-
-        Red: Current script uses S3 partitioning locally (divisions/type=division/).
-        The script extracts type=division, type=division_area, etc. from S3 and
-        constructs local paths like ${cache_dir}/divisions/${type}, which expands
-        to cache_dir/divisions/type=division/. After restructure, local paths
-        should use flat naming (division/, division_area/) without the type= prefix.
-        """
+        """download-overture.sh should not use S3 type= naming in local directory paths."""
         script_path = SCRIPTS_DIR / "download-overture.sh"
         script_content = script_path.read_text()
 
@@ -137,20 +101,17 @@ class TestOvertureCacheLayout:
 
         # The issue is: script extracts "type=division" from S3 and uses it in local paths
         assert not (has_s3_type_extraction and has_local_type_usage), (
-            "Script extracts S3 type= names (type=division, type=division_area, etc.) "
-            "and uses them directly in local path construction. "
-            "After restructure, local paths should strip the type= prefix and use flat naming.\n"
+            "Local paths should use flat naming (division/, division_area/, "
+            "division_boundary/), not S3 type= names (type=division, "
+            "type=division_area, etc.) extracted into local path construction.\n"
             "Expected: cache_dir/division/, cache_dir/division_area/, cache_dir/division_boundary/\n"
-            "Current pattern: cache_dir/divisions/type=division/ (via ${cache_dir}/divisions/${type})"
+            "Found: cache_dir/divisions/type=division/ (via ${cache_dir}/divisions/${type})"
         )
 
     def test_download_script_no_divisions_nesting(self):
-        """download-overture.sh should not nest divisions under a divisions/ directory.
-
-        Red: Current script creates divisions/type=division/, etc.
-        After restructure, division types should be at cache root: division/,
-        division_area/, division_boundary/. The word 'divisions' should only
-        appear in S3 URL contexts.
+        """download-overture.sh keeps division types at cache root (division/,
+        division_area/, division_boundary/); 'divisions' appears only in S3
+        URL contexts.
         """
         script_path = SCRIPTS_DIR / "download-overture.sh"
         script_content = script_path.read_text()

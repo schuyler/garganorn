@@ -29,36 +29,29 @@ def _strip_sql_comments(sql: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Tests: quadtree pipeline SQL fixes (Red phase — fail against current code)
+# Tests: quadtree pipeline SQL invariants
 # ---------------------------------------------------------------------------
 
 class TestQk17PipelineFixes:
-    """Red-phase tests for pending fixes to the quadtree pipeline SQL files.
+    """Tests pinning how qk17 is computed in the quadtree pipeline SQL files.
 
-    Fix 1 — overture_place_import.sql: qk17 should be computed inline in the CTAS
-             SELECT list; no ALTER TABLE or UPDATE statements.
+    overture_place_import.sql: qk17 is computed inline in the CTAS
+        SELECT list; no ALTER TABLE or UPDATE statements.
 
-    Fix 4 — overture_place_export_tiles.sql: place_addresses TEMP TABLE eliminated;
-             addresses rendered inline via list_transform/list_filter in the VIEW.
+    overture_place_export_tiles.sql: no place_addresses TEMP TABLE;
+        addresses are rendered inline via list_transform/list_filter in
+        the VIEW.
 
-    OSM Fix — osm_import.sql: qk17 should be in the CREATE TABLE schema and
-              computed inline in each INSERT SELECT; no ALTER TABLE ADD COLUMN.
-
-    Every test here FAILS against the current SQL files and PASSES after the
-    corresponding fix is applied.
+    osm_import.sql: qk17 is in the CREATE TABLE schema and computed
+        inline in each INSERT SELECT; no ALTER TABLE ADD COLUMN.
     """
 
     # ------------------------------------------------------------------
-    # Fix 1: overture_place_import.sql — qk17 inline in CTAS, no ALTER/UPDATE
+    # overture_place_import.sql — qk17 inline in CTAS, no ALTER/UPDATE
     # ------------------------------------------------------------------
 
     def test_fix1_overture_import_no_alter_table(self):
-        """overture_place_import.sql must NOT contain ALTER TABLE after fix.
-
-        Currently the script adds qk17 via ALTER TABLE + UPDATE after the CTAS.
-        After the fix, qk17 is computed inline in the CTAS SELECT list.
-        FAILS until the ALTER TABLE statement is removed.
-        """
+        """overture_place_import.sql must NOT contain ALTER TABLE."""
         sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
         sql = sql_path.read_text()
         assert "ALTER TABLE" not in sql.upper(), (
@@ -68,10 +61,7 @@ class TestQk17PipelineFixes:
         )
 
     def test_fix1_overture_import_no_update_qk17(self):
-        """overture_place_import.sql must NOT contain UPDATE places SET qk17 after fix.
-
-        FAILS until the UPDATE statement is removed.
-        """
+        """overture_place_import.sql must NOT contain UPDATE places SET qk17."""
         sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
         sql = sql_path.read_text()
         assert "UPDATE PLACES SET QK17" not in sql.upper(), (
@@ -80,13 +70,7 @@ class TestQk17PipelineFixes:
         )
 
     def test_fix1_overture_import_qk17_nonnull(self, overture_parquet, tmp_path):
-        """After overture_place_import.sql runs, all rows must have a non-null qk17.
-
-        This is a green regression guard: it passes both before and after the
-        fix because both the current ALTER TABLE + UPDATE approach and the
-        post-fix inline CTAS approach produce non-null qk17 values. It ensures
-        that the inline approach doesn't accidentally leave qk17 null.
-        """
+        """After overture_place_import.sql runs, all rows must have a non-null qk17."""
         db_path = tmp_path / "test_fix1_qk17_nonnull.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -98,20 +82,18 @@ class TestQk17PipelineFixes:
         ).fetchone()[0]
         conn.close()
         assert null_count == 0, (
-            f"Expected 0 null qk17 values after fix; got {null_count}. "
+            f"Expected 0 null qk17 values; got {null_count}. "
             "Inline CTAS must compute qk17 for every row."
         )
 
     # ------------------------------------------------------------------
-    # Fix 4: overture_place_export_tiles.sql — eliminate place_addresses TEMP TABLE
+    # overture_place_export_tiles.sql — no place_addresses TEMP TABLE
     # ------------------------------------------------------------------
 
     def test_no_place_addresses_temp_table(self):
         """overture_place_export_tiles.sql must NOT define place_addresses as a TEMP TABLE.
 
-        After the fix, place_addresses is eliminated entirely and replaced with
-        inline list_transform/list_filter in the VIEW. This test FAILS until the
-        TEMP TABLE is removed from the SQL file.
+        Addresses are rendered inline via list_transform/list_filter in the VIEW.
         """
         sql_path = REPO_ROOT / "garganorn" / "sql" / "overture_place_export_tiles.sql"
         sql = sql_path.read_text()
@@ -121,16 +103,14 @@ class TestQk17PipelineFixes:
         )
 
     # ------------------------------------------------------------------
-    # OSM Fix: osm_import.sql — qk17 inline, no ALTER TABLE ADD COLUMN
+    # osm_import.sql — qk17 inline, no ALTER TABLE ADD COLUMN
     # ------------------------------------------------------------------
 
     def test_osm_fix_no_alter_table_add_column_qk17(self):
         """osm_import.sql must NOT contain ALTER TABLE places ADD COLUMN qk17.
 
-        Currently the script adds qk17 via ALTER TABLE after the INSERT statements.
-        After the fix, qk17 is in the CREATE TABLE schema and computed inline
-        in each INSERT SELECT list.
-        FAILS until the ALTER TABLE ADD COLUMN qk17 statement is removed.
+        qk17 is in the CREATE TABLE schema and computed inline in each
+        INSERT SELECT list.
         """
         sql_path = REPO_ROOT / "garganorn" / "sql" / "osm_import.sql"
         sql = sql_path.read_text()
@@ -144,12 +124,7 @@ class TestQk17PipelineFixes:
         )
 
     def test_osm_fix_qk17_nonnull(self, tmp_path):
-        """After osm_import.sql runs against a minimal synthetic fixture, all qk17 values must be non-null.
-
-        This is a green regression guard: it passes both before and after the fix because
-        both the current ALTER TABLE + UPDATE approach and the post-fix inline approach
-        produce non-null qk17 values.
-        """
+        """After osm_import.sql runs against a minimal synthetic fixture, all qk17 values must be non-null."""
         import duckdb as _duckdb
 
         base = tmp_path / "osm_fix_qk17_nonnull"
@@ -193,43 +168,40 @@ class TestQk17PipelineFixes:
         ).fetchone()[0]
         conn2.close()
         assert null_count == 0, (
-            f"Expected 0 null qk17 values after osm_import; got {null_count}. "
-            "Both the current UPDATE approach and the post-fix inline approach must produce non-null qk17."
+            f"Expected 0 null qk17 values after osm_import; got {null_count}."
         )
 
 
 # ---------------------------------------------------------------------------
-# Fix 5: overture_place_import.sql — eliminate ov_base re-materialization spill
+# overture_place_import.sql: ov_base re-materialization spill
 # ---------------------------------------------------------------------------
 #
-# Background: ov_base is currently referenced five times beyond its own
-# definition (ov_density, ov_idf, common_entries, rule_entries, and the
-# final SELECT). Each reference forces DuckDB to re-materialize the full
+# ov_base is referenced at most once beyond its own definition (the final
+# SELECT). Referencing it more forces DuckDB to re-materialize the full
 # width of ov_base (every Overture column) to answer a join or unnest,
 # which on the production 22M-row Overture places extract spills >60GB of
-# temp disk (a plain scan of the same rows spills 0 bytes). The fix folds
-# the density/idf joins directly into the final SELECT and computes
-# `variants` as a per-row list expression (list_transform/list_concat/
-# list_filter/list_sort) with no unnest, no GROUP BY, and no join-back —
-# so ov_base is scanned once.
+# temp disk (a plain scan of the same rows spills 0 bytes). Density/idf
+# joins and `variants` are folded directly into the final SELECT, with
+# `variants` computed as a per-row list expression (list_transform/
+# list_concat/list_filter/list_sort) with no unnest, no GROUP BY, and no
+# join-back — so ov_base is scanned once.
 #
 # The structural tests below pin the absence of the spill-causing pattern.
-# They FAIL against the current SQL and must PASS once the rewrite lands.
-# The characterization tests pin the *semantics* of the variants column as
-# currently produced, so the rewrite cannot silently change behavior.
+# The characterization tests pin the *semantics* of the variants column,
+# so a future rewrite cannot silently change behavior.
 # ---------------------------------------------------------------------------
 
 class TestOvertureVariantsCteSpillFix:
-    """Red-phase structural tests for the ov_base/variants CTE-spill fix.
+    """Structural tests pinning the ov_base/variants CTE-spill fix for
+    overture_place_import.sql: no unnest on names.common/rules, no GROUP
+    BY id.
 
-    The ov_base-reference-count and forbidden-helper-CTE checks that used
-    to live here have moved to TestImportSqlD6Enforcement below, which
-    parametrizes the same checks over a list of import SQL files
-    (`gotchas.md`, "No unbounded complex-state aggregation") instead of
-    hand-writing them per file. The tests remaining here (no
-    unnest on names.common/rules, no
-    GROUP BY id) are specific to how Overture's `variants` column is
+    These checks are specific to how Overture's `variants` column is
     derived and have no OSM equivalent, so they stay Overture-specific.
+    The ov_base-reference-count and forbidden-helper-CTE checks are
+    enforced by TestImportSqlD6Enforcement below, which parametrizes
+    the same checks over a list of import SQL files (`gotchas.md`,
+    "No unbounded complex-state aggregation").
     """
 
     SQL_PATH = REPO_ROOT / "garganorn" / "sql" / "overture_place_import.sql"
@@ -243,11 +215,10 @@ class TestOvertureVariantsCteSpillFix:
     def test_no_unnest_on_names_common(self):
         """No unnest(...) applied to names.common.
 
-        Currently `unnest(map_entries(names.common))` is used in a comma-join
-        lateral against ov_base to explode names.common into rows, which
-        forces a full re-materialization of ov_base for that join. The fix
-        computes variants as a per-row list expression with no unnest.
-        FAILS until the unnest(map_entries(names.common)) pattern is removed.
+        `unnest(map_entries(names.common))` in a comma-join lateral against
+        ov_base would force a full re-materialization of ov_base for that
+        join; variants is computed as a per-row list expression with no
+        unnest instead.
         """
         sql = self._sql()
         assert not re.search(r"unnest\s*\(\s*map_entries\s*\(\s*names\.common", sql, re.IGNORECASE), (
@@ -262,9 +233,9 @@ class TestOvertureVariantsCteSpillFix:
     def test_no_unnest_on_names_rules(self):
         """No unnest(...) applied to names.rules.
 
-        Currently `unnest(names.rules)` is used in a comma-join lateral
-        against ov_base, with the same full re-materialization cost as the
-        names.common unnest. FAILS until removed.
+        `unnest(names.rules)` in a comma-join lateral against ov_base would
+        carry the same full re-materialization cost as the names.common
+        unnest.
         """
         sql = self._sql()
         assert not re.search(r"unnest\s*\(\s*names\.rules", sql, re.IGNORECASE), (
@@ -279,12 +250,11 @@ class TestOvertureVariantsCteSpillFix:
     def test_no_group_by_id(self):
         """No GROUP BY id.
 
-        Currently ov_variants aggregates the unnested/unioned name rows back
-        into a per-id list via `GROUP BY id`, which requires a full shuffle/
-        sort of all exploded rows keyed by id — the single largest
-        contributor to the temp-disk spill. The fix computes variants
-        per-row (no explosion, so no re-aggregation is needed).
-        FAILS until GROUP BY id is removed.
+        Aggregating unnested/unioned name rows back into a per-id list via
+        `GROUP BY id` would require a full shuffle/sort of every exploded
+        row keyed by id — the largest single contributor to the temp-disk
+        spill. variants is computed per-row instead, with no explosion and
+        no re-aggregation.
         """
         sql = self._sql()
         assert not re.search(r"GROUP\s+BY\s+id\b", sql, re.IGNORECASE), (
@@ -295,26 +265,23 @@ class TestOvertureVariantsCteSpillFix:
             "expression so no re-aggregation by id is needed."
         )
 
-    # test_helper_cte_not_defined and test_ov_base_referenced_at_most_once_
-    # outside_definition used to live here. They are now
-    # TestImportSqlD6Enforcement.test_no_forbidden_helper_cte and
-    # .test_base_cte_referenced_at_most_once_outside_definition below,
-    # parametrized over IMPORT_SQL_FILES (which includes
-    # overture_place_import.sql with the same base CTE / forbidden-CTE
-    # values used here previously, plus osm_import.sql).
+    # Base-CTE-reference-count and forbidden-helper-CTE checks for this file
+    # are enforced by TestImportSqlD6Enforcement.test_no_forbidden_helper_cte
+    # and .test_base_cte_referenced_at_most_once_outside_definition below,
+    # parametrized over IMPORT_SQL_FILES (which also covers osm_import.sql).
 
 
 # ---------------------------------------------------------------------------
 # Enforcement ledger: no unbounded complex-state aggregation, enforced as
 # a hard review criterion for every SQL file.
 #
-# IMPORT_SQL_FILES below is that list for the two files known to
-# violate it (overture_place_import.sql, osm_import.sql): each has one or
-# more base CTE(s) that scan the raw parquet input in full, referenced
-# multiple times beyond their own definition by narrow-projection
-# "helper" CTEs (density/idf/variant scores) that get LEFT JOINed back on
-# a computed key — forcing DuckDB to re-materialize the full-width base CTE
-# once per reference, which is what spills temp disk at production scale.
+# IMPORT_SQL_FILES below lists the import SQL files this invariant is
+# enforced against (overture_place_import.sql, osm_import.sql): each has
+# one or more base CTE(s) that scan the raw parquet input in full. A
+# narrow-projection "helper" CTE (density/idf/variant scores) that
+# re-scans a base CTE and gets LEFT JOINed back on a computed key forces
+# DuckDB to re-materialize the full-width base CTE once per reference,
+# which is what spills temp disk at production scale.
 #
 # EXEMPT_IMPORT_SQL_FILES is a visible ledger of known debt, not a silent
 # omission: every *_import.sql file under garganorn/sql/ must appear in
@@ -341,9 +308,8 @@ IMPORT_SQL_FILES = [
     {
         "filename": "osm_import.sql",
         # filtered (nodes) and way_base (ways) are the two base CTEs;
-        # each is currently referenced 4x beyond its own definition
-        # (node_density/node_idf/final SELECT for filtered;
-        # way_density/way_idf/final SELECT for way_base).
+        # node_density/node_idf and way_density/way_idf are the
+        # narrow-projection CTEs this guards against re-introducing.
         "base_ctes": ["filtered", "way_base"],
         "forbidden_helper_ctes": [
             "node_density", "node_idf", "way_density", "way_idf",
@@ -466,14 +432,12 @@ class TestImportSqlD6Enforcement:
 
 
 class TestOvertureVariantsCharacterization:
-    """Green-phase characterization tests pinning current `variants` semantics.
+    """Characterization tests pinning `variants` semantics.
 
-    These tests run the CURRENT overture_place_import.sql against fixture
-    rows added to the `overture_parquet` fixture (ov010-ov016 in
-    tests/conftest.py) and assert on the exact `variants` value observed.
-    They must PASS both before and after the ov_base/variants CTE-spill fix
-    (Fix 5 above) — the fix must not change what `variants` computes, only
-    how it computes it.
+    These tests run overture_place_import.sql against fixture rows added
+    to the `overture_parquet` fixture (ov010-ov016 in tests/conftest.py)
+    and assert on the exact `variants` value observed, so a future rewrite
+    of how `variants` is computed cannot silently change what it computes.
     """
 
     def _variants_for(self, conn, place_id):
@@ -576,9 +540,9 @@ class TestOvertureVariantsCharacterization:
         Pins that variants is exactly [] and NOT NULL when both source
         fields are NULL, not just empty, complementing ov010 (common NULL,
         rules populated) and ov011 (common populated, rules NULL). A row
-        with the whole `names` struct SQL NULL can no longer reach this
-        code path: names.primary would also be NULL, and the ov_base
-        filter excludes NULL-name rows before variants is computed.
+        with the whole `names` struct SQL NULL never reaches this code
+        path: names.primary would also be NULL, and the ov_base filter
+        excludes NULL-name rows before variants is computed.
         """
         db_path = tmp_path / "test_variants_ov003.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -593,12 +557,13 @@ class TestOvertureVariantsCharacterization:
         """ov014: names from both names.common and names.rules, including two
         entries that share the same name ('Golden Gate').
 
-        Pins the stable property (ORDER BY name) rather than a fixed order
-        between tied entries, since the tie-break order between two rows
-        with the same name is not specified by the current SQL (UNION ALL
-        followed by ORDER BY name only) and is not guaranteed stable across
-        DuckDB versions/plans. Non-tied entries ('Porte Doree', 'Zelle') do
-        have a fully-determined order and are asserted exactly.
+        Pins the stable property (sorted by name) rather than a fixed order
+        between tied entries, since list_sort orders structs by their
+        fields in order (name first) and does not specify a tie-break
+        between two entries with the same name, which is not guaranteed
+        stable across DuckDB versions/plans. Non-tied entries ('Porte
+        Doree', 'Zelle') do have a fully-determined order and are
+        asserted exactly.
         """
         db_path = tmp_path / "test_variants_ov014.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -632,12 +597,8 @@ class TestOvertureVariantsCharacterization:
         """ov015: the same (name, type, language) tuple appears twice within
         names.rules alone.
 
-        Pins that variants does NOT dedupe: nothing in the current SQL
-        (rule_entries -> all_variants UNION ALL -> ov_variants list(...))
-        applies DISTINCT, so both identical entries survive into variants.
-        The planned rewrite uses list_concat with no DISTINCT either, so
-        this must remain true after the fix — if the rewrite silently
-        starts deduping, this test will fail and flag the behavior change.
+        Pins that variants does NOT dedupe: list_concat has no DISTINCT,
+        so both identical entries survive into variants.
         """
         db_path = tmp_path / "test_variants_ov015.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -655,8 +616,8 @@ class TestOvertureVariantsCharacterization:
         names.common and once from an explicit names.rules 'alternate' entry.
 
         Pins that variants does NOT dedupe across the two source fields
-        either: common_entries and rule_entries are combined with UNION ALL
-        (not UNION), so a cross-source duplicate also survives.
+        either: the common and rules lists are combined with list_concat,
+        which has no DISTINCT, so a cross-source duplicate also survives.
         """
         db_path = tmp_path / "test_variants_ov016.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -671,13 +632,13 @@ class TestOvertureVariantsCharacterization:
 
     def test_struct_field_keys_and_order(self, overture_parquet, tmp_path):
         """Each variants element must have exactly the keys name/type/language,
-        in that order (as produced by the current struct literal
+        in that order (as produced by the struct literal
         `{'name': ..., 'type': ..., 'language': ...}`).
 
         Checked against both a rules-derived variant (ov010) and a
         common-derived variant (ov011), since names.common and names.rules
-        are built by separate CTEs (common_entries vs rule_entries) that
-        could independently drift in field order.
+        are built by separate list_transform expressions that could
+        independently drift in field order.
         """
         db_path = tmp_path / "test_variants_struct_shape.duckdb"
         conn = duckdb.connect(str(db_path))
@@ -701,42 +662,29 @@ class TestOvertureVariantsCharacterization:
 
 
 # ---------------------------------------------------------------------------
-# Fix 5 (continued): density/idf join must not multiply place rows
+# density/idf join must not multiply place rows
 # ---------------------------------------------------------------------------
 #
-# Background: run_overture_import() (tests/quadtree_helpers.py) always
-# created density_tiles/idf_scores as EMPTY tables, so the density/idf
-# LEFT JOINs were never exercised against real matching rows by any test.
-# That matters because the fix folds those joins directly into the final
-# SELECT: if the join key (tile_qk15, matched via
-# `d.tile_qk15 = left(b.qk17, 15)`) is not guaranteed unique, a LEFT JOIN
-# against a density_tiles table with a duplicate tile_qk15 key fans out
-# the matching place row. No test anywhere in the suite asserts
-# COUNT(*) FROM places or `id` uniqueness, so a fan-out bug would pass the
-# whole suite silently.
-#
-# run_overture_import() now accepts optional density_rows/idf_rows to
-# populate those temp tables with real data (default behavior unchanged:
-# omitting them still creates empty tables, so every existing caller is
-# unaffected).
+# ov_density and ov_idf join density_tiles/idf_scores to ov_base on a
+# computed key (tile_qk15, category) with no uniqueness guarantee on that
+# key in the joined table; a duplicate key would fan the matching place's
+# row out through the final `LEFT JOIN ... USING (id)`. Exercising this
+# requires real density_tiles/idf_scores rows, which run_overture_import()
+# accepts via optional density_rows/idf_rows parameters (omitting them
+# still creates empty tables, matching every other caller).
 # ---------------------------------------------------------------------------
 
 class TestOvertureDensityJoinNoFanOut:
-    """Red-phase regression guard: density_tiles join must not multiply rows.
+    """Regression guard: a duplicate tile_qk15 key in density_tiles must
+    not multiply a place's row in the final output.
 
-    This is a real, currently-reproducible bug in overture_place_import.sql,
-    not just a hypothetical risk from the rewrite: ov_density joins
-    density_tiles to ov_base on `d.tile_qk15 = left(b.qk17, 15)` with no
-    guarantee that tile_qk15 is unique in density_tiles. If it isn't, the
-    LEFT JOIN produces one ov_density row per matching density_tiles row,
-    and the final `LEFT JOIN ov_density od USING (id)` then fans that back
-    out into duplicate `places` rows for the same id. The fix must not
-    reproduce this: whether by construction (e.g. aggregating density_tiles
-    by key before joining) or by strengthening the data contract, exactly
-    one places row per input row is required.
-
-    FAILS now: two input places (one matching a duplicated density_tiles
-    key, one not) currently produce three places rows.
+    ov_density joins density_tiles to ov_base on
+    `d.tile_qk15 = left(b.qk17, 15)` with no guarantee that tile_qk15 is
+    unique in density_tiles. If it isn't, the LEFT JOIN would produce one
+    ov_density row per matching density_tiles row, and the final
+    `LEFT JOIN ov_density od USING (id)` would fan that back out into
+    duplicate `places` rows for the same id. Exactly one places row per
+    input row is required regardless of construction.
     """
 
     def test_row_count_and_id_uniqueness_preserved_with_duplicate_density_key(self, tmp_path):
@@ -795,18 +743,14 @@ class TestOvertureDensityJoinNoFanOut:
 
 
 class TestOvertureIdfJoinNoFanOut:
-    """Red-phase regression guard: idf_scores join must not multiply rows.
+    """Regression guard: a duplicate category key in idf_scores must not
+    multiply a place's row in the final output.
 
     Symmetric to TestOvertureDensityJoinNoFanOut above, for the idf side:
     ov_idf joins idf_scores to ov_base on `i.category = b.categories.primary`
-    with no guarantee that category is unique in idf_scores. This is the
-    same real, currently-reproducible bug as the density case (confirmed by
-    running the current SQL, not assumed): a duplicate category key in
-    idf_scores fans out the matching place's row through
+    with no guarantee that category is unique in idf_scores. A duplicate
+    category key would fan the matching place's row out through
     `LEFT JOIN ov_idf oi USING (id)` in the final SELECT.
-
-    FAILS now: two input places (one matching a duplicated idf_scores
-    category key, one not) currently produce three places rows.
     """
 
     def test_row_count_and_id_uniqueness_preserved_with_duplicate_idf_key(self, tmp_path):

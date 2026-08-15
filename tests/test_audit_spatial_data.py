@@ -1,7 +1,5 @@
-"""Failing tests for spatial and data import bug fixes.
-
-This test file exercises the bugs identified in the spatial/data import audit.
-All tests should FAIL until the corresponding fixes are implemented.
+"""Coordinate-range, bbox-overlap, and bbox-normalization edge cases for the
+import SQL files.
 """
 import pathlib
 import string

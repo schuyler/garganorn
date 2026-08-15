@@ -8,7 +8,7 @@ INSTALL spatial; LOAD spatial;
 ${density_cte}
 ${idf_cte}
 
--- Import OSM nodes and ways, compute importance inline (Phase 2: density+IDF+importance unified in import CTAS)
+-- Import OSM nodes and ways, compute importance inline
 CREATE TABLE places (
     osm_type         VARCHAR,
     osm_id           BIGINT,

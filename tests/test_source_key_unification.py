@@ -43,7 +43,7 @@ class TestCollectionClassAttributes:
 
 
 class TestClassRenaming:
-    """Test that old class names are removed and new ones exist."""
+    """Test which collection classes garganorn.database does and does not expose."""
 
     def test_overture_places_class_exists(self):
         """OverturePlaces class should be importable from garganorn.database."""
@@ -52,11 +52,11 @@ class TestClassRenaming:
             "OverturePlaces class should exist in garganorn.database"
 
     def test_overture_maps_class_removed(self):
-        """OvertureMaps class should NOT exist (renamed to OverturePlaces)."""
+        """OvertureMaps class should NOT exist; garganorn.database exposes OverturePlaces."""
         with pytest.raises(ImportError, match="OvertureMaps"):
             from garganorn.database import OvertureMaps
             # If we get here, the import succeeded - fail the test
-            pytest.fail("OvertureMaps should not exist (should be renamed to OverturePlaces)")
+            pytest.fail("OvertureMaps should not exist in garganorn.database")
 
     def test_overture_divisions_class_in_database(self):
         """OvertureDivisions class should be importable from garganorn.database."""
@@ -67,8 +67,8 @@ class TestClassRenaming:
     def test_overture_divisions_removed_from_boundaries(self):
         """OvertureDivisions should NOT be importable from garganorn.boundaries.
 
-        garganorn.boundaries no longer exists as a module at all (OvertureDivisions
-        lives in database.py), so this raises ModuleNotFoundError rather than an
+        garganorn.boundaries is not a module at all (OvertureDivisions lives
+        in database.py), so this raises ModuleNotFoundError rather than an
         ImportError naming the class specifically; both are ImportError.
         """
         with pytest.raises(ImportError):
@@ -78,7 +78,7 @@ class TestClassRenaming:
 
 
 class TestQuadtreeRegistry:
-    """Test that quadtree.py has SOURCES registry and old dicts are removed."""
+    """Test that quadtree.py has a SOURCES registry and no per-source dicts."""
 
     def test_quadtree_sources_registry_exists(self):
         """quadtree.py should export a SOURCES dict keyed by source_key strings."""
@@ -116,13 +116,13 @@ class TestQuadtreeRegistry:
         """SOURCE_PK dict should NOT exist in quadtree.py."""
         import garganorn.quadtree
         assert not hasattr(garganorn.quadtree, 'SOURCE_PK'), \
-            "SOURCE_PK dict should be removed from quadtree.py (replaced by SOURCES registry)"
+            "quadtree.py must not have a SOURCE_PK dict (use the SOURCES registry)"
 
     def test_quadtree_attribution_removed(self):
         """ATTRIBUTION dict should NOT exist in quadtree.py."""
         import garganorn.quadtree
         assert not hasattr(garganorn.quadtree, 'ATTRIBUTION'), \
-            "ATTRIBUTION dict should be removed from quadtree.py (replaced by SOURCES registry)"
+            "quadtree.py must not have an ATTRIBUTION dict (use the SOURCES registry)"
 
 
 class TestSQLFileNames:
