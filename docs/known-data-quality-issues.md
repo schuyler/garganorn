@@ -59,9 +59,9 @@ no land geometry at all.
 The consequence is that `overture_division_import.sql`'s `ST_Union_Agg`
 has nothing to merge — measured as a spatial no-op on this release, though
 it does normalize ring order and so re-serializes those 38,019
-multipolygons. It is kept deliberately: 30.8s against a 97-minute build is
-cheap insurance, and a release that does emit two rows for one division
-must still yield one geometry.
+multipolygons. It is kept deliberately: the 30.8s buys insurance against a
+release that does emit two rows for one division, which must still yield
+one geometry.
 
 ## Duplicate boundary records
 
