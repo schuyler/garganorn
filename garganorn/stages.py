@@ -838,7 +838,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     # Read and transform import SQL:
     #   - Remove "DROP TABLE IF EXISTS places;" (no places table on fresh connection)
     #   - Rename "CREATE TABLE places AS" → "CREATE TEMP TABLE division_all AS"
-    #   - Trailing "DROP TABLE density_tiles;" is left in place (harmless cleanup)
+    #   - Trailing DROP TABLE statements are left in place (harmless cleanup)
     sql = (_SQL_DIR / "overture_division_import.sql").read_text()
     sql = sql.replace("${memory_limit}", memory_limit)
     sql = sql.replace("${density_cte}", density_cte)

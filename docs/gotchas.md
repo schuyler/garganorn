@@ -97,8 +97,8 @@ time:
 
 **Applies to**: `stages.py:compute_containment()`, where `p` is materialized as
 its own `CREATE TEMP TABLE` (not left as a CTE over `places_slim`) for exactly
-this reason; `sql/overture_division_import.sql`'s `division_density` join, which
-currently is not.
+this reason; `sql/overture_division_import.sql`, which materializes
+`division_base` ahead of the `division_density` join for the same reason.
 
 **Why it matters**: an expensive per-row predicate is not the trigger — the
 second case has none — so any join whose probe side is a filtered CTE over a

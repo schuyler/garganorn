@@ -517,6 +517,125 @@ class TestDivisionImportArtifactPhase2:
 
 
 # ---------------------------------------------------------------------------
+# Multi-area division merge
+# ---------------------------------------------------------------------------
+
+class TestMultiAreaDivisionMerge:
+    """A division with more than one division_area row must merge to a
+    single MULTIPOLYGON record, not one record per area row.
+
+    Module-local fixture, not conftest.division_parquet -- that fixture is
+    session-scoped and shared by seven other test files; a fourth division
+    would shift row counts, tile assignments and containment relations for
+    all of them (see D3 in the division-import-perf design).
+    """
+
+    _BBOX = (-10.0, -10.0, 30.0, 30.0)
+
+    @pytest.fixture
+    def multi_area_division_parquet(self, tmp_path):
+        """One division, two disjoint division_area squares."""
+        division_path = tmp_path / "division.parquet"
+        division_area_path = tmp_path / "division_area.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        conn.execute("""
+            CREATE TABLE tmp_division (
+                id VARCHAR,
+                names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
+                subtype VARCHAR,
+                country VARCHAR,
+                region VARCHAR,
+                wikidata VARCHAR,
+                population BIGINT,
+                parent_division_id VARCHAR
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_division VALUES (
+                'div_multi_area',
+                {'primary': 'Multi-Area Land', 'common': map([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+                'county',
+                'US',
+                'US-CA',
+                'Q1',
+                1000,
+                NULL
+            )
+        """)
+        conn.execute(f"COPY tmp_division TO '{division_path}' (FORMAT PARQUET)")
+
+        conn.execute("""
+            CREATE TABLE tmp_division_area (
+                division_id VARCHAR,
+                admin_level INTEGER,
+                is_land BOOLEAN,
+                geometry VARCHAR,
+                bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+            )
+        """)
+        # Two disjoint squares for the same division_id.
+        conn.execute("""
+            INSERT INTO tmp_division_area VALUES (
+                'div_multi_area',
+                3,
+                true,
+                'POLYGON((0 0, 0 10, 10 10, 10 0, 0 0))',
+                {'xmin': 0.0, 'ymin': 0.0, 'xmax': 10.0, 'ymax': 10.0}
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_division_area VALUES (
+                'div_multi_area',
+                3,
+                true,
+                'POLYGON((20 20, 20 30, 30 30, 30 20, 20 20))',
+                {'xmin': 20.0, 'ymin': 20.0, 'xmax': 30.0, 'ymax': 30.0}
+            )
+        """)
+        conn.execute(f"COPY tmp_division_area TO '{division_area_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        return (str(division_path), str(division_area_path))
+
+    def test_two_area_rows_merge_to_one_record(self, multi_area_division_parquet, tmp_path):
+        """Two division_area rows for one division_id collapse to one
+        bnd.places record, whose geometry is the MULTIPOLYGON union of both
+        parts, with extents spanning both squares."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", multi_area_division_parquet, self._BBOX, output)
+        boundaries = str(tmp_path / "boundaries.duckdb")
+
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
+        rows = con.execute("""
+            SELECT ST_GeometryType(geometry), ST_NumGeometries(geometry),
+                   min_longitude, max_longitude
+            FROM bnd.places
+        """).fetchall()
+        con.close()
+
+        assert len(rows) == 1, (
+            f"two division_area rows for one division_id must collapse to one "
+            f"bnd.places record; got {len(rows)}"
+        )
+        geom_type, num_geoms, min_lon, max_lon = rows[0]
+        assert geom_type == "MULTIPOLYGON", (
+            f"merged geometry must be MULTIPOLYGON; got {geom_type}"
+        )
+        assert num_geoms == 2, (
+            f"merged geometry must keep both parts; ST_NumGeometries got {num_geoms}"
+        )
+        assert min_lon == 0.0 and max_lon == 30.0, (
+            f"extents must span both squares (0..30); got min_longitude="
+            f"{min_lon}, max_longitude={max_lon}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # _assert_interior_points raises on non-interior points
 # ---------------------------------------------------------------------------
 

@@ -78,7 +78,7 @@ The Overture divisions theme contains administrative boundary data: countries, r
 - **division** — one row per administrative unit; carries metadata (names, subtype, country, region, wikidata, population)
 - **division_area** — one or more rows per administrative unit; carries the polygon geometry and `admin_level`
 
-A single division may have multiple `division_area` rows (e.g. a country with non-contiguous territory). The import pipeline merges these with `ST_Union_Agg`.
+The schema permits several `division_area` rows per division, and the import merges them with `ST_Union_Agg`. In `2026-07-22.0` none occur: non-contiguous territory is carried inside a single MULTIPOLYGON instead.
 
 ## Division Schema
 
@@ -116,7 +116,7 @@ Record attributes:
 | `subtype` | `division.subtype` |
 | `country` | `division.country` |
 | `region` | `division.region` |
-| `admin_level` | `division_area.admin_level` (minimum across merged areas) |
+| `level` | atgeo containment level, derived from `division.subtype` |
 | `wikidata` | `division.wikidata` |
 | `population` | `division.population` |
 

@@ -4,8 +4,9 @@
 --   division       -- metadata (names, subtype, country, wikidata, population)
 --   division_area  -- geometries, one or more rows per division (filtered to is_land=true)
 --
--- A single division can have multiple division_area rows (e.g. non-contiguous territories).
--- ST_Union_Agg merges them into one geometry per division.
+-- ST_Union_Agg merges a division's area rows into one geometry. In 2026-07-22.0
+-- there is exactly one row per division -- non-contiguity is carried inside a
+-- single MULTIPOLYGON -- but the schema permits more, so the aggregate stays.
 --
 -- The atgeo containment `level` is derived from `subtype` alone via a
 -- generated CASE expression, substituted below as a dollar-brace placeholder
@@ -30,7 +31,7 @@ INSTALL spatial; LOAD spatial;
 -- When parquet path is None, create empty temp table (LEFT JOINs produce NULL, importance defaults to 0)
 ${density_cte}
 
-CREATE TABLE places AS
+CREATE TEMP TABLE division_base AS
 WITH division AS (
     SELECT id, names, subtype, country, region, wikidata,
            population, parent_division_id
@@ -56,45 +57,45 @@ merged_areas_interior AS (
     SELECT division_id, geometry,
            ST_PointOnSurface(geometry) AS interior_point
     FROM merged_areas
-),
-division_base AS (
-    SELECT
-        d.id,
-        ma.geometry,
-        d.names,
-        d.subtype,
-        d.country,
-        d.region,
-        -- atgeo containment level, derived from subtype alone (no ELSE branch:
-        -- an unmapped subtype must produce NULL here so the fail-loud validator
-        -- and the post-CTAS NULL-level assertion in stage_division_import()
-        -- catch it).
-        ${level_case} AS level,
-        d.wikidata,
-        greatest(coalesce(d.population, 0), 0) AS population,
-        d.parent_division_id,
-        -- bbox is derived from the merged geometry; used for tile assignment and export
-        {'xmin': ST_XMin(ma.geometry), 'ymin': ST_YMin(ma.geometry),
-         'xmax': ST_XMax(ma.geometry), 'ymax': ST_YMax(ma.geometry)} AS bbox,
-        -- qk17 placed at the interior point -- the same point containment
-        -- tests -- so a division's tile and its containment answer agree.
-        -- A bbox midpoint can fall outside a crescent or multipart division
-        -- entirely, which puts the record in a tile it isn't in.
-        qk17(ST_X(ma.interior_point), ST_Y(ma.interior_point)) AS qk17,
-        -- min/max extents stored flat for fast bbox-filter in containment queries
-        ST_YMin(ma.geometry) AS min_latitude,
-        ST_YMax(ma.geometry) AS max_latitude,
-        ST_XMin(ma.geometry) AS min_longitude,
-        ST_XMax(ma.geometry) AS max_longitude,
-        ST_X(ma.interior_point) AS interior_lon,
-        ST_Y(ma.interior_point) AS interior_lat
-    FROM division d
-    JOIN merged_areas_interior ma ON ma.division_id = d.id
-),
+)
+SELECT
+    d.id,
+    ma.geometry,
+    d.names,
+    d.subtype,
+    d.country,
+    d.region,
+    -- atgeo containment level, derived from subtype alone (no ELSE branch:
+    -- an unmapped subtype must produce NULL here so the fail-loud validator
+    -- and the post-CTAS NULL-level assertion in stage_division_import()
+    -- catch it).
+    ${level_case} AS level,
+    d.wikidata,
+    greatest(coalesce(d.population, 0), 0) AS population,
+    d.parent_division_id,
+    -- bbox is derived from the merged geometry; used for tile assignment and export
+    {'xmin': ST_XMin(ma.geometry), 'ymin': ST_YMin(ma.geometry),
+     'xmax': ST_XMax(ma.geometry), 'ymax': ST_YMax(ma.geometry)} AS bbox,
+    -- qk17 placed at the interior point -- the same point containment
+    -- tests -- so a division's tile and its containment answer agree.
+    -- A bbox midpoint can fall outside a crescent or multipart division
+    -- entirely, which puts the record in a tile it isn't in.
+    qk17(ST_X(ma.interior_point), ST_Y(ma.interior_point)) AS qk17,
+    -- min/max extents stored flat for fast bbox-filter in containment queries
+    ST_YMin(ma.geometry) AS min_latitude,
+    ST_YMax(ma.geometry) AS max_latitude,
+    ST_XMin(ma.geometry) AS min_longitude,
+    ST_XMax(ma.geometry) AS max_longitude,
+    ST_X(ma.interior_point) AS interior_lon,
+    ST_Y(ma.interior_point) AS interior_lat
+FROM division d
+JOIN merged_areas_interior ma ON ma.division_id = d.id;
+
+CREATE TABLE places AS
 -- Compute average density for localities: find all z15 density tiles whose
 -- bbox intersects the locality's bounding box. Uses bbox-overlap join
 -- (not centroid-point-in-bbox) to ensure small localities receive density scores.
-division_density AS (
+WITH division_density AS (
     SELECT p.id,
            coalesce(avg(d.density_score), 0) AS avg_density
     FROM division_base p
@@ -120,4 +121,5 @@ FROM division_base db
 LEFT JOIN division_density dd USING (id);
 
 -- Drop temp tables
+DROP TABLE division_base;
 DROP TABLE density_tiles;

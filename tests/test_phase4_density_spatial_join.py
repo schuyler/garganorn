@@ -186,6 +186,19 @@ class TestDivisionDensityJoin:
         assert "tile_ymin" in sql, "overture_division_import.sql should use tile_ymin"
         assert "tile_ymax" in sql, "overture_division_import.sql should use tile_ymax"
 
+    def test_division_base_is_materialized(self):
+        """division_base must be a CREATE TEMP TABLE, not a CTE, so the density
+        join's probe side is materialized (docs/gotchas.md: "A join is sized
+        off the source relation, not the filtered one"). Text proxy for a plan
+        property, not the plan itself -- it cannot see the actual query plan.
+        """
+        division_import_path = Path(__file__).parent.parent / "garganorn" / "sql" / "overture_division_import.sql"
+        sql = division_import_path.read_text()
+
+        assert "CREATE TEMP TABLE division_base AS" in sql, (
+            "division_base must be materialized as its own CREATE TEMP TABLE"
+        )
+
     def test_division_import_bbox_overlap_join(self):
         """overture_division_import.sql's density join uses a bbox-overlap condition:
 

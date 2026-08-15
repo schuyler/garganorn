@@ -71,7 +71,7 @@ Supported sources (for `run --source`):
 
 Imports Overture Maps administrative boundaries from the `division` and `division_area` parquet themes. Produces two outputs:
 
-- **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, admin_level, wikidata, population).
+- **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, level, wikidata, population).
 - **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries, alongside a `covering/` directory of quadtree-to-boundary index parquet. Used by other sources' tile pipelines via `--boundaries`.
 
 ```
