@@ -287,3 +287,222 @@ class TestTileAssignmentAmbiguousLevelColumn:
             f"  Missing: {expected_ids - assigned_ids}\n"
             f"  Extra:   {assigned_ids - expected_ids}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Summary tile assignment (garganorn/stages.py::stage_summary_tile_assignment)
+#
+# Per docs/design-constraints.md: the summary
+# band is the top-N places by importance DESC / id ASC, plus (for
+# overture_division only) every subtype IN ('country','region','dependency')
+# additively, assigned into a z1-z5 tile band by the same coarsest-fit
+# algorithm as stage_tile_assignment.
+# ---------------------------------------------------------------------------
+
+def _make_places_parquet_with_importance(tmp_path, places, filename="places_importance.parquet"):
+    """Write a places.parquet with (id, qk17, importance).
+
+    `places` is a list of (id, lat, lon, importance) tuples.
+    """
+    parquet_path = str(tmp_path / filename)
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    rows_sql = ", ".join(
+        f"('{pid}', ST_QuadKey({lon}, {lat}, 17), {importance})"
+        for pid, lat, lon, importance in places
+    )
+    con.execute(f"""
+        COPY (
+            SELECT id, qk17, importance
+            FROM (VALUES {rows_sql}) t(id, qk17, importance)
+        ) TO '{parquet_path}' (FORMAT PARQUET)
+    """)
+    con.close()
+    return parquet_path
+
+
+def _make_division_places_parquet(tmp_path, places, filename="places_division.parquet"):
+    """Write a places.parquet with (id, qk17, importance, subtype).
+
+    `places` is a list of (id, lat, lon, importance, subtype) tuples.
+    """
+    parquet_path = str(tmp_path / filename)
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    rows_sql = ", ".join(
+        f"('{pid}', ST_QuadKey({lon}, {lat}, 17), {importance}, '{subtype}')"
+        for pid, lat, lon, importance, subtype in places
+    )
+    con.execute(f"""
+        COPY (
+            SELECT id, qk17, importance, subtype
+            FROM (VALUES {rows_sql}) t(id, qk17, importance, subtype)
+        ) TO '{parquet_path}' (FORMAT PARQUET)
+    """)
+    con.close()
+    return parquet_path
+
+
+def _summary_place_ids(output_path):
+    con = duckdb.connect()
+    ids = {row[0] for row in con.execute(
+        f"SELECT DISTINCT place_id FROM read_parquet('{output_path}')"
+    ).fetchall()}
+    con.close()
+    return ids
+
+
+class TestSummarySetSelection:
+    """Top-N by importance DESC, ties by id ASC; additive unconditional
+    subtypes for overture_division."""
+
+    def test_topn_with_tie_broken_by_id_ascending(self, tmp_path):
+        """n=2 over 4 places: the #1 importance plus the id-ASC winner of an
+        importance tie for #2 must survive; the tie loser and the
+        low-importance place must not."""
+        from garganorn.stages import stage_summary_tile_assignment
+        places = [
+            ("p1_top", 37.7749, -122.4194, 90),
+            ("aaa_tie", 37.7750, -122.4195, 80),
+            ("bbb_tie", 37.7751, -122.4196, 80),
+            ("z_low", 40.7128, -74.0060, 10),
+        ]
+        places_parquet = _make_places_parquet_with_importance(tmp_path, places)
+        output = str(tmp_path / "summary_ta.parquet")
+        stage_summary_tile_assignment(places_parquet, output, "overture_place", n=2)
+        ids = _summary_place_ids(output)
+        assert ids == {"p1_top", "aaa_tie"}, (
+            f"top-2 by importance DESC/id ASC must be {{'p1_top', 'aaa_tie'}}; got {ids}"
+        )
+
+    def test_division_unconditional_subtypes_additive_and_dont_shrink_topn(self, tmp_path):
+        """n=1: only the highest-importance place makes the top-N cut, but
+        every country/region/dependency record is included additively
+        regardless of its own importance. A non-unconditional low-importance
+        subtype (county) must stay excluded. Growing the unconditional set
+        must not shrink the top-N (non-unconditional) portion of the
+        result."""
+        from garganorn.stages import stage_summary_tile_assignment
+        base_places = [
+            ("loc_hi", 37.7749, -122.4194, 95, "locality"),
+            ("loc_lo", 40.0, -74.0, 5, "locality"),
+            ("country_a", 10.0, 10.0, 1, "country"),
+            ("region_b", 20.0, 20.0, 1, "region"),
+            ("dependency_c", 30.0, 30.0, 1, "dependency"),
+            ("county_d", 5.0, 5.0, 1, "county"),
+        ]
+        places_parquet = _make_division_places_parquet(tmp_path, base_places)
+        output = str(tmp_path / "summary_div_ta.parquet")
+        stage_summary_tile_assignment(places_parquet, output, "overture_division", n=1)
+        ids = _summary_place_ids(output)
+        assert ids == {"loc_hi", "country_a", "region_b", "dependency_c"}, (
+            f"n=1 additive selection must be top-1 + unconditional subtypes; got {ids}"
+        )
+
+        # Grow the unconditional set; the non-unconditional (top-N) portion
+        # must stay exactly n=1 -- it must not be crowded out.
+        grown_places = base_places + [("dependency_e", 35.0, 35.0, 1, "dependency")]
+        places_parquet_2 = _make_division_places_parquet(
+            tmp_path, grown_places, filename="places_division_grown.parquet"
+        )
+        output_2 = str(tmp_path / "summary_div_ta_grown.parquet")
+        stage_summary_tile_assignment(places_parquet_2, output_2, "overture_division", n=1)
+        ids_2 = _summary_place_ids(output_2)
+        unconditional = {"country_a", "region_b", "dependency_c", "dependency_e"}
+        non_unconditional = ids_2 - unconditional
+        assert non_unconditional == {"loc_hi"}, (
+            f"top-N portion must stay exactly n=1 ({{'loc_hi'}}) as the unconditional "
+            f"set grows from 3 to 4; got non-unconditional={non_unconditional}"
+        )
+        assert unconditional <= ids_2, (
+            f"grown unconditional set must all be present; missing {unconditional - ids_2}"
+        )
+
+
+class TestSummaryAssignmentBand:
+    """Summary tile_qk length is always in [1, 5]."""
+
+    def test_all_summary_tile_qk_lengths_between_1_and_5(self, tmp_path):
+        """A fixture spread across ten widely separated regions, with a tight
+        max_per_tile, forces the coarsest-fit algorithm to split down from
+        z1. Every resulting tile_qk must still have length in [1, 5]; none
+        empty, none >=6."""
+        from garganorn.stages import stage_summary_tile_assignment
+        places = [
+            (f"p{i}", lat, lon, 100 - i)
+            for i, (lat, lon) in enumerate([
+                (37.7749, -122.4194), (40.7128, -74.0060), (51.5074, -0.1278),
+                (35.6762, 139.6503), (-33.8688, 151.2093), (55.7558, 37.6173),
+                (-23.5505, -46.6333), (28.6139, 77.2090), (30.0444, 31.2357),
+                (19.4326, -99.1332),
+            ])
+        ]
+        places_parquet = _make_places_parquet_with_importance(tmp_path, places)
+        output = str(tmp_path / "summary_band_ta.parquet")
+        stage_summary_tile_assignment(places_parquet, output, "overture_place",
+                                      n=1000, max_per_tile=2)
+        con = duckdb.connect()
+        lengths = {
+            len(row[0]) for row in con.execute(
+                f"SELECT DISTINCT tile_qk FROM read_parquet('{output}')"
+            ).fetchall()
+        }
+        con.close()
+        assert lengths, "no summary tile_qk rows produced"
+        assert all(1 <= n <= 5 for n in lengths), (
+            f"summary tile_qk lengths must all be in [1, 5]; got lengths {sorted(lengths)}"
+        )
+
+
+class TestSummaryZ5HardFloorOverflow:
+    """z5 is a hard floor -- a z5 tile may exceed max_per_tile, and this
+    must not raise or drop records."""
+
+    def test_z5_tile_exceeds_max_per_tile_without_error(self, tmp_path):
+        """1200 places packed into a single z5 cell, with max_per_tile=1000,
+        must all still be assigned -- to that one z5 tile -- with no error
+        and none dropped."""
+        from garganorn.stages import quadkey_to_bbox
+        from garganorn.stages import stage_summary_tile_assignment
+
+        # Pack 1200 points inside a single z5 cell with margin, so every
+        # point's qk17 shares the same 5-char prefix.
+        z5_qk = "12333"
+        xmin, ymin, xmax, ymax = quadkey_to_bbox(z5_qk)
+        mx, my = 0.1 * (xmax - xmin), 0.1 * (ymax - ymin)
+        xmin, xmax = xmin + mx, xmax - mx
+        ymin, ymax = ymin + my, ymax - my
+
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.execute(f"""
+            CREATE TABLE places AS
+            SELECT 'p' || i AS id,
+                   ST_QuadKey({xmin} + (i % 40 + 0.5) * ({xmax} - {xmin}) / 40,
+                              {ymin} + (i // 40 + 0.5) * ({ymax} - {ymin}) / 30, 17) AS qk17,
+                   1000 - i AS importance
+            FROM generate_series(0, 1199) AS t(i)
+        """)
+        places_parquet = str(tmp_path / "z5_overflow_places.parquet")
+        con.execute(f"COPY places TO '{places_parquet}' (FORMAT PARQUET)")
+        con.close()
+
+        output = str(tmp_path / "z5_overflow_ta.parquet")
+        stage_summary_tile_assignment(places_parquet, output, "overture_place",
+                                      n=2000, max_per_tile=1000)
+
+        con = duckdb.connect()
+        rows = con.execute(
+            f"SELECT tile_qk, count(*) FROM read_parquet('{output}') GROUP BY tile_qk"
+        ).fetchall()
+        con.close()
+        assert len(rows) == 1, f"all 1200 places must land on one tile; got tiles {rows}"
+        tile_qk, count = rows[0]
+        assert tile_qk == z5_qk, f"the shared tile must be the z5 cell {z5_qk!r}; got {tile_qk!r}"
+        assert count == 1200, (
+            f"all 1200 places must be assigned (none dropped); got {count}"
+        )
+        assert count > 1000, (
+            "fixture must actually overflow max_per_tile=1000 to exercise the "
+            f"hard floor; got count={count}"
+        )

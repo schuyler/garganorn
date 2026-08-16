@@ -236,3 +236,49 @@ class TestTileManifest:
         urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert isinstance(urls, list)
         assert len(urls) == 4
+
+
+# ---------------------------------------------------------------------------
+# Summary fallback vs BboxTooLarge.
+#
+# TileManifest partitions its loaded quadkeys by key length: a summary tile
+# is one whose tile_qk is shorter than 6 characters (the regular band's
+# min_zoom). get_tiles_for_bbox answers from the regular band first; when
+# the regular count exceeds max_tiles it returns the intersecting summary
+# tiles instead of raising, uncapped by max_tiles (the band is bounded by
+# construction, not by the coverage budget).
+# ---------------------------------------------------------------------------
+
+class TestSummaryFallback:
+    def test_falls_back_to_summary_tiles_when_regular_exceeds_max_tiles(self, tmp_path):
+        """4 regular tiles > max_tiles=3, with a summary band present, must
+        return the (uncapped) summary tiles instead of raising. Summary keys
+        of length 1, 3, and 5 also exercise the qk[:6]/qk URL shape for keys
+        shorter than 6 characters."""
+        regular = list(_MANIFEST_QUADKEYS)
+        summary = ["0", "023", "20111"]
+        path = _make_manifest_db(tmp_path, quadkeys=regular + summary)
+        tm = TileManifest(str(path), _BASE_URL)
+
+        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
+
+        assert set(urls) == {f"{_BASE_URL}/{qk}/{qk}.json.gz" for qk in summary}, (
+            f"regular count (4) > max_tiles (3) with a summary band present "
+            f"must return the summary tiles, not raise; got {urls}"
+        )
+
+    def test_no_summary_leak_when_regular_answers_within_max_tiles(self, tmp_path):
+        """A summary band must not be returned when the regular band already
+        answers within max_tiles -- the fallback is 'instead of', not
+        'in addition to'."""
+        regular = _MANIFEST_QUADKEYS[:2]
+        summary = ["0"]
+        path = _make_manifest_db(tmp_path, quadkeys=regular + summary)
+        tm = TileManifest(str(path), _BASE_URL)
+
+        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
+
+        assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in regular}, (
+            f"regular count (2) <= max_tiles (3) must answer from the "
+            f"regular band only; got {urls}"
+        )

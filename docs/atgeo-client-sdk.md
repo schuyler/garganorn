@@ -239,8 +239,8 @@ where Kyoto is. Tiles killed couch-geocoding: fetching tiles for a place
 requires locating it first. The earlier design proposed recovering this by
 wholesale-prefetching the division tileset and running a locality tier over
 it, which needs a manifest the gazetteer does not publish. The real answer is
-summary tiles, sketched in
-[planned-features.md](planned-features.md#summary-tiles-for-region-less-search).
+summary tiles, described in
+[design-constraints.md](design-constraints.md#the-summary-band-is-a-coarse-tile-tier-for-region-less-resolution).
 Until those exist, `region` is required.
 
 **The write path.** `composeLocation`, `checkin`, and anything else that

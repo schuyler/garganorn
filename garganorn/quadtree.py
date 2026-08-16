@@ -12,6 +12,8 @@ from .stages import (
     bboxes_intersect,
     _coord_exprs,
     _is_output_fresh,
+    artifact_fresh,
+    finalize_artifact,
     compute_containment,
     write_manifest,
     write_manifest_db,
@@ -19,7 +21,9 @@ from .stages import (
     stage_density_extract,
     stage_idf,
     stage_tile_assignment,
+    stage_summary_tile_assignment,
     stage_division_tile_references,
+    stage_summary_division_tile_references,
     stage_export,
 )
 from .covering import stage_covering
@@ -29,6 +33,50 @@ log = logging.getLogger(__name__)
 SOURCES = {cls.source_key: cls for cls in [OverturePlaces, OpenStreetMap, OvertureDivisions]}
 
 
+def _union_tile_assignments(regular_path, summary_path, output_path, *,
+                            memory_limit="48GB", temp_directory=None,
+                            max_temp_directory_size="250GB", force=False) -> None:
+    """Union regular and summary (place_id, tile_qk) rows into one artifact.
+
+    UNION ALL, not UNION: the regular band is zoom 6-17 and the summary band
+    is zoom 1-5, so no (place_id, tile_qk) pair can appear on both sides.
+    """
+    inputs = [regular_path, summary_path]
+    if not force and artifact_fresh(output_path, inputs, {}):
+        log.info("union_tile_assignments: skipping (artifact fresh)")
+        return
+
+    tmp_output = output_path + ".tmp"
+    if os.path.exists(tmp_output):
+        os.remove(tmp_output)
+
+    regular_sql = regular_path.replace("'", "''")
+    summary_sql = summary_path.replace("'", "''")
+    tmp_sql = tmp_output.replace("'", "''")
+
+    con = duckdb.connect()
+    try:
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"""
+            COPY (
+                SELECT place_id, tile_qk FROM read_parquet('{regular_sql}')
+                UNION ALL
+                SELECT place_id, tile_qk FROM read_parquet('{summary_sql}')
+                ORDER BY tile_qk, place_id
+            ) TO '{tmp_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+    finally:
+        con.close()
+
+    finalize_artifact(tmp_output, output_path, params={}, inputs=inputs)
+
+
 def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB"):
     """Orchestrates import → covering → tile-assign → containment → export."""
     source_dir = os.path.join(output_dir, source)
@@ -36,6 +84,9 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
     places_parquet = os.path.join(source_dir, "places.parquet")
     ta_parquet = os.path.join(source_dir, "tile_assignments.parquet")
     tr_parquet = os.path.join(source_dir, "tile_references.parquet")
+    summary_ta_parquet = os.path.join(source_dir, "summary_tile_assignments.parquet")
+    summary_tr_parquet = os.path.join(source_dir, "summary_tile_references.parquet")
+    combined_parquet = os.path.join(source_dir, "tile_assignments_combined.parquet")
     containment_dir = os.path.join(source_dir, "containment")
     t0 = time.monotonic()
 
@@ -47,6 +98,8 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
         for fname in [
             "places.parquet", "places.parquet.meta.json",
             "tile_assignments.parquet", "tile_assignments.parquet.meta.json",
+            "summary_tile_assignments.parquet", "summary_tile_assignments.parquet.meta.json",
+            "tile_assignments_combined.parquet", "tile_assignments_combined.parquet.meta.json",
         ]:
             path = os.path.join(source_dir, fname)
             if os.path.exists(path):
@@ -55,7 +108,9 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             shutil.rmtree(containment_dir)
         if source == "overture_division":
             for fname in ["tile_references.parquet",
-                          "tile_references.parquet.meta.json"]:
+                          "tile_references.parquet.meta.json",
+                          "summary_tile_references.parquet",
+                          "summary_tile_references.parquet.meta.json"]:
                 path = os.path.join(source_dir, fname)
                 if os.path.exists(path):
                     os.remove(path)
@@ -108,6 +163,32 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
             max_temp_directory_size=max_temp_directory_size, force=force)
         assignments_parquet = tr_parquet
 
+    # Summary band (self-gating): top-N places in a z1-z5 tile band, same
+    # algorithm restricted to the summary set (docs/design-constraints.md).
+    stage_summary_tile_assignment(places_parquet, summary_ta_parquet, source,
+                                  max_per_tile=max_per_tile, memory_limit=memory_limit,
+                                  temp_directory=temp_directory,
+                                  max_temp_directory_size=max_temp_directory_size,
+                                  force=force)
+    summary_assignments_parquet = summary_ta_parquet
+    if source == "overture_division":
+        stage_summary_division_tile_references(
+            os.path.join(source_dir, "covering"), summary_ta_parquet, summary_tr_parquet,
+            memory_limit=memory_limit, temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size, force=force)
+        summary_assignments_parquet = summary_tr_parquet
+
+    # Union regular and summary rows into the single artifact that feeds
+    # compute_containment, stage_export, and write_manifest_db: this is
+    # what makes summary-band record copies byte-identical to their regular
+    # copies, and gives them the same containment.
+    _union_tile_assignments(assignments_parquet, summary_assignments_parquet,
+                            combined_parquet, memory_limit=memory_limit,
+                            temp_directory=temp_directory,
+                            max_temp_directory_size=max_temp_directory_size,
+                            force=force)
+    assignments_parquet = combined_parquet
+
     # Containment (self-gating, parquet-based)
     pk_expr = SOURCES[source].source_pk
     lon_expr, lat_expr = _coord_exprs(source, alias="p")
@@ -143,14 +224,29 @@ class TileManifest:
         self.base_url = base_url.rstrip("/")
 
     def get_tiles_for_bbox(self, xmin, ymin, xmax, ymax, max_tiles=50):
-        urls = []
-        for qk in self.quadkeys:
-            tile_bbox = quadkey_to_bbox(qk)
-            if bboxes_intersect(tile_bbox, (xmin, ymin, xmax, ymax)):
-                urls.append(f"{self.base_url}/{qk[:6]}/{qk}.json.gz")
-                if len(urls) > max_tiles:
-                    raise BboxTooLarge(f"Bounding box covers more than {max_tiles} tiles")
-        return urls
+        # Summary tiles are keyed by quadkey length < 6 (the regular band's
+        # min_zoom); answer from the regular band first, and fall back to
+        # the summary band -- uncapped, since it is bounded by construction
+        # -- only when the regular answer exceeds max_tiles
+        # (docs/design-constraints.md).
+        bbox = (xmin, ymin, xmax, ymax)
+        regular_urls = [
+            f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
+            for qk in self.quadkeys
+            if len(qk) >= 6 and bboxes_intersect(quadkey_to_bbox(qk), bbox)
+        ]
+        if len(regular_urls) <= max_tiles:
+            return regular_urls
+
+        summary_qks = [qk for qk in self.quadkeys if len(qk) < 6]
+        if summary_qks:
+            return [
+                f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
+                for qk in summary_qks
+                if bboxes_intersect(quadkey_to_bbox(qk), bbox)
+            ]
+
+        raise BboxTooLarge(f"Bounding box covers more than {max_tiles} tiles")
 
 
 # ---------------------------------------------------------------------------

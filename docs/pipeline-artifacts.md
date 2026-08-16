@@ -255,7 +255,9 @@ sources are unaffected.
 **Writes**: a new timestamped run directory,
 `<tiles_root>/<YYYYMMDDTHHMMSS>/<qk[:6]>/<qk>.json.gz` (one gzip file per
 tile), plus `manifest.duckdb` and `manifest.json` in the run dir, then
-swaps the `<tiles_root>/current` symlink to point at it.
+swaps the `<tiles_root>/current` symlink to point at it. `qk[:6]` returns
+the whole key for the summary band's sub-6-char quadkeys, so those tiles
+land at `<qk>/<qk>.json.gz` in the same layout.
 
 **Schema** (tile payload, per `envelope.py`): `{collection, source,
 license, generated_at, records: [{uri, cid: null, value: <record>}]}`.
@@ -268,7 +270,9 @@ license, generated_at, records: [{uri, cid: null, value: <record>}]}`.
 **Sort**: two passes. Pass 1 copies the export query's output into a
 staging directory, Hive-partitioned by `left(tile_qk,
 export_partition_zoom)`, with no `ORDER BY` — this bounds peak spill to
-one partition rather than the whole dataset. Pass 2 reads one partition
+one partition rather than the whole dataset. `left(s, 6)` on a summary
+tile's shorter key returns the whole key, so those tiles partition by
+their own quadkey rather than a 6-char prefix. Pass 2 reads one partition
 at a time with `ORDER BY tile_qk, place_id` and streams it to the flush
 loop below. `place_id` is a deterministic tiebreaker with no meaning
 downstream, kept solely so repeated runs over identical inputs produce

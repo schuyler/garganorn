@@ -432,3 +432,65 @@ class TestGridUntouched:
 
         assert bytes_after == bytes_before, "tile_assignments.parquet bytes changed"
         assert mtime_after == mtime_before, "tile_assignments.parquet mtime changed"
+
+
+# ---------------------------------------------------------------------------
+# Summary division references (garganorn/stages.py::
+# stage_summary_division_tile_references).
+#
+# stage_division_tile_references derives its output from covering overlap
+# alone, so run unrestricted over a summary grid it references every
+# division whose geometry overlaps a summary tile, not only the divisions
+# in the summary set. stage_summary_division_tile_references must restrict
+# that output to the ids present in the summary tile_assignments it's given.
+# ---------------------------------------------------------------------------
+
+class TestSummaryDivisionReferences:
+    def test_division_outside_summary_set_not_referenced_despite_overlap(self, tmp_path):
+        """div_in and div_out both sit inside the same z4 summary tile, but
+        only div_in's own record is in the summary set (i.e. present in the
+        summary tile_assignments). div_out must not appear in the restricted
+        output, even though its geometry genuinely overlaps the tile -- an
+        oracle run (the plain, unrestricted stage) proves that overlap is
+        real, not a fixture artifact."""
+        from garganorn.stages import stage_summary_division_tile_references
+
+        parent_qk = "1230"
+        xmin, ymin, xmax, ymax = quadkey_to_bbox(parent_qk)
+        w, h = xmax - xmin, ymax - ymin
+        in_wkt = _rect_wkt(xmin + 0.1 * w, ymin + 0.1 * h, xmin + 0.4 * w, ymin + 0.4 * h)
+        out_wkt = _rect_wkt(xmin + 0.6 * w, ymin + 0.6 * h, xmin + 0.9 * w, ymin + 0.9 * h)
+
+        db_path = tmp_path / "boundaries.duckdb"
+        _create_boundaries_db(db_path, [
+            ("div_in", 50, in_wkt, ymin + 0.1 * h, xmin + 0.1 * w, ymin + 0.4 * h, xmin + 0.4 * w),
+            ("div_out", 50, out_wkt, ymin + 0.6 * h, xmin + 0.6 * w, ymin + 0.9 * h, xmin + 0.9 * w),
+        ])
+
+        covering_dir = str(tmp_path / "covering")
+        stage_covering(str(db_path), covering_dir, cover_min_zoom=4, cover_max_zoom=5)
+
+        # Only div_in is in the summary set -- its own place row is the only
+        # one assigned into the z1-z5 grid.
+        summary_ta_path = str(tmp_path / "summary_ta.parquet")
+        _write_tile_assignments(summary_ta_path, [("div_in", parent_qk)])
+
+        # Oracle: the plain, unrestricted stage run over this same summary
+        # grid DOES reference div_out -- proving the fixture creates a real
+        # crowd-out risk, not a vacuous one.
+        raw_output = str(tmp_path / "raw_tile_references.parquet")
+        stage_division_tile_references(covering_dir, summary_ta_path, raw_output)
+        raw_ids = {r[0] for r in _output_rows(raw_output)}
+        assert "div_out" in raw_ids, (
+            "fixture assumption violated: div_out's geometry must overlap "
+            f"{parent_qk!r} in the unrestricted references, or this test "
+            "proves nothing"
+        )
+
+        restricted_output = str(tmp_path / "summary_tile_references.parquet")
+        stage_summary_division_tile_references(covering_dir, summary_ta_path, restricted_output)
+        restricted = set(_output_rows(restricted_output))
+        assert restricted == {("div_in", parent_qk)}, (
+            f"summary references must be restricted to the summary id set; "
+            f"expected only div_in referenced at {parent_qk!r}, got {restricted}"
+        )

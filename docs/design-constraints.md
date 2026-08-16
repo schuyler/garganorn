@@ -200,12 +200,43 @@ Any join of the tile-assignment artifact (`tile_assignments.parquet` or
 itself carry tile-scoped rows must key on `(place_id, tile_qk)` together,
 never `place_id` alone — `compute_containment` groups by `(tile_qk,
 place_id)`, so a `place_id`-only join fans out to N² rows for an N-tile
-record. `overture_place_export_tiles.sql` and `osm_export_tiles.sql` keep
-the `place_id`-only join deliberately: both sides stay one row per place
-for those sources.
+record. The summary band (below) unions a second assignment row into the
+same artifact for every top-N place, so a place can carry two rows even
+in sources where the regular band assigns it once; all three
+`*_export_tiles.sql` files join containment on `(place_id, tile_qk)` for
+this reason.
 
 **Applies to**: `stages.py` (`stage_division_tile_references`,
-`compute_containment`), `overture_division_export_tiles.sql`
+`compute_containment`), `overture_division_export_tiles.sql`,
+`overture_place_export_tiles.sql`, `osm_export_tiles.sql`
+
+### The summary band is a coarse tile tier for region-less resolution
+
+Each source's tileset carries a z1-z5 band alongside the regular z6-z17 grid,
+holding only the top-N=10,000 records by `importance` DESC (ties by
+`<pk>` ASC), so a client with no region can resolve a name without
+prefetching the whole tileset. Divisions additionally include `subtype IN
+('country', 'region', 'dependency')` unconditionally, additive on top of
+the top-N cut and deduplicated against it — a pure importance cut crowds
+every non-locality subtype out below N≈50,000.
+
+z0 is excluded because its quadkey is the empty string, which degenerates
+the `qk[:6]` partition and URL slice; z6 is excluded because it would
+collide with the regular band's filenames. Quadkey length under six
+characters is what marks a tile summary-band, both on disk and in
+`TileManifest.get_tiles_for_bbox`. z5 is a hard floor — tiling cannot
+split a fine cell further — so a z5 tile may hold more than
+`max_per_tile` records; this is expected, not an error.
+
+`get_tiles_for_bbox` answers from the regular band first; when that
+answer would exceed `max_tiles`, it returns the intersecting summary-band
+tiles instead of raising `BboxTooLarge`. The summary answer is uncapped —
+the band is bounded by construction, a few dozen tiles per source at
+N=10,000 — and is deliberately incomplete rather than an error.
+
+**Applies to**: `stages.py` (`stage_summary_tile_assignment`,
+`stage_summary_division_tile_references`), `quadtree.py`
+(`TileManifest.get_tiles_for_bbox`)
 
 ### Tile serving uses three distinct, deliberately separate namespaces
 
@@ -264,6 +295,7 @@ derivation is unnecessary.
 
 - All coordinates are WGS84 (EPSG:4326), longitude/latitude order
 - Quadkey zoom levels: z17 for places, z15 for density, z6-z17 for tiles
+  plus a z1-z5 summary band
 - Coordinate precision in export: `DECIMAL(10,6)` → 6 decimal places (~0.1m)
 - Bbox privacy grid: 0.01° (~1km) enforced by `_check_bbox_precision()`
 - Latitude for a quadkey is clamped to ±85.05101030905541, the centre of the

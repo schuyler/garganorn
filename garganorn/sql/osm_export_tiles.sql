@@ -39,5 +39,7 @@ SELECT
     })::VARCHAR AS record_json
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.rkey
-LEFT JOIN place_containment pc ON pc.place_id = p.rkey;
+-- Keyed on (place_id, tile_qk): a place can carry two tile_assignments rows
+-- (its own band and the z1-z5 summary band), each with its own containment row.
+LEFT JOIN place_containment pc ON pc.place_id = p.rkey AND pc.tile_qk = ta.tile_qk;
 -- No ORDER BY: stage_export sorts per partition (pass 2), not here.

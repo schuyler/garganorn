@@ -54,7 +54,8 @@ class TileBackedCollection:
     def _read_tile(self, tile_qk: str) -> dict:
         """Read and decompress a tile file. Uses LRU cache to amortize repeated access."""
         # tile_qk[:6] is the 6-char subdirectory prefix. The export pipeline produces
-        # zoom-6+ keys (always >= 6 chars), so the slice is always a full 6 chars.
+        # zoom 6-17 keys, plus the summary band's short keys, where the slice is the
+        # whole key.
         tile_path = os.path.join(self.tiles_dir, tile_qk[:6], f"{tile_qk}.json.gz")
         return self._cached_read_tile(tile_path)
 

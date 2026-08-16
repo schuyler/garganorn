@@ -1354,7 +1354,8 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
         output_path: Destination path for tile_assignments.parquet artifact.
         source: Source key (overture_place, osm, overture_division).
         max_per_tile: Maximum places per tile (triggers tile splitting). Default 1000.
-        min_zoom: Minimum zoom level for tile assignment. Default 6.
+        min_zoom: Minimum zoom level for tile assignment. Default 6;
+            stage_summary_tile_assignment passes 1 for the summary band.
         max_zoom: Maximum zoom level for tile assignment. Default 17.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         temp_directory: DuckDB temp_directory for spill (optional).
@@ -1483,6 +1484,107 @@ def stage_tile_assignment(places_parquet, output_path, source, *,
     return stats
 
 
+def stage_summary_tile_assignment(places_parquet, output_path, source, *,
+                                  n=10000, max_per_tile=1000,
+                                  memory_limit="48GB", temp_directory=None,
+                                  max_temp_directory_size="250GB",
+                                  force=False) -> dict:
+    """Assign the summary set to a z1-z5 tile band and write summary
+    tile_assignments.parquet.
+
+    The summary set is the top-n places by importance DESC, place_id ASC;
+    for overture_division, every subtype IN ('country', 'region',
+    'dependency') is additionally included, additive on top of n
+    (docs/design-constraints.md). Assignment then reuses
+    stage_tile_assignment's coarsest-fit algorithm over that subset, in the
+    z1-z5 band -- z5 is a hard floor, so a z5 tile may exceed
+    max_per_tile; that already falls out of stage_tile_assignment's
+    coalesce(bz.level, max_zoom) fallback.
+
+    Args:
+        places_parquet: Path to input places.parquet file.
+        output_path: Destination path for the summary tile_assignments.parquet
+            artifact.
+        source: Source key (overture_place, osm, overture_division).
+        n: Top-N cutoff by importance. Default 10000.
+        max_per_tile: Maximum places per tile. Default 1000.
+        memory_limit: DuckDB memory_limit string. Default "48GB".
+        temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
+        force: Re-build even when the artifact is fresh.
+
+    Returns:
+        dict: stats from the underlying stage_tile_assignment call.
+    """
+    t0 = time.monotonic()
+
+    inputs = [places_parquet]
+    params = {"n": n, "max_per_tile": max_per_tile}
+
+    if not force and artifact_fresh(output_path, inputs, params):
+        log.info("[%s] summary_tile_assignment: skipping (artifact fresh)", source)
+        return {}
+
+    pk_col = _SOURCES[source].source_pk
+    pq_sql = places_parquet.replace("'", "''")
+    summary_places_path = output_path + ".summary_places.tmp.parquet"
+    if os.path.exists(summary_places_path):
+        os.remove(summary_places_path)
+
+    unconditional_clause = (
+        " OR p.subtype IN ('country', 'region', 'dependency')"
+        if source == "overture_division" else ""
+    )
+
+    con = duckdb.connect()
+    try:
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"""
+            COPY (
+                SELECT * FROM read_parquet('{pq_sql}') p
+                WHERE p.{pk_col} IN (
+                    SELECT {pk_col} FROM read_parquet('{pq_sql}')
+                    ORDER BY importance DESC, {pk_col} ASC
+                    LIMIT {n}
+                ){unconditional_clause}
+            ) TO '{summary_places_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+    finally:
+        con.close()
+
+    try:
+        stats = stage_tile_assignment(
+            summary_places_path, output_path, source,
+            max_per_tile=max_per_tile, min_zoom=1, max_zoom=5,
+            memory_limit=memory_limit, temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size, force=True,
+        )
+    finally:
+        os.remove(summary_places_path)
+        summary_places_meta = summary_places_path + ".meta.json"
+        if os.path.exists(summary_places_meta):
+            os.remove(summary_places_meta)
+
+    # stage_tile_assignment already finalized output_path against the
+    # summary_places_path subset; overwrite its meta with OUR params/inputs
+    # (n, max_per_tile, the real places_parquet) so the freshness check
+    # above gates on those, not on the deleted intermediate subset.
+    finalize_artifact(output_path, output_path, params, stats=stats, inputs=inputs)
+    log.info(
+        "[%s] summary_tile_assignment artifact: done (%.1fs)",
+        source, time.monotonic() - t0,
+    )
+    return stats
+
+
 def stage_division_tile_references(covering_dir, tile_assignments_path, output_path, *,
                                     memory_limit="48GB", temp_directory=None,
                                     max_temp_directory_size="250GB",
@@ -1591,6 +1693,104 @@ def stage_division_tile_references(covering_dir, tile_assignments_path, output_p
     return stats
 
 
+def stage_summary_division_tile_references(covering_dir, summary_ta_path, output_path, *,
+                                            memory_limit="48GB", temp_directory=None,
+                                            max_temp_directory_size="250GB",
+                                            force=False) -> dict:
+    """Expand summary division tile assignments to every summary grid tile
+    a division's covering overlaps, restricted to the summary set.
+
+    Runs stage_division_tile_references's overlap logic unchanged against
+    the summary grid (summary_ta_path's distinct tile_qk set), then
+    restricts the result to the place_ids present in summary_ta_path:
+    the references stage works from the full covering, so without this
+    restriction every division on earth would be referenced into the z1-z5
+    tiles and the top-N cut would be destroyed.
+
+    Args:
+        covering_dir: Directory of covering parquet files + _meta.json
+            (from stage_covering).
+        summary_ta_path: Path to the summary tile_assignments.parquet
+            artifact (from stage_summary_tile_assignment); both its grid and
+            its place_id set are used.
+        output_path: Destination path for the summary
+            tile_references.parquet artifact.
+        memory_limit: DuckDB memory_limit string. Default "48GB".
+        temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
+        force: Re-build even when the artifact is fresh.
+
+    Returns:
+        dict: {"references": int}
+    """
+    t0 = time.monotonic()
+
+    covering_meta_path = os.path.join(covering_dir, "_meta.json")
+    inputs = [covering_meta_path, summary_ta_path]
+
+    if not force and artifact_fresh(output_path, inputs, {}):
+        log.info("summary_division_tile_references: skipping (artifact fresh)")
+        return {}
+
+    raw_path = output_path + ".raw.tmp.parquet"
+    if os.path.exists(raw_path):
+        os.remove(raw_path)
+
+    try:
+        stage_division_tile_references(
+            covering_dir, summary_ta_path, raw_path,
+            memory_limit=memory_limit, temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size, force=True,
+        )
+
+        tmp_output = output_path + ".tmp"
+        if os.path.exists(tmp_output):
+            os.remove(tmp_output)
+        raw_sql = raw_path.replace("'", "''")
+        summary_ta_sql = summary_ta_path.replace("'", "''")
+
+        con = duckdb.connect()
+        try:
+            if temp_directory:
+                con.execute(f"SET temp_directory = '{temp_directory}'")
+            if max_temp_directory_size:
+                con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+            con.execute(f"SET memory_limit = '{memory_limit}'")
+            con.execute("SET preserve_insertion_order = false")
+            con.execute("SET enable_progress_bar = false")
+            con.execute(f"""
+                COPY (
+                    SELECT r.place_id, r.tile_qk
+                    FROM read_parquet('{raw_sql}') r
+                    WHERE r.place_id IN (
+                        SELECT DISTINCT place_id FROM read_parquet('{summary_ta_sql}')
+                    )
+                    ORDER BY r.tile_qk, r.place_id
+                ) TO '{tmp_output}' (FORMAT PARQUET, COMPRESSION ZSTD)
+            """)
+            count = con.execute(
+                f"SELECT count(*) FROM read_parquet('{tmp_output}')"
+            ).fetchone()[0]
+        finally:
+            con.close()
+    finally:
+        if os.path.exists(raw_path):
+            os.remove(raw_path)
+        raw_meta = raw_path + ".meta.json"
+        if os.path.exists(raw_meta):
+            os.remove(raw_meta)
+
+    stats = {"references": count}
+    finalize_artifact(tmp_output, output_path, params={}, stats=stats, inputs=inputs)
+    log.info(
+        "summary_division_tile_references artifact: done (%.1fs, %d references)",
+        time.monotonic() - t0, count,
+    )
+    return stats
+
+
 def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str,
                  containment_dir: str, tiles_root: str, t0: float,
                  export_workers: int = None,
@@ -1618,8 +1818,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
             export (pass 1 partitions tile_export unsorted by
             left(tile_qk, export_partition_zoom); pass 2 sorts and flushes
             one partition at a time). Default 6, matching the qk[:6] output
-            subdirectory grain. Not exposed via run_pipeline, the CLI, or
-            config.yaml.
+            subdirectory grain (zoom 6-17, plus the summary band's short
+            keys). Not exposed via run_pipeline, the CLI, or config.yaml.
         memory_limit: DuckDB memory_limit string. Default "48GB".
         temp_directory: optional caller-supplied spill directory, same contract
             as stage_covering's temp_directory (garganorn/covering.py):
@@ -1698,8 +1898,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         containment_expr = f"read_parquet([{file_list}])"
     else:
         # Empty subquery with matching column names so LEFT JOIN ON resolves
-        # correctly. tile_qk is projected for the division export, whose join
-        # keys on it; the other sources' SQL simply never references it.
+        # correctly. tile_qk is projected because every source's export join
+        # keys containment on (place_id, tile_qk).
         containment_expr = (
             "(SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json, "
             "NULL::VARCHAR AS tile_qk WHERE 1=0)"

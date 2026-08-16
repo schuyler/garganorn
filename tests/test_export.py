@@ -104,7 +104,8 @@ def _make_overture_export_db(conn, places_rows=None, assignments=None):
     conn.execute("""
         CREATE TABLE place_containment (
             place_id       VARCHAR,
-            relations_json VARCHAR
+            relations_json VARCHAR,
+            tile_qk        VARCHAR
         )
     """)
 
@@ -135,7 +136,8 @@ class TestOvertureExportTiles:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS place_containment (
                 place_id       VARCHAR,
-                relations_json VARCHAR
+                relations_json VARCHAR,
+                tile_qk        VARCHAR
             )
         """)
 
@@ -334,21 +336,22 @@ _SF_WITHIN_JSON = json.dumps({
 
 
 def _create_place_containment(conn, entries):
-    """Create the place_containment table and insert given (place_id, relations_json) rows.
+    """Create the place_containment table and insert given (place_id, tile_qk, relations_json) rows.
 
-    `entries` is a list of (place_id, relations_json) tuples.
+    `entries` is a list of (place_id, tile_qk, relations_json) tuples.
     Pass an empty list to create an empty table.
     """
     conn.execute("""
         CREATE OR REPLACE TABLE place_containment (
             place_id      VARCHAR,
-            relations_json VARCHAR
+            relations_json VARCHAR,
+            tile_qk       VARCHAR
         )
     """)
-    for place_id, relations_json in entries:
+    for place_id, tile_qk, relations_json in entries:
         conn.execute(
-            "INSERT INTO place_containment VALUES (?, ?)",
-            [place_id, relations_json],
+            "INSERT INTO place_containment VALUES (?, ?, ?)",
+            [place_id, relations_json, tile_qk],
         )
 
 
@@ -380,8 +383,12 @@ class TestContainmentInExport:
         run_overture_import(conn, overture_parquet)
         run_tile_assignments(conn, pk_expr="id", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
-        # Populate place_containment for ov001
-        _create_place_containment(conn, [("ov001", _SF_WITHIN_JSON)])
+        # Populate place_containment for ov001, keyed on its actual tile_qk
+        # so the (place_id, tile_qk) join in the export SQL matches it.
+        ov001_qk = conn.execute(
+            "SELECT tile_qk FROM tile_assignments WHERE place_id = 'ov001'"
+        ).fetchone()[0]
+        _create_place_containment(conn, [("ov001", ov001_qk, _SF_WITHIN_JSON)])
 
         # Run export
         raw_sql = _load_sql("overture_place_export_tiles.sql", self._OV_SUBS)
@@ -434,7 +441,10 @@ class TestContainmentInExport:
         assert rkeys, "OSM import must produce at least one place"
         target_rkey = rkeys[0][0]
 
-        _create_place_containment(conn, [(target_rkey, _SF_WITHIN_JSON)])
+        target_qk = conn.execute(
+            "SELECT tile_qk FROM tile_assignments WHERE place_id = ?", [target_rkey]
+        ).fetchone()[0]
+        _create_place_containment(conn, [(target_rkey, target_qk, _SF_WITHIN_JSON)])
 
         # Run export
         raw_sql = _load_sql("osm_export_tiles.sql", self._OSM_SUBS)
@@ -1117,6 +1127,80 @@ class TestExportRecordParityPhase2:
 
 
 # ---------------------------------------------------------------------------
+# Summary-band and regular-band copies of the same record are
+# byte-identical, because both are written by the same export run over a
+# single (unioned) assignments artifact -- not by two separate exports.
+# ---------------------------------------------------------------------------
+
+class TestSummaryByteIdenticalCopies:
+    def test_regular_and_summary_copies_are_byte_identical(
+        self, overture_parquet, density_parquet, tmp_path, monkeypatch
+    ):
+        """Run the full overture_place pipeline; at N=10,000 every fixture
+        place lands in both the regular and summary band. Currently no
+        summary band is produced at all, so this fails on the "no
+        summary-band tile" assertion below -- the missing-feature failure.
+        """
+        import gzip as _gzip
+        from datetime import datetime as _datetime, timezone as _timezone
+        import garganorn.stages as _stages
+        from garganorn.quadtree import run_pipeline as _run_pipeline
+
+        fixed = _datetime(2026, 1, 2, 3, 4, 5, tzinfo=_timezone.utc)
+
+        class _FixedClock(_datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed
+
+        monkeypatch.setattr(_stages, "datetime", _FixedClock)
+
+        root = tmp_path / "summary_out"
+        root.mkdir()
+        _run_pipeline(
+            "overture_place", overture_parquet,
+            (-122.55, 37.60, -122.30, 37.85),
+            str(root), memory_limit="4GB", max_per_tile=100,
+            density_parquet=density_parquet, force=True,
+        )
+        tiles_current = root / "overture_place" / "tiles" / "current"
+        assert tiles_current.exists(), f"tiles must be at {tiles_current}"
+
+        regular_records = {}
+        summary_records = {}
+        for gz_path in tiles_current.rglob("*.json.gz"):
+            band_dir = gz_path.parent.name
+            with _gzip.open(gz_path) as f:
+                tile = json.loads(f.read())
+            for rec in tile["records"]:
+                rkey = rec["value"]["rkey"]
+                target = summary_records if len(band_dir) < 6 else regular_records
+                target.setdefault(rkey, []).append(rec)
+
+        assert summary_records, (
+            "no summary-band (<6-char directory) tile was produced -- the "
+            "z1-z5 summary band is not being generated"
+        )
+
+        shared = set(regular_records) & set(summary_records)
+        assert shared, (
+            "no record appears in both the regular and summary band; "
+            "at N=10,000 every fixture place should land in both"
+        )
+        rkey = sorted(shared)[0]
+        reg_recs = regular_records[rkey]
+        sum_recs = summary_records[rkey]
+        assert len(reg_recs) == 1 and len(sum_recs) == 1, (
+            f"{rkey!r} must appear exactly once per band; "
+            f"got regular={len(reg_recs)}, summary={len(sum_recs)}"
+        )
+        assert reg_recs[0] == sum_recs[0], (
+            f"regular and summary copies of {rkey!r} must be byte-identical; "
+            f"regular={reg_recs[0]!r}\nsummary={sum_recs[0]!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # write_manifest_db from tile_assignments.parquet
 # ---------------------------------------------------------------------------
 
@@ -1699,9 +1783,10 @@ class TestBatchedExportPartitioning:
     def test_short_and_long_tile_qk_mixed_in_one_run(self, tmp_path, monkeypatch):
         """A tile_qk shorter than the partition depth must still land as one
         complete file: left(tile_qk, 6) on a 4-char string returns the whole
-        string, so the tile is its own partition, not a fragment of one. No
-        pipeline path produces a sub-6-char key, but the test pins the
-        slicing behavior anyway. Mixed with 10-char tile_qks in the same run
+        string, so the tile is its own partition, not a fragment of one. The
+        summary band produces sub-6-char keys in real runs; this test pins
+        the slicing behavior directly rather than through that dependency.
+        Mixed with 10-char tile_qks in the same run
         so partition-dir listing and the sort/flush loop are exercised at
         both widths, not just the width the real and fake implementations
         happen to agree on.

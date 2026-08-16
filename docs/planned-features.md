@@ -79,47 +79,6 @@ atgeo.org, or the READMEs of the SDK and a demo app; how much can be carried
 by a worked example instead of prose; and whether the AT Protocol half is
 better contributed upstream, since none of it is specific to this gazetteer.
 
-## Summary tiles for region-less search
-
-Status: decided and scoped for implementation, not implemented — see
-`summary-tiles-design.md`, which resolves this section's open questions,
-records the measurements, and carries the implementation plan.
-
-A client cannot search for "Kyoto" without already knowing roughly where
-Kyoto is. `getCoverage` takes a bounding box, so finding a place requires
-locating it first, and tiles therefore have no answer for the ordinary
-gazetteer question of typing a place name into a box. This is the one real
-capability the tile architecture gave up when `searchRecords` was removed,
-and `docs/atgeo-client-sdk.md` records region-less search as out of scope
-pending this section.
-
-The idea: publish a small, coarse tileset holding only the records worth
-finding without a region — high-importance divisions and places, at a low
-zoom, complete enough to resolve a name to a rough location. A client
-fetches it once (or is shipped with it), searches it locally to turn "Kyoto"
-into a bounding box, and then runs an ordinary `searchPlaces` inside that
-box. Two tiers, same tile format, same matching rules, no new server method
-and no new privacy surface: the coarse tier is a static asset every client
-holds identically, so fetching it reveals nothing about what the user is
-looking for.
-
-An earlier SDK design proposed something adjacent — prefetch the whole
-division tileset and run a locality tier over it — which does not work,
-because enumerating a tileset requires the manifest and the gazetteer does
-not distribute one. A purpose-built summary tileset is the same idea without
-that dependency, and much smaller: the division tileset is every division on
-earth, where the useful set for name resolution is a few tens of thousands of
-records.
-
-Open questions: what goes in it (importance threshold? population floor?
-divisions only, or notable places too?); how big it is gzipped, which decides
-whether it ships in the SDK or is fetched on first use; whether one global
-file or a handful of continental ones; how a client learns it exists and
-where it lives, given there is no manifest and no discovery mechanism; and
-whether the coarse tier's ranking can reuse the ordinary matching rules
-unchanged or needs its own, since resolving a name to a region is a different
-question from ranking results within one.
-
 ## Division-in-division containment is never computed
 
 Status: designed, not implemented. The design below is the whole of it; no
