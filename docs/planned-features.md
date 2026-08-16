@@ -81,9 +81,9 @@ better contributed upstream, since none of it is specific to this gazetteer.
 
 ## Summary tiles for region-less search
 
-Status: designed, not implemented — see `summary-tiles-design.md`, which
-resolves this section's open questions and flags the measurements still
-pending.
+Status: decided and scoped for implementation, not implemented — see
+`summary-tiles-design.md`, which resolves this section's open questions,
+records the measurements, and carries the implementation plan.
 
 A client cannot search for "Kyoto" without already knowing roughly where
 Kyoto is. `getCoverage` takes a bounding box, so finding a place requires
@@ -120,11 +120,60 @@ whether the coarse tier's ranking can reuse the ordinary matching rules
 unchanged or needs its own, since resolving a name to a region is a different
 question from ranking results within one.
 
+## Division-in-division containment is never computed
+
+Status: designed, not implemented. The design below is the whole of it; no
+separate document.
+
+Every division record ships `relations: {}`, by construction rather than by
+configuration. Divisions are the source that *produces* `boundaries.duckdb`
+for the other sources, so `run_pipeline` is invoked for `overture_division`
+without a `boundaries_db` argument, and `compute_containment` treats that as
+its documented empty-containment degradation: it writes the `{"empty": true}`
+marker and no parquet. Place and OSM records get real `relations.within`;
+divisions never have.
+
+The fix is a join, not geometry. Every record in the Overture divisions
+parquet carries `hierarchies` — a list of ancestor chains as `(division_id,
+subtype, name)` structs, each chain ordered broadest-first and ending at the
+record itself — which `garganorn/sql/overture_division_import.sql` currently
+drops. Verified against release 2026-07-22.0: 4,655,003 rows, none with a
+null `hierarchies`, none with more than one chain. A division's
+`relations.within` is therefore: flatten `hierarchies`, deduplicate, drop
+the record itself, keep only ancestors present in the imported set (the
+import's filters — `is_land`, a bbox-scoped build — can drop an ancestor,
+and an emitted rkey must resolve via `getRecord`), map `division_id` to the
+collection-qualified rkey, derive `level` from the chain member's `subtype`
+exactly as the import does for the record's own, and order level-ascending
+then id. Flatten-plus-deduplicate is identical to taking the single chain
+today and stays correct if a future release ships per-perspective chains.
+Written in the same `containment/` parquet shape `compute_containment`
+produces, the result flows through `stage_export` unchanged — noting that
+export joins containment on `(place_id, tile_qk)` and divisions are
+multi-tile-referenced, so the rows must fan out across every tile that
+references the division, via `tile_references.parquet`.
+
+The geometric route — feeding the division pipeline its own
+`boundaries.duckdb` — was considered and rejected: a representative point is
+the wrong containment test for divisions (a region's point lands in exactly
+one county without the region being inside it, and every division's point is
+inside itself), so it would need level-filtering machinery the hierarchy
+join makes unnecessary, at covering-probe cost the join doesn't pay. The
+geometric machinery stays untouched and is still required for places and
+OSM, whose records carry no division references. Where the join runs —
+inside the import stage or as a division-specific containment writer — is an
+implementation choice.
+
+`atgeo-spec.md` says containment "reaches every level in the vocabulary,
+country through microhood ... wherever the source data supports it" and does
+not carve out division records, so the current behavior is also a spec-scrub
+item until this ships.
+
 ## Maritime divisions
 
 Status: proposed, not started. No design has been reviewed.
 
-`sql/overture_division_import.sql`'s division import filters on
+`garganorn/sql/overture_division_import.sql`'s division import filters on
 `is_land=true`, which drops bays, straits, and seas from the division
 collection entirely. This is a completeness question, not a data-quality
 one — those are real Overture divisions, just not land ones — and it was

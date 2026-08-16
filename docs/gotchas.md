@@ -19,7 +19,7 @@ R-tree spatial indexes are not used in JOIN ON conditions or subqueries.
 Workaround: materialize filtered results to a temp table via a top-level WHERE
 clause, then join against the temp table.
 
-**Applies to**: `sql/covering_seed.sql` (containment pre-filter)
+**Applies to**: `garganorn/sql/covering_seed.sql` (containment pre-filter)
 
 **Why it matters**: Without this workaround, spatial queries degrade to
 full-table scans against large geometry columns, causing 100x+ latency.
@@ -97,7 +97,7 @@ time:
 
 **Applies to**: `stages.py:compute_containment()`, where `p` is materialized as
 its own `CREATE TEMP TABLE` (not left as a CTE over `places_slim`) for exactly
-this reason; `sql/overture_division_import.sql`, which materializes
+this reason; `garganorn/sql/overture_division_import.sql`, which materializes
 `division_base` ahead of the `division_density` join for the same reason.
 
 **Why it matters**: an expensive per-row predicate is not the trigger — the
@@ -120,7 +120,7 @@ no-op: `ST_Equals` holds for every row, vertex counts, validity and geometry
 types are all unchanged. It does re-serialize, normalizing ring order, so the WKB
 bytes differ for all 38,019 MULTIPOLYGONs.
 
-**Applies to**: `sql/overture_division_import.sql` (`merged_areas` CTE)
+**Applies to**: `garganorn/sql/overture_division_import.sql` (`merged_areas` CTE)
 
 **Why it matters**: the cost is time, not the memory pressure the shape suggests.
 Any equivalence check on a change here has to compare with `ST_Equals` — a
@@ -166,8 +166,8 @@ equivalent ([PR #21748](https://github.com/duckdb/duckdb/pull/21748)). It may
 fail on JSON keys containing `{`, `}`, `"`, or `,`. No failures observed in
 practice.
 
-**Applies to**: `sql/overture_place_export_tiles.sql`,
-`sql/overture_division_export_tiles.sql`
+**Applies to**: `garganorn/sql/overture_place_export_tiles.sql`,
+`garganorn/sql/overture_division_export_tiles.sql`
 
 **Why it matters**: replace it with the native function when that lands rather
 than hardening the workaround.
@@ -294,8 +294,8 @@ flags actually used rather than inferring from size.
 character** of that value rather than the first element of a list — silently, with
 no error.
 
-**Applies to**: `sql/osm_import.sql`, `sql/overture_place_export_tiles.sql`,
-`sql/overture_division_export_tiles.sql`
+**Applies to**: `garganorn/sql/osm_import.sql`, `garganorn/sql/overture_place_export_tiles.sql`,
+`garganorn/sql/overture_division_export_tiles.sql`
 
 **Why it matters**: the `[1]` form is what a reader familiar with array-valued
 tags will write, and it produces plausible one-character garbage instead of
