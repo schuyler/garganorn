@@ -175,13 +175,10 @@ records carry a `bbox` of their extent; Overture place records may add
 `address` entries. `hthree` is declared but not yet produced. Handle the
 union, not the current subset.
 
-`variants` is populated for `org.atgeo.places.overture.place` (upstream
-multilingual and rule-based names) and `org.atgeo.places.osm` (OSM name
-tags — `name:{lang}`, `alt_name`, `official_name`, and related tags).
-`org.atgeo.places.overture.division` always carries an empty array — the
-field is part of the record shape everywhere, but no producer fills it for
-divisions today. Don't build multilingual lookup against a collection that
-has none.
+`variants` is populated for all three collections: `org.atgeo.places.overture.place`
+and `org.atgeo.places.overture.division` from upstream multilingual and
+rule-based names, `org.atgeo.places.osm` from OSM name tags — `name:{lang}`,
+`alt_name`, `official_name`, and related tags.
 
 `attributes` is the source's own vocabulary, passed through rather than
 homogenized: OSM records carry a filtered tag map including the primary

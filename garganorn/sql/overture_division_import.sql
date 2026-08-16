@@ -116,7 +116,23 @@ SELECT
         ELSE
             round(40 * least(ln(1 + db.population) / ${pop_norm}, 1.0))::INTEGER
     END AS importance,
-    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] AS variants
+    -- Compute variants from names.common and names.rules per-row, same
+    -- expression and semantics as overture_place_import.sql (no dedup).
+    list_sort(list_filter(
+        list_concat(
+            coalesce(list_transform(map_entries(db.names.common),
+                e -> {'name': e.value, 'type': 'alternate', 'language': e.key}), []),
+            coalesce(list_transform(db.names.rules,
+                r -> {'name': r.value,
+                      'type': CASE r.variant
+                                WHEN 'common'     THEN 'alternate'
+                                WHEN 'official'   THEN 'official'
+                                WHEN 'alternate'  THEN 'alternate'
+                                WHEN 'short'      THEN 'short'
+                                ELSE 'alternate'
+                              END,
+                      'language': r.language}), [])),
+        v -> v.name IS NOT NULL AND TRIM(v.name) != '')) AS variants
 FROM division_base db
 LEFT JOIN division_density dd USING (id);
 

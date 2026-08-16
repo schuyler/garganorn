@@ -257,7 +257,9 @@ def division_parquet(tmp_path):
     conn.execute("""
         CREATE TABLE division AS
         SELECT 'div1' AS id,
-               {'primary': 'Small Locality'} AS names,
+               {'primary': 'Small Locality',
+                'common': map([]::VARCHAR[], []::VARCHAR[]),
+                'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names,
                'locality' AS subtype,
                'US' AS country,
                'US-CA' AS region,

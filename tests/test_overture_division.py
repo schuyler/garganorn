@@ -153,8 +153,9 @@ class TestPipelineSkipsImportanceVariants:
 
     All sources compute these values inline during import; there is no
     separate importance or variants stage. overture_division uses a hybrid
-    formula (density+population) and sets variants=[] inline in its import
-    SQL.
+    importance formula (density+population) and derives variants from
+    names.common/names.rules inline in its import SQL, the same expression
+    overture_place uses.
     """
 
     def test_importance_computed_inline_for_overture_division(self):
@@ -183,7 +184,7 @@ class TestPipelineSkipsImportanceVariants:
         """run_pipeline computes variants inline during import for all sources.
 
         We verify this by checking that run_pipeline does not call a
-        separate variants stage. overture_division sets variants=[] inline
+        separate variants stage. overture_division derives variants inline
         in its import SQL.
         """
         import inspect
@@ -633,6 +634,102 @@ class TestMultiAreaDivisionMerge:
             f"extents must span both squares (0..30); got min_longitude="
             f"{min_lon}, max_longitude={max_lon}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Division variants are derived from names.common/names.rules, not hardcoded []
+# ---------------------------------------------------------------------------
+
+class TestDivisionVariantsDerived:
+    """overture_division_import.sql must derive variants from names.common
+    and names.rules the same way overture_place_import.sql does, instead of
+    the hardcoded empty list.
+
+    Module-local fixture, not conftest.division_parquet -- see
+    TestMultiAreaDivisionMerge's docstring above for why: that fixture is
+    session-scoped and shared by seven other test files.
+    """
+
+    _BBOX = (-10.0, -10.0, 30.0, 30.0)
+
+    @pytest.fixture
+    def division_with_variants_parquet(self, tmp_path):
+        """One division whose names.common and names.rules each carry one
+        entry, distinct from the primary name."""
+        division_path = tmp_path / "division.parquet"
+        division_area_path = tmp_path / "division_area.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        conn.execute("""
+            CREATE TABLE tmp_division (
+                id VARCHAR,
+                names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
+                subtype VARCHAR,
+                country VARCHAR,
+                region VARCHAR,
+                wikidata VARCHAR,
+                population BIGINT,
+                parent_division_id VARCHAR
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_division VALUES (
+                'div_variants',
+                {'primary': 'Firenze',
+                 'common': map(['it'], ['Firenze']),
+                 'rules': [{'language': 'en', 'value': 'Florence', 'variant': 'official'}]},
+                'locality',
+                'IT',
+                NULL,
+                'Q2044',
+                382258,
+                NULL
+            )
+        """)
+        conn.execute(f"COPY tmp_division TO '{division_path}' (FORMAT PARQUET)")
+
+        conn.execute("""
+            CREATE TABLE tmp_division_area (
+                division_id VARCHAR,
+                admin_level INTEGER,
+                is_land BOOLEAN,
+                geometry VARCHAR,
+                bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_division_area VALUES (
+                'div_variants',
+                8,
+                true,
+                'POLYGON((0 0, 0 10, 10 10, 10 0, 0 0))',
+                {'xmin': 0.0, 'ymin': 0.0, 'xmax': 10.0, 'ymax': 10.0}
+            )
+        """)
+        conn.execute(f"COPY tmp_division_area TO '{division_area_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        return (str(division_path), str(division_area_path))
+
+    def test_division_variants_derived_from_names(self, division_with_variants_parquet, tmp_path):
+        """div_variants gets two variants: 'Firenze' (alternate, from
+        names.common) and 'Florence' (official, from names.rules) -- not the
+        hardcoded []."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_with_variants_parquet, self._BBOX, output)
+
+        con = duckdb.connect()
+        variants = con.execute(
+            f"SELECT variants FROM read_parquet('{output}') WHERE id = 'div_variants'"
+        ).fetchone()[0]
+        con.close()
+
+        assert variants == [
+            {"name": "Firenze", "type": "alternate", "language": "it"},
+            {"name": "Florence", "type": "official", "language": "en"},
+        ], variants
 
 
 # ---------------------------------------------------------------------------

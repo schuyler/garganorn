@@ -194,9 +194,7 @@ their referenced nodes' coordinates (`way_centroids`); both the node and
 way pipelines apply the same category allow-list, keeping only named POIs
 in a fixed set of OSM tag categories.
 
-**Variants**: `overture_place` and `osm` both produce them; `overture_division`
-still emits an empty list literal — the column exists, the data was never
-built for divisions.
+**Variants**: all three sources produce them.
 
 `overture_place` computes them per row inside the same CTAS, by concatenating
 two `list_transform`s — one over `map_entries(names.common)`, whose entries
@@ -206,6 +204,9 @@ are always typed `alternate` with the map key as the language, and one over
 unrecognized to `alternate`. Entries with a NULL or blank name are filtered
 out; the result is `list_sort`ed. Duplicates between the two sources are
 deliberately not deduplicated.
+
+`overture_division` computes them the same way, from `names.common` and
+`names.rules` on the division parquet.
 
 `osm` computes them per row the same way, from the raw OSM tags map via two
 macros defined in `osm_import.sql` (`osm_dropped_suffix`,

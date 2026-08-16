@@ -137,15 +137,6 @@ it forecloses a slimmed summary record format. The fat Overture place
 records cost size here; that cost is part of what the size measurement
 prices.
 
-**Dependency: division name variants.** Division records export a
-hardcoded empty `variants` list — the derivation was never built
-(`pipeline-artifacts.md`). A summary band without division variants cannot
-resolve "München", "Firenze", or "京都". The Overture source columns
-(`names.common`, `names.rules`) are already read into the import, and the
-Overture-places variant expression ports directly. This is its own work
-item, sequenced before or alongside implementation; the feature's
-acceptance depends on it.
-
 ## Client use
 
 Resolution reuses the SDK's matching rules as written — normalize, match
@@ -178,6 +169,5 @@ something specific:
 
 ## Out of scope for this tranche
 
-Implementation, the division-variants derivation, and all updates to
-`atgeo-spec.md`, `atgeo-client-sdk.md`, and the lexicon JSON files, which
-wait for the post-features spec scrub.
+Implementation and all updates to `atgeo-spec.md`, `atgeo-client-sdk.md`,
+and the lexicon JSON files, which wait for the post-features spec scrub.
