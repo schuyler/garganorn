@@ -509,7 +509,7 @@ test_building_chain_two_passes() {
         fail "building-chain: expected an 'osmium tags-filter ... w/name' invocation"
     fi
     assert_output_contains "building-chain: w/name pass reads the w/building pass's output" \
-        "buildings-all.osm.pbf.tmp" "$name_pass"
+        "buildings-all-tmp.osm.pbf" "$name_pass"
 
     teardown_tmpdir
 }
@@ -559,17 +559,17 @@ test_building_intermediate_removed() {
     run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
 
     local building_pass
-    building_pass=$(grep "buildings-all.osm.pbf.tmp" "$call_log" 2>/dev/null || true)
+    building_pass=$(grep "buildings-all-tmp.osm.pbf" "$call_log" 2>/dev/null || true)
     if [ -n "$building_pass" ]; then
-        pass "building-intermediate: w/building pass produced buildings-all.osm.pbf.tmp"
+        pass "building-intermediate: w/building pass produced buildings-all-tmp.osm.pbf"
     else
-        fail "building-intermediate: expected an osmium invocation writing buildings-all.osm.pbf.tmp"
+        fail "building-intermediate: expected an osmium invocation writing buildings-all-tmp.osm.pbf"
     fi
 
-    if [ ! -e "${cache_dir}/buildings-all.osm.pbf.tmp" ]; then
-        pass "building-intermediate: buildings-all.osm.pbf.tmp removed after successful run"
+    if [ ! -e "${cache_dir}/buildings-all-tmp.osm.pbf" ]; then
+        pass "building-intermediate: buildings-all-tmp.osm.pbf removed after successful run"
     else
-        fail "building-intermediate: buildings-all.osm.pbf.tmp should not survive a successful run"
+        fail "building-intermediate: buildings-all-tmp.osm.pbf should not survive a successful run"
     fi
 
     teardown_tmpdir

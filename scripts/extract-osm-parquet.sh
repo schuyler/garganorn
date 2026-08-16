@@ -124,7 +124,7 @@ safe_rm_rf() {
 # ─── Stage 0: Filter PBF with osmium ─────────────────────────────────────────
 
 filtered_tags_pbf="${cache_dir}/filtered-tags.osm.pbf"
-buildings_all_tmp="${cache_dir}/buildings-all.osm.pbf.tmp"
+buildings_all_tmp="${cache_dir}/buildings-all-tmp.osm.pbf"
 filtered_buildings_pbf="${cache_dir}/filtered-buildings.osm.pbf"
 filtered_pbf="${cache_dir}/filtered.osm.pbf"
 selectors_file="${cache_dir}/filter-selectors.txt"
