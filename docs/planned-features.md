@@ -6,30 +6,6 @@ sections here rather than starting another file.
 Each section below is its own proposal with its own status. Nothing in this
 document is scoped for implementation until its section says so.
 
-## Serve tiles uncompressed; let the transport layer own compression
-
-Status: proposed, not started. No design has been reviewed.
-
-Tiles are stored gzipped on disk (`.json.gz`) and served that way today:
-`garganorn/__main__.py`'s `/tiles/<slug>/<path:tile_path>` route
-unconditionally sets `Content-Encoding: gzip` on the response, regardless of
-what the client's `Accept-Encoding` says. Caddy currently decompresses this in transit for every request
-(see `knowledge/server_infrastructure.md`'s tile-serving note) — the
-backend always emits gzip, and the reverse proxy always undoes it.
-
-The idea: keep gzip as the on-disk storage format (compact, cheap to
-produce once at export time), but have the app decompress before
-responding — serve plain JSON with no `Content-Encoding` header — and let
-Caddy (the transport layer) apply standard HTTP compression negotiation
-based on each client's actual `Accept-Encoding`. Storage-format and
-wire-format are currently the same decision; they shouldn't be.
-
-Open questions: where the decompression happens (in the Flask route vs.
-letting Caddy re-encode from a plain source); whether CDN/cache layers in
-front of Caddy benefit from a properly negotiated `Content-Encoding` in a
-way they don't today; whether this is worth doing before the project has
-real traffic to negotiate for.
-
 ## Collection and service metadata
 
 Status: proposed, not started. No design has been reviewed.
