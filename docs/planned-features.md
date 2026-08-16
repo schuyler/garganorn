@@ -133,6 +133,41 @@ containment answer for a client, and if so, does it change tile
 assignment or containment-name derivation (see `design-constraints.md`'s
 "A record may be referenced by more than one tile")?
 
+## Fold the OSM parquet extraction into the pipeline
+
+Status: proposed, not started. No design has been reviewed.
+
+`scripts/extract-osm-parquet.sh` filters `planet.osm.pbf` with `osmium
+tags-filter` and converts the result to parquet, but it lives entirely
+outside `garganorn.quadtree`: nothing in the pipeline invokes it, checks its
+freshness, or warns when it's stale. Its own cache check (PBF mtime plus a
+`filter-selectors.txt` sidecar recording the selector list) is sound, but
+nothing wires that check into `quadtree`'s own `--force`, which only
+bypasses the pipeline's own stage-level freshness gates. On 2026-08-16 this
+let a full `quadtree all --force` run start against a parquet cache dated
+March 2026 — five months stale relative to the OSM whitelist expansion
+(`39d7c14`) that had just changed the extraction script's selectors — with
+nothing in the pipeline's own logs or exit status distinguishing that run
+from a correct one.
+
+The idea: have `quadtree` check the extraction script's own freshness
+markers before the OSM import stage and either shell out to it automatically
+or fail loudly with instructions, rather than silently proceeding on
+whatever parquet happens to be on disk.
+
+Timing: the re-extraction triggered by the 2026-08-16 incident, run
+standalone against the full planet PBF (91.8 GB, `planet.osm.pbf` dated
+2026-03-27), took 1h08m40s — 64m00s for the two `tags-filter` passes plus
+`osmium merge`, 4m40s for the `osm-pbf-parquet` conversion (1.82B elements),
+producing a 36 GB parquet cache.
+
+Open questions: whether `quadtree` should invoke the script directly
+(pulling `osmium`/`osm-pbf-parquet` into the pipeline's dependency surface)
+or just check freshness and refuse to proceed; whether the check belongs in
+`stage_import` or earlier, before Overture stages run for nothing; and
+whether a bbox-scoped build (no full planet PBF on disk) should skip the
+check entirely.
+
 ## OSM relations are never imported
 
 Status: proposed, not started. No design has been reviewed.
