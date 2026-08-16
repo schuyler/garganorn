@@ -42,6 +42,15 @@ CROSS JOIN (
             OR tags['railway'] IS NOT NULL
             OR tags['public_transport'] IS NOT NULL
             OR tags['place'] IS NOT NULL
+            OR tags['landuse'] IS NOT NULL
+            OR tags['waterway'] IS NOT NULL
+            OR tags['power'] IS NOT NULL
+            OR tags['boundary'] IS NOT NULL
+            OR tags['highway'] IS NOT NULL
+            OR tags['barrier'] IS NOT NULL
+            OR tags['emergency'] IS NOT NULL
+            OR tags['telecom'] IS NOT NULL
+            OR tags['building'] IS NOT NULL
           )
 
         UNION ALL
@@ -64,6 +73,15 @@ CROSS JOIN (
             OR tags['railway'] IS NOT NULL
             OR tags['public_transport'] IS NOT NULL
             OR tags['place'] IS NOT NULL
+            OR tags['landuse'] IS NOT NULL
+            OR tags['waterway'] IS NOT NULL
+            OR tags['power'] IS NOT NULL
+            OR tags['boundary'] IS NOT NULL
+            OR tags['highway'] IS NOT NULL
+            OR tags['barrier'] IS NOT NULL
+            OR tags['emergency'] IS NOT NULL
+            OR tags['telecom'] IS NOT NULL
+            OR tags['building'] IS NOT NULL
           )
     ) named_categorized
 ) N

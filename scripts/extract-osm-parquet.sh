@@ -123,22 +123,78 @@ safe_rm_rf() {
 
 # ─── Stage 0: Filter PBF with osmium ─────────────────────────────────────────
 
+filtered_tags_pbf="${cache_dir}/filtered-tags.osm.pbf"
+buildings_all_tmp="${cache_dir}/buildings-all.osm.pbf.tmp"
+filtered_buildings_pbf="${cache_dir}/filtered-buildings.osm.pbf"
 filtered_pbf="${cache_dir}/filtered.osm.pbf"
+selectors_file="${cache_dir}/filter-selectors.txt"
 
-if [ -f "$filtered_pbf" ] && [ ! "$pbf_path" -nt "$filtered_pbf" ]; then
+# The selector list, written to selectors_file on success. Compared against
+# that sidecar below so an edit here invalidates the cache even though it
+# doesn't touch the planet PBF's mtime.
+selectors=(
+    n/amenity n/shop n/tourism n/leisure n/office n/craft n/healthcare
+    n/historic n/natural n/man_made n/aeroway n/railway n/public_transport n/place
+    n/landuse=cemetery,industrial,quarry,allotments,military,winter_sports
+    n/waterway=dam,waterfall
+    n/power=plant,substation
+    n/boundary=national_park,protected_area,aboriginal_lands
+    n/highway=services,rest_area,trailhead
+    n/barrier=toll_booth
+    n/emergency=ambulance_station
+    n/telecom=data_center
+    w/amenity w/shop w/tourism w/leisure w/office w/craft w/healthcare
+    w/historic w/natural w/man_made w/aeroway w/railway w/public_transport w/place
+    w/landuse=cemetery,industrial,quarry,allotments,military,winter_sports
+    w/waterway=dam,waterfall
+    w/power=plant,substation
+    w/boundary=national_park,protected_area,aboriginal_lands
+    w/highway=services,rest_area,trailhead
+    w/barrier=toll_booth
+    w/emergency=ambulance_station
+    w/telecom=data_center
+)
+current_selectors="$(printf '%s\n' "${selectors[@]}")"
+
+if [ -f "$filtered_pbf" ] && [ ! "$pbf_path" -nt "$filtered_pbf" ] \
+    && [ -f "$selectors_file" ] && [ "$current_selectors" = "$(cat "$selectors_file")" ]; then
     echo "Using cached filtered PBF: $filtered_pbf"
 else
     echo "Filtering PBF with osmium tags-filter..."
-    if ! osmium tags-filter "$pbf_path" \
-        n/amenity n/shop n/tourism n/leisure n/office n/craft n/healthcare \
-        n/historic n/natural n/man_made n/aeroway n/railway n/public_transport n/place \
-        w/amenity w/shop w/tourism w/leisure w/office w/craft w/healthcare \
-        w/historic w/natural w/man_made w/aeroway w/railway w/public_transport w/place \
+    if ! osmium tags-filter "$pbf_path" "${selectors[@]}" \
         --overwrite \
-        -o "$filtered_pbf"; then
+        -o "$filtered_tags_pbf"; then
         echo "osmium tags-filter failed."
         exit 1
     fi
+
+    # Buildings are way-only (SQL whitelist mirrors this) and reached in two
+    # passes: tags-filter can't read a pipe when it must add referenced
+    # objects, and -R would discard the node closure the centroid needs.
+    echo "Filtering buildings with osmium tags-filter..."
+    if ! osmium tags-filter "$pbf_path" w/building \
+        --overwrite \
+        -o "$buildings_all_tmp"; then
+        echo "osmium tags-filter (buildings) failed."
+        exit 1
+    fi
+    if ! osmium tags-filter "$buildings_all_tmp" w/name \
+        --overwrite \
+        -o "$filtered_buildings_pbf"; then
+        echo "osmium tags-filter (named buildings) failed."
+        exit 1
+    fi
+    safe_rm_rf "$buildings_all_tmp"
+
+    echo "Merging filtered PBFs..."
+    if ! osmium merge "$filtered_tags_pbf" "$filtered_buildings_pbf" \
+        --overwrite \
+        -o "$filtered_pbf"; then
+        echo "osmium merge failed."
+        exit 1
+    fi
+
+    printf '%s\n' "${selectors[@]}" > "$selectors_file"
 fi
 
 elapsed

@@ -450,6 +450,205 @@ test_leftover_parquet_tmp() {
     teardown_tmpdir
 }
 
+# Test 11: Value-restricted selectors appear in the main filter invocation
+test_value_restricted_selectors_in_main_filter() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    # The main filter call is the one carrying the existing n/amenity
+    # selector; the building chain's two passes don't carry it.
+    local main_filter_call
+    main_filter_call=$(grep "n/amenity" "$call_log" 2>/dev/null || true)
+    for key in landuse waterway power boundary highway barrier emergency telecom; do
+        assert_output_contains "value-restricted-selectors: n/${key} in main filter" "n/${key}" "$main_filter_call"
+        assert_output_contains "value-restricted-selectors: w/${key} in main filter" "w/${key}" "$main_filter_call"
+    done
+
+    teardown_tmpdir
+}
+
+# Test 12: Building chain — two tags-filter invocations, second reads first's output
+test_building_chain_two_passes() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local building_pass
+    building_pass=$(grep "tags-filter" "$call_log" 2>/dev/null | grep "w/building" || true)
+    if [ -n "$building_pass" ]; then
+        pass "building-chain: w/building tags-filter invocation present"
+    else
+        fail "building-chain: expected an 'osmium tags-filter ... w/building' invocation"
+    fi
+    assert_output_contains "building-chain: w/building pass reads the input PBF" "$fake_pbf" "$building_pass"
+
+    local name_pass
+    name_pass=$(grep "tags-filter" "$call_log" 2>/dev/null | grep "w/name" || true)
+    if [ -n "$name_pass" ]; then
+        pass "building-chain: w/name tags-filter invocation present"
+    else
+        fail "building-chain: expected an 'osmium tags-filter ... w/name' invocation"
+    fi
+    assert_output_contains "building-chain: w/name pass reads the w/building pass's output" \
+        "buildings-all.osm.pbf.tmp" "$name_pass"
+
+    teardown_tmpdir
+}
+
+# Test 13: osmium merge combines the two kept artifacts into filtered.osm.pbf
+test_merge_invocation() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local merge_call
+    merge_call=$(grep "^osmium merge " "$call_log" 2>/dev/null || true)
+    if [ -n "$merge_call" ]; then
+        pass "merge: osmium merge invocation present"
+    else
+        fail "merge: expected an 'osmium merge' invocation"
+    fi
+    assert_output_contains "merge: input is filtered-tags.osm.pbf" "filtered-tags.osm.pbf" "$merge_call"
+    assert_output_contains "merge: input is filtered-buildings.osm.pbf" "filtered-buildings.osm.pbf" "$merge_call"
+    assert_output_contains "merge: output is filtered.osm.pbf" "filtered.osm.pbf" "$merge_call"
+
+    teardown_tmpdir
+}
+
+# Test 14: Large first-pass intermediate does not survive a successful run
+test_building_intermediate_removed() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local building_pass
+    building_pass=$(grep "buildings-all.osm.pbf.tmp" "$call_log" 2>/dev/null || true)
+    if [ -n "$building_pass" ]; then
+        pass "building-intermediate: w/building pass produced buildings-all.osm.pbf.tmp"
+    else
+        fail "building-intermediate: expected an osmium invocation writing buildings-all.osm.pbf.tmp"
+    fi
+
+    if [ ! -e "${cache_dir}/buildings-all.osm.pbf.tmp" ]; then
+        pass "building-intermediate: buildings-all.osm.pbf.tmp removed after successful run"
+    else
+        fail "building-intermediate: buildings-all.osm.pbf.tmp should not survive a successful run"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 15: Selector-change invalidation — planet mtime untouched, sidecar stale → osmium re-runs
+test_selector_change_invalidates_cache() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir" "$cache_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    # First run — populates cache and writes the selector sidecar
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+    assert_file_exists "selector-change: sidecar written on first run" \
+        "${cache_dir}/filter-selectors.txt"
+
+    # Leave the input PBF's mtime untouched (it is already older than the
+    # cache written moments ago), but make the sidecar stale.
+    echo "stale-selector-list" > "${cache_dir}/filter-selectors.txt"
+
+    rm -f "$call_log"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local osmium_calls=0
+    if [ -f "$call_log" ]; then
+        osmium_calls=$(grep -c "^osmium " "$call_log" 2>/dev/null)
+    fi
+    if [ "$osmium_calls" -ge 1 ]; then
+        pass "selector-change: osmium re-runs when the selector sidecar is stale"
+    else
+        fail "selector-change: osmium should have re-run on a stale selector sidecar (calls: $osmium_calls)"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 16: Selector-change invalidation — sidecar absent on a pre-existing cache → osmium re-runs
+test_missing_selector_sidecar_invalidates_cache() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir" "$cache_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+    # Backdate the input PBF so the fresh filtered.osm.pbf below is
+    # unambiguously newer, isolating the sidecar as the only stale signal.
+    touch -t 202001010000 "$fake_pbf"
+
+    # Simulate a cache with no selector sidecar: a fresh filtered.osm.pbf
+    # newer than the input PBF, but no sidecar file.
+    touch "${cache_dir}/filtered.osm.pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local osmium_calls=0
+    if [ -f "$call_log" ]; then
+        osmium_calls=$(grep -c "^osmium " "$call_log" 2>/dev/null)
+    fi
+    if [ "$osmium_calls" -ge 1 ]; then
+        pass "missing-sidecar: osmium re-runs when the selector sidecar is absent"
+    else
+        fail "missing-sidecar: osmium should have re-run with no selector sidecar (calls: $osmium_calls)"
+    fi
+
+    teardown_tmpdir
+}
+
 # ─── Run all tests ────────────────────────────────────────────────────────────
 
 echo "Running tests for scripts/extract-osm-parquet.sh"
@@ -466,6 +665,12 @@ test_cache_invalidation
 test_log_flag
 test_cache_dir_flag
 test_leftover_parquet_tmp
+test_value_restricted_selectors_in_main_filter
+test_building_chain_two_passes
+test_merge_invocation
+test_building_intermediate_removed
+test_selector_change_invalidates_cache
+test_missing_selector_sidecar_invalidates_cache
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

@@ -518,3 +518,454 @@ class TestOsmJoinNoFanOut:
             f"{join_site}: places contains duplicate rkeys {dupes!r}. A duplicate "
             f"key in the lookup table multiplied rows through the join."
         )
+
+
+# ---------------------------------------------------------------------------
+# Tests: which OSM tags the whitelist accepts. The invariants these pin are
+# recorded in docs/design-constraints.md.
+# ---------------------------------------------------------------------------
+
+# Key/value pairs the whitelist accepts beyond the fourteen keys the CASE
+# opened with, one (key, value) pair per row.
+WHITELISTED_KEY_VALUE_PAIRS = [
+    ("place", "locality"), ("place", "isolated_dwelling"), ("place", "farm"),
+    ("place", "islet"), ("place", "city_block"),
+    ("natural", "water"), ("natural", "wood"), ("natural", "wetland"),
+    ("natural", "cliff"), ("natural", "strait"), ("natural", "peninsula"),
+    ("man_made", "bridge"), ("man_made", "wastewater_plant"),
+    ("man_made", "water_works"), ("man_made", "pumping_station"),
+    ("man_made", "adit"), ("man_made", "mineshaft"),
+    ("historic", "wayside_shrine"), ("historic", "tomb"),
+    ("historic", "citywalls"), ("historic", "monastery"),
+    ("historic", "battlefield"), ("historic", "aircraft"),
+    ("aeroway", "helipad"),
+    ("railway", "yard"),
+    ("leisure", "bird_hide"),
+    ("landuse", "cemetery"), ("landuse", "industrial"), ("landuse", "quarry"),
+    ("landuse", "allotments"), ("landuse", "military"),
+    ("landuse", "winter_sports"),
+    ("waterway", "dam"), ("waterway", "waterfall"),
+    ("power", "plant"), ("power", "substation"),
+    ("boundary", "national_park"), ("boundary", "protected_area"),
+    ("boundary", "aboriginal_lands"),
+    ("highway", "services"), ("highway", "rest_area"), ("highway", "trailhead"),
+    ("barrier", "toll_booth"),
+    ("emergency", "ambulance_station"),
+    ("telecom", "data_center"),
+]
+
+# The fourteen keys _osm_category_case.sql recognizes today, one accepted
+# value per key -- pins "no existing category loses records".
+EXISTING_WHITELIST_KEY_VALUES = [
+    ("amenity", "cafe"), ("shop", "bakery"), ("tourism", "attraction"),
+    ("leisure", "park"), ("office", "coworking"), ("craft", "carpenter"),
+    ("healthcare", "clinic"), ("historic", "castle"), ("natural", "peak"),
+    ("man_made", "lighthouse"), ("aeroway", "aerodrome"),
+    ("railway", "station"), ("public_transport", "station"),
+    ("place", "city"),
+]
+
+# The building subtractive rule.
+BUILDING_INCLUDE_VALUES = ["commercial", "yes", "apartments"]
+BUILDING_EXCLUDE_VALUES = [
+    "house", "detached", "semidetached_house", "terrace",
+    "garage", "garages", "shed", "hut", "barn", "greenhouse",
+    "static_caravan", "roof", "no", "construction", "ruins",
+]
+
+
+@pytest.fixture(scope="module")
+def whitelisted_keys_parquet(tmp_path_factory):
+    """One named node per WHITELISTED_KEY_VALUE_PAIRS entry; an empty way parquet
+    (this fixture only exercises the node arm, which shares its whitelist
+    predicate with the way arm apart from the building branch).
+    """
+    base = tmp_path_factory.mktemp("whitelisted_keys_parquet")
+    node_path = base / "node_data.parquet"
+    way_path = base / "way_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE tmp_nodes (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            lat     DOUBLE,
+            lon     DOUBLE
+        )
+    """)
+    ids = {}
+    for i, (key, value) in enumerate(WHITELISTED_KEY_VALUE_PAIRS):
+        node_id = 5000 + i
+        ids[f"{key}={value}"] = node_id
+        conn.execute(
+            f"INSERT INTO tmp_nodes VALUES "
+            f"({node_id}, map(['name', '{key}'], ['Test {key}={value}', '{value}']), "
+            f"37.7800, -122.4200)"
+        )
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+    conn.execute("""
+        CREATE TABLE tmp_ways (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            nds     STRUCT(ref BIGINT)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return {"node": str(node_path), "way": str(way_path), "ids": ids}
+
+
+@pytest.fixture(scope="module")
+def whitelisted_keys_rkeys(whitelisted_keys_parquet):
+    """Run the import once for all of WHITELISTED_KEY_VALUE_PAIRS and return the
+    surviving rkeys, so the parametrized test below doesn't re-run the
+    import per case.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    run_osm_import(conn, whitelisted_keys_parquet["node"], whitelisted_keys_parquet["way"])
+    rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
+    conn.close()
+    return rkeys
+
+
+@pytest.fixture(scope="module")
+def existing_keys_parquet(tmp_path_factory):
+    """One named node per EXISTING_WHITELIST_KEY_VALUES entry."""
+    base = tmp_path_factory.mktemp("existing_keys_parquet")
+    node_path = base / "node_data.parquet"
+    way_path = base / "way_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE tmp_nodes (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            lat     DOUBLE,
+            lon     DOUBLE
+        )
+    """)
+    ids = {}
+    for i, (key, value) in enumerate(EXISTING_WHITELIST_KEY_VALUES):
+        node_id = 4000 + i
+        ids[key] = node_id
+        conn.execute(
+            f"INSERT INTO tmp_nodes VALUES "
+            f"({node_id}, map(['name', '{key}'], ['Existing {key}', '{value}']), "
+            f"37.7800, -122.4200)"
+        )
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+    conn.execute("""
+        CREATE TABLE tmp_ways (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            nds     STRUCT(ref BIGINT)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return {"node": str(node_path), "way": str(way_path), "ids": ids}
+
+
+@pytest.fixture(scope="module")
+def existing_keys_categories(existing_keys_parquet):
+    """Run the import once and return {rkey: primary_category}."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    run_osm_import(conn, existing_keys_parquet["node"], existing_keys_parquet["way"])
+    rows = conn.execute("SELECT rkey, primary_category FROM places").fetchall()
+    conn.close()
+    return {rkey: category for rkey, category in rows}
+
+
+@pytest.fixture(scope="module")
+def building_parquet(tmp_path_factory):
+    """One named way per BUILDING_INCLUDE_VALUES/BUILDING_EXCLUDE_VALUES
+    entry (the subtractive building rule), all referencing the same
+    two nodes so every way's centroid resolves.
+    """
+    base = tmp_path_factory.mktemp("building_parquet")
+    node_path = base / "node_data.parquet"
+    way_path = base / "way_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE tmp_nodes (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            lat     DOUBLE,
+            lon     DOUBLE
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES
+            (9101, map([]::VARCHAR[], []::VARCHAR[]), 37.7800, -122.4200),
+            (9102, map([]::VARCHAR[], []::VARCHAR[]), 37.7801, -122.4201)
+    """)
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+    conn.execute("""
+        CREATE TABLE tmp_ways (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            nds     STRUCT(ref BIGINT)[]
+        )
+    """)
+    ids = {}
+    way_id = 6000
+    for value in BUILDING_INCLUDE_VALUES + BUILDING_EXCLUDE_VALUES:
+        ids[value] = way_id
+        conn.execute(
+            f"INSERT INTO tmp_ways VALUES "
+            f"({way_id}, map(['name', 'building'], ['Test building={value}', '{value}']), "
+            f"[{{'ref': 9101}}, {{'ref': 9102}}]::STRUCT(ref BIGINT)[])"
+        )
+        way_id += 1
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return {"node": str(node_path), "way": str(way_path), "ids": ids}
+
+
+@pytest.fixture(scope="module")
+def building_rkeys(building_parquet):
+    """Run the import once and return the surviving rkeys."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    run_osm_import(conn, building_parquet["node"], building_parquet["way"])
+    rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
+    conn.close()
+    return rkeys
+
+
+class TestOsmImportKeyWhitelist:
+    """Values under the existing fourteen keys, and values under the eight
+    keys outside them.
+
+    Table-driven over WHITELISTED_KEY_VALUE_PAIRS -- one named node per pair, and
+    each must resolve to a places record. Also covers the acceptance
+    spot-list (cemetery, waterfall, dam, locality, power plant) as a
+    subset of the same table.
+    """
+
+    @pytest.mark.parametrize("key,value", WHITELISTED_KEY_VALUE_PAIRS)
+    def test_whitelisted_key_value_resolves(self, key, value, whitelisted_keys_parquet, whitelisted_keys_rkeys):
+        expected = f"n{whitelisted_keys_parquet['ids'][f'{key}={value}']}"
+        assert expected in whitelisted_keys_rkeys, (
+            f"{key}={value} (rkey {expected}) should resolve to a places record"
+        )
+
+
+class TestOsmImportBuildingWhitelist:
+    """The building subtractive rule, and its category precedence."""
+
+    @pytest.mark.parametrize("value", BUILDING_INCLUDE_VALUES)
+    def test_building_value_resolves(self, value, building_parquet, building_rkeys):
+        """building=commercial (the Seagram Building acceptance case),
+        building=yes, and building=apartments must all resolve.
+        """
+        expected = f"w{building_parquet['ids'][value]}"
+        assert expected in building_rkeys, (
+            f"building={value} (rkey {expected}) should resolve to a places record"
+        )
+
+    @pytest.mark.parametrize("value", BUILDING_EXCLUDE_VALUES)
+    def test_building_drop_list_value_excluded(self, value, building_parquet, building_rkeys):
+        """building=house and the rest of the drop list must not resolve."""
+        excluded = f"w{building_parquet['ids'][value]}"
+        assert excluded not in building_rkeys, (
+            f"building={value} (rkey {excluded}) must stay excluded"
+        )
+
+    def test_building_yields_to_amenity_precedence(self, tmp_path):
+        """A way tagged building=yes *and* amenity=restaurant, with a name,
+        must resolve as amenity=restaurant, not a building category --
+        building is appended last in _osm_category_case.sql's CASE,
+        so any key already in the CASE wins over it.
+        """
+        base = tmp_path / "precedence_fixture"
+        base.mkdir()
+        node_path = base / "node_data.parquet"
+        way_path = base / "way_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_nodes (
+                id      BIGINT,
+                tags    MAP(VARCHAR, VARCHAR),
+                lat     DOUBLE,
+                lon     DOUBLE
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_nodes VALUES
+                (9201, map([]::VARCHAR[], []::VARCHAR[]), 37.7800, -122.4200),
+                (9202, map([]::VARCHAR[], []::VARCHAR[]), 37.7801, -122.4201)
+        """)
+        conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+        conn.execute("""
+            CREATE TABLE tmp_ways (
+                id      BIGINT,
+                tags    MAP(VARCHAR, VARCHAR),
+                nds     STRUCT(ref BIGINT)[]
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_ways VALUES (
+                7001,
+                map(['name', 'building', 'amenity'],
+                    ['Precedence Restaurant', 'yes', 'restaurant']),
+                [{'ref': 9201}, {'ref': 9202}]::STRUCT(ref BIGINT)[]
+            )
+        """)
+        conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        db_path = tmp_path / "test_precedence.duckdb"
+        conn2 = duckdb.connect(str(db_path))
+        conn2.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(conn2, str(node_path), str(way_path))
+        row = conn2.execute(
+            "SELECT primary_category FROM places WHERE rkey = 'w7001'"
+        ).fetchone()
+        conn2.close()
+        assert row is not None, "w7001 not found in places"
+        assert row[0] == "amenity=restaurant", (
+            f"expected primary_category 'amenity=restaurant' for "
+            f"building=yes+amenity=restaurant; got {row[0]!r}"
+        )
+
+    def test_building_is_way_only(self, tmp_path):
+        """A NODE tagged building=yes with a name and no other whitelisted
+        tag must produce no record -- the building branch lives in
+        the way arm of the whitelist only.
+        """
+        base = tmp_path / "node_building_fixture"
+        base.mkdir()
+        node_path = base / "node_data.parquet"
+        way_path = base / "way_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_nodes (
+                id      BIGINT,
+                tags    MAP(VARCHAR, VARCHAR),
+                lat     DOUBLE,
+                lon     DOUBLE
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_nodes VALUES (
+                8001,
+                map(['name', 'building'], ['Node Building', 'yes']),
+                37.7800, -122.4200
+            )
+        """)
+        conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+        conn.execute("""
+            CREATE TABLE tmp_ways (
+                id      BIGINT,
+                tags    MAP(VARCHAR, VARCHAR),
+                nds     STRUCT(ref BIGINT)[]
+            )
+        """)
+        conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        db_path = tmp_path / "test_node_building.duckdb"
+        conn2 = duckdb.connect(str(db_path))
+        conn2.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(conn2, str(node_path), str(way_path))
+        rkeys = {row[0] for row in conn2.execute("SELECT rkey FROM places").fetchall()}
+        conn2.close()
+        assert "n8001" not in rkeys, (
+            f"node-tagged building=yes must not resolve; got {rkeys}"
+        )
+
+
+class TestOsmImportSettledExclusions:
+    """Requirement: settled exclusions (transit stops, leisure=pitch) stay
+    out even as sibling keys/values are added to the whitelist.
+
+    Each case is asserted for both element types: the node arm (`filtered`)
+    and the way arm (`qualifying_ways`) carry the same whitelist predicate
+    written out twice, so a node-only fixture leaves the way arm unexercised.
+    """
+
+    @pytest.mark.parametrize("key,value", [
+        ("leisure", "pitch"),
+        ("highway", "bus_stop"),
+        ("public_transport", "platform"),
+        ("railway", "platform"),
+    ])
+    def test_settled_exclusion_stays_out(self, key, value, tmp_path):
+        base = tmp_path / f"exclusion_{key}_{value}"
+        base.mkdir()
+        node_path = base / "node_data.parquet"
+        way_path = base / "way_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_nodes (
+                id      BIGINT,
+                tags    MAP(VARCHAR, VARCHAR),
+                lat     DOUBLE,
+                lon     DOUBLE
+            )
+        """)
+        conn.execute(
+            f"INSERT INTO tmp_nodes VALUES "
+            f"(8500, map(['name', '{key}'], ['Excluded Place', '{value}']), "
+            f"37.7800, -122.4200), "
+            f"(8600, map([]::VARCHAR[], []::VARCHAR[]), 37.7800, -122.4200), "
+            f"(8601, map([]::VARCHAR[], []::VARCHAR[]), 37.7801, -122.4201)"
+        )
+        conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+        conn.execute("""
+            CREATE TABLE tmp_ways (
+                id      BIGINT,
+                tags    MAP(VARCHAR, VARCHAR),
+                nds     STRUCT(ref BIGINT)[]
+            )
+        """)
+        conn.execute(
+            f"INSERT INTO tmp_ways VALUES "
+            f"(8501, map(['name', '{key}'], ['Excluded Way', '{value}']), "
+            f"[{{'ref': 8600}}, {{'ref': 8601}}]::STRUCT(ref BIGINT)[])"
+        )
+        conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        db_path = tmp_path / f"test_exclusion_{key}_{value}.duckdb"
+        conn2 = duckdb.connect(str(db_path))
+        conn2.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(conn2, str(node_path), str(way_path))
+        rkeys = {row[0] for row in conn2.execute("SELECT rkey FROM places").fetchall()}
+        conn2.close()
+        assert "n8500" not in rkeys, f"{key}={value} must stay excluded (node); got {rkeys}"
+        assert "w8501" not in rkeys, f"{key}={value} must stay excluded (way); got {rkeys}"
+
+
+class TestOsmImportExistingCategoriesInvariant:
+    """The 'no existing category loses records' invariant:
+    appending keys after the existing fourteen in _osm_category_case.sql's
+    CASE must not change any existing category's primary_category.
+    """
+
+    @pytest.mark.parametrize("key,value", EXISTING_WHITELIST_KEY_VALUES)
+    def test_existing_key_keeps_primary_category(
+        self, key, value, existing_keys_parquet, existing_keys_categories
+    ):
+        rkey = f"n{existing_keys_parquet['ids'][key]}"
+        expected = f"{key}={value}"
+        assert existing_keys_categories.get(rkey) == expected, (
+            f"{rkey} ({key}={value}) primary_category changed; "
+            f"expected {expected!r}, got {existing_keys_categories.get(rkey)!r}"
+        )

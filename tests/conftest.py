@@ -699,7 +699,7 @@ def osm_parquet(tmp_path_factory):
     conn.execute("""
         INSERT INTO tmp_nodes VALUES (
             1006,
-            map(['name','highway'], ['No Category Node','crossing']),
+            map(['name','traffic_calming'], ['No Category Node','bump']),
             37.7760, -122.4150
         )
     """)

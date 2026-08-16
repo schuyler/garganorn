@@ -101,10 +101,10 @@ CREATE TABLE places (
 -- computed key.
 --
 -- Two CTEs in the way pipeline below do NOT hold to that, and are known debt:
--- qualifying_ways (:159) is the raw-parquet way base carrying the full nds
+-- qualifying_ways is the raw-parquet way base carrying the full nds
 -- node-ref array and the tags MAP -- the widest rows in this file -- and is
 -- scanned twice beyond its definition, by way_node_refs and way_base.
--- way_node_refs (:221) is an UNNEST(nds) explosion carrying one row per node
+-- way_node_refs is an UNNEST(nds) explosion carrying one row per node
 -- reference in a way, and is likewise scanned twice, by needed_node_ids and
 -- way_centroids. Measured on 10.7M OSM rows at a 32GB memory limit: zero
 -- bytes of temp disk, so neither spills at present scale. Nothing structural
@@ -141,7 +141,7 @@ WITH filtered AS (
                 'ice_rink', 'water_park', 'miniature_golf', 'bowling_alley',
                 'beach_resort', 'resort', 'horse_riding', 'dance', 'sauna',
                 'amusement_arcade', 'adult_gaming_centre', 'trampoline_park',
-                'escape_game', 'hackerspace')
+                'escape_game', 'hackerspace', 'bird_hide')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['office'] IS NOT NULL AND tags['office'] != 'yes'
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
@@ -152,26 +152,49 @@ WITH filtered AS (
         OR (tags['historic'] IN (
                 'castle', 'monument', 'memorial', 'archaeological_site',
                 'ruins', 'fort', 'manor', 'church', 'city_gate',
-                'building', 'mine', 'wreck')
+                'building', 'mine', 'wreck', 'wayside_shrine', 'tomb',
+                'citywalls', 'monastery', 'battlefield', 'aircraft')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['natural'] IN (
                 'peak', 'beach', 'spring', 'bay', 'cave_entrance',
                 'volcano', 'glacier', 'hot_spring', 'cape', 'hill',
-                'valley', 'saddle', 'ridge', 'geyser', 'arch', 'gorge', 'rock')
+                'valley', 'saddle', 'ridge', 'geyser', 'arch', 'gorge', 'rock',
+                'water', 'wood', 'wetland', 'cliff', 'strait', 'peninsula')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['man_made'] IN (
                 'lighthouse', 'tower', 'pier', 'observatory', 'windmill',
                 'water_tower', 'works', 'chimney', 'obelisk', 'watermill',
-                'beacon')
+                'beacon', 'bridge', 'wastewater_plant', 'water_works',
+                'pumping_station', 'adit', 'mineshaft')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
-        OR (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport')
+        OR (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport', 'helipad')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
-        OR (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+        OR (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance', 'yard')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['public_transport'] = 'station' AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['place'] IN (
                 'city', 'town', 'village', 'hamlet', 'suburb',
-                'neighbourhood', 'quarter', 'island', 'square')
+                'neighbourhood', 'quarter', 'island', 'square',
+                'locality', 'isolated_dwelling', 'farm', 'islet', 'city_block')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['landuse'] IN (
+                'cemetery', 'industrial', 'quarry', 'allotments',
+                'military', 'winter_sports')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['waterway'] IN ('dam', 'waterfall')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['power'] IN ('plant', 'substation')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['boundary'] IN (
+                'national_park', 'protected_area', 'aboriginal_lands')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['highway'] IN ('services', 'rest_area', 'trailhead')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['barrier'] IN ('toll_booth')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['emergency'] IN ('ambulance_station')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['telecom'] IN ('data_center')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
       )
 )
@@ -275,7 +298,7 @@ WITH qualifying_ways AS (
                 'ice_rink', 'water_park', 'miniature_golf', 'bowling_alley',
                 'beach_resort', 'resort', 'horse_riding', 'dance', 'sauna',
                 'amusement_arcade', 'adult_gaming_centre', 'trampoline_park',
-                'escape_game', 'hackerspace')
+                'escape_game', 'hackerspace', 'bird_hide')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['office'] IS NOT NULL AND tags['office'] != 'yes'
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
@@ -286,26 +309,56 @@ WITH qualifying_ways AS (
         OR (tags['historic'] IN (
                 'castle', 'monument', 'memorial', 'archaeological_site',
                 'ruins', 'fort', 'manor', 'church', 'city_gate',
-                'building', 'mine', 'wreck')
+                'building', 'mine', 'wreck', 'wayside_shrine', 'tomb',
+                'citywalls', 'monastery', 'battlefield', 'aircraft')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['natural'] IN (
                 'peak', 'beach', 'spring', 'bay', 'cave_entrance',
                 'volcano', 'glacier', 'hot_spring', 'cape', 'hill',
-                'valley', 'saddle', 'ridge', 'geyser', 'arch', 'gorge', 'rock')
+                'valley', 'saddle', 'ridge', 'geyser', 'arch', 'gorge', 'rock',
+                'water', 'wood', 'wetland', 'cliff', 'strait', 'peninsula')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['man_made'] IN (
                 'lighthouse', 'tower', 'pier', 'observatory', 'windmill',
                 'water_tower', 'works', 'chimney', 'obelisk', 'watermill',
-                'beacon')
+                'beacon', 'bridge', 'wastewater_plant', 'water_works',
+                'pumping_station', 'adit', 'mineshaft')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
-        OR (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport')
+        OR (tags['aeroway'] IN ('aerodrome', 'terminal', 'heliport', 'helipad')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
-        OR (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance')
+        OR (tags['railway'] IN ('station', 'halt', 'tram_stop', 'subway_entrance', 'yard')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['public_transport'] = 'station' AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
         OR (tags['place'] IN (
                 'city', 'town', 'village', 'hamlet', 'suburb',
-                'neighbourhood', 'quarter', 'island', 'square')
+                'neighbourhood', 'quarter', 'island', 'square',
+                'locality', 'isolated_dwelling', 'farm', 'islet', 'city_block')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['landuse'] IN (
+                'cemetery', 'industrial', 'quarry', 'allotments',
+                'military', 'winter_sports')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['waterway'] IN ('dam', 'waterfall')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['power'] IN ('plant', 'substation')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['boundary'] IN (
+                'national_park', 'protected_area', 'aboriginal_lands')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['highway'] IN ('services', 'rest_area', 'trailhead')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['barrier'] IN ('toll_booth')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['emergency'] IN ('ambulance_station')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['telecom'] IN ('data_center')
+            AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
+        OR (tags['building'] IS NOT NULL
+            AND tags['building'] NOT IN (
+                'house', 'detached', 'semidetached_house', 'terrace',
+                'garage', 'garages', 'shed', 'hut', 'barn', 'greenhouse',
+                'static_caravan', 'roof',
+                'no', 'construction', 'ruins')
             AND tags['name'] IS NOT NULL AND TRIM(tags['name']) != '')
     )
 ),

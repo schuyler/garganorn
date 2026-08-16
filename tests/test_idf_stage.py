@@ -9,6 +9,7 @@ Tests verify:
 """
 import json
 import logging
+import math
 import os
 import time
 
@@ -85,7 +86,7 @@ def osm_idf_parquets(tmp_path):
     - Unnamed node with amenity=cafe (should be excluded)
     - Named way with tourism=attraction
     - Unnamed way with shop=supermarket (should be excluded)
-    - Node with highway=crossing (no recognized OSM category key — no output)
+    - Node with traffic_calming=bump (no recognized OSM category key — no output)
     """
     node_path = tmp_path / "osm_nodes.parquet"
     way_path = tmp_path / "osm_ways.parquet"
@@ -107,7 +108,7 @@ def osm_idf_parquets(tmp_path):
             (1001, map(['name', 'amenity'], ['Node Cafe', 'cafe']),       37.77, -122.42),
             (1002, map(['name', 'amenity'], ['Node Restaurant', 'rest']),  37.78, -122.43),
             (1003, map(['amenity'], ['cafe']),                             37.79, -122.44),
-            (1004, map(['name', 'highway'], ['Crossing Spot', 'crossing']), 37.76, -122.40)
+            (1004, map(['name', 'traffic_calming'], ['Speed Bump Spot', 'bump']), 37.76, -122.40)
     """)
 
     conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
@@ -322,8 +323,8 @@ class TestStageIdfOSM:
     def test_no_category_not_in_output(self, osm_idf_parquets, tmp_path):
         """Unrecognized tag keys produce no output rows.
 
-        Node 1004 has highway=crossing. 'highway' is not a recognized OSM
-        place category key, so it should not appear in the output.
+        Node 1004 has traffic_calming=bump. 'traffic_calming' is not a
+        recognized OSM place category key, so it should not appear in the output.
         """
         output_path = str(tmp_path / "osm_idf_out.parquet")
         t0 = time.monotonic()
@@ -337,8 +338,8 @@ class TestStageIdfOSM:
         con.close()
 
         cat_list = [row[0] for row in categories]
-        assert "highway=crossing" not in cat_list, (
-            f"highway=crossing should not appear, got {cat_list}"
+        assert "traffic_calming=bump" not in cat_list, (
+            f"traffic_calming=bump should not appear, got {cat_list}"
         )
 
 
@@ -598,6 +599,82 @@ class TestIdfSortPin:
         assert cats == sorted(cats), (
             f"idf.parquet must be sorted by category; "
             f"out-of-order pairs: {[(a, b) for a, b in zip(cats, cats[1:]) if a > b][:3]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestStageIdfWhitelistedKey — the N.total denominator:
+# osm_idf.sql's N.total denominator must count rows under the whitelisted
+# keys, not just the existing fourteen.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def osm_idf_whitelisted_key_parquets(tmp_path):
+    """One node under an existing whitelisted key (amenity=cafe) and one
+    under a key outside the existing fourteen (landuse=cemetery). Isolates
+    the N.total denominator: if 'landuse' is missing from osm_idf.sql's
+    presence lists, the second node is invisible to N.total and
+    idf_score('amenity=cafe') is ln(1/1) == 0 instead of ln(2/1).
+    """
+    node_path = tmp_path / "osm_nodes_whitelisted_key.parquet"
+    way_path = tmp_path / "osm_ways_whitelisted_key.parquet"
+
+    conn = duckdb.connect(":memory:")
+
+    conn.execute("""
+        CREATE TABLE tmp_nodes (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            lat     DOUBLE,
+            lon     DOUBLE
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES
+            (3001, map(['name', 'amenity'], ['Existing Cafe', 'cafe']),        37.77, -122.42),
+            (3002, map(['name', 'landuse'], ['Whitelisted Cemetery', 'cemetery']), 37.78, -122.43)
+    """)
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_ways (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            nds     STRUCT(ref BIGINT)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return (str(node_path), str(way_path))
+
+
+class TestStageIdfWhitelistedKey:
+    """osm_idf.sql's N.total denominator must count rows under the
+    whitelisted keys, not just the existing fourteen.
+    """
+
+    def test_whitelisted_key_row_counted_in_total_denominator(
+        self, osm_idf_whitelisted_key_parquets, tmp_path
+    ):
+        output_path = str(tmp_path / "osm_idf_whitelisted_key_out.parquet")
+        t0 = time.monotonic()
+
+        stage_idf("osm", osm_idf_whitelisted_key_parquets, output_path, t0)
+
+        con = duckdb.connect(":memory:")
+        row = con.execute(
+            f"SELECT idf_score FROM read_parquet('{output_path}') "
+            f"WHERE category = 'amenity=cafe'"
+        ).fetchone()
+        con.close()
+
+        assert row is not None, "amenity=cafe should appear in idf output"
+        expected = math.log(2 / 1)  # N.total=2 once landuse=cemetery is counted
+        assert row[0] == pytest.approx(expected), (
+            f"amenity=cafe idf_score should reflect N.total including the "
+            f"landuse=cemetery row (ln(2/1)={expected}); got {row[0]}"
         )
 
 

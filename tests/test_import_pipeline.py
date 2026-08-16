@@ -40,6 +40,8 @@ class TestOsmiumPreFilter:
             "amenity", "shop", "tourism", "leisure", "office", "craft",
             "healthcare", "historic", "natural", "man_made", "aeroway",
             "railway", "public_transport", "place",
+            "landuse", "waterway", "power", "boundary", "highway",
+            "barrier", "emergency", "telecom",
         ]
         for key in category_keys:
             assert f"n/{key}" in script_content, (
@@ -48,6 +50,16 @@ class TestOsmiumPreFilter:
             assert f"w/{key}" in script_content, (
                 f"osmium filter missing way prefix for tag key: w/{key}"
             )
+
+        # building is way-only: it arrives through the merge chain's
+        # w/building pass, not the main filter, so a node arm would be
+        # machinery nothing reaches.
+        assert "w/building" in script_content, (
+            "osmium filter missing way prefix for tag key: w/building"
+        )
+        assert "n/building" not in script_content, (
+            "building must not appear as n/building — the rule is way-only"
+        )
 
     def test_filtered_pbf_cache_variable(self, script_content):
         assert "filtered.osm.pbf" in script_content, (

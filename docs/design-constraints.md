@@ -83,6 +83,61 @@ describes.
 
 **Applies to**: `quadtree.py`
 
+### OSM category branches are appended, never interleaved
+
+`_osm_category_case.sql`'s `CASE` expression is ordered: each key's branch
+must come after every key that was already in the whitelist when it was
+added, never inserted earlier. This is what keeps every already-importable
+record's `primary_category` unchanged as the whitelist grows — the CASE
+still stops at the same branch for those records regardless of what's
+appended below it. A branch's position therefore records when its key was
+added, not how strong a signal it is. `building` is the weakest signal in
+the expression and is also the most recent, so an element carrying
+`building` and any other whitelisted key categorizes by the other key; a
+later key weaker still than `building` would sit below it and break that
+coincidence without breaking the invariant.
+
+**Applies to**: `garganorn/sql/_osm_category_case.sql`
+
+### OSM building import is way-only and subtractive
+
+Named buildings are reached through `tags['building'] IS NOT NULL AND
+tags['building'] NOT IN (...)` in the way arm of `osm_import.sql`'s
+whitelist only — there is no `building` branch in the node arm. Stage 0's
+building chain (`w/building` → `w/name` in `extract-osm-parquet.sh`)
+selects ways; the only building-derived nodes in `filtered.osm.pbf` are
+untagged way members, so a node-arm `building` branch would be machinery
+nothing reaches.
+
+**Applies to**: `garganorn/sql/osm_import.sql`, `scripts/extract-osm-parquet.sh`
+
+### Stage 0 merges to one filtered.osm.pbf, relying on osmium's dedup
+
+`extract-osm-parquet.sh`'s building chain is two further `osmium
+tags-filter` passes — `w/building` reads the planet, `w/name` filters that
+intermediate — whose output is merged back into the same
+`filtered.osm.pbf` with `osmium merge`, which drops objects duplicated
+across its inputs by type/id/version. That dedup is what keeps the
+pipeline at one parquet dataset with no SQL-side dedup: a way matched by
+both the tag filter and the building filter (e.g. `building=yes` +
+`amenity=restaurant`) would otherwise import twice and collide on rkey
+`w<id>`, and a node present in both would double-count in `way_centroids`,
+which averages over the join.
+
+**Applies to**: `scripts/extract-osm-parquet.sh`
+
+### Stage 0's cache key includes the selector list, not just the PBF's mtime
+
+Editing `extract-osm-parquet.sh`'s selector list doesn't touch the planet
+PBF's mtime, so a plain freshness check would silently reuse a
+`filtered.osm.pbf` built under the old selectors. Stage 0 writes the exact
+selector list it used to `filter-selectors.txt` on success and re-derives
+`filtered-tags.osm.pbf`, `filtered-buildings.osm.pbf` and
+`filtered.osm.pbf` when that file is missing or its content differs from
+the current list.
+
+**Applies to**: `scripts/extract-osm-parquet.sh`
+
 ### IDF is computed from source parquet, not imported places table
 
 IDF computation reads raw parquet directly (ephemeral DuckDB connection),

@@ -14,4 +14,13 @@ CASE
     WHEN tags['public_transport'] IS NOT NULL
         THEN 'public_transport=' || tags['public_transport']
     WHEN tags['place'] IS NOT NULL THEN 'place=' || tags['place']
+    WHEN tags['boundary'] IS NOT NULL THEN 'boundary=' || tags['boundary']
+    WHEN tags['waterway'] IS NOT NULL THEN 'waterway=' || tags['waterway']
+    WHEN tags['power'] IS NOT NULL THEN 'power=' || tags['power']
+    WHEN tags['landuse'] IS NOT NULL THEN 'landuse=' || tags['landuse']
+    WHEN tags['highway'] IS NOT NULL THEN 'highway=' || tags['highway']
+    WHEN tags['barrier'] IS NOT NULL THEN 'barrier=' || tags['barrier']
+    WHEN tags['emergency'] IS NOT NULL THEN 'emergency=' || tags['emergency']
+    WHEN tags['telecom'] IS NOT NULL THEN 'telecom=' || tags['telecom']
+    WHEN tags['building'] IS NOT NULL THEN 'building=' || tags['building']
 END
