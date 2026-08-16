@@ -44,8 +44,7 @@ partial-result protocol.
 
 ## Tiles
 
-A tile is a set of place records associated with one quadkey cell, stored
-as a gzipped JSON file.
+A tile is a set of place records associated with one quadkey cell.
 
 **Quadkey scheme.** Web-Mercator (Bing) quadkeys over WGS84 longitude and
 latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing
@@ -85,10 +84,11 @@ in practice. The division collection
 division can be referenced from more than one tile, so real duplication
 should be expected there.
 
-**Transport.** Tiles are served with `Content-Encoding: gzip` and
-`Content-Type: application/json`, unconditionally. The server does not
-negotiate: gzip is sent regardless of the request's `Accept-Encoding`, so a
-client must be prepared to decompress.
+**Transport.** Tiles are served with `Content-Type: application/json`.
+Wire compression is negotiated via standard HTTP content negotiation
+against the request's `Accept-Encoding` — clients should rely on their
+HTTP library's usual behavior rather than assuming any particular
+encoding.
 
 **Caching.** Because tile URLs are immutable, tiles are served with
 `Cache-Control: public, max-age=604800, immutable` — cache them for a week

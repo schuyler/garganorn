@@ -1,5 +1,5 @@
-import os, logging
-from flask import Flask, abort, request, send_file
+import gzip, os, logging
+from flask import Flask, abort, request, Response
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
@@ -111,7 +111,9 @@ def create_app():
 
     @app.route("/tiles/<slug>/<path:tile_path>")
     def serve_tile(slug, tile_path):
-        """Serve a gzipped JSON tile file with correct headers."""
+        """Serve a tile as plain JSON, decompressed from its on-disk gzip
+        file -- storage format and wire format are separate decisions;
+        Caddy owns wire compression negotiation via Accept-Encoding."""
         if not tile_path.endswith(".json.gz"):
             return ("Not found", 404)
         tiles_dir = tile_dirs.get(slug)
@@ -120,8 +122,9 @@ def create_app():
         full_path = safe_join(tiles_dir, tile_path)
         if full_path is None or not os.path.isfile(full_path):
             return ("Not found", 404)
-        response = send_file(full_path, mimetype="application/json")
-        response.headers["Content-Encoding"] = "gzip"
+        with gzip.open(full_path, "rb") as f:
+            data = f.read()
+        response = Response(data, mimetype="application/json")
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 

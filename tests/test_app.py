@@ -282,16 +282,17 @@ def tile_client_empty(tmp_path):
 
 
 def test_tile_served_successfully(tile_client):
-    """GET /tiles/<slug>/<stamp>/<qk6>/<qk>.json.gz returns 200 with correct
-    headers. tile_client's run is stamped 20260101T000000 (tiles_dir roots
-    at tiles/, one level above the run, so the stamp is part of the
-    path)."""
+    """GET /tiles/<slug>/<stamp>/<qk6>/<qk>.json.gz returns 200 with plain
+    JSON and no Content-Encoding -- the on-disk file is gzip, but the
+    response body is decompressed before serving, so the client's
+    Accept-Encoding governs the wire format instead of a forced header.
+    tile_client's run is stamped 20260101T000000 (tiles_dir roots at
+    tiles/, one level above the run, so the stamp is part of the path)."""
     resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
     assert resp.status_code == 200
-    assert resp.headers.get("Content-Encoding") == "gzip"
+    assert resp.headers.get("Content-Encoding") is None
     assert "application/json" in resp.content_type
-    body = gzip.decompress(resp.data)
-    data = json.loads(body)
+    data = json.loads(resp.data)
     assert "records" in data
 
 
@@ -457,7 +458,7 @@ def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
                 f"prior-run URL {path!r} must still resolve after a new build; "
                 f"got {resp.status_code}"
             )
-            body = json.loads(gzip.decompress(resp.data))
+            body = json.loads(resp.data)
             assert body == {"marker": "RunOne"}, (
                 f"prior-run URL {path!r} must serve the PRIOR run's bytes, "
                 f"got {body!r}"
