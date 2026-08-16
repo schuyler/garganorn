@@ -9,7 +9,7 @@ Test class mapping:
   2. Ordering (within by level ASC)         → TestContainmentOrdering
   3. Brute-force oracle parity              → TestBruteForceOracle
   4. Containment artifact layout            → TestContainmentArtifacts
-  5. Q3 graceful degradation               → TestQ3Degradation
+  5. Empty-containment graceful degradation → TestEmptyContainmentDegradation
   6. End-to-end export integration          → TestExportIntegration
   7. Antimeridian arm (gotchas.md, "Antimeridian bboxes are two lobes") → TestAntimeridianEdgeArm
 """
@@ -738,25 +738,25 @@ class TestContainmentArtifacts:
 
 
 # ---------------------------------------------------------------------------
-# Q3 graceful degradation
+# Empty-containment graceful degradation
 # ---------------------------------------------------------------------------
 
-class TestQ3Degradation:
+class TestEmptyContainmentDegradation:
     """boundaries_db=None, missing/empty covering_dir → empty place_containment."""
 
     def test_boundaries_db_none_gives_empty_containment(self, tmp_path):
-        """boundaries_db=None → containment is created empty (Q3 preserved)."""
+        """boundaries_db=None → containment is created empty."""
         places_parquet = _make_parquet_places(
-            tmp_path, [("p1", 0.0, 0.0)], "q3_no_bnd_places.parquet"
+            tmp_path, [("p1", 0.0, 0.0)], "no_bnd_places.parquet"
         )
         ta_parquet = _make_parquet_tile_assignments(
-            tmp_path, [("p1", "222222")], "q3_no_bnd_ta.parquet"
+            tmp_path, [("p1", "222222")], "no_bnd_ta.parquet"
         )
-        containment_dir = str(tmp_path / "q3_no_bnd_containment")
+        containment_dir = str(tmp_path / "no_bnd_containment")
         compute_containment(
             places_parquet, ta_parquet, None,
             "place_id", "longitude", "latitude", containment_dir,
-            covering_dir=str(tmp_path / "q3_no_bnd_covering"),
+            covering_dir=str(tmp_path / "no_bnd_covering"),
             force=True,
         )
         parquet_files = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
@@ -771,14 +771,14 @@ class TestQ3Degradation:
     def test_missing_covering_dir_gives_empty_containment(self, simple_boundaries_db, tmp_path):
         """covering_dir that does not exist → containment is created empty."""
         places_parquet = _make_parquet_places(
-            tmp_path, [("p1", -122.4194, 37.7749)], "q3_no_cov_places.parquet"
+            tmp_path, [("p1", -122.4194, 37.7749)], "no_cov_places.parquet"
         )
         ta_parquet = _make_parquet_tile_assignments(
-            tmp_path, [("p1", "023010")], "q3_no_cov_ta.parquet"
+            tmp_path, [("p1", "023010")], "no_cov_ta.parquet"
         )
         missing_dir = str(tmp_path / "does_not_exist")
         assert not os.path.exists(missing_dir)
-        containment_dir = str(tmp_path / "q3_no_cov_containment")
+        containment_dir = str(tmp_path / "no_cov_containment")
         compute_containment(
             places_parquet, ta_parquet, str(simple_boundaries_db),
             "place_id", "longitude", "latitude", containment_dir,
@@ -797,12 +797,12 @@ class TestQ3Degradation:
         covering_dir = str(tmp_path / "empty_covering")
         os.makedirs(covering_dir)  # exists but empty
         places_parquet = _make_parquet_places(
-            tmp_path, [("p1", -122.4194, 37.7749)], "q3_empty_places.parquet"
+            tmp_path, [("p1", -122.4194, 37.7749)], "empty_cov_places.parquet"
         )
         ta_parquet = _make_parquet_tile_assignments(
-            tmp_path, [("p1", "023010")], "q3_empty_ta.parquet"
+            tmp_path, [("p1", "023010")], "empty_cov_ta.parquet"
         )
-        containment_dir = str(tmp_path / "q3_empty_containment")
+        containment_dir = str(tmp_path / "empty_cov_containment")
         compute_containment(
             places_parquet, ta_parquet, str(simple_boundaries_db),
             "place_id", "longitude", "latitude", containment_dir,
@@ -1536,17 +1536,17 @@ class TestContainmentRelocationPhase2:
             f"containment/_meta.json must exist at {meta_path}"
         )
 
-    def test_compute_containment_q3_boundaries_none(self, tmp_path):
+    def test_compute_containment_empty_degradation_boundaries_none(self, tmp_path):
         """With boundaries_db=None, compute_containment must still write containment/_meta.json."""
         places_parquet = _make_parquet_places(tmp_path, self._SF_PLACES)
         tile_assignments_parquet = _make_parquet_tile_assignments(
             tmp_path, [("p001", "023130")],
         )
-        containment_dir = str(tmp_path / "containment_q3")
+        containment_dir = str(tmp_path / "containment_empty")
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
-            None,              # boundaries_db=None → Q3 degradation
+            None,              # boundaries_db=None → empty-containment degradation
             "place_id",
             "longitude",
             "latitude",
@@ -1554,7 +1554,8 @@ class TestContainmentRelocationPhase2:
         )
         meta_path = os.path.join(containment_dir, "_meta.json")
         assert os.path.exists(meta_path), (
-            "Q3 degradation: containment/_meta.json must exist even when boundaries_db=None"
+            "Empty-containment degradation: containment/_meta.json must exist even "
+            "when boundaries_db=None"
         )
 
     def test_compute_containment_freshness_against_places_parquet(
@@ -1694,13 +1695,13 @@ class TestContainmentDirSwapAtomicity:
 
 
 # ---------------------------------------------------------------------------
-# Q3 export relations: {} + idempotency
+# Empty-containment export relations: {} + idempotency
 # ---------------------------------------------------------------------------
 
-class TestContainmentQ3ExportAndIdempotency:
-    """Q3 empty containment → relations:{} in export; idempotency."""
+class TestContainmentEmptyExportAndIdempotency:
+    """Empty containment → relations:{} in export; idempotency."""
 
-    def test_compute_containment_idempotent_q3(self, tmp_path):
+    def test_compute_containment_idempotent_empty_degradation(self, tmp_path):
         """Calling compute_containment twice (boundaries_db=None) must not error; second call
         is a no-op (containment dir already fresh).
         """
@@ -1716,7 +1717,7 @@ class TestContainmentQ3ExportAndIdempotency:
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
-            None,  # boundaries_db=None → Q3 degradation
+            None,  # boundaries_db=None → empty-containment degradation
             "place_id",
             "longitude",
             "latitude",
@@ -1791,41 +1792,43 @@ class TestContainmentQ3ExportAndIdempotency:
             "Second call with fresh inputs and boundaries must be a no-op"
         )
 
-    def test_q3_containment_dir_only_has_meta_json(self, tmp_path):
-        """Q3: boundaries_db=None → containment/ contains only _meta.json (no parquets)."""
+    def test_empty_degradation_containment_dir_only_has_meta_json(self, tmp_path):
+        """boundaries_db=None → containment/ contains only _meta.json (no parquets)."""
         places_parquet = _make_parquet_places(
-            tmp_path, [("p001", 0.0, 0.0)], "q3_places.parquet"
+            tmp_path, [("p001", 0.0, 0.0)], "empty_places.parquet"
         )
         tile_assignments_parquet = _make_parquet_tile_assignments(
-            tmp_path, [("p001", "300000")], "q3_ta.parquet"
+            tmp_path, [("p001", "300000")], "empty_ta.parquet"
         )
-        containment_dir = str(tmp_path / "q3_containment")
+        containment_dir = str(tmp_path / "empty_containment")
 
         compute_containment(
             places_parquet,
             tile_assignments_parquet,
-            None,  # Q3 degradation
+            None,  # empty-containment degradation
             "place_id",
             "longitude",
             "latitude",
             containment_dir,
         )
 
-        assert os.path.isdir(containment_dir), "containment/ must be created even in Q3"
+        assert os.path.isdir(containment_dir), (
+            "containment/ must be created even in empty-containment degradation"
+        )
         meta_path = os.path.join(containment_dir, "_meta.json")
-        assert os.path.exists(meta_path), "_meta.json must exist in Q3 mode"
+        assert os.path.exists(meta_path), "_meta.json must exist in empty-containment mode"
 
-        # In Q3 mode, no .parquet files (no containment data)
+        # In empty-containment mode, no .parquet files (no containment data)
         parquets = [f for f in os.listdir(containment_dir) if f.endswith(".parquet")]
         assert len(parquets) == 0, (
-            f"Q3 containment must have no .parquet files; found: {parquets}"
+            f"Empty containment must have no .parquet files; found: {parquets}"
         )
 
         # The meta should record "empty": true
         with open(meta_path) as f:
             meta = json.load(f)
         assert meta.get("empty") is True, (
-            f"Q3 containment _meta.json must have 'empty': true; got: {meta}"
+            f"Empty containment _meta.json must have 'empty': true; got: {meta}"
         )
 
 

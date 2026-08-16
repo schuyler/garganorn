@@ -345,15 +345,15 @@ def compute_containment(
     - Builds per-qk4-prefix containment parquet files under containment_dir.
     - Uses dir-swap atomicity (covering.py pattern): builds under .tmp/, writes
       _meta.json last inside .tmp/, renames .tmp/ → containment_dir.
-    - Q3 degradation: boundaries_db=None, missing/empty covering_dir → writes
-      containment_dir/_meta.json with "empty": true (no parquet files).
+    - Empty-containment degradation: boundaries_db=None, missing/empty covering_dir
+      → writes containment_dir/_meta.json with "empty": true (no parquet files).
     - Freshness: skips rebuild if containment_dir/_meta.json is newer than all
       inputs and params+inputs match the recorded meta.
 
     Args:
         places_parquet: Path to places.parquet artifact (qk17-sorted).
         tile_assignments_parquet: Path to tile_assignments.parquet artifact.
-        boundaries_db: Path to boundaries.duckdb, or None for Q3 degradation.
+        boundaries_db: Path to boundaries.duckdb, or None for empty-containment degradation.
         pk_expr: SQL expression for the place primary key column in places parquet.
         lon_expr: SQL expression for the longitude column in places parquet.
         lat_expr: SQL expression for the latitude column in places parquet.
@@ -427,7 +427,7 @@ def compute_containment(
             except (OSError, json.JSONDecodeError):
                 pass
 
-    # Determine Q3 short-circuit conditions
+    # Determine empty-containment short-circuit conditions
     empty = False
     covering_parquets = {}
     if boundaries_db is None:
