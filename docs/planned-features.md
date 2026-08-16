@@ -105,7 +105,9 @@ better contributed upstream, since none of it is specific to this gazetteer.
 
 ## Summary tiles for region-less search
 
-Status: proposed, not started. No design has been reviewed.
+Status: designed, not implemented — see `summary-tiles-design.md`, which
+resolves this section's open questions and flags the measurements still
+pending.
 
 A client cannot search for "Kyoto" without already knowing roughly where
 Kyoto is. `getCoverage` takes a bounding box, so finding a place requires
