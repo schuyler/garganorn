@@ -145,6 +145,32 @@ MOCK
     chmod +x "${bin_dir}/osm-pbf-parquet"
 }
 
+# write_mock_osmium_env <bin_dir> <env_log>
+#   As write_mock_osmium, but records OSMIUM_POOL_THREADS from its environment
+#   rather than its arguments.
+write_mock_osmium_env() {
+    local bin_dir="$1"
+    local env_log="$2"
+    cat > "${bin_dir}/osmium" <<MOCK
+#!/bin/bash
+echo "OSMIUM_POOL_THREADS=\${OSMIUM_POOL_THREADS:-unset}" >> "${env_log}"
+output_path=""
+args=("\$@")
+for (( i=0; i<\${#args[@]}; i++ )); do
+    if [ "\${args[i]}" = "-o" ]; then
+        output_path="\${args[i+1]}"
+        break
+    fi
+done
+if [ -n "\$output_path" ]; then
+    mkdir -p "\$(dirname "\$output_path")"
+    touch "\$output_path"
+fi
+exit 0
+MOCK
+    chmod +x "${bin_dir}/osmium"
+}
+
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
 # Test 1: Missing required arg (no pbf_path) → exits non-zero with usage message
@@ -649,6 +675,57 @@ test_missing_selector_sidecar_invalidates_cache() {
     teardown_tmpdir
 }
 
+# Test 17: osmium's decode pool is sized to the host rather than libosmium's
+# core-count-minus-two default, which leaves a small-core host idle during the
+# filter passes.
+test_osmium_pool_threads_sized_to_host() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local env_log="${TMPROOT}/env.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium_env "$bin_dir" "$env_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "${TMPROOT}/calls.log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    assert_output_contains "pool-threads: osmium sees the host core count" \
+        "OSMIUM_POOL_THREADS=$(getconf _NPROCESSORS_ONLN)" "$(cat "$env_log")"
+
+    teardown_tmpdir
+}
+
+# Test 18: An operator-supplied pool size wins over the host-derived default.
+test_osmium_pool_threads_override() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local env_log="${TMPROOT}/env.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium_env "$bin_dir" "$env_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "${TMPROOT}/calls.log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    OSMIUM_POOL_THREADS=3 PATH="${bin_dir}:/usr/bin:/bin" \
+        bash "$SCRIPT" "$fake_pbf" --cache-dir "$cache_dir" >/dev/null 2>&1
+
+    assert_output_contains "pool-threads: operator override wins" \
+        "OSMIUM_POOL_THREADS=3" "$(cat "$env_log")"
+    if grep -qF "OSMIUM_POOL_THREADS=$(getconf _NPROCESSORS_ONLN)" "$env_log" \
+        && [ "$(getconf _NPROCESSORS_ONLN)" != "3" ]; then
+        fail "pool-threads: override should not be replaced by the host count"
+    else
+        pass "pool-threads: host count does not override the operator value"
+    fi
+
+    teardown_tmpdir
+}
+
 # ─── Run all tests ────────────────────────────────────────────────────────────
 
 echo "Running tests for scripts/extract-osm-parquet.sh"
@@ -671,6 +748,8 @@ test_merge_invocation
 test_building_intermediate_removed
 test_selector_change_invalidates_cache
 test_missing_selector_sidecar_invalidates_cache
+test_osmium_pool_threads_sized_to_host
+test_osmium_pool_threads_override
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

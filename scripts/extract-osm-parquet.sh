@@ -123,6 +123,11 @@ safe_rm_rf() {
 
 # ─── Stage 0: Filter PBF with osmium ─────────────────────────────────────────
 
+# libosmium sizes its decode pool at core count minus two, which idles ~40% of
+# a 4-core host while PBF decode — the bottleneck for both filter passes — is
+# what saturates. getconf reads the count on both Linux and macOS.
+export OSMIUM_POOL_THREADS="${OSMIUM_POOL_THREADS:-$(getconf _NPROCESSORS_ONLN)}"
+
 filtered_tags_pbf="${cache_dir}/filtered-tags.osm.pbf"
 buildings_all_tmp="${cache_dir}/buildings-all-tmp.osm.pbf"
 filtered_buildings_pbf="${cache_dir}/filtered-buildings.osm.pbf"
