@@ -252,6 +252,37 @@ instead of one. This feeds `tile_assignments_combined.parquet` (the union
 with the summary band's own tile references) in place of
 `tile_assignments.parquet`; other sources are unaffected.
 
+**Summary-band extension**: `stage_summary_tile_assignment`
+(`garganorn/stages.py`) writes `<source>/summary_tile_assignments.parquet`,
+same schema, restricted to the top-N places by `importance DESC, place_id
+ASC` (default N=10000) — for `overture_division`, every `country`/`region`/
+`dependency` subtype is additionally included, additive on top of N
+(`docs/design-constraints.md`, "The summary band is a coarse tile tier for
+region-less resolution"). It reuses this stage's coarsest-fit algorithm
+over that subset, but in a z1-z5 band instead of z6-z17; z5 is a hard
+floor, so a z5 tile may exceed `max_per_tile`.
+
+For `overture_division`, `stage_summary_division_tile_references`
+(`garganorn/stages.py`) is the summary-band analog of
+`stage_division_tile_references` above: it expands the summary grid the
+same overlap-from-covering way, then restricts the result to the
+`place_id`s already in `summary_tile_assignments.parquet` — without that
+restriction every division on earth would be referenced into the z1-z5
+tiles, destroying the top-N cut.
+
+`_union_tile_assignments` (`garganorn/quadtree.py`, not `stages.py` — it
+needs no source-specific schema, just the shared `place_id, tile_qk`
+columns) then `UNION ALL`s the regular assignments (or division
+references) with their summary-band counterpart into
+`tile_assignments_combined.parquet`, `ORDER BY tile_qk, place_id`.
+`UNION ALL` rather than `UNION` is safe because the regular band is z6-z17
+and the summary band is z1-z5, so no `(place_id, tile_qk)` pair can appear
+on both sides. `compute_containment`/`stage_division_containment` and
+`stage_export` both read this combined artifact instead of the plain one,
+which is what makes a summary-band record byte-identical to its regular
+copy — same containment, same everything, it just also appears at a
+coarser tile.
+
 ## 7. `stage_export` (`garganorn/stages.py`)
 
 **Writes**: a new timestamped run directory,
