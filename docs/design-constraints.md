@@ -183,6 +183,28 @@ safely. Moving it either way trades that fan-out against stored fragment
 count, and wants a real run's `per_level` stats and measured artifact
 size to justify.
 
+### Division containment comes from Overture hierarchies, not geometry
+
+`stage_division_containment` derives a division's `relations.within` from
+Overture's `hierarchies` column (`division_containment.sql`), not from
+`compute_containment`'s geometric covering join. The geometric route was
+considered and rejected: a representative point is the wrong containment
+test for divisions — a region's point lands in exactly one county without
+the region being inside it, and every division's own point is inside
+itself. The covering machinery is untouched and still required for places
+and OSM, whose records carry no division references of their own.
+
+An ancestor is kept only if it survived the import's own filters (`is_land`,
+a bbox-scoped build) — an emitted rkey must resolve via `getRecord`, so an
+ancestor dropped from the imported set is dropped from `relations.within`
+too. Containment fans out over `tile_assignments_combined.parquet`, the same
+union of tile references and summary tile references that `stage_export`
+reads, so a division's summary-band copy and its regular-grid copies carry
+identical `relations`.
+
+**Applies to**: `garganorn/sql/division_containment.sql`, `stages.py`
+(`stage_division_containment`), `quadtree.py` (`run_pipeline`)
+
 ### A record may be referenced by more than one tile
 
 Divisions are polygons: `stage_division_tile_references` references a
@@ -207,8 +229,9 @@ in sources where the regular band assigns it once; all three
 this reason.
 
 **Applies to**: `stages.py` (`stage_division_tile_references`,
-`compute_containment`), `overture_division_export_tiles.sql`,
-`overture_place_export_tiles.sql`, `osm_export_tiles.sql`
+`compute_containment`, `stage_division_containment`),
+`overture_division_export_tiles.sql`, `overture_place_export_tiles.sql`,
+`osm_export_tiles.sql`
 
 ### The summary band is a coarse tile tier for region-less resolution
 

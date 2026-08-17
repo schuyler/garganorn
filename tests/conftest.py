@@ -810,11 +810,17 @@ def division_parquet(tmp_path_factory):
             region VARCHAR,
             wikidata VARCHAR,
             population BIGINT,
-            parent_division_id VARCHAR
+            parent_division_id VARCHAR,
+            hierarchies STRUCT(division_id VARCHAR, subtype VARCHAR, name VARCHAR)[][]
         )
     """)
 
-    # Insert SF locality
+    # Insert SF locality. Its chain's div_region_ca member is deliberately
+    # misnamed ("Not California") to pin that a record's own names.primary
+    # in the imported set wins over the name carried in the hierarchies
+    # struct. div_missing_county never
+    # appears as its own tmp_division row, so the containment semi-join has
+    # an ancestor to drop.
     conn.execute("""
         INSERT INTO tmp_division VALUES (
             'div_locality_sf',
@@ -824,7 +830,13 @@ def division_parquet(tmp_path_factory):
             'US-CA',
             'Q62',
             874961,
-            NULL
+            NULL,
+            [[
+                {'division_id': 'div_country_us', 'subtype': 'country', 'name': 'United States'},
+                {'division_id': 'div_missing_county', 'subtype': 'county', 'name': 'Phantom County'},
+                {'division_id': 'div_region_ca', 'subtype': 'region', 'name': 'Not California'},
+                {'division_id': 'div_locality_sf', 'subtype': 'locality', 'name': 'San Francisco'}
+            ]]::STRUCT(division_id VARCHAR, subtype VARCHAR, name VARCHAR)[][]
         )
     """)
 
@@ -838,7 +850,10 @@ def division_parquet(tmp_path_factory):
             NULL,
             'Q30',
             331000000,
-            NULL
+            NULL,
+            [[
+                {'division_id': 'div_country_us', 'subtype': 'country', 'name': 'United States'}
+            ]]::STRUCT(division_id VARCHAR, subtype VARCHAR, name VARCHAR)[][]
         )
     """)
 
@@ -852,7 +867,11 @@ def division_parquet(tmp_path_factory):
             'US-CA',
             'Q99',
             39538223,
-            'div_country_us'
+            'div_country_us',
+            [[
+                {'division_id': 'div_country_us', 'subtype': 'country', 'name': 'United States'},
+                {'division_id': 'div_region_ca', 'subtype': 'region', 'name': 'California'}
+            ]]::STRUCT(division_id VARCHAR, subtype VARCHAR, name VARCHAR)[][]
         )
     """)
 

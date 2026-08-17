@@ -235,7 +235,9 @@ tile — if no coarser tile qualifies). This sizes the grid without a fixed
 global zoom: dense areas get fine tiles, sparse areas get coarse ones. It
 bounds records per export tile for the point sources, whose export reads
 this artifact; a division tile's exported count follows geometry instead,
-since the division export reads `tile_references.parquet`. Places with a NULL or malformed `qk17` are dropped (logged as
+since a division's per-tile membership comes from `tile_references.parquet`,
+which folds into `tile_assignments_combined.parquet` before `stage_export`
+reads it. Places with a NULL or malformed `qk17` are dropped (logged as
 a warning, not a failure); a post-write duplicate-assignment check exists
 because the join logic should make a place-in-two-tiles outcome
 impossible, but a silent double-export would be a worse failure mode than
@@ -246,9 +248,9 @@ a loud check.
 `overture_division`, same schema and sort. It expands the grid above to
 every tile a division's geometry overlaps — read from the covering
 artifact, not `qk17` — so a division gets one row per referencing tile
-instead of one. `compute_containment` and `stage_export` read this file
-in place of `tile_assignments.parquet` for `overture_division`; other
-sources are unaffected.
+instead of one. This feeds `tile_assignments_combined.parquet` (the union
+with the summary band's own tile references) in place of
+`tile_assignments.parquet`; other sources are unaffected.
 
 ## 7. `stage_export` (`garganorn/stages.py`)
 
@@ -328,13 +330,18 @@ that passes `--boundaries`.
 freshness check described above (other sources, when a `boundaries_db` is
 supplied) → `stage_tile_assignment` → `stage_division_tile_references`
 (division only, expanding `tile_assignments.parquet` into
-`tile_references.parquet`) → `compute_containment` (in `stages.py`, not
-one of the seven stages above — it joins a source's places against the
-covering artifact and `boundaries.duckdb` to write
-`<source>/containment/*.parquet`, which `stage_export` reads for each
-record's `relations`) → `stage_export`. Both `compute_containment` and
-`stage_export` take `tile_references.parquet` for `overture_division` and
-`tile_assignments.parquet` for every other source.
+`tile_references.parquet`) → containment (in `stages.py`, not one of the
+seven stages above): `stage_division_containment` for `overture_division`,
+joining Overture's `hierarchies` against the imported places
+(`design-constraints.md`, "Division containment comes from Overture
+hierarchies, not geometry"); `compute_containment` for every other source,
+joining a source's places against the covering artifact and
+`boundaries.duckdb`. Both write `<source>/containment/*.parquet`, which
+`stage_export` reads for each record's `relations` → `stage_export`. The
+containment step and `stage_export` both take
+`tile_assignments_combined.parquet` — the union of the regular tile
+assignments/references above and their summary-band counterparts — for
+every source, not just `overture_division`.
 
 The `all` subcommand (`quadtree.py:_cmd_all`) runs the full set for every
 configured source: `stage_density_extract` once (shared,

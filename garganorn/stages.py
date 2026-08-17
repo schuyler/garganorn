@@ -590,6 +590,119 @@ def compute_containment(
         shutil.rmtree(old_dir, ignore_errors=True)
 
 
+def stage_division_containment(
+    division_parquet, places_parquet, tile_assignments_parquet, containment_dir,
+    *, collection_prefix="org.atgeo.places.overture.division",
+    memory_limit="48GB", temp_directory=None,
+    max_temp_directory_size="250GB", force=False,
+) -> None:
+    """Write <src>/containment/ from Overture hierarchies, in place of
+    compute_containment's geometric join. See garganorn/sql/division_containment.sql.
+
+    Sequence: builds one TEMP TABLE over the whole division set, then writes
+    one COPY per distinct left(tile_qk, 6) prefix, sorted (tile_qk, place_id)
+    within each file. Dir-swap atomicity and freshness gate mirror
+    compute_containment.
+
+    Args:
+        division_parquet: Raw division parquet glob (parquet_glob[0]).
+        places_parquet: Path to places.parquet artifact.
+        tile_assignments_parquet: Path to tile_assignments_combined.parquet.
+        containment_dir: Directory to write containment parquet files and _meta.json.
+        collection_prefix: NSID prefix for rkey values.
+        memory_limit: DuckDB memory_limit string.
+        temp_directory: DuckDB temp_directory for spill (optional).
+        max_temp_directory_size: DuckDB max_temp_directory_size string,
+            bounding spill (default "250GB"), independently of whether
+            temp_directory is also supplied.
+        force: Re-build even when the artifact is fresh.
+    """
+    inputs = [places_parquet, tile_assignments_parquet] + _resolve_glob_paths(
+        division_parquet, required=True
+    )
+    params = {"collection_prefix": collection_prefix}
+
+    meta_path = os.path.join(containment_dir, "_meta.json")
+    if not force:
+        if os.path.exists(meta_path):
+            try:
+                with open(meta_path) as f:
+                    recorded = json.load(f)
+                if (recorded.get("params") == params
+                        and recorded.get("inputs") == inputs
+                        and _is_output_fresh(meta_path, inputs)):
+                    log.info("stage_division_containment: skipping (artifact fresh)")
+                    return
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    tmp_dir = containment_dir + ".tmp"
+    old_dir = containment_dir + ".old"
+    for d in [tmp_dir, old_dir]:
+        if os.path.exists(d):
+            shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(tmp_dir)
+
+    division_sql = division_parquet.replace("'", "''")
+    pq_sql = places_parquet.replace("'", "''")
+    ta_sql = tile_assignments_parquet.replace("'", "''")
+
+    sql = (_SQL_DIR / "division_containment.sql").read_text()
+    sql = sql.replace("${division_parquet}", division_sql)
+    sql = sql.replace("${places_parquet}", pq_sql)
+    sql = sql.replace("${tile_assignments_parquet}", ta_sql)
+    sql = sql.replace("${collection_prefix}", collection_prefix)
+
+    empty = True
+    con = duckdb.connect(":memory:")
+    try:
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        if memory_limit:
+            con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET preserve_insertion_order = false")
+        con.execute("SET enable_progress_bar = false")
+
+        con.execute(f"CREATE TEMP TABLE division_containment AS {sql}")
+
+        prefixes = con.execute(
+            "SELECT DISTINCT left(tile_qk, 6) AS prefix FROM division_containment ORDER BY prefix"
+        ).fetchall()
+        empty = not prefixes
+        for (prefix,) in prefixes:
+            out_path = os.path.join(tmp_dir, f"{prefix}.parquet")
+            out_path_sql = out_path.replace("'", "''")
+            con.execute(f"""
+                COPY (
+                    SELECT tile_qk, place_id, relations_json
+                    FROM division_containment
+                    WHERE left(tile_qk, 6) = '{prefix}'
+                    ORDER BY tile_qk, place_id
+                ) TO '{out_path_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+            """)
+    finally:
+        con.close()
+
+    meta = {
+        "params": params,
+        "inputs": inputs,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if empty:
+        meta["empty"] = True
+
+    with open(os.path.join(tmp_dir, "_meta.json"), "w") as f:
+        json.dump(meta, f)
+
+    if os.path.exists(containment_dir):
+        os.rename(containment_dir, old_dir)
+    os.rename(tmp_dir, containment_dir)
+    if os.path.exists(old_dir):
+        shutil.rmtree(old_dir, ignore_errors=True)
+
+
 def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: str,
                       *, generated_at: str = None,
                       temp_directory: str | None = None,

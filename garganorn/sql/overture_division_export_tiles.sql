@@ -10,9 +10,10 @@
 -- admin_level), subtype (e.g. "country", "region", "county"), country/region
 -- ISO codes, wikidata QID, and population where present in the source data.
 --
--- relations carries containment assignments populated by compute_containment
--- (which divisions contain this one). Left join means records without
--- containment data get an empty relations object.
+-- relations carries containment assignments populated by
+-- stage_division_containment (which divisions contain this one). Left join
+-- means records without containment data -- a division whose hierarchy chain
+-- holds only itself -- get an empty relations object.
 
 -- Strip null-valued keys from a JSON object. Divisions commonly have null
 -- values for optional fields (region, wikidata, population) which creates
@@ -56,8 +57,8 @@ SELECT
 FROM places p
 JOIN tile_assignments ta ON ta.place_id = p.id
 -- Keyed on (place_id, tile_qk), not place_id alone: a division is referenced
--- by every tile its geometry reaches, and compute_containment emits one row
--- per (tile_qk, place_id), so both sides carry N rows for an N-tile division.
+-- by every tile its geometry reaches, and stage_division_containment emits one
+-- row per (tile_qk, place_id), so both sides carry N rows for an N-tile division.
 -- Joining on place_id alone would pair every tile with every containment row
 -- and export N^2 copies of the record.
 LEFT JOIN place_containment pc

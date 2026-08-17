@@ -15,6 +15,7 @@ from .stages import (
     artifact_fresh,
     finalize_artifact,
     compute_containment,
+    stage_division_containment,
     write_manifest,
     write_manifest_db,
     stage_import,
@@ -189,15 +190,24 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                             force=force)
     assignments_parquet = combined_parquet
 
-    # Containment (self-gating, parquet-based)
-    pk_expr = SOURCES[source].source_pk
-    lon_expr, lat_expr = _coord_exprs(source, alias="p")
-    compute_containment(places_parquet, assignments_parquet, boundaries_db,
-                        pk_expr, lon_expr, lat_expr, containment_dir,
-                        covering_dir=covering_dir, memory_limit=memory_limit,
-                        temp_directory=temp_directory,
-                        max_temp_directory_size=max_temp_directory_size,
-                        force=force)
+    # Containment (self-gating, parquet-based). Divisions derive containment
+    # from Overture hierarchies instead of the geometric join (see
+    # design-constraints.md, "Division containment comes from Overture
+    # hierarchies, not geometry").
+    if source == "overture_division":
+        stage_division_containment(
+            parquet_glob[0], places_parquet, assignments_parquet, containment_dir,
+            memory_limit=memory_limit, temp_directory=temp_directory,
+            max_temp_directory_size=max_temp_directory_size, force=force)
+    else:
+        pk_expr = SOURCES[source].source_pk
+        lon_expr, lat_expr = _coord_exprs(source, alias="p")
+        compute_containment(places_parquet, assignments_parquet, boundaries_db,
+                            pk_expr, lon_expr, lat_expr, containment_dir,
+                            covering_dir=covering_dir, memory_limit=memory_limit,
+                            temp_directory=temp_directory,
+                            max_temp_directory_size=max_temp_directory_size,
+                            force=force)
 
     # Export (self-gating, manages manifests + symlink + keep-2)
     stage_export(source, places_parquet, assignments_parquet, containment_dir, tiles_root,
