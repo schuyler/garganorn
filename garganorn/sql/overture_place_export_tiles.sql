@@ -3,7 +3,7 @@
 -- struct-union, which adds spurious null fields from the other type. The
 -- $."key" path syntax handles the $type key (leading $ is JSONPath root).
 -- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
--- it (merged in PR #21748, 2026-04-02; not yet in v1.5.1).
+-- it (merged in PR #21748, 2026-04-02; not in the pinned duckdb==1.4.4).
 CREATE OR REPLACE MACRO strip_json_nulls(js) AS
     map_from_entries(
         [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
@@ -12,7 +12,8 @@ CREATE OR REPLACE MACRO strip_json_nulls(js) AS
 
 -- Overture tile JSON export view.
 -- Inputs:
---   places          — Overture places table (imported via import-overture-extract.sh)
+--   places          — Overture places table (imported via stage_import →
+--                     overture_place_import.sql)
 --   tile_assignments — columns: place_id VARCHAR, tile_qk VARCHAR
 -- Substitution params: ${repo}
 -- Addresses are rendered inline via list_transform/list_filter — no pre-materialization.

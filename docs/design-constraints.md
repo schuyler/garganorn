@@ -12,11 +12,16 @@ builds on, see `gotchas.md`.
 ### All spatial indexing uses quadkeys
 
 Quadkeys (Bing tile system) at z17 for places, z15 for density tiles.
-S2 cell IDs are eliminated from the pipeline. ST_QuadKey() computes
-spatial keys from lon/lat coordinates.
+S2 cell IDs are eliminated from the pipeline. The `qk17` macro
+(`garganorn/sql/qk_env_macro.sql`) computes spatial keys from lon/lat
+coordinates; it is the only place `ST_QuadKey()` appears.
 
-**Applies to**: All `*_import.sql` (qk17 column), `compute_tile_assignments.sql`,
-`density_extract.sql`
+**Applies to**: `garganorn/sql/qk_env_macro.sql` (macro definition); every
+`*_import.sql` (qk17 column) and `density_extract.sql` call `qk17(...)`,
+never `ST_QuadKey()` directly. Tile assignment builds its quadkey prefixes
+inline in `stages.py:stage_tile_assignment`; `compute_tile_assignments.sql`
+is the reference implementation the parity test compares it against, not
+pipeline SQL.
 
 ### Importance scoring varies by entity type
 
@@ -152,8 +157,8 @@ The reason a plain R-tree prefilter isn't enough on its own:
 `ST_Contains`-style cost scales with the boundary polygon's vertex count,
 not the candidate count, so a 900K-vertex boundary costs the same per
 test whether the candidate point is a sliver away or on the other side of
-the tile (see `gotchas.md`, "Join memory is sized off the source relation,
-not the filtered one"). Clipping each boundary to a tile's own envelope
+the tile (see `gotchas.md`, "A join is sized off the source relation, not
+the filtered one"). Clipping each boundary to a tile's own envelope
 during descent trims that cost without changing the answer, since every
 candidate in that tile is inside it: `ST_Contains(clipped, point) ⟺
 ST_Contains(full, point)`. Containment is tested with `ST_Covers` rather

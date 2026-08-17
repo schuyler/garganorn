@@ -1,8 +1,9 @@
 # Pipeline Artifacts
 
 What each tile-build stage writes, in what shape, and why. Source of truth
-is the code (`garganorn/stages.py`, `garganorn/covering.py`, `garganorn/sql/*.sql`);
-this document describes current behavior only.
+is the code (`garganorn/stages.py`, `garganorn/quadtree.py`,
+`garganorn/covering.py`, `garganorn/sql/*.sql`); this document describes
+current behavior only.
 
 ## Shared machinery
 
@@ -27,11 +28,15 @@ scheme) uses the same freshness/atomicity pattern:
 **Schema**: `tile_qk15 VARCHAR, density_score DOUBLE, tile_xmin DOUBLE,
 tile_ymin DOUBLE, tile_xmax DOUBLE, tile_ymax DOUBLE`.
 
-**Sort**: `ORDER BY tile_qk15`. Downstream, every import stage does a
-`left(qk17, 15)` prefix join against this table (`overture_place_import.sql`,
-`osm_import.sql`) or a bbox-overlap join (`overture_division_import.sql`);
-a sorted `tile_qk15` column lets DuckDB's zone maps prune row groups on
-either access pattern instead of scanning the whole file.
+**Sort**: `ORDER BY tile_qk15`. Every import stage loads this file
+wholesale (`CREATE TEMP TABLE density_tiles AS SELECT * FROM
+read_parquet(...)`) with no predicate, so nothing is pruned; the
+downstream join — a `left(qk17, 15)` prefix equality
+(`overture_place_import.sql`, `osm_import.sql`) or a bbox-overlap join on
+`tile_xmin`/`tile_xmax`/`tile_ymin`/`tile_ymax`
+(`overture_division_import.sql`) — runs against an already-resident temp
+table. Sorting here is for deterministic output, not zone-map pruning,
+same as `stage_idf`'s entry.
 
 **Shape**: Runs globally over the raw Overture place parquet (no bbox
 filter) on an ephemeral in-memory connection — density feeds importance
@@ -74,9 +79,9 @@ and `boundaries.duckdb`.
 **Schema** (`places.parquet`, geometry excluded): `id, names, subtype,
 country, region, level INTEGER, wikidata, population, parent_division_id,
 bbox STRUCT(xmin, ymin, xmax, ymax), qk17 VARCHAR, min_latitude,
-max_latitude, min_longitude, max_longitude, importance INTEGER, variants
-STRUCT(name, type, language)[]`. `level` comes from
-`garganorn.levels.LEVEL_VOCAB` via a generated `CASE` with no `ELSE`
+max_latitude, min_longitude, max_longitude, interior_lon, interior_lat,
+importance INTEGER, variants STRUCT(name, type, language)[]`. `level`
+comes from `garganorn.levels.LEVEL_VOCAB` via a generated `CASE` with no `ELSE`
 branch — an unmapped `subtype` must surface as NULL, not a silent default.
 
 **Schema** (`boundaries.duckdb`, table `places`): `id, geometry GEOMETRY,
@@ -85,8 +90,8 @@ min_latitude, max_latitude, min_longitude, max_longitude, importance,
 variants`, unfiltered — every level in `LEVEL_VOCAB` (country through
 microhood) is present — plus an `RTREE` index on `geometry`.
 
-**Sort**: `places.parquet` is `ORDER BY qk17 NULLS LAST` — same zone-map
-reasoning as the other two sources' `places.parquet`. `boundaries.duckdb`
+**Sort**: `places.parquet` is `ORDER BY qk17 NULLS LAST` — same rationale
+as `stage_import`'s equivalent COPY, below. `boundaries.duckdb`
 is `ORDER BY ST_Hilbert(geometry, <world bbox>)` — a Hilbert-curve sort
 keeps geometrically nearby boundaries physically close on disk, which
 matters for the R-tree index build and for containment queries that scan
@@ -117,10 +122,10 @@ inside the boundary, so this is the trivial geometry to test it against —
 and a non-interior tile's `geom` is the boundary's geometry clipped to
 that tile.
 
-**Sort**: each per-prefix file is `ORDER BY tile_qk, boundary_id` — this
-groups rows the way `compute_containment`'s per-zoom equi-join
-(`left(p.qk17, L) = c.tile_qk`) needs them, and makes per-run output
-deterministic.
+**Sort**: each per-prefix file is `ORDER BY tile_qk, boundary_id`, for
+deterministic per-run output. `compute_containment` loads each file
+wholesale into a temp table, so its equi-join does not depend on the
+order.
 
 **Shape**: Descends z4 → z16 (`COVER_MIN_ZOOM`..`COVER_MAX_ZOOM`),
 clipping each boundary's geometry to each tile's own envelope as it goes.
@@ -173,24 +178,32 @@ grepping the codebase shows no query anywhere ever looks up `places` by
 `rkey` before the connection closes — apparently dead weight, not confirmed
 in scope here.
 
-**Sort**: both `ORDER BY qk17 NULLS LAST` — same zone-map reasoning as
-`stage_division_import`'s `places.parquet`.
+**Sort**: both `ORDER BY qk17 NULLS LAST`, kept though nothing prunes this
+parquet by a qk17 range — dropping it makes `places_slim`'s re-sort real,
+costing ~160s of a 9,659.8s build (measured 2026-08-13), and plausibly
+costs compression here too, though that half is unmeasured.
 
 **Shape**: `importance = round(60 * least(density/density_norm, 1.0) + 40
 * least(idf/idf_norm, 1.0))`, computed inline in the same `CREATE TABLE
 ... AS` that imports the source data — one pass, not an import followed
 by a separate scoring pass. `density_tiles`/`idf_scores` are loaded as
-standalone temp tables *before* the source SQL runs, so their join-key
-uniqueness (`_assert_unique_key`) can be checked before any join executes
-— a duplicate key would otherwise silently fan out place rows through the
-`LEFT JOIN`. Both lookup tables are also pre-deduplicated
-(`GROUP BY ... any_value(...)`) at the join site as a second line of
+standalone temp tables *before* the source SQL runs. `idf_scores`' join-key
+uniqueness is checked here (`_assert_unique_key`); `density_tiles`' was
+already checked by `_assert_density_parquet_unique`, ahead of the
+`overture_division` dispatch — a duplicate key would otherwise silently
+fan out place rows through the `LEFT JOIN`. Both lookup tables are also
+pre-deduplicated (`GROUP BY ... any_value(...)`) at the join site as a second line of
 defense. `overture_place`'s `ov_base` CTE and OSM's `filtered`/`way_base`
 CTEs are each scanned exactly once beyond their own definition — geometry
 is dropped as early as possible (before any join) since `qk17` comes from
 `bbox`, not `geometry`, avoiding a full-width shuffle of the widest
-columns at global-Overture scale. OSM ways derive a centroid by averaging
-their referenced nodes' coordinates (`way_centroids`); both the node and
+columns at global-Overture scale. OSM's way pipeline has known debt here:
+`qualifying_ways` and `way_node_refs` are each scanned twice beyond their
+own definition (by `way_node_refs`/`way_base` and by
+`needed_node_ids`/`way_centroids`); measured zero bytes of temp disk at
+10.7M OSM rows and a 32GB memory limit, so neither spills at present
+scale, but nothing structural holds that. OSM ways derive a centroid by
+averaging their referenced nodes' coordinates (`way_centroids`); both the node and
 way pipelines apply the same category allow-list, keeping only named POIs
 in a fixed set of OSM tag categories.
 
@@ -221,11 +234,10 @@ is dropped. The result is `list_sort`ed the same way as `overture_place`'s.
 
 **Schema**: `place_id VARCHAR, tile_qk VARCHAR`.
 
-**Sort**: `ORDER BY tile_qk, place_id`. This is not just a zone-map
-optimization — `stage_export`'s streaming cursor reads tiles in this same
-order and detects a tile boundary by watching `tile_qk` change row to
-row, so the sort order *is* the grouping mechanism the export stage relies
-on.
+**Sort**: `ORDER BY tile_qk, place_id`, for deterministic output. No
+downstream read depends on it: `stage_export` joins this file wholesale and
+pass 2 re-sorts each partition with its own `ORDER BY tile_qk, place_id`,
+which is what establishes the order its cursor consumes.
 
 **Shape**: assigns each place to the coarsest quadtree tile (z6..z17)
 whose place count is at or below `max_per_tile`, by building a per-zoom
@@ -263,9 +275,10 @@ over that subset, but in a z1-z5 band instead of z6-z17; z5 is a hard
 floor, so a z5 tile may exceed `max_per_tile`.
 
 For `overture_division`, `stage_summary_division_tile_references`
-(`garganorn/stages.py`) is the summary-band analog of
-`stage_division_tile_references` above: it expands the summary grid the
-same overlap-from-covering way, then restricts the result to the
+(`garganorn/stages.py`) writes `<source>/summary_tile_references.parquet`,
+the summary-band analog of `stage_division_tile_references` above: it
+expands the summary grid the same overlap-from-covering way, then
+restricts the result to the
 `place_id`s already in `summary_tile_assignments.parquet` — without that
 restriction every division on earth would be referenced into the z1-z5
 tiles, destroying the top-N cut.
@@ -318,11 +331,12 @@ the spill directory either way: under `temp_directory` when the caller
 supplies one, otherwise beside the run dir on the tiles volume. Sizing
 the tiles volume therefore has to account for it when no
 `temp_directory` is given. Pass 2 streams each partition's query via
-`fetchmany(1000)` so at most
-one tile's records are buffered in Python memory regardless of source
-size; flush work (JSON wrap + gzip + write) is handed to a thread pool
-with inflight futures capped at `2 * workers`, so compression overlaps
-with the next batch's fetch without unbounded queueing. `manifest.json` is written last
+`fetchmany(1000)`; flush work (JSON wrap + gzip + write) is handed to a
+thread pool with inflight futures capped at `2 * workers`
+(`max_inflight`), each holding one tile's records, plus the tile still
+accumulating from the cursor — so up to `max_inflight + 1` tiles' records
+are buffered in Python memory at once, regardless of source size.
+`manifest.json` is written last
 — after every tile file and after `manifest.duckdb` — so its presence is
 the run's sole completeness marker: freshness gating and the keep-2
 retention sweep both key off it, and a crash mid-export leaves a run dir
@@ -361,7 +375,10 @@ that passes `--boundaries`.
 freshness check described above (other sources, when a `boundaries_db` is
 supplied) → `stage_tile_assignment` → `stage_division_tile_references`
 (division only, expanding `tile_assignments.parquet` into
-`tile_references.parquet`) → containment (in `stages.py`, not one of the
+`tile_references.parquet`) → `stage_summary_tile_assignment` →
+`stage_summary_division_tile_references` (division only) →
+`_union_tile_assignments`, producing `tile_assignments_combined.parquet`
+→ containment (in `stages.py`, not one of the
 seven stages above): `stage_division_containment` for `overture_division`,
 joining Overture's `hierarchies` against the imported places
 (`design-constraints.md`, "Division containment comes from Overture

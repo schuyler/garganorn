@@ -12,7 +12,7 @@ The project is named after the earliest recorded [mammoth goose](https://en.wiki
 
 ## What it serves
 
-Two collections today: [Overture Maps](https://overturemaps.org/) places (`org.atgeo.places.overture.place`) and [OpenStreetMap](https://www.openstreetmap.org/) (`org.atgeo.places.osm`). Both are served as pre-built, gzipped tile files — there's no live search or query-by-name; you discover tiles for a bounding box and fetch them.
+Three collections today: [Overture Maps](https://overturemaps.org/) places (`org.atgeo.places.overture.place`), [OpenStreetMap](https://www.openstreetmap.org/) (`org.atgeo.places.osm`), and Overture administrative divisions (`org.atgeo.places.overture.division`). Tiles are pre-built and stored gzip-compressed on disk, but served as plain JSON — wire compression is negotiated separately via `Accept-Encoding`. There's no live search or query-by-name; you discover tiles for a bounding box and fetch them.
 
 ## Configuration
 
@@ -32,7 +32,7 @@ tiles:
   max_coverage_tiles: 50
 ```
 
-`source` and `license` are required — they show up in every record's `getRecord` envelope and every tile's header, so clients can attribute correctly without a separate lookup.
+`source` and `license` aren't validated — `load_config` just parses the YAML, and omitting either yields an empty string, no error. They matter for `getRecord`: `TileBackedCollection` puts these exact config values in every record's envelope. Tile file headers carry a different source/license, hardcoded per source class in `garganorn/database.py`, independent of this config.
 
 ## Getting source data
 
@@ -57,7 +57,7 @@ Use a smaller Geofabrik region for local testing — the default `north-america`
 
 `python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, and `density`, `idf`, and `covering` build the shared artifacts the sources depend on. Invoking it with no subcommand is an error — use `run`.
 
-Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes a parquet artifact alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless.
+Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless.
 
 Supported sources (for `run --source`):
 
@@ -101,7 +101,7 @@ Optional arguments (`run`, all sources):
 | `--max-per-tile` | `1000` | Maximum records per tile in the assignment grid, every source. It does not bound a division tile's exported record count, which follows geometry |
 | `--temp-directory` | DuckDB default | Volume DuckDB spills to when a stage exceeds `--memory-limit` |
 | `--max-temp-directory-size` | `250GB` | Ceiling on that spill; a runaway query fails with "temp directory full" instead of filling the volume |
-| `--export-workers` | CPU count | Threads for tile gzip compression |
+| `--export-workers` | unset (`ThreadPoolExecutor` default: `min(32, cpu_count + 4)`) | Threads for tile gzip compression |
 | `--force` | off | Rebuild every stage, ignoring artifact freshness |
 | `--config` | none | YAML config file; `run` reads `memory_limit`, `max_per_tile`, `temp_directory`, and `max_temp_directory_size` from the `pipeline:` section (`all` reads the rest) |
 
@@ -144,10 +144,10 @@ $ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getCoverage?collection=org.atgeo.pl
 {"tiles":["https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz","https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json.gz"]}
 ```
 
-Fetch one of those URLs directly — it's a gzipped JSON array of records, source/license included in the header so you don't need a separate lookup:
+Fetch one of those URLs directly — despite the `.json.gz` name, the server always decompresses it and returns plain JSON (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client); source/license are included in the header so you don't need a separate lookup:
 
 ```
-$ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz' | gunzip
+$ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz'
 {
   "collection": "org.atgeo.places.osm",
   "source": "https://www.openstreetmap.org/",

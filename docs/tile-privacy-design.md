@@ -2,7 +2,7 @@
 
 ## Problem
 
-A server-side search endpoint (`searchRecords`) requires the client to send
+A server-side search endpoint requires the client to send
 the full query — search terms, location, filters — to the server. For a
 gazetteer, this means the server learns where the user is, where they're
 going, and what they're looking for. Repeated queries build a movement
@@ -84,8 +84,8 @@ Key design decisions:
 ## Design principle
 
 The most trustworthy server is one that never receives the sensitive
-information in the first place. Phasing out `searchRecords` in favor of
-client-side search over tiles eliminates the query surveillance surface
+information in the first place. Avoiding a server-side search endpoint in
+favor of client-side search over tiles eliminates the query surveillance surface
 entirely. The coordinate precision restriction ensures that even the
 residual bbox signal is coarse enough to protect the user's physical
 location.

@@ -1,8 +1,8 @@
 -- covering_level.sql: one iteration of the covering level loop, run once per
 -- zoom level from cover_min_zoom to cover_max_zoom (inclusive).
 --
--- Preconditions: l_current and covering_out temp tables exist (see
--- covering_seed.sql). ${leaf} is substituted per level by stage_covering:
+-- Preconditions: l_current (see covering_seed.sql) and covering_out (see
+-- covering.py) temp tables exist. ${leaf} is substituted per level by stage_covering:
 -- FALSE below cover_min_leaf_zoom, `npoints <= V` between the floor and the
 -- cap, TRUE at cover_max_zoom.
 --

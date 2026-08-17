@@ -1,7 +1,8 @@
 -- Compute IDF scores per OSM primary category from raw node and way parquets.
 -- Uses _osm_category_case.sql snippet substitution to share CASE expression with osm_import.sql.
--- Filters to named elements only (tags['name'] IS NOT NULL).
--- No category whitelists/blacklists (global IDF).
+-- Numerator: named elements only (tags['name'] IS NOT NULL), any category.
+-- Denominator (N.total): named elements additionally passing the 23-key
+-- whitelist mirrored from _osm_category_case.sql, on both node and way arms.
 DROP TABLE IF EXISTS idf_scores;
 CREATE TABLE idf_scores AS
 SELECT

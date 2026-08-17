@@ -4,7 +4,7 @@ This document describes the data model for Overture Maps Places, as of its writi
 
 ## Overview
 
-Overture Maps provides free and open geospatial map data normalized to a common schema. The places theme contains 64M+ point representations of real-world entities including businesses, schools, hospitals, landmarks, and points of interest. The data is sourced from Meta and Microsoft and is available under a CDLA Permissive 2.0 license.
+Overture Maps provides free and open geospatial map data normalized to a common schema. The places theme contains 72.8M+ point representations of real-world entities including businesses, schools, hospitals, landmarks, and points of interest (72,783,221 as of the 2026-03-18.0 release; see `docs/wikimedia-importance-evaluation.md`). The data is sourced from nine contributing datasets, including Meta, Microsoft, and Foursquare, and is available under a CDLA Permissive 2.0 license.
 
 ## Places Dataset Schema
 

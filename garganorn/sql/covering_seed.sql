@@ -2,7 +2,7 @@
 --
 -- Preconditions (set up by stage_covering in covering.py before running this):
 --   - LOAD spatial; macros qk_tile_x, qk_tile_y, qk_env created
---   - ATTACH boundaries_db READ_ONLY AS bnd
+--   - ATTACH boundaries_db AS bnd (READ_ONLY)
 --   - TEMP TABLE z4_tiles(qk VARCHAR, xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
 --     populated with all cover_min_zoom tiles (256 rows at z4)
 --   - TEMP TABLE covering_out(tile_qk, boundary_id, level, geom) created

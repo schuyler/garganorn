@@ -4,11 +4,12 @@ Evaluated 2026-04-11. Not yet implemented.
 
 ## Problem
 
-Garganorn's importance formula (`60 * density + 40 * idf`) has no notability
-signal. For text-only queries without a bounding box, there is nothing to
-distinguish the Golden Gate Bridge from a nearby dentist's office with similar
-density. Both may survive the importance floor filter (≥52 for global queries),
-but rank equally in results.
+Garganorn's importance formula (`60 * density + 40 * idf` for places; division
+scoring differs — see `design-constraints.md`, "Importance scoring varies by
+entity type") has no notability signal. Garganorn doesn't serve text queries
+today — it registers only `getRecord` and `getCoverage` — but if it did, there
+would be nothing to distinguish the Golden Gate Bridge from a nearby dentist's
+office with similar density: both would rank equally.
 
 ## Nominatim's Approach
 
@@ -116,9 +117,10 @@ For connecting garganorn places to Wikipedia importance scores:
 ## Why It Matters
 
 The current importance formula measures "busy area" (density) and "unusual
-category" (IDF). Neither measures "famous." When a user types "Golden Gate
-Bridge" without a location, the system needs a signal that says this is a
-globally-known landmark, not just another POI in a dense area.
+category" (IDF). Neither measures "famous." If garganorn served text-only
+queries without a bounding box, the system would need a signal that says
+"Golden Gate Bridge" is a globally-known landmark, not just another POI in a
+dense area.
 
 Wikipedia importance directly measures notability — how much attention a
 place receives. Places with Wikidata QIDs skew toward exactly the class that

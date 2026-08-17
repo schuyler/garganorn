@@ -32,7 +32,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: Added unnecessary pipeline complexity and an extra file to manage. IDF can be computed inline during importance scoring directly from the places table.
 
-**Successor**: Inline IDF computation during importance scoring stage (see `design-constraints.md`, "IDF is computed from source parquet, not imported places table"). The `t_idf` temp table is created and consumed within the same DuckDB session as importance scoring.
+**Successor**: `quadtree.py`'s `idf` subcommand — a separate, freshness-gated CLI stage producing `<source>/idf.parquet`, passed back via `--idf-parquet` (the same shape as the build stage this section describes as discarded). The resulting `idf_scores` temp table is injected via `${idf_cte}` and dropped at the end of the source's import SQL.
 
 ## Double Metaphone Phonetic Index
 
@@ -40,7 +40,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: Character trigrams provide better cross-word matching (e.g., "pizza hut" generates `za `, `a h` trigrams) and simpler implementation. Full-string Jaro-Winkler scoring handles ranking effectively without token-level phonetic encoding.
 
-**Successor**: Trigram retrieval with full-string Jaro-Winkler scoring. See `database.py` (`_compute_trigrams()`, JW_THRESHOLD, JW_TOKEN_ALPHA).
+**Successor**: Trigram retrieval with full-string Jaro-Winkler scoring — itself since removed with the rest of the Jaro-Winkler machinery when server-side search was deleted (see "Token-Level Scoring with Length Penalty" below).
 
 ## Token-Level Scoring with Length Penalty
 
@@ -56,7 +56,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: DuckDB's zonemaps on sorted columns are sufficient. `name_index` is `ORDER BY trigram`, so DuckDB's min/max statistics per row group identify exact row groups containing each trigram. ART indexes on 616M rows are not buffer-managed and would consume unbounded RAM. The queries that most need optimization (multi-trigram) exceed the selectivity threshold where DuckDB would use the index.
 
-**Successor**: Sorted `name_index` with zone map pruning. No ART index needed.
+**Successor**: Sorted `name_index` with zone map pruning — itself removed with the rest of the trigram/Jaro-Winkler machinery when server-side search was deleted.
 
 ## External Density Parquet Attachment
 
@@ -64,7 +64,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Why discarded**: Added operational complexity—tracking a separate file, ensuring version compatibility, manual rebuild schedule. Density computation is fast enough to run inline during import.
 
-**Successor**: Density tiles computed during pipeline stage 2 (`density_extract`), stored in pipeline database rather than external Parquet. See `stages.py:stage_density_extract()`.
+**Successor**: `quadtree.py`'s standalone `density` subcommand writes `shared/density_tiles.parquet`, an external Parquet artifact — not database state; `all` runs it first, before `idf`, `overture_division`, and the remaining sources. See `stages.py:stage_density_extract()`.
 
 ## Lexicon Discovery via DID/WebFinger
 

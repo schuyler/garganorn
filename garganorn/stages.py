@@ -1299,8 +1299,9 @@ def stage_density_extract(parquet_glob: str, output_path: str, t0: float,
     and reused in importance computation across all place sources.
 
     Uses tmp+rename + finalize_artifact for atomicity; freshness gate uses
-    artifact_fresh() (meta-aware). Output sorted by tile_qk15 so zone-map
-    pruning works on tile-prefix filters downstream.
+    artifact_fresh() (meta-aware). Output sorted by tile_qk15 for
+    deterministic output; every consumer loads the file wholesale, so
+    nothing prunes it by tile prefix.
 
     Tile bounds (tile_xmin, tile_ymin, tile_xmax, tile_ymax) are computed
     in SQL using the qk_env() macro (garganorn/sql/qk_env_macro.sql), which

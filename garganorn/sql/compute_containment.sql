@@ -8,7 +8,7 @@
 --   collection_prefix : rkey NSID prefix (org.atgeo.places.overture.division)
 --
 -- Preconditions (set up by compute_containment before executing this):
---   - LOAD spatial; ATTACH boundaries_db READ_ONLY AS bnd
+--   - LOAD spatial; ATTACH boundaries_db AS bnd (READ_ONLY)
 --   - TABLE tile_assignments(place_id, tile_qk) in the working connection
 --   - TEMP TABLE cov, built once per z4 group from covering/<z4_prefix>.parquet
 --   - TEMP TABLE p(place_id, qk17, lon, lat), built once per batch from a
@@ -30,7 +30,8 @@
 -- here: this stage has no bbox pre-filter to need it.
 --
 -- Output: (tile_qk, place_id, relations_json) sorted (tile_qk, place_id).
--- Written directly to ${output_tmp} via COPY; caller renames to final path.
+-- Wrapped by compute_containment() in stages.py as COPY (this query) TO
+-- '<prefix>.parquet' under a .tmp/ dir the caller renames into place.
 
 WITH matches AS (
 ${arms}

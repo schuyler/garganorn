@@ -1,9 +1,9 @@
 # Gotchas
 
 Behaviors of the tools garganorn builds on — DuckDB, GeoParquet, Overture,
-QuackOSM — that cost real time to learn and are not discoverable from their
-documentation. Each entry states the behavior, where it bites, and why it
-matters.
+osmium, pytest — that cost real time to learn and are not discoverable from
+their documentation. Each entry states the behavior, where it bites, and why
+it matters.
 
 These are facts about software we did not write. They would still be true in a
 rewrite. Decisions about garganorn's own architecture belong in
@@ -19,10 +19,13 @@ R-tree spatial indexes are not used in JOIN ON conditions or subqueries.
 Workaround: materialize filtered results to a temp table via a top-level WHERE
 clause, then join against the temp table.
 
-**Applies to**: `garganorn/sql/covering_seed.sql` (containment pre-filter)
+**Applies to**: `garganorn/stages.py`, which creates `bnd_places_rtree ON
+bnd.places USING RTREE(geometry)`. Prospective: no query in the repo puts a
+geometry predicate against an indexed table in a top-level WHERE, so nothing
+here demonstrates the workaround — the rule constrains new SQL.
 
-**Why it matters**: Without this workaround, spatial queries degrade to
-full-table scans against large geometry columns, causing 100x+ latency.
+**Why it matters**: without this workaround, a query that needs the index
+degrades to a full-table scan against the geometry column.
 
 ### Zone maps require sorted columns
 
@@ -30,7 +33,9 @@ Zone maps (min/max statistics per row group) only accelerate queries when the
 filtered column is physically sorted in the parquet file. Removing ORDER BY from
 a CTAS that writes parquet can cause 10-24x query regression on filtered reads.
 
-**Applies to**: All `*_import.sql` files, `density_extract.sql`, manifest writes
+**Applies to**: `garganorn/stages.py`, `garganorn/quadtree.py`,
+`garganorn/covering.py` (the `COPY (... ORDER BY ...)` parquet writes), and
+the ordered SELECT in `compute_containment.sql`.
 
 **Why it matters**: The pipeline uses parquet as its interchange format.
 Unsorted parquet defeats DuckDB's built-in zonemap pushdown.
@@ -41,7 +46,9 @@ Columnar storage means every column mutation is a full table copy. Be
 INSERT/CTAS-only; never UPDATE a column or ALTER TABLE ADD COLUMN on a large
 table.
 
-**Applies to**: All SQL files, `stages.py`
+**Applies to**: the invariant that production stays INSERT/CTAS-only; the
+repo's one `ALTER TABLE` (`covering_level.sql`, `RENAME TO`) is a
+metadata-only rename, not a column mutation.
 
 **Why it matters**: An UPDATE on a 38M-row table can take as long as the
 original import.
@@ -51,8 +58,7 @@ original import.
 CTAS with ORDER BY sorts multi-threaded but can exhaust memory on large
 datasets. Lower `memory_limit` below system RAM to leave headroom.
 
-**Applies to**: `overture_division_import.sql` (ST_Hilbert sort),
-`export_boundaries_db()` (Hilbert sort)
+**Applies to**: `stages.py:stage_division_import` (ST_Hilbert sort)
 
 **Why it matters**: OOM during sort kills the pipeline. The memory limit
 parameter exists to prevent this.
@@ -63,10 +69,13 @@ Unnesting a NULL or empty array removes the row from the result set entirely —
 no error, no NULL output row. Correct SQL semantics, but it changes row counts
 unexpectedly.
 
-**Applies to**: `overture_place_import.sql` (name variant unnesting)
+**Applies to**: `garganorn/sql/division_containment.sql` (`unnest(d.hierarchies)`
+and `unnest(chain)`, chained) and `garganorn/sql/osm_import.sql`
+(`UNNEST(nds).ref` in `way_node_refs`).
 
-**Why it matters**: Places with NULL category arrays get no IDF score (defaults
-to 0 via coalesce).
+**Why it matters**: a division whose `hierarchies` is NULL or empty drops out
+of the containment chain entirely, and a way with NULL `nds` drops out of
+`way_node_refs`.
 
 ### No unbounded complex-state aggregation
 
@@ -74,8 +83,10 @@ DuckDB cannot spill intermediate state for `list()`, `string_agg()`, and other
 holistic aggregates. Any query using them must run over a bounded partition —
 per-tile, or per qk4 prefix.
 
-**Applies to**: every SQL file; `compute_containment` partitions at z6 for
-exactly this reason
+**Applies to**: every SQL file, with one exception — `division_containment.sql`
+runs `list()` over the whole relation in one unpartitioned `CREATE TEMP
+TABLE`; its z6 partitioning applies only to the subsequent per-prefix `COPY`.
+`compute_containment` partitions at z6 for exactly this reason.
 
 **Why it matters**: it is the most reliable way to exhaust memory on the 72 GB
 target, and it has done so. Treat it as a review criterion for new SQL, not a
@@ -136,8 +147,9 @@ immediately if `INSTALL spatial; LOAD spatial` has not run on that connection.
 Correct order on any ephemeral connection: load the extension, create the macros,
 then run the SQL that uses them.
 
-**Applies to**: `covering.py:_load_qk_env_macros`; any standalone runner of a
-`.sql` that references a macro
+**Applies to**: `covering.py:_load_qk_env_macros` and its second definition
+`stages.py:_load_qk_env_macros`; any standalone runner of a `.sql` that
+references a macro
 
 **Why it matters**: putting `LOAD spatial` inside the `.sql` that runs *after* the
 macros are created is too late, and the error names the function rather than the
@@ -162,9 +174,10 @@ the limit is itself the value that wraps. See the Coordinate System entry in
 ### No native `json_strip_nulls()`
 
 The custom `strip_json_nulls()` helper exists only because DuckDB has no native
-equivalent ([PR #21748](https://github.com/duckdb/duckdb/pull/21748)). It may
-fail on JSON keys containing `{`, `}`, `"`, or `,`. No failures observed in
-practice.
+equivalent ([PR #21748](https://github.com/duckdb/duckdb/pull/21748)). The
+macro uses `json_keys` plus a `$."key"` JSONPath, so it fails on JSON keys
+containing `"` — `{`, `}`, and `,` round-trip correctly. No failures observed
+in practice.
 
 **Applies to**: `garganorn/sql/overture_place_export_tiles.sql`,
 `garganorn/sql/overture_division_export_tiles.sql`
@@ -172,21 +185,55 @@ practice.
 **Why it matters**: replace it with the native function when that lands rather
 than hardening the workaround.
 
-### Version spread — dev pins 1.5.1, production runs 1.4.4
+### 1.4.4 is pinned exactly — write SQL to its dialect
 
-All SQL must run unchanged on both. Consequences:
+`pyproject.toml` pins `duckdb==1.4.4`, so newer syntax is unavailable rather
+than merely risky:
 
-- `ATTACH 'p' AS x (READ_ONLY)` is the only attach form that parses on both
-  (`... READ_ONLY AS` parses on neither).
-- `COPY`'s `KV_METADATA` option is 1.4+ only, which is why parquet/DB metadata
-  lives in JSON sidecars (`.meta.json`, `_meta.json`, `manifest.json`) rather
-  than embedded key-value metadata.
+- `ATTACH 'p' AS x (READ_ONLY)` is the form that parses (`... READ_ONLY AS`
+  does not).
 - `map_filter` does not exist — use
   `map_from_entries(list_filter(map_entries(m), e -> ...))`.
 - The `.transform()` method syntax is unsupported — use `list_transform(list, fn)`.
-- QuackOSM breaks on 1.5.x (GEOMETRY type conflict).
+- `COPY`'s `KV_METADATA` option is available, but parquet/DB metadata lives in
+  JSON sidecars (`.meta.json`, `_meta.json`, `manifest.json`) anyway.
 
-**Applies to**: all SQL files; run `.venv/bin/pytest` to test against the dev pin.
+**Applies to**: all SQL files; `.venv/bin/pytest` runs against the pin.
+
+**Why it matters**: an unavailable function fails at bind time, so a query
+using one is dead on every row rather than degraded — but only when that
+branch is first reached, which may be deep into a build.
+
+### `tags['key'][1]` indexes into the string, not a list
+
+DuckDB `MAP(VARCHAR, VARCHAR)` returns the value directly from `tags['key']`.
+**`tags['key'][1]` extracts the first character** of that value rather than
+the first element of a list — silently, with no error.
+
+**Applies to**: `garganorn/sql/osm_import.sql`,
+`garganorn/sql/_osm_category_case.sql`, `garganorn/sql/osm_idf.sql`
+
+**Why it matters**: the `[1]` form is what a reader familiar with
+array-valued tags will write, and it produces plausible one-character garbage
+instead of failing.
+
+### The progress bar emits nothing until the statement finishes
+
+When stdout is not a tty, `enable_progress_bar` is not a liveness signal. A
+measured 5.7s query with `progress_bar_time=100` emitted exactly one carriage
+return — the final `100% ███… (00:00:05.71 elapsed)`. No intermediate redraws
+land, and it is not tty-aware, so the block characters reach the log anyway,
+all at once, after the thing you wanted to watch has finished.
+
+**Applies to**: any stage whose progress you would want logged — the log
+file itself (`tile-build.log`) is written by the Ansible role in the
+separate `atgeo-server-config` repo (`roles/garganorn/tasks/tiles.yml`), not
+by anything in this one
+
+**Why it matters**: enabling it can never make a silent stage visible. Log
+liveness has to come from Python-side logging, which needs a loop to hook — a
+single-statement stage has no such hook. To judge liveness without code,
+observe from outside: process CPU time, spill-dir size, output-file mtimes.
 
 ---
 
@@ -243,8 +290,12 @@ Where a bbox filter is derived from a geometry's min/max longitude,
 tile-seed set built as the union of the two lobes.
 
 **Applies to**: `stages.py` (`bboxes_intersect` wrap branches) and
-`covering_seed.sql`'s join implement this. The import-side bbox filter
-does not, so features crossing ±180° are dropped there.
+`covering_seed.sql`'s join implement this. The import-side bbox filters do
+not — `overture_place_import.sql`, `overture_division_import.sql` (two
+sites: the bbox filter and the density-tile overlap join), and
+`osm_import.sql` (two sites) use the naive `BETWEEN` shape this entry's
+first paragraph names as the bug, so features crossing ±180° are dropped
+there.
 
 **Why it matters**: it affects Pacific data — eastern Russia, Fiji, Antarctica. A
 global build makes it reachable where a CONUS-bounded one did not.
@@ -286,21 +337,60 @@ flags actually used rather than inferring from size.
 
 ---
 
-## QuackOSM
+## osmium
 
-### Tags are `MAP(VARCHAR, VARCHAR)`, not `VARCHAR[]`
+### libosmium caps its decode pool at `hardware_concurrency - 2`
 
-`tags['key']` returns the value directly. **`tags['key'][1]` extracts the first
-character** of that value rather than the first element of a list — silently, with
-no error.
+Measured on a 4-core host, `osmium
+tags-filter` over `planet.osm.pbf` runs 5 threads — main, two
+`_osmium_worker`, `_osmium_pbf_in`, `_osmium_write` — and saturates only 2.33
+of 4 cores, because the pool is sized at two. The work is decode-bound, not
+I/O-bound: both workers pegged at 99.8% while the reader idled at 9.8%.
+`OSMIUM_POOL_THREADS` overrides the default; setting it to 6 yields 7 threads
+and 4.07 of 4 cores.
 
-**Applies to**: `garganorn/sql/osm_import.sql`, `garganorn/sql/overture_place_export_tiles.sql`,
-`garganorn/sql/overture_division_export_tiles.sql`
+**Applies to**: `scripts/extract-osm-parquet.sh`, which exports
+`OSMIUM_POOL_THREADS="${OSMIUM_POOL_THREADS:-$(getconf _NPROCESSORS_ONLN)}"`
+so all four osmium calls inherit it
 
-**Why it matters**: the `[1]` form is what a reader familiar with array-valued
-tags will write, and it produces plausible one-character garbage instead of
-failing.
+**Why it matters**: faster storage does not help a decode-bound pass, and the
+default leaves cores idle already at four — the host this was measured on —
+so the margin only grows on hosts with more. The size of the
+speedup from raising the pool is unmeasured — a bytes-at-SIGKILL proxy
+returned identical totals for pool=4 and pool=6, which is a flush-boundary
+artifact rather than throughput.
 
-### Temp disk is ~2.4x PBF size
+### `osmium tags-filter` refuses stdin when it must add referenced objects
 
-Not the 10x an early estimate assumed.
+A pass that resolves referenced objects cannot read from a pipe, and `-R` on a
+`w/building` pass yields ways with zero nodes. So a two-pass filter cannot be
+piped together and the large intermediate is unavoidable.
+
+**Applies to**: `scripts/extract-osm-parquet.sh` (the buildings chain)
+
+**Why it matters**: the obvious optimization — pipe pass one into pass two —
+is not available, and the intermediate has to be budgeted for rather than
+designed away.
+
+---
+
+## pytest
+
+### The bytecode cache lies after a mid-run edit
+
+If the tree changes while a suite runs, or between runs sharing a cache,
+pytest's assertion-rewritten `.pyc` files can execute stale code while the
+traceback renders the **current** source. The tell is a mismatch between the
+displayed `>` line and the reported assertion — source reading `assert
+"generated_at" in manifest` while the error says `assert 'source' in {...}`.
+
+Clear it before trusting a result:
+
+```
+find garganorn tests scripts -name '__pycache__' -exec rm -rf {} +
+```
+
+**Applies to**: any suite run against a tree being edited concurrently
+
+**Why it matters**: the failure looks like a defect in the code under test,
+and the traceback actively misleads by showing source that did not run.

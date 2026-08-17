@@ -34,7 +34,7 @@ LEFT JOIN best_zoom bz ON bz.place_id = p.${pk_expr}
 WHERE p.qk17 IS NOT NULL
   AND length(p.qk17) = 17
   AND p.qk17 ~ '^[0-3]{17}$'
-ORDER BY tile_qk;  -- sort enables streaming GROUP BY in export query
+ORDER BY tile_qk;
 
 -- Drop temp tables (tile_counts is TEMP and would auto-drop at connection close,
 -- but dropping explicitly frees memory sooner)

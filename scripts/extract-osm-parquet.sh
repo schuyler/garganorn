@@ -173,9 +173,10 @@ else
         exit 1
     fi
 
-    # Buildings are way-only (SQL whitelist mirrors this) and reached in two
-    # passes: tags-filter can't read a pipe when it must add referenced
-    # objects, and -R would discard the node closure the centroid needs.
+    # Buildings are way-only (osm_import.sql's whitelist mirrors this;
+    # osm_idf.sql's does not) and reached in two passes: tags-filter can't
+    # read a pipe when it must add referenced objects, and -R would discard
+    # the node closure the centroid needs.
     echo "Filtering buildings with osmium tags-filter..."
     if ! osmium tags-filter "$pbf_path" w/building \
         --overwrite \

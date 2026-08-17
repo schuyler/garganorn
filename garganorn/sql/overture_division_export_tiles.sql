@@ -19,7 +19,7 @@
 -- values for optional fields (region, wikidata, population) which creates
 -- noisy output when embedded in tile JSON.
 -- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
--- it (merged in PR #21748, 2026-04-02; not yet in v1.5.1).
+-- it (merged in PR #21748, 2026-04-02; not in the pinned duckdb==1.4.4).
 CREATE OR REPLACE MACRO strip_json_nulls(js) AS
     map_from_entries(
         [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
