@@ -1,4 +1,5 @@
 import argparse
+import fcntl
 import logging
 import os
 import shutil
@@ -397,10 +398,28 @@ def _cmd_run(args, run_parser):
     )
 
 
+def _acquire_build_lock(output_dir):
+    """Exclusive flock so only one `quadtree all` run proceeds at a time.
+
+    The kernel releases the lock when the holding process exits for any
+    reason, including a crash or SIGKILL, so a dead run can never wedge
+    the next one the way a pgrep/PID-based check can.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    fd = os.open(os.path.join(output_dir, ".quadtree-all.lock"), os.O_CREAT | os.O_RDWR)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        os.close(fd)
+        raise SystemExit("quadtree all: another run holds the lock, refusing to start")
+    return fd
+
+
 def _cmd_all(args):
     """Orchestrate all configured sources: density → idf → division → others."""
     config = _load_pipeline_config(args.config)
     output_dir = config["output"]
+    _acquire_build_lock(output_dir)
     memory_limit = config.get("memory_limit", "48GB")
     temp_directory = config.get("temp_directory")
     max_temp_directory_size = config.get("max_temp_directory_size", "250GB")

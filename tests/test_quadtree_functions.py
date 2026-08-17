@@ -1,7 +1,11 @@
 """Tests for quadtree Python functions: quadkey_to_bbox, bboxes_intersect,
 BboxTooLarge, and TileManifest.
 """
+import fcntl
 import math
+import os
+import subprocess
+import sys
 
 import duckdb
 import pytest
@@ -11,6 +15,7 @@ from garganorn.quadtree import (
     TileManifest,
     bboxes_intersect,
     quadkey_to_bbox,
+    _acquire_build_lock,
 )
 
 POLE_YMAX = 90.0
@@ -282,3 +287,52 @@ class TestSummaryFallback:
             f"regular count (2) <= max_tiles (3) must answer from the "
             f"regular band only; got {urls}"
         )
+
+
+class TestAcquireBuildLock:
+    """_acquire_build_lock guards concurrent `quadtree all` runs with an
+    OS-level flock, so a killed holder can never wedge the next run."""
+
+    def test_succeeds_when_no_lock_held(self, tmp_path):
+        fd = _acquire_build_lock(str(tmp_path))
+        assert os.path.exists(tmp_path / ".quadtree-all.lock")
+        os.close(fd)
+
+    def test_raises_when_another_process_holds_it(self, tmp_path):
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, time; "
+             f"fd = open({str(tmp_path / '.quadtree-all.lock')!r}, 'w'); "
+             "fcntl.flock(fd, fcntl.LOCK_EX); time.sleep(30)"]
+        )
+        try:
+            for _ in range(50):
+                if (tmp_path / ".quadtree-all.lock").exists():
+                    break
+                import time as _time
+                _time.sleep(0.1)
+            with pytest.raises(SystemExit):
+                _acquire_build_lock(str(tmp_path))
+        finally:
+            holder.kill()
+            holder.wait()
+
+    def test_recovers_after_holder_is_killed(self, tmp_path):
+        """The requirement this guards: a crashed/killed run must not
+        permanently wedge the next `quadtree all` attempt."""
+        holder = subprocess.Popen(
+            [sys.executable, "-c",
+             "import fcntl, time; "
+             f"fd = open({str(tmp_path / '.quadtree-all.lock')!r}, 'w'); "
+             "fcntl.flock(fd, fcntl.LOCK_EX); time.sleep(30)"]
+        )
+        for _ in range(50):
+            if (tmp_path / ".quadtree-all.lock").exists():
+                break
+            import time as _time
+            _time.sleep(0.1)
+        holder.kill()
+        holder.wait()
+
+        fd = _acquire_build_lock(str(tmp_path))
+        os.close(fd)
