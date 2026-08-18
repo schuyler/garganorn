@@ -1,9 +1,15 @@
 # Garganorn Architectural Invariants
 
-Living reference of pipeline invariants and architectural rules garganorn's
-own code must satisfy. Each entry includes the constraint, why it exists,
-and where it applies. For behaviors of the third-party tools garganorn
-builds on, see `gotchas.md`.
+Non-trivial implications of garganorn's design requirements and its
+implementation choices taken together — consequences neither the
+requirement nor the code states on its own. An entry earns its place only
+if it can't be read off the file it binds; if it can, it belongs in a
+comment there. Each entry gives the constraint, why it exists, and where it
+applies.
+
+Above this sits the normative layer: `tile-privacy-design.md` states the
+principles that override implementation choices. Below it, `gotchas.md`
+records behaviors of the third-party tools garganorn builds on.
 
 ---
 
@@ -281,6 +287,21 @@ route can serve — checked at startup, not discovered at request time.
 
 **Applies to**: `garganorn/__main__.py` (`serve_tile` route, `base_url`
 check)
+
+### The bbox precision check is a backstop, not the mechanism
+
+Clients must snap to the 0.01° grid before sending; `_check_bbox_precision`
+refuses anything finer anyway, so a conforming client would never trip the
+check — which is not the same as redundant. Two things follow for anyone
+editing it. Don't replace the refusal with server-side snapping: that
+silences the only signal that a client is sending raw GPS. Don't fold it
+into `max_tiles`, which bounds a request's cost rather than its precision
+(see "The summary band is a coarse tile tier for region-less resolution");
+the two answer different threats and neither subsumes the other.
+`tile-privacy-design.md` holds the reasoning.
+
+**Applies to**: `garganorn/server.py` (`_check_bbox_precision`),
+`garganorn/lexicon/getCoverage.json`
 
 ---
 
