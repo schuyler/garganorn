@@ -27,6 +27,21 @@ SAMPLE_RECORD = {
     "attributes": {},
 }
 
+# A realistic org.atgeo.collection record value, matching
+# garganorn/lexicon/collection.json's schema, for OVERTURE_COLLECTION.
+SAMPLE_COLLECTION_RECORD = {
+    "collection": OVERTURE_COLLECTION,
+    "source": "https://overturemaps.org/",
+    "license": "https://docs.overturemaps.org/attribution/",
+    "generatedAt": "2026-01-01T00:00:00Z",
+    "recordCount": 1,
+    "extent": {"north": "37.80", "west": "-122.42", "south": "37.77", "east": "-122.41"},
+    "locationTypes": ["community.lexicon.location.geo"],
+    "containmentLevels": ["locality"],
+    "categories": [{"value": "coffee_shop", "count": 1}],
+    "attributes": ["name", "category"],
+}
+
 
 @pytest.fixture
 def client(tmp_path):
@@ -191,12 +206,15 @@ def _make_tile_config(tiles_dir, manifest_path, slug="overture-place",
     }
 
 
-def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True, rkey="r1"):
+def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True, rkey="r1",
+               collection_metadata=None):
     """Create tiles_root/<stamp>/ with a manifest (record_tiles: rkey -> qk),
     optionally a tile file at tiles_root/<stamp>/<qk6>/<qk>.json.gz, and --
     unless complete=False -- the manifest.json completeness marker (pass
     complete=False to simulate a run that crashed before writing it).
-    Returns the run directory."""
+    collection_metadata, if given, is written as collection.json in the run
+    directory, sibling to manifest.json -- omitted entirely simulates a build
+    from before the collection-metadata feature. Returns the run directory."""
     run_dir = tiles_root / stamp
     run_dir.mkdir(parents=True)
     manifest_path = run_dir / "manifest.duckdb"
@@ -208,6 +226,9 @@ def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True, 
         tile_subdir.mkdir(parents=True)
         with gzip.open(tile_subdir / f"{qk}.json.gz", "wb") as f:
             f.write(tile_content)
+    if collection_metadata is not None:
+        with open(run_dir / "collection.json", "w") as f:
+            json.dump(collection_metadata, f)
     return run_dir
 
 
@@ -719,3 +740,135 @@ def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):
         mock_load.return_value = ("places.atgeo.org", tiles_config)
         with pytest.raises(ValueError, match="base_url must end with '/overture-place'"):
             create_app()
+
+
+# ---------------------------------------------------------------------------
+# org.atgeo.describeGazetteer and org.atgeo.collection
+# ---------------------------------------------------------------------------
+
+def test_describe_gazetteer_endpoint_returns_did_and_collections(tmp_path):
+    """GET /xrpc/org.atgeo.describeGazetteer returns 200, cached for 1 hour,
+    with the did and the served collection's metadata URL."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config)
+    with app.test_client() as client:
+        resp = client.get("/xrpc/org.atgeo.describeGazetteer")
+
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+    data = resp.get_json()
+    assert data["did"] == "did:web:places.atgeo.org"
+    assert data["collections"] == [{
+        "collection": OVERTURE_COLLECTION,
+        "metadata": f"https://places.atgeo.org/org.atgeo.collection/{OVERTURE_COLLECTION}",
+    }]
+
+
+def test_describe_gazetteer_lexicon_route_lacks_cache_control(tmp_path):
+    """GET /<nsid> (the lexicon route) for org.atgeo.describeGazetteer must
+    not carry the XRPC cache header -- same guard as
+    test_getcoverage_lexicon_route_lacks_cache_control, for the new NSID:
+    request.endpoint == 'xrpc-endpoint' is what keeps the header off this
+    route, not view_args['nsid'] alone."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000")
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config)
+    with app.test_client() as client:
+        resp = client.get("/org.atgeo.describeGazetteer")
+
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") != "public, max-age=3600"
+
+
+def test_get_collection_metadata_record_returns_bare_value(tmp_path):
+    """GET /org.atgeo.collection/{nsid} returns the bare record value (not
+    the getRecord envelope) through the existing get_resource route."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config)
+    with app.test_client() as client:
+        resp = client.get(f"/org.atgeo.collection/{OVERTURE_COLLECTION}")
+
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data == SAMPLE_COLLECTION_RECORD
+    assert "uri" not in data
+
+
+def test_get_collection_metadata_record_unknown_nsid_404s(tmp_path):
+    """GET /org.atgeo.collection/{unknown-nsid} returns 404 RecordNotFound --
+    org.atgeo.collection is itself a known collection (a metadata record
+    exists for OVERTURE_COLLECTION); the requested rkey just isn't one of
+    its keys."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config)
+    with app.test_client() as client:
+        resp = client.get("/org.atgeo.collection/org.atgeo.places.nonexistent")
+
+    assert resp.status_code == 404
+    data = resp.get_json()
+    assert data is not None
+    assert data.get("error") == "RecordNotFound"
+
+
+def test_new_lexicons_served_at_nsid_route(client):
+    """Both new lexicon documents are served at GET /<nsid>, like every other
+    lexicon (see test_lexicon_known_nsid)."""
+    resp = client.get("/org.atgeo.describeGazetteer")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["id"] == "org.atgeo.describeGazetteer"
+    assert data["lexicon"] == 1
+
+    resp = client.get("/org.atgeo.collection")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["id"] == "org.atgeo.collection"
+    assert data["lexicon"] == 1
+
+
+def test_missing_collection_json_omits_metadata_and_404s_on_fetch(tmp_path):
+    """A run dir without collection.json (a build from before this feature)
+    still lists its collection via describeGazetteer, just without a
+    'metadata' link, and get_record on org.atgeo.collection for that nsid
+    returns RecordNotFound -- degraded but truthful."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000")  # no collection_metadata
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config)
+    with app.test_client() as client:
+        resp = client.get("/xrpc/org.atgeo.describeGazetteer")
+        assert resp.status_code == 200
+        assert resp.get_json()["collections"] == [{"collection": OVERTURE_COLLECTION}]
+
+        resp = client.get(f"/org.atgeo.collection/{OVERTURE_COLLECTION}")
+        assert resp.status_code == 404
+        data = resp.get_json()
+        assert data is not None
+        assert data.get("error") == "RecordNotFound"

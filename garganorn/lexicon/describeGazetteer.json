@@ -1,0 +1,40 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.describeGazetteer",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Enumerates the collections this gazetteer serves. The list is authoritative: a collection absent from it returns CollectionNotFound from org.atgeo.getCoverage.",
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "object",
+                    "required": ["did", "collections"],
+                    "properties": {
+                        "did": {
+                            "type": "string",
+                            "format": "did",
+                            "description": "The DID this deployment identifies as, matching /.well-known/did.json."
+                        },
+                        "collections": {
+                            "type": "array",
+                            "items": {"type": "ref", "ref": "#servedCollection"}
+                        }
+                    }
+                }
+            }
+        },
+        "servedCollection": {
+            "type": "object",
+            "required": ["collection"],
+            "properties": {
+                "collection": {"type": "string", "format": "nsid"},
+                "metadata": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URL of this collection's org.atgeo.collection metadata record. Absent when the serving build predates metadata generation."
+                }
+            }
+        }
+    }
+}

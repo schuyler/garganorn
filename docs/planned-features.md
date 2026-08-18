@@ -8,42 +8,21 @@ document is scoped for implementation until its section says so.
 
 ## Collection and service metadata
 
-Status: proposed, not started. No design has been reviewed.
+Status: implemented (`org.atgeo.describeGazetteer`, `org.atgeo.collection`;
+see `pipeline-artifacts.md`'s `stage_export` section). What remains open:
 
-There is no way to ask a gazetteer what it serves. `atgeo-spec.md` puts it
-plainly — "Ask `getCoverage`; a collection it doesn't recognize is a
-collection the deployment doesn't serve" — which is discovery by guessing an
-NSID and reading an error. And there is no way to ask what a collection *is*:
-`source` and `license` arrive in every tile header, so a client learns them
-only by fetching a tile in a region it already knows about, and everything
-else about a collection is undocumented at runtime.
-
-Two pieces, probably:
-
-**Collection metadata.** What a client needs before it can decide whether a
-collection is usable: source and license without fetching a tile; the
-attribute and category vocabulary, which is the source's own and differs
-between collections; which members of the location union the collection
-actually emits; which containment levels its records carry; spatial extent,
-record count, and when it was last built.
-
-**Service metadata.** The list of collections a deployment serves, so a
-client can enumerate instead of guess. `org.atgeo.tiles.service.json`, the
-draft lexicon sitting in this directory, sketches an adjacent version of this
-as announcement records in an operator's repo; whether that or a plain XRPC
-method is the right shape is part of what needs designing.
-
-Worth being clear about what this does *not* solve. Place categories and
-attribute shapes are not standardized across sources, and describing two
-incompatible vocabularies does not reconcile them. An application that does
-anything with attributes will still pick one collection and stay there.
-Metadata makes that choice informed; it doesn't make it unnecessary.
-
-Open questions: whether this is one XRPC method or two; whether it rides on
-the existing lexicon-serving route (`GET /{nsid}`) rather than being new
-surface; how a category vocabulary gets described in a way a client can act
-on rather than merely display; and whether any of it is worth building before
-a second gazetteer deployment exists to be discovered.
+- A DID-based discovery layer, so a client can learn a service *exists and
+  what kind it is* before calling any XRPC method on it — resolved via the
+  operator's DID, not the service's own HTTP surface. `describeGazetteer`
+  answers from a DID a client already has; nothing yet gets a client that
+  DID in the first place.
+- An actionable category/attribute vocabulary, distinct from the current
+  displayable one — a client can render `categories`/`attributes` today but
+  can't act on them (e.g. filter a query by category) without additional
+  per-collection structure.
+- Whether summary-band facts (band existence, its top-N cap, its record
+  count) belong in `org.atgeo.collection` — deliberately excluded from the
+  current record for lack of an approved requirement.
 
 ## Two introductory tutorials, in both directions
 

@@ -1,4 +1,4 @@
-import gzip, os, logging
+import gzip, json, os, logging
 from flask import Flask, abort, request, Response
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
@@ -16,6 +16,7 @@ def create_app():
     app.logger.setLevel(logging.INFO)
     tile_manifests = {}
     tile_collections = {}
+    collection_metadata = {}
     max_coverage_tiles = 50
     tile_dirs = {}  # slug -> tiles_dir
     if tiles_config:
@@ -50,6 +51,10 @@ def create_app():
                 stamp = os.path.basename(run_dir)
                 tiles_root = os.path.dirname(run_dir)
                 tile_manifests[collection] = TileManifest(manifest_path, f"{base_url}/{stamp}")
+                collection_json_path = os.path.join(run_dir, "collection.json")
+                if os.path.isfile(collection_json_path):
+                    with open(collection_json_path) as f:
+                        collection_metadata[collection] = json.load(f)
                 if "tiles_dir" in coll_cfg:
                     tile_collections[collection] = TileBackedCollection(
                         collection=collection,
@@ -70,7 +75,8 @@ def create_app():
         max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
     gazetteer = Server(repo, app.logger,
                        tile_manifests=tile_manifests, tile_collections=tile_collections,
-                       max_coverage_tiles=max_coverage_tiles)
+                       max_coverage_tiles=max_coverage_tiles,
+                       collection_metadata=collection_metadata)
     init_flask(gazetteer.server, app)
 
     lexicon_map = gazetteer.lexicon_map
@@ -128,11 +134,13 @@ def create_app():
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 
+    CACHED_QUERIES = {"org.atgeo.getCoverage", "org.atgeo.describeGazetteer"}
+
     @app.after_request
     def add_coverage_cache_control(response):
         if (
             request.endpoint == "xrpc-endpoint"
-            and request.view_args.get("nsid") == "org.atgeo.getCoverage"
+            and request.view_args.get("nsid") in CACHED_QUERIES
             and response.status_code == 200
         ):
             response.headers["Cache-Control"] = "public, max-age=3600"

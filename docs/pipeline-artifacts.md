@@ -358,6 +358,43 @@ references come from the covering artifact rather than their own `qk17`,
 so a places-side filter would drop them silently. A second export
 mechanism is not worth buying back a few dozen GB.
 
+**`collection.json`**: `write_collection_json` runs between
+`write_manifest_db` and `write_manifest`, writing the `org.atgeo.collection`
+record value as `collection.json`, sibling to `manifest.json` in the run
+dir. This seam is the only point where every input is simultaneously in
+hand: the per-tile histogram, the freshly written `record_tiles`,
+`places.parquet`, the containment artifacts, and the export's single
+`run_now`. `write_manifest` still runs last, so `manifest.json` stays the
+sole completeness marker — an interrupted run can leave `collection.json`
+on disk without `manifest.json`, same as any other partial output. A
+zero-tile run omits `collection.json` entirely rather than fabricate a
+required `extent`. `idf.parquet` joins `stage_export`'s freshness inputs
+for `overture_place` and `osm` (divisions have no IDF artifact), so a
+category-vocabulary refresh forces a re-export.
+
+Most fields are read straight from artifacts already open for the tile
+export (`source`/`license` from the source class, `recordCount` from
+`record_tiles`, `extent` from the regular-band quadkey histogram,
+`containmentLevels` from the containment artifacts mapped through
+`LEVEL_VOCAB`). `categories` comes from `idf.parquet` for `overture_place`
+and `osm`, and from `GROUP BY subtype` over `places.parquet` for
+`overture_division`. `locationTypes` is `community.lexicon.location.geo`
+for `overture_place` (plus `.address` iff at least one exported record has
+a country-bearing address) and for `osm` (unconditional, one location per
+record), and `.bbox` for `overture_division` (unconditional). `attributes`
+is source-specific: `overture_place` and
+`overture_division` capture it directly from `tile_export`'s rendered JSON
+on the export connection (`json_keys(record_json, '$.attributes')`) — the
+actual served shape, immune by construction to any upstream column
+filtering. `osm` instead reads `places.parquet`'s `tags` column directly,
+to avoid a full JSON-materialization scan over planet-scale data; because
+`osm_import.sql` deliberately strips each record's primary-category key out
+of `tags` (it's already carried in the separate `primary_category` column,
+and `osm_export_tiles.sql` re-adds it at export time via `map_concat`),
+`write_collection_json`'s OSM branch closes the same gap by unioning in the
+category keys already fetched from `idf.parquet` — reusing that read rather
+than re-deriving from `tags` a second time.
+
 ## How the stages compose
 
 Each stage above is independently freshness-gated, so the `density`, `idf` and

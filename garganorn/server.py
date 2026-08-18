@@ -31,6 +31,7 @@ def load_lexicons():
     return lexicons
 
 LEXICON_SCHEMA_COLLECTION = "com.atproto.lexicon.schema"
+COLLECTION_METADATA_COLLECTION = "org.atgeo.collection"
 
 
 class Server:
@@ -40,11 +41,13 @@ class Server:
     }
 
     def __init__(self, repo, logger, tile_manifests=None,
-                 tile_collections=None, max_coverage_tiles=50):
+                 tile_collections=None, max_coverage_tiles=50,
+                 collection_metadata=None):
         self.repo = repo
         self.tile_manifests = tile_manifests or {}
         self.tile_collections = tile_collections or {}
         self.max_coverage_tiles = max_coverage_tiles
+        self.collection_metadata = collection_metadata or {}
         self.lexicons = load_lexicons()
         self.lexicon_map = {lex["id"]: lex for lex in self.lexicons}
         self.server = lexrpc.Server(lexicons=self.lexicons)
@@ -53,6 +56,7 @@ class Server:
             """Register bound methods with the server."""
             self.server.register(name, getattr(self, method))
         self.server.register("org.atgeo.getCoverage", self.get_coverage)
+        self.server.register("org.atgeo.describeGazetteer", self.describe_gazetteer)
 
     def record_uri(self, collection, rkey):
         return envelope.record_uri(self.repo, collection, rkey)
@@ -69,6 +73,22 @@ class Server:
             return {
                 "uri": f"at://did:web:{self.repo}/{LEXICON_SCHEMA_COLLECTION}/{rkey}",
                 "value": lexicon,
+            }
+
+        # Collection metadata: served from the boot-loaded in-memory map,
+        # keyed by the described collection's own NSID.
+        if collection == COLLECTION_METADATA_COLLECTION:
+            described = self.collection_metadata.get(rkey)
+            if described is None:
+                raise XrpcError(
+                    f"Record {rkey} not found in collection {collection}",
+                    "RecordNotFound",
+                )
+            return {
+                "uri": self.record_uri(COLLECTION_METADATA_COLLECTION, rkey),
+                "source": described["source"],
+                "license": described["license"],
+                "value": described,
             }
 
         start_time = time.perf_counter()
@@ -95,6 +115,17 @@ class Server:
                 "elapsed_ms": run_time
             }
         }
+
+    def describe_gazetteer(self, _):
+        """Enumerate served collections. The list is tile_manifests' keys --
+        the same map get_coverage consults for CollectionNotFound (R1)."""
+        collections = []
+        for collection in self.tile_manifests:
+            entry = {"collection": collection}
+            if collection in self.collection_metadata:
+                entry["metadata"] = self.record_uri(COLLECTION_METADATA_COLLECTION, collection)
+            collections.append(entry)
+        return {"did": f"did:web:{self.repo}", "collections": collections}
 
     def _parse_bbox(self, bbox_str):
         """Parse and validate bbox string 'xmin,ymin,xmax,ymax'. Returns tuple or raises XrpcError."""

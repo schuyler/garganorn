@@ -215,7 +215,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                  t0, export_workers=export_workers, memory_limit=memory_limit,
                  temp_directory=temp_directory,
                  max_temp_directory_size=max_temp_directory_size,
-                 force=force)
+                 force=force, idf_parquet=idf_parquet)
 
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
 

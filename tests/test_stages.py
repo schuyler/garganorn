@@ -20,11 +20,13 @@ import json
 import gzip
 import logging
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 import duckdb
+import lexrpc
 
 from garganorn.stages import (
     stage_import,
@@ -36,9 +38,12 @@ from garganorn.stages import (
     write_manifest,
     write_manifest_db,
     _coord_exprs,
+    quadkey_to_bbox,
 )
 from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
+from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline, SOURCES
+from garganorn.server import load_lexicons
 from tests.duckdb_spy import spy_on_duckdb_connect
 
 
@@ -1949,4 +1954,451 @@ class TestMaxTempDirectorySizeThreading:
         assert calls[-1].get("max_temp_directory_size") == "", (
             f"an explicit empty string must reach run_pipeline unchanged, "
             f"not be replaced with the 250GB default; got kwargs={calls[-1]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# collection.json: the org.atgeo.collection record value, written by
+# stage_export between write_manifest_db and write_manifest (see
+# pipeline-artifacts.md's stage_export section). Build-side only;
+# serve-side coverage lives in test_app.py/test_server.py.
+# ---------------------------------------------------------------------------
+
+class TestCollectionMetadata:
+    """stage_export writes collection.json (the org.atgeo.collection record
+    value) into the run dir, derived from the same inputs as the tiles."""
+
+    def _build_export_inputs(self, overture_parquet, tmp_path, subdir):
+        return _build_export_inputs(overture_parquet, tmp_path, subdir)
+
+    def _run_export_with_idf(self, overture_parquet, tmp_path, subdir):
+        """Build export inputs, compute idf.parquet, run stage_export with
+        idf_parquet=... . Returns (run_dir, idf_parquet, places_parquet)."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, subdir
+        )
+        idf_parquet = str(tmp_path / subdir / "idf.parquet")
+        stage_idf("overture_place", overture_parquet, idf_parquet, time.monotonic(), force=True)
+        tiles_root = str(tmp_path / f"tiles_{subdir}")
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, ta_parquet, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB",
+            force=True, idf_parquet=idf_parquet,
+        ))
+        return run_dir, idf_parquet, places_parquet
+
+    def test_collection_json_written_in_run_dir(self, overture_parquet, tmp_path):
+        """An exported fixture run contains collection.json, sibling to manifest.json."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm1")
+        assert (run_dir / "collection.json").exists(), (
+            f"collection.json must be written into the run dir; run_dir={run_dir}, "
+            f"contents={list(run_dir.iterdir())}"
+        )
+
+    def test_required_fields_present_and_collection_value(self, overture_parquet, tmp_path):
+        """Every required org.atgeo.collection key is present; collection ==
+        org.atgeo.places.overture.place."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm2")
+        collection = json.loads((run_dir / "collection.json").read_text())
+        required = {"collection", "source", "license", "generatedAt",
+                    "recordCount", "extent", "locationTypes"}
+        missing = required - set(collection)
+        assert not missing, f"collection.json missing required keys: {missing}"
+        assert collection["collection"] == "org.atgeo.places.overture.place"
+
+    def test_source_license_attribution_match_tile_envelope(self, overture_parquet, tmp_path):
+        """source/license/attribution equal OverturePlaces' class constants,
+        and equal the values a real tile of the same run carries (R2)."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm3")
+        collection = json.loads((run_dir / "collection.json").read_text())
+        tile = _read_one_tile(run_dir)
+
+        assert collection["source"] == OverturePlaces.source_url == tile["source"]
+        assert collection["license"] == OverturePlaces.license_url == tile["license"]
+        assert collection.get("attribution") == OverturePlaces.attribution
+
+    def test_record_count_equals_distinct_rkeys_in_manifest_db(self, overture_parquet, tmp_path):
+        """recordCount == COUNT(DISTINCT rkey) FROM record_tiles in manifest.duckdb."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm4")
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        con = duckdb.connect(str(run_dir / "manifest.duckdb"), read_only=True)
+        expected = con.execute("SELECT COUNT(DISTINCT rkey) FROM record_tiles").fetchone()[0]
+        con.close()
+
+        assert collection["recordCount"] == expected
+
+    def test_generated_at_matches_manifest_json(self, overture_parquet, tmp_path):
+        """generatedAt equals manifest.json's generated_at (the single run_now)."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm5")
+        collection = json.loads((run_dir / "collection.json").read_text())
+        manifest = json.loads((run_dir / "manifest.json").read_text())
+
+        assert collection["generatedAt"] == manifest["generated_at"]
+
+    def test_categories_match_idf_parquet(self, overture_parquet, tmp_path):
+        """categories carries idf.parquet's (category, n_places) pairs,
+        descending by count. Tie order among equal counts is unspecified, so
+        only the value set and the descending property are pinned."""
+        run_dir, idf_parquet, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm6")
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        con = duckdb.connect()
+        rows = con.execute(
+            f"SELECT category, n_places FROM read_parquet('{idf_parquet}')"
+        ).fetchall()
+        con.close()
+        expected_pairs = {(cat, n) for cat, n in rows}
+
+        categories = collection.get("categories")
+        assert categories, "categories must be present and non-empty for overture_place"
+        actual_pairs = {(c["value"], c["count"]) for c in categories}
+        assert actual_pairs == expected_pairs, (
+            f"categories must match idf.parquet's (category, n_places) pairs; "
+            f"expected {expected_pairs}, got {actual_pairs}"
+        )
+        counts = [c["count"] for c in categories]
+        assert counts == sorted(counts, reverse=True), (
+            f"categories must be descending by count; got counts={counts}"
+        )
+
+    def test_extent_contains_every_exported_point(self, overture_parquet, tmp_path):
+        """extent (community.lexicon.location.bbox) equals the union bbox of
+        the run's regular-band tile quadkeys (len(qk) >= 6, recovered from
+        the on-disk <qk[:6]>/<qk>.json.gz layout) via quadkey_to_bbox, and is
+        rendered as decimal strings."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, "cm7"
+        )
+        tiles_root = str(tmp_path / "tiles_cm7")
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, ta_parquet, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+        ))
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        quadkeys = [p.name[: -len(".json.gz")] for p in run_dir.glob("*/*.json.gz")]
+        regular_qks = [qk for qk in quadkeys if len(qk) >= 6]
+        assert regular_qks, "expected at least one regular-band tile quadkey on disk"
+        bboxes = [quadkey_to_bbox(qk) for qk in regular_qks]
+        expected = {
+            "west": min(b[0] for b in bboxes),
+            "south": min(b[1] for b in bboxes),
+            "east": max(b[2] for b in bboxes),
+            "north": max(b[3] for b in bboxes),
+        }
+
+        extent = collection["extent"]
+        for key in expected:
+            assert isinstance(extent[key], str) and re.match(r"^-?\d+\.\d{6}$", extent[key]), (
+                f"extent.{key} must be a decimal string with exactly 6 decimal places "
+                f"(the repo's ::DECIMAL(10,6)::VARCHAR coordinate convention); got {extent[key]!r}"
+            )
+        actual = {k: float(extent[k]) for k in expected}
+        assert actual == pytest.approx(expected, abs=1e-6), (
+            f"extent must equal the union bbox of regular-band quadkeys via "
+            f"quadkey_to_bbox; expected {expected}, got {actual}"
+        )
+
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
+        con = duckdb.connect()
+        points = con.execute(
+            f"SELECT {lon_expr} AS lon, {lat_expr} AS lat FROM read_parquet('{places_parquet}') p"
+        ).fetchall()
+        con.close()
+        assert points, "expected at least one exported point in the fixture"
+        for lon, lat in points:
+            assert expected["west"] <= lon <= expected["east"], f"extent must bracket point lon={lon}"
+            assert expected["south"] <= lat <= expected["north"], f"extent must bracket point lat={lat}"
+
+    def test_extent_falls_back_to_full_histogram_with_no_regular_band_tiles(
+        self, overture_parquet, tmp_path
+    ):
+        """When every tile_qk is shorter than 6 chars (summary band only),
+        the regular-band filter empties the list; extent must fall back to
+        the union over the full histogram instead of raising."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, "cm13"
+        )
+        short_ta = str(tmp_path / "cm13" / "ta_short.parquet")
+        con = duckdb.connect()
+        con.execute(
+            f"COPY (SELECT place_id, left(tile_qk, 3) AS tile_qk "
+            f"FROM read_parquet('{ta_parquet}')) TO '{short_ta}' (FORMAT PARQUET)"
+        )
+        con.close()
+
+        tiles_root = str(tmp_path / "tiles_cm13")
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, short_ta, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+        ))
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        quadkeys = [p.name[: -len(".json.gz")] for p in run_dir.glob("*/*.json.gz")]
+        assert quadkeys and all(len(qk) < 6 for qk in quadkeys), (
+            f"fixture sanity check failed: expected only summary-band "
+            f"(<6-char) tile quadkeys; got {quadkeys}"
+        )
+        bboxes = [quadkey_to_bbox(qk) for qk in quadkeys]
+        expected = {
+            "west": min(b[0] for b in bboxes),
+            "south": min(b[1] for b in bboxes),
+            "east": max(b[2] for b in bboxes),
+            "north": max(b[3] for b in bboxes),
+        }
+
+        extent = collection["extent"]
+        for key in expected:
+            assert isinstance(extent[key], str) and re.match(r"^-?\d+\.\d{6}$", extent[key]), (
+                f"extent.{key} must be a decimal string with exactly 6 decimal "
+                f"places; got {extent[key]!r}"
+            )
+        actual = {k: float(extent[k]) for k in expected}
+        assert actual == pytest.approx(expected, abs=1e-6), (
+            f"extent must equal the union bbox of the full tile histogram "
+            f"when no regular-band tile exists; expected {expected}, got {actual}"
+        )
+
+    def test_zero_tile_run_omits_collection_json_but_keeps_manifest(
+        self, overture_parquet, tmp_path
+    ):
+        """A run with zero exported tiles (bbox matches no fixture rows) must
+        complete without raising, must NOT write collection.json -- there is
+        no honest extent for zero records -- and must still write
+        manifest.json, so the run stays a valid, complete, servable run."""
+        base = tmp_path / "cm14"
+        base.mkdir()
+        places_parquet = str(base / "places.parquet")
+        ta_parquet = str(base / "tile_assignments.parquet")
+        containment_dir = str(base / "containment")
+
+        # Bbox far from the fixture's San Francisco data: zero rows survive
+        # stage_import, so stage_tile_assignment and stage_export see zero
+        # places/tiles all the way through.
+        stage_import("overture_place", overture_parquet, (0.0, 0.0, 0.01, 0.01),
+                     places_parquet, memory_limit="4GB", force=True)
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
+                              max_per_tile=100, memory_limit="4GB", force=True)
+        pk_expr = SOURCES["overture_place"].source_pk
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
+        compute_containment(places_parquet, ta_parquet, None,
+                            pk_expr, lon_expr, lat_expr, containment_dir,
+                            memory_limit="4GB", force=True)
+
+        tiles_root = str(tmp_path / "tiles_cm14")
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, ta_parquet, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+        ))
+
+        assert not (run_dir / "collection.json").exists(), (
+            "a zero-tile run must not write collection.json"
+        )
+        assert (run_dir / "manifest.json").exists(), (
+            "a zero-tile run must still write manifest.json as the "
+            "completeness marker"
+        )
+
+    def test_location_types_includes_geo_and_address(self, overture_parquet, tmp_path):
+        """locationTypes is exactly {.geo, .address} for overture_place with
+        this fixture: .geo unconditional, .address because the fixture has
+        records with a country-bearing address (ov001, ov009) -- the same
+        predicate overture_place_export_tiles.sql uses."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, "cm8"
+        )
+        con = duckdb.connect()
+        has_country_address = con.execute(
+            f"SELECT count(*) FROM read_parquet('{places_parquet}') "
+            f"WHERE len(list_filter(coalesce(addresses, []), addr -> addr.country IS NOT NULL)) > 0"
+        ).fetchone()[0] > 0
+        con.close()
+        assert has_country_address, (
+            "fixture sanity check failed: expected at least one record with a "
+            "country-bearing address (ov001, ov009)"
+        )
+
+        tiles_root = str(tmp_path / "tiles_cm8")
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, ta_parquet, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+        ))
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        location_types = collection["locationTypes"]
+        assert set(location_types) == {
+            "community.lexicon.location.geo", "community.lexicon.location.address",
+        }, f"expected exactly geo+address; got locationTypes={location_types}"
+
+    def test_containment_levels_are_subtype_names(self, overture_parquet, division_db_path, tmp_path):
+        """containmentLevels holds LEVEL_VOCAB subtype NAMES (not integer
+        levels). The fixture's only divisions are continent/country/region/
+        locality (div_borough_manhattan's subtype is 'locality', not
+        'borough' -- no borough-subtype division exists in the fixture at
+        all), and continent has no LEVEL_VOCAB entry, so the result must
+        equal exactly {country, region, locality}."""
+        from garganorn.covering import stage_covering
+
+        base = tmp_path / "cm9"
+        base.mkdir()
+        places_parquet = str(base / "places.parquet")
+        ta_parquet = str(base / "tile_assignments.parquet")
+        covering_dir = str(base / "covering")
+        containment_dir = str(base / "containment")
+
+        stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True)
+        stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
+                              max_per_tile=100, memory_limit="4GB", force=True)
+        stage_covering(str(division_db_path), covering_dir,
+                       cover_min_zoom=4, cover_max_zoom=12, force=True)
+
+        pk_expr = SOURCES["overture_place"].source_pk
+        lon_expr, lat_expr = _coord_exprs("overture_place", alias="p")
+        compute_containment(places_parquet, ta_parquet, str(division_db_path),
+                            pk_expr, lon_expr, lat_expr, containment_dir,
+                            covering_dir=covering_dir, memory_limit="4GB", force=True)
+
+        tiles_root = str(tmp_path / "tiles_cm9")
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, ta_parquet, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+        ))
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        levels = set(collection.get("containmentLevels") or [])
+        assert levels <= set(LEVEL_VOCAB), (
+            f"containmentLevels must be subtype names from LEVEL_VOCAB's keys; got {levels}"
+        )
+        assert levels == {"country", "region", "locality"}, (
+            f"the fixture's only division subtypes are country/region/locality "
+            f"(plus continent, which has no LEVEL_VOCAB entry); expected exactly "
+            f"{{'country', 'region', 'locality'}}, got {levels}"
+        )
+
+    def test_attributes_match_export_struct_fields(self, overture_parquet, tmp_path):
+        """attributes equals the field names of tile_export's attributes
+        struct (overture_place_export_tiles.sql), not a hardcoded guess or
+        every column: every key observed in an exported record's attributes
+        must be among them, and a non-attribute record field ('name') must
+        not be."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm11")
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        expected = {
+            "id", "names", "categories", "websites", "socials",
+            "emails", "phones", "brand", "confidence", "version", "sources",
+        }
+        attributes = set(collection.get("attributes") or [])
+        assert attributes == expected, (
+            f"attributes must equal tile_export's attributes struct field names; "
+            f"expected {expected}, got {attributes}"
+        )
+
+        observed = set()
+        for gz in run_dir.glob("*/*.json.gz"):
+            with gzip.open(gz, "rt") as f:
+                data = json.load(f)
+            for rec in data["records"]:
+                observed |= set(rec["value"].get("attributes", {}))
+        assert observed <= attributes, (
+            f"declared attributes must be a superset of observed keys; "
+            f"observed - declared = {observed - attributes}"
+        )
+        assert "name" not in attributes, (
+            "attributes must not include the top-level record field 'name'"
+        )
+
+    def test_osm_attributes_include_primary_category_key(self, osm_parquet, tmp_path):
+        """OSM's attributes vocabulary must include primary-category keys
+        (R4): osm_import.sql deliberately strips the primary category's
+        top-level key (e.g. 'amenity') out of the stored tags column, since
+        primary_category already carries it -- but osm_export_tiles.sql
+        re-inserts that key into every served record's attributes struct via
+        map_concat. A client rendering the declared vocabulary must see the
+        key every qualifying served record actually carries."""
+        base = tmp_path / "cm_osm1"
+        base.mkdir()
+        places_parquet = str(base / "places.parquet")
+        ta_parquet = str(base / "tile_assignments.parquet")
+        containment_dir = str(base / "containment")
+
+        stage_import("osm", (osm_parquet["node"], osm_parquet["way"]),
+                     (-122.55, 37.60, -122.30, 37.85),
+                     places_parquet, memory_limit="4GB", force=True)
+        stage_tile_assignment(places_parquet, ta_parquet, "osm",
+                              max_per_tile=100, memory_limit="4GB", force=True)
+        pk_expr = SOURCES["osm"].source_pk
+        lon_expr, lat_expr = _coord_exprs("osm", alias="p")
+        compute_containment(places_parquet, ta_parquet, None,
+                            pk_expr, lon_expr, lat_expr, containment_dir,
+                            memory_limit="4GB", force=True)
+
+        idf_parquet = str(base / "idf.parquet")
+        stage_idf("osm", (osm_parquet["node"], osm_parquet["way"]), idf_parquet,
+                  time.monotonic(), force=True)
+
+        tiles_root = str(tmp_path / "tiles_cm_osm1")
+        run_dir = Path(stage_export(
+            "osm", places_parquet, ta_parquet, containment_dir,
+            tiles_root, time.monotonic(), memory_limit="4GB",
+            force=True, idf_parquet=idf_parquet,
+        ))
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        # The fixture's 'Tartine Manufactory' node carries amenity=cafe and
+        # lands inside the bbox with a name, so it survives stage_import;
+        # its served attributes struct includes 'amenity' by construction
+        # (osm_export_tiles.sql's map_concat).
+        assert "amenity" in (collection.get("attributes") or []), (
+            "attributes must include primary-category keys like 'amenity' -- "
+            "every served OSM record with a primary_category carries one, "
+            f"but got {collection.get('attributes')}"
+        )
+
+    def test_generated_record_validates_against_lexicon(self, overture_parquet, tmp_path):
+        """A real generated collection.json validates against
+        org.atgeo.collection's record schema (categories populated via the
+        IDF path), catching a Green implementation that satisfies the other
+        tests' field checks but violates its own lexicon."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm12")
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        server = lexrpc.Server(lexicons=load_lexicons())
+        schema = server.defs["org.atgeo.collection"]["record"]
+        server._validate_schema(
+            name="record", val=collection, type_name="org.atgeo.collection",
+            lexicon="org.atgeo.collection", schema=schema,
+        )
+
+    def test_manifest_json_still_written_last(self, overture_parquet, tmp_path, monkeypatch):
+        """collection.json lands before manifest.json, the sole completeness
+        marker: interrupting the run at write_manifest must leave
+        collection.json on disk without manifest.json existing."""
+        import garganorn.stages as stages_mod
+
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, "cm10"
+        )
+        tiles_root = str(tmp_path / "tiles_cm10")
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("simulated crash before manifest.json")
+
+        monkeypatch.setattr(stages_mod, "write_manifest", _boom)
+
+        with pytest.raises(RuntimeError, match="simulated crash"):
+            stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
+                         tiles_root, time.monotonic(), memory_limit="4GB", force=True)
+
+        run_dirs = [d for d in Path(tiles_root).iterdir() if d.is_dir() and not d.is_symlink()]
+        assert run_dirs, "expected the interrupted run dir to remain on disk"
+        run_dir = run_dirs[0]
+
+        assert (run_dir / "collection.json").exists(), (
+            "collection.json must be written before write_manifest runs"
+        )
+        assert not (run_dir / "manifest.json").exists(), (
+            "manifest.json must not exist when write_manifest was never reached"
         )

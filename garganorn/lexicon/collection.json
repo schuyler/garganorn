@@ -1,0 +1,64 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.collection",
+    "defs": {
+        "main": {
+            "type": "record",
+            "description": "Build-derived description of one collection this gazetteer serves. One record per served collection, keyed by the described collection's NSID, regenerated on every export. Values describe the build being served, not a promise about future builds. Category and attribute vocabularies are observed, not closed: absence means no served record carries the value, not that the value is invalid.",
+            "key": "nsid",
+            "record": {
+                "type": "object",
+                "required": ["collection", "source", "license", "generatedAt", "recordCount", "extent", "locationTypes"],
+                "properties": {
+                    "collection": {"type": "string", "format": "nsid"},
+                    "source": {"type": "string", "format": "uri"},
+                    "license": {"type": "string", "format": "uri"},
+                    "attribution": {
+                        "type": "string",
+                        "maxGraphemes": 500,
+                        "description": "URL of the source's attribution or copyright page, for display."
+                    },
+                    "generatedAt": {
+                        "type": "string",
+                        "format": "datetime",
+                        "description": "When the serving build was exported. Identical to the generated_at in every tile of the release."
+                    },
+                    "recordCount": {"type": "integer", "minimum": 0},
+                    "extent": {
+                        "type": "ref",
+                        "ref": "community.lexicon.location.bbox",
+                        "description": "Bounding box of the served records, aligned to tile boundaries."
+                    },
+                    "locationTypes": {
+                        "type": "array",
+                        "items": {"type": "string", "format": "nsid"},
+                        "description": "Location-union member lexicons this collection's records emit."
+                    },
+                    "containmentLevels": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Containment levels observed in the records' within relations. Absent when records carry none."
+                    },
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "ref", "ref": "#categoryCount"},
+                        "description": "Observed primary-category values with record counts, descending by count."
+                    },
+                    "attributes": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Attribute keys this collection's records may carry."
+                    }
+                }
+            }
+        },
+        "categoryCount": {
+            "type": "object",
+            "required": ["value", "count"],
+            "properties": {
+                "value": {"type": "string"},
+                "count": {"type": "integer", "minimum": 0}
+            }
+        }
+    }
+}
