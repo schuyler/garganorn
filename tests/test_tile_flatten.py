@@ -8,6 +8,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
+from tests.quadtree_helpers import _load_sql as _load_sql_with_substitutions
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -16,9 +18,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 
 def _load_sql(filename: str) -> str:
-    """Load SQL file from garganorn/sql/."""
-    sql_path = REPO_ROOT / "garganorn" / "sql" / filename
-    return sql_path.read_text()
+    """Load SQL file from garganorn/sql/ (no template substitutions)."""
+    return _load_sql_with_substitutions(filename, {})
 
 
 def _strip_spatial_install(sql: str) -> str:

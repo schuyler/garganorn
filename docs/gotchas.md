@@ -179,8 +179,9 @@ macro uses `json_keys` plus a `$."key"` JSONPath, so it fails on JSON keys
 containing `"` — `{`, `}`, and `,` round-trip correctly. No failures observed
 in practice.
 
-**Applies to**: `garganorn/sql/overture_place_export_tiles.sql`,
-`garganorn/sql/overture_division_export_tiles.sql`
+**Applies to**: `garganorn/sql/json_macros.sql` (definition, loaded onto the
+connection by `stage_export` and by tests before running any
+`*_export_tiles.sql` file)
 
 **Why it matters**: replace it with the native function when that lands rather
 than hardening the workaround.

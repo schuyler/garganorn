@@ -1,3 +1,7 @@
+-- strip_json_nulls is defined in json_macros.sql, loaded onto the
+-- connection before this file runs (stage_export in stages.py; tests use
+-- tests/quadtree_helpers.py's _load_sql, which does the same).
+
 CREATE OR REPLACE VIEW tile_export AS
 SELECT
     ta.tile_qk,
@@ -23,7 +27,7 @@ SELECT
             latitude: p.latitude::DECIMAL(10,6)::VARCHAR,
             longitude: p.longitude::DECIMAL(10,6)::VARCHAR
         }],
-        variants: coalesce(p.variants, []),
+        variants: list_transform(coalesce(p.variants, []), v -> strip_json_nulls(to_json(v))),
         attributes: CASE
             WHEN p.primary_category IS NOT NULL
             THEN map_concat(

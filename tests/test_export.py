@@ -319,6 +319,204 @@ class TestOvertureExportTiles:
 
 
 # ---------------------------------------------------------------------------
+# variant.language and attribute-struct null-vs-absent export fields
+#
+# org.atgeo.place's lexicon marks variant.language optional but not
+# nullable: exported JSON must omit the key when the source value is NULL,
+# not emit `"language": null`, which lexrpc's validator rejects. See
+# docs/design-null-vs-absent-export-fields.md.
+# ---------------------------------------------------------------------------
+
+class TestVariantAndAttributeNullVsAbsent:
+    """variant.language (all three sources) and overture_place's attributes
+    struct must omit null-valued keys from exported JSON rather than emit
+    them as JSON null."""
+
+    def _overture_place_record(self, conn, variants_sql, brand_sql="NULL"):
+        """Build a single-row overture_place places/tile_assignments/
+        place_containment db (schema matches _make_overture_export_db
+        above) and return the parsed record_json for that row."""
+        conn.execute("""
+            CREATE TABLE places (
+                id          VARCHAR PRIMARY KEY,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                names       STRUCT("primary" VARCHAR),
+                categories  STRUCT("primary" VARCHAR),
+                addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+                websites    VARCHAR[],
+                socials     VARCHAR[],
+                emails      VARCHAR[],
+                phones      VARCHAR[],
+                brand       STRUCT(names STRUCT("primary" VARCHAR)),
+                confidence  DOUBLE,
+                version     INTEGER,
+                sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[],
+                importance  INTEGER,
+                variants    STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT []
+            )
+        """)
+        conn.execute(f"""
+            INSERT INTO places VALUES (
+                'op001',
+                {{'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776}},
+                {{'primary': 'Test Place'}},
+                {{'primary': 'coffee_shop'}},
+                NULL, NULL, NULL, NULL, NULL,
+                {brand_sql},
+                0.9, 1, NULL,
+                50,
+                {variants_sql}
+            )
+        """)
+        conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+        conn.execute("INSERT INTO tile_assignments VALUES ('op001', '023130')")
+        conn.execute("""
+            CREATE TABLE place_containment (
+                place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
+            )
+        """)
+        raw_sql = _load_sql("overture_place_export_tiles.sql", {"repo": "https://example.com"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+        (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
+        return json.loads(record_json)
+
+    def test_overture_place_variant_without_language_omits_key(self):
+        """A variant whose source language is NULL must have no 'language'
+        key in the exported JSON object -- not `"language": null`."""
+        conn = duckdb.connect()
+        record = self._overture_place_record(
+            conn,
+            "[{'name': 'Alt Name', 'type': 'alternate', 'language': NULL}]"
+            "::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]",
+        )
+        conn.close()
+        variant = record["variants"][0]
+        assert "language" not in variant, (
+            f"variant.language must be omitted when the source value is "
+            f"NULL, not emitted as JSON null; got variants={record['variants']}"
+        )
+        assert variant["name"] == "Alt Name"
+
+    def test_overture_place_variant_with_language_present(self):
+        """A variant WITH a language must still carry it after
+        null-stripping lands -- regression guard against over-stripping."""
+        conn = duckdb.connect()
+        record = self._overture_place_record(
+            conn,
+            "[{'name': 'Nom Alternatif', 'type': 'alternate', 'language': 'fr'}]"
+            "::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]",
+        )
+        conn.close()
+        variant = record["variants"][0]
+        assert variant.get("language") == "fr", (
+            f"a variant WITH a language must still carry it (present, with "
+            f"value) after null-stripping lands; got {variant}"
+        )
+
+    def test_overture_place_attribute_with_null_value_omits_key(self):
+        """A place with brand IS NULL must omit the 'brand' key from its
+        exported attributes object (R2), matching overture_division's
+        existing attributes null-stripping."""
+        conn = duckdb.connect()
+        record = self._overture_place_record(
+            conn,
+            "[]::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]",
+            brand_sql="NULL",
+        )
+        conn.close()
+        attrs = record["attributes"]
+        assert "brand" not in attrs, (
+            f"attributes.brand must be omitted when NULL, not emitted as "
+            f"JSON null; got {attrs}"
+        )
+
+    def test_overture_division_variant_without_language_omits_key(self):
+        """Same requirement as overture_place, for overture_division's
+        export SQL."""
+        conn = duckdb.connect()
+        conn.execute("""
+            CREATE TABLE places (
+                id            VARCHAR PRIMARY KEY,
+                names         STRUCT("primary" VARCHAR),
+                importance    INTEGER,
+                min_latitude  DOUBLE, max_latitude  DOUBLE,
+                min_longitude DOUBLE, max_longitude DOUBLE,
+                variants      STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [],
+                subtype       VARCHAR, country VARCHAR, region VARCHAR,
+                level         VARCHAR, wikidata VARCHAR, population BIGINT
+            )
+        """)
+        conn.execute("""
+            INSERT INTO places VALUES (
+                'div001', {'primary': 'Test Division'}, 50, 37.60, 37.85,
+                -122.55, -122.30,
+                [{'name': 'Alt Div Name', 'type': 'alternate', 'language': NULL}]
+                ::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                'region', 'US', NULL, 'region', NULL, NULL
+            )
+        """)
+        conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+        conn.execute("INSERT INTO tile_assignments VALUES ('div001', '023130')")
+        conn.execute("""
+            CREATE TABLE place_containment (
+                place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
+            )
+        """)
+        raw_sql = _load_sql("overture_division_export_tiles.sql", {"repo": "https://example.com"})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+        (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
+        conn.close()
+        variant = json.loads(record_json)["variants"][0]
+        assert "language" not in variant, (
+            f"overture_division variant.language must be omitted when "
+            f"NULL, not emitted as JSON null; got {variant}"
+        )
+
+    def test_osm_variant_without_language_omits_key(self):
+        """Same requirement as overture_place, for osm's export SQL. OSM's
+        osm_variant_type_lang macro sets language NULL for 6 of its
+        branches (alt_name, int_name, official_name, short_name, loc_name,
+        old_name) -- the common case, not an edge case."""
+        conn = duckdb.connect()
+        conn.execute("""
+            CREATE TABLE places (
+                rkey             VARCHAR PRIMARY KEY,
+                name             VARCHAR,
+                importance       INTEGER,
+                latitude         DOUBLE,
+                longitude        DOUBLE,
+                variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [],
+                primary_category VARCHAR,
+                tags             MAP(VARCHAR, VARCHAR)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO places VALUES (
+                'osm001', 'Test OSM Place', 50, 37.7749, -122.4194,
+                [{'name': 'Alt OSM Name', 'type': 'alternate', 'language': NULL}]
+                ::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[],
+                NULL, map([]::VARCHAR[], []::VARCHAR[])
+            )
+        """)
+        conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+        conn.execute("INSERT INTO tile_assignments VALUES ('osm001', '023130')")
+        conn.execute("""
+            CREATE TABLE place_containment (
+                place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
+            )
+        """)
+        raw_sql = _load_sql("osm_export_tiles.sql", {})
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+        (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
+        conn.close()
+        variant = json.loads(record_json)["variants"][0]
+        assert "language" not in variant, (
+            f"osm variant.language must be omitted when NULL, not emitted "
+            f"as JSON null; got {variant}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Division containment relations JSON for test fixtures
 # ---------------------------------------------------------------------------
 

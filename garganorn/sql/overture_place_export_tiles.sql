@@ -1,14 +1,6 @@
--- Strip null-valued keys from a JSON object. Needed because locations are
--- built as independent structs (geo, address) to avoid DuckDB's list_concat
--- struct-union, which adds spurious null fields from the other type. The
--- $."key" path syntax handles the $type key (leading $ is JSONPath root).
--- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
--- it (merged in PR #21748, 2026-04-02; not in the pinned duckdb==1.4.4).
-CREATE OR REPLACE MACRO strip_json_nulls(js) AS
-    map_from_entries(
-        [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
-         IF json_extract(js, '$."' || key || '"') <> ('null'::JSON)]
-    )::JSON;
+-- strip_json_nulls is defined in json_macros.sql, loaded onto the
+-- connection before this file runs (stage_export in stages.py; tests use
+-- tests/quadtree_helpers.py's _load_sql, which does the same).
 
 -- Overture tile JSON export view.
 -- Inputs:
@@ -58,8 +50,8 @@ SELECT
             END
             || ']'
         )::JSON,
-        variants: coalesce(p.variants, []),
-        attributes: {
+        variants: list_transform(coalesce(p.variants, []), v -> strip_json_nulls(to_json(v))),
+        attributes: strip_json_nulls(to_json({
             id: p.id,
             names: p.names,
             categories: p.categories,
@@ -71,7 +63,7 @@ SELECT
             confidence: p.confidence::DECIMAL(4,3)::VARCHAR,
             version: p.version,
             sources: p.sources
-        },
+        })),
         relations: coalesce(pc.relations_json::JSON, '{}'::JSON)
     })::VARCHAR AS record_json
 FROM places p

@@ -14,7 +14,16 @@ REPO_ROOT = pathlib.Path(__file__).parent.parent
 def _load_sql(filename: str, substitutions: dict) -> str:
     sql_path = REPO_ROOT / "garganorn" / "sql" / filename
     raw = sql_path.read_text()
-    return string.Template(raw).safe_substitute(substitutions)
+    sql = string.Template(raw).safe_substitute(substitutions)
+    if filename.endswith("_export_tiles.sql"):
+        # Export SQL calls strip_json_nulls but no longer defines it inline
+        # (garganorn/stages.py's stage_export loads json_macros.sql onto the
+        # connection first); standalone tests that execute an export file's
+        # SQL directly, bypassing stage_export, need the same macro defined
+        # on their own connection.
+        macros = (REPO_ROOT / "garganorn" / "sql" / "json_macros.sql").read_text()
+        sql = macros + "\n" + sql
+    return sql
 
 
 def _strip_spatial_install(sql: str) -> str:

@@ -2278,22 +2278,28 @@ class TestCollectionMetadata:
         )
 
     def test_attributes_match_export_struct_fields(self, overture_parquet, tmp_path):
-        """attributes equals the field names of tile_export's attributes
-        struct (overture_place_export_tiles.sql), not a hardcoded guess or
-        every column: every key observed in an exported record's attributes
-        must be among them, and a non-attribute record field ('name') must
-        not be."""
+        """attributes is drawn from the field names of tile_export's
+        attributes struct (overture_place_export_tiles.sql), not a
+        hardcoded guess or every column: every key observed in an exported
+        record's attributes must be among them, and a non-attribute record
+        field ('name') must not be. Optional fields the export's
+        strip_json_nulls omits when null (see
+        test_attribute_fields_union_recovers_key_null_in_sampled_row for
+        the union-across-rows guarantee) aren't required here -- only
+        every emitted key's provenance is."""
         run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm11")
         collection = json.loads((run_dir / "collection.json").read_text())
 
-        expected = {
+        max_possible = {
             "id", "names", "categories", "websites", "socials",
             "emails", "phones", "brand", "confidence", "version", "sources",
         }
+        always_present = {"id", "names", "categories"}
         attributes = set(collection.get("attributes") or [])
-        assert attributes == expected, (
-            f"attributes must equal tile_export's attributes struct field names; "
-            f"expected {expected}, got {attributes}"
+        assert always_present <= attributes <= max_possible, (
+            f"attributes must be drawn from tile_export's attributes struct "
+            f"field names, and always include the never-null ones; "
+            f"max_possible={max_possible}, got {attributes}"
         )
 
         observed = set()
@@ -2355,6 +2361,111 @@ class TestCollectionMetadata:
             "attributes must include primary-category keys like 'amenity' -- "
             "every served OSM record with a primary_category carries one, "
             f"but got {collection.get('attributes')}"
+        )
+
+    def test_attribute_fields_union_recovers_key_null_in_sampled_row(self, tmp_path):
+        """collection.json's attribute-field union for overture_place must
+        recover a key like 'brand' from wherever it's non-null, even when
+        the row an unordered LIMIT 1 happens to sample carries it NULL.
+
+        Once overture_place's attributes struct is null-stripped (R2), a
+        null-stripped record's exported JSON omits a null-valued key
+        entirely -- checked directly below on the 'brandnull' record, and
+        currently red because that stripping isn't implemented yet. The
+        second assertion pins the requirement this test is really about:
+        collection.json's declared attribute vocabulary must not
+        under-report keys just because today's overture_place branch
+        samples a single row (LIMIT 1) instead of unioning across rows the
+        way overture_division's DISTINCT UNNEST branch already does. See
+        docs/design-null-vs-absent-export-fields.md.
+        """
+        base = tmp_path / "attr_union"
+        base.mkdir()
+        parquet_path = base / "brand_data.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        conn.execute("""
+            CREATE TABLE tmp_ov (
+                id          VARCHAR,
+                bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
+                geometry    VARCHAR,
+                names       STRUCT(
+                                "primary" VARCHAR,
+                                common MAP(VARCHAR, VARCHAR),
+                                rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
+                            ),
+                categories  STRUCT("primary" VARCHAR),
+                addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
+                websites    VARCHAR[],
+                socials     VARCHAR[],
+                emails      VARCHAR[],
+                phones      VARCHAR[],
+                brand       VARCHAR,
+                confidence  DOUBLE,
+                version     INTEGER,
+                sources     VARCHAR[]
+            )
+        """)
+        # Each row is missing a DIFFERENT optional field ('brandnull' lacks
+        # brand but carries confidence; 'brandset' lacks confidence but
+        # carries brand), so neither row's own post-strip key set is a
+        # superset of the other's. That makes the union assertion below
+        # deterministically red without the collection.json attribute_fields
+        # branch collapse, regardless of which row an unordered LIMIT 1
+        # draws (stage_export sets preserve_insertion_order=false, so row
+        # order can't be relied on).
+        conn.execute("""
+            INSERT INTO tmp_ov VALUES (
+                'brandnull',
+                {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+                'POINT(-122.419 37.775)',
+                {'primary': 'No Brand Place', 'common': map([]::VARCHAR[], []::VARCHAR[]),
+                 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+                {'primary': 'coffee_shop'},
+                NULL, NULL, NULL, NULL, NULL, NULL, 0.85, NULL, NULL
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_ov VALUES (
+                'brandset',
+                {'xmin': -122.411, 'ymin': 37.769, 'xmax': -122.409, 'ymax': 37.771},
+                'POINT(-122.410 37.770)',
+                {'primary': 'Branded Place', 'common': map([]::VARCHAR[], []::VARCHAR[]),
+                 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
+                {'primary': 'coffee_shop'},
+                NULL, NULL, NULL, NULL, NULL, 'Acme Corp', NULL, NULL, NULL
+            )
+        """)
+        conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        overture_glob = str(base / "*.parquet")
+        run_dir, _, _ = self._run_export_with_idf(overture_glob, tmp_path, "cm_brand_union")
+        collection = json.loads((run_dir / "collection.json").read_text())
+
+        record = None
+        for gz in run_dir.glob("*/*.json.gz"):
+            with gzip.open(gz, "rt") as f:
+                data = json.load(f)
+            for rec in data["records"]:
+                if rec["value"]["rkey"] == "brandnull":
+                    record = rec["value"]
+        assert record is not None, "expected the 'brandnull' record to be exported"
+        assert "brand" not in record["attributes"], (
+            f"a record with brand IS NULL must omit the 'brand' key from "
+            f"its exported attributes, not emit it as JSON null; got "
+            f"{record['attributes']}"
+        )
+
+        attributes = set(collection.get("attributes") or [])
+        assert "brand" in attributes and "confidence" in attributes, (
+            f"collection.json's attribute vocabulary must recover the "
+            f"union across rows -- 'brand' is set only on 'brandset' and "
+            f"'confidence' only on 'brandnull', so a single-row sample "
+            f"(whichever row an unordered LIMIT 1 draws) would report at "
+            f"most one of the two even once both rows are correctly "
+            f"null-stripped; got {attributes}"
         )
 
     def test_generated_record_validates_against_lexicon(self, overture_parquet, tmp_path):

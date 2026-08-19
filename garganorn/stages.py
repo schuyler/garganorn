@@ -2183,20 +2183,17 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         # without materialising to preserve row order.
         con.execute("SET preserve_insertion_order = false")
         # No LOAD spatial needed: none of the export SQLs use ST_* functions
+        con.execute((_SQL_DIR / "json_macros.sql").read_text())
         con.execute(sql)
         con.execute("SET enable_progress_bar = false")
 
         # collection.json's `attributes` field: the tile_export view's
         # attributes struct field names, captured now because the view only
-        # lives on this connection. overture_place's struct is never
-        # null-stripped, so one row's keys are already the complete set.
-        # overture_division's is wrapped in strip_json_nulls, which drops a
-        # key wherever that row's value is null, so only the union over
-        # every row recovers the full set.
-        if source == "overture_place":
-            row = con.execute("SELECT json_keys(record_json, '$.attributes') FROM tile_export LIMIT 1").fetchone()
-            attribute_fields = set(row[0]) if row else set()
-        elif source == "overture_division":
+        # lives on this connection. Both overture_place and
+        # overture_division wrap attributes in strip_json_nulls, which
+        # drops a key wherever that row's value is null, so only the union
+        # over every row recovers the full set.
+        if source in ("overture_place", "overture_division"):
             rows = con.execute(
                 "SELECT DISTINCT UNNEST(json_keys(record_json, '$.attributes')) AS k FROM tile_export"
             ).fetchall()

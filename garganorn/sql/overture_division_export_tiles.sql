@@ -15,16 +15,9 @@
 -- means records without containment data -- a division whose hierarchy chain
 -- holds only itself -- get an empty relations object.
 
--- Strip null-valued keys from a JSON object. Divisions commonly have null
--- values for optional fields (region, wikidata, population) which creates
--- noisy output when embedded in tile JSON.
--- TODO: Replace with native json_strip_nulls() once a DuckDB release ships
--- it (merged in PR #21748, 2026-04-02; not in the pinned duckdb==1.4.4).
-CREATE OR REPLACE MACRO strip_json_nulls(js) AS
-    map_from_entries(
-        [(key, json_extract(js, '$."' || key || '"')) FOR key IN json_keys(js)
-         IF json_extract(js, '$."' || key || '"') <> ('null'::JSON)]
-    )::JSON;
+-- strip_json_nulls is defined in json_macros.sql, loaded onto the
+-- connection before this file runs (stage_export in stages.py; tests use
+-- tests/quadtree_helpers.py's _load_sql, which does the same).
 
 CREATE OR REPLACE VIEW tile_export AS
 SELECT
@@ -43,7 +36,7 @@ SELECT
             east: p.max_longitude::DECIMAL(10,6)::VARCHAR,
             west: p.min_longitude::DECIMAL(10,6)::VARCHAR
         }],
-        variants: coalesce(p.variants, []),
+        variants: list_transform(coalesce(p.variants, []), v -> strip_json_nulls(to_json(v))),
         attributes: strip_json_nulls(to_json({
             subtype: p.subtype,
             country: p.country,

@@ -303,6 +303,24 @@ the two answer different threats and neither subsumes the other.
 **Applies to**: `garganorn/server.py` (`_check_bbox_precision`),
 `garganorn/lexicon/getCoverage.json`
 
+### Optional-but-not-nullable lexicon fields must be omitted, not null
+
+A DuckDB struct literal always carries every declared key, so building
+JSON for a lexicon field that's optional (not `required`) but not marked
+`nullable` — e.g. `variant.language` — from a possibly-NULL source column
+emits `"language": null` instead of omitting the key, which `lexrpc`'s
+validator rejects. This only matters where a struct gets serialized to
+JSON text (export SQL); a typed struct column at rest is fine, since the
+distinction doesn't exist until serialization. Wrap the `to_json(...)`
+call in `strip_json_nulls` (`garganorn/sql/json_macros.sql`) for any new
+optional-but-not-nullable field built this way — per element via
+`list_transform` for a list field, directly for a single struct.
+
+**Applies to**: `garganorn/sql/json_macros.sql`,
+`garganorn/sql/overture_place_export_tiles.sql`,
+`garganorn/sql/overture_division_export_tiles.sql`,
+`garganorn/sql/osm_export_tiles.sql`
+
 ---
 
 ## Compatibility Policy
