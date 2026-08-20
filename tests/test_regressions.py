@@ -123,7 +123,7 @@ class TestQk17PipelineFixes:
             "osm_import.sql still contains UPDATE places SET qk17 — inline qk17 in INSERT SELECT lists instead."
         )
 
-    def test_osm_fix_qk17_nonnull(self, tmp_path):
+    def test_osm_fix_qk17_nonnull(self, tmp_path, empty_relation_parquet):
         """After osm_import.sql runs against a minimal synthetic fixture, all qk17 values must be non-null."""
         import duckdb as _duckdb
 
@@ -162,7 +162,7 @@ class TestQk17PipelineFixes:
         db_path = tmp_path / "test_osm_fix_qk17_nonnull.duckdb"
         conn2 = _duckdb.connect(str(db_path))
         conn2.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn2, str(node_path), str(way_path))
+        run_osm_import(conn2, str(node_path), str(way_path), empty_relation_parquet)
         null_count = conn2.execute(
             "SELECT count(*) FROM places WHERE qk17 IS NULL"
         ).fetchone()[0]
@@ -307,12 +307,14 @@ IMPORT_SQL_FILES = [
     },
     {
         "filename": "osm_import.sql",
-        # filtered (nodes) and way_base (ways) are the two base CTEs;
-        # node_density/node_idf and way_density/way_idf are the
-        # narrow-projection CTEs this guards against re-introducing.
-        "base_ctes": ["filtered", "way_base"],
+        # filtered (nodes), way_base (ways), and rel_base (relations) are
+        # the three base CTEs; node_density/node_idf, way_density/way_idf,
+        # and rel_density/rel_idf are the narrow-projection CTEs this
+        # guards against re-introducing.
+        "base_ctes": ["filtered", "way_base", "rel_base"],
         "forbidden_helper_ctes": [
             "node_density", "node_idf", "way_density", "way_idf",
+            "rel_density", "rel_idf",
         ],
     },
 ]

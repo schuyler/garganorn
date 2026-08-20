@@ -330,6 +330,13 @@ class TestOsmWayEmptyNodeGuard:
             con.execute("CREATE TABLE test_nodes (id BIGINT, lat DOUBLE, lon DOUBLE, tags MAP(VARCHAR, VARCHAR));")
             con.execute("COPY test_nodes TO '" + str(pathlib.Path(tmpdir) / "nodes.parquet") + "' (FORMAT PARQUET);")
 
+            # Create empty relations parquet
+            con.execute(
+                "CREATE TABLE test_relations (id BIGINT, tags MAP(VARCHAR, VARCHAR), "
+                "members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]);"
+            )
+            con.execute("COPY test_relations TO '" + str(pathlib.Path(tmpdir) / "relations.parquet") + "' (FORMAT PARQUET);")
+
             # Run OSM import SQL
             density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
             idf_cte = "CREATE TEMP TABLE idf_scores AS SELECT NULL::VARCHAR AS category, NULL::DOUBLE AS idf_score WHERE 1=0;"
@@ -338,6 +345,7 @@ class TestOsmWayEmptyNodeGuard:
                 "memory_limit": "4GB",
                 "node_parquet": str(pathlib.Path(tmpdir) / "nodes.parquet"),
                 "way_parquet": str(pathlib.Path(tmpdir) / "ways.parquet"),
+                "relation_parquet": str(pathlib.Path(tmpdir) / "relations.parquet"),
                 "xmin": -122.55, "xmax": -122.30,
                 "ymin": 37.60, "ymax": 37.85,
                 "density_cte": density_cte,

@@ -144,7 +144,7 @@ $ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getCoverage?collection=org.atgeo.pl
 {"tiles":["https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz","https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json.gz"]}
 ```
 
-Fetch one of those URLs directly — despite the `.json.gz` name, the server always decompresses it and returns plain JSON (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client); source/license are included in the header so you don't need a separate lookup:
+Fetch one of those URLs directly — despite the `.json.gz` name, the server always decompresses it and returns plain JSON (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client); source/license are included in the header so you don't need a separate lookup. OSM rkeys carry one of three prefixes — `node:`, `way:`, `relation:` — naming the source OSM element type:
 
 ```
 $ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz'

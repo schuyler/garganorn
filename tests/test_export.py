@@ -631,7 +631,7 @@ class TestContainmentInExport:
         conn.execute("INSTALL spatial; LOAD spatial;")
 
         # Run the full OSM pipeline (includes importance and variants computation)
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         run_tile_assignments(conn, pk_expr="rkey", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
         # Get a valid rkey from the imported places to use for containment

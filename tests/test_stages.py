@@ -989,7 +989,7 @@ class TestStageImportLookupKeyUniqueness:
 
         parquet_glob = {
             "overture_place": overture_parquet,
-            "osm": (osm_parquet["node"], osm_parquet["way"]),
+            "osm": (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
             "overture_division": division_parquet,
         }[source]
 
@@ -1272,15 +1272,16 @@ class TestConfiguredSourceGlobPreflight:
             "stage_import must fail before writing any output artifact"
         )
 
-    @pytest.mark.parametrize("empty_side", ["node", "way"])
+    @pytest.mark.parametrize("empty_side", ["node", "way", "relation"])
     def test_osm_glob_matches_nothing_raises(self, empty_side, osm_parquet, tmp_path):
         empty_glob = str(tmp_path / f"empty_{empty_side}" / "*.parquet")
         node_glob = empty_glob if empty_side == "node" else osm_parquet["node"]
         way_glob = empty_glob if empty_side == "way" else osm_parquet["way"]
+        relation_glob = empty_glob if empty_side == "relation" else osm_parquet["relation"]
         places_parquet = str(tmp_path / f"places_{empty_side}.parquet")
 
         with pytest.raises(RuntimeError) as excinfo:
-            stage_import("osm", (node_glob, way_glob), (-122.55, 37.60, -122.30, 37.85),
+            stage_import("osm", (node_glob, way_glob, relation_glob), (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True)
 
         assert empty_glob in str(excinfo.value)
@@ -1339,15 +1340,16 @@ class TestConfiguredSourceGlobPreflight:
             "stage_idf must fail before writing any output artifact"
         )
 
-    @pytest.mark.parametrize("empty_side", ["node", "way"])
+    @pytest.mark.parametrize("empty_side", ["node", "way", "relation"])
     def test_idf_osm_glob_matches_nothing_raises(self, empty_side, osm_parquet, tmp_path):
         empty_glob = str(tmp_path / f"empty_{empty_side}" / "*.parquet")
         node_glob = empty_glob if empty_side == "node" else osm_parquet["node"]
         way_glob = empty_glob if empty_side == "way" else osm_parquet["way"]
+        relation_glob = empty_glob if empty_side == "relation" else osm_parquet["relation"]
         idf_output = str(tmp_path / f"idf_{empty_side}.parquet")
 
         with pytest.raises(RuntimeError) as excinfo:
-            stage_idf("osm", (node_glob, way_glob), idf_output, time.monotonic(), force=True)
+            stage_idf("osm", (node_glob, way_glob, relation_glob), idf_output, time.monotonic(), force=True)
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(idf_output), (
@@ -2330,7 +2332,7 @@ class TestCollectionMetadata:
         ta_parquet = str(base / "tile_assignments.parquet")
         containment_dir = str(base / "containment")
 
-        stage_import("osm", (osm_parquet["node"], osm_parquet["way"]),
+        stage_import("osm", (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
                      (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True)
         stage_tile_assignment(places_parquet, ta_parquet, "osm",
@@ -2342,7 +2344,7 @@ class TestCollectionMetadata:
                             memory_limit="4GB", force=True)
 
         idf_parquet = str(base / "idf.parquet")
-        stage_idf("osm", (osm_parquet["node"], osm_parquet["way"]), idf_parquet,
+        stage_idf("osm", (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]), idf_parquet,
                   time.monotonic(), force=True)
 
         tiles_root = str(tmp_path / "tiles_cm_osm1")

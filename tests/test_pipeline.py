@@ -138,7 +138,7 @@ class TestRunPipeline:
 
         run_pipeline(
             "osm",
-            (osm_parquet["node"], osm_parquet["way"]),
+            (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
             memory_limit="4GB",
@@ -181,7 +181,7 @@ class TestRunPipeline:
         )
 
     def test_osm_pipeline_parquet_is_tuple(self, tmp_path):
-        """run_pipeline accepts a 2-tuple for parquet_glob (OSM node+way paths)."""
+        """run_pipeline accepts a 3-tuple for parquet_glob (OSM node+way+relation paths)."""
         try:
             from garganorn.quadtree import run_pipeline
         except (ImportError, ModuleNotFoundError):
@@ -196,7 +196,8 @@ class TestRunPipeline:
         with pytest.raises(RuntimeError, match=re.escape("/nonexistent/nodes/*.parquet")):
             run_pipeline(
                 "osm",
-                ("/nonexistent/nodes/*.parquet", "/nonexistent/ways/*.parquet"),
+                ("/nonexistent/nodes/*.parquet", "/nonexistent/ways/*.parquet",
+                 "/nonexistent/relations/*.parquet"),
                 (-122.55, 37.60, -122.30, 37.85),
                 str(output_dir),
                 memory_limit="4GB",
@@ -518,7 +519,7 @@ class TestQuadtreeMainCLI:
     # ------------------------------------------------------------------
 
     def test_osm_parquet_dir_derives_node_way_paths(self, tmp_path):
-        """--source osm --parquet-dir /some/dir must forward type=node/type=way globs as tuple."""
+        """--source osm --parquet-dir /some/dir must forward type=node/type=way/type=relation globs as tuple."""
         from garganorn.quadtree import main
 
         argv = [
@@ -537,12 +538,13 @@ class TestQuadtreeMainCLI:
         ca = mock_pipeline.call_args
         parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
 
-        assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 2, (
-            f"For OSM, parquet_glob must be a 2-element tuple; got {parquet_arg!r}"
+        assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 3, (
+            f"For OSM, parquet_glob must be a 3-element tuple; got {parquet_arg!r}"
         )
-        node_glob, way_glob = parquet_arg
+        node_glob, way_glob, relation_glob = parquet_arg
         assert node_glob == "/some/dir/type=node/*.parquet", f"node glob wrong: {node_glob!r}"
         assert way_glob == "/some/dir/type=way/*.parquet", f"way glob wrong: {way_glob!r}"
+        assert relation_glob == "/some/dir/type=relation/*.parquet", f"relation glob wrong: {relation_glob!r}"
 
         bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else "NOT_PRESENT")
         assert bbox_arg is None, f"bbox must be None when --bbox is omitted; got {bbox_arg!r}"
@@ -669,12 +671,13 @@ class TestQuadtreeMainCLI:
         ca = mock_pipeline.call_args
 
         parquet_arg = ca.kwargs.get("parquet_glob") if "parquet_glob" in ca.kwargs else (ca.args[1] if len(ca.args) > 1 else None)
-        assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 2, (
-            f"For OSM, parquet_glob must be a 2-element tuple; got {parquet_arg!r}"
+        assert isinstance(parquet_arg, tuple) and len(parquet_arg) == 3, (
+            f"For OSM, parquet_glob must be a 3-element tuple; got {parquet_arg!r}"
         )
-        node_glob, way_glob = parquet_arg
+        node_glob, way_glob, relation_glob = parquet_arg
         assert node_glob == "/some/dir/type=node/*.parquet"
         assert way_glob == "/some/dir/type=way/*.parquet"
+        assert relation_glob == "/some/dir/type=relation/*.parquet"
 
         bbox_arg = ca.kwargs.get("bbox") if "bbox" in ca.kwargs else (ca.args[2] if len(ca.args) > 2 else None)
         assert isinstance(bbox_arg, tuple) and len(bbox_arg) == 4, (
@@ -750,7 +753,7 @@ class TestRunPipelineStaleDb:
         # Second run must succeed without raising CatalogException.
         run_pipeline(
             "osm",
-            (osm_parquet["node"], osm_parquet["way"]),
+            (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir),
             memory_limit="4GB",

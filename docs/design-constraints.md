@@ -34,6 +34,9 @@ pipeline SQL.
 - **Places (Overture, OSM)**: `60% density + 40% IDF`
   - Formula: `round(60 * least(density/density_norm, 1.0) + 40 * least(idf/idf_norm, 1.0))`
   - Defaults: `density_norm=10.0`, `idf_norm=18.0`
+  - OSM's IDF term reads node, way, and relation parquet in both the
+    numerator and the denominator (`osm_idf.sql`), so every OSM
+    importance value shifts whenever the relation arm's counts change.
 - **Localities (Overture divisions, subtype=locality)**: `60% density + 40% population`
   - Formula: `round(60 * least(avg_density/density_norm, 1.0) + 40 * least(ln(1+population)/pop_norm, 1.0))`
   - Defaults: `density_norm=10.0`, `pop_norm=20.0`
@@ -110,30 +113,57 @@ coincidence without breaking the invariant.
 
 **Applies to**: `garganorn/sql/_osm_category_case.sql`
 
-### OSM building import is way-only and subtractive
+### OSM building import is way-and-relation, subtractive; the node arm has none
 
 Named buildings are reached through `tags['building'] IS NOT NULL AND
-tags['building'] NOT IN (...)` in the way arm of `osm_import.sql`'s
-whitelist only — there is no `building` branch in the node arm. Stage 0's
-building chain (`w/building` → `w/name` in `extract-osm-parquet.sh`)
-selects ways; the only building-derived nodes in `filtered.osm.pbf` are
-untagged way members, so a node-arm `building` branch would be machinery
-nothing reaches.
+tags['building'] NOT IN (...)` in the way and relation arms of
+`osm_import.sql`'s whitelist — there is no `building` branch in the node
+arm. Stage 0's building chain (`w/building` → `w/name` in
+`extract-osm-parquet.sh`) selects ways; the relation selector list
+includes `r/building` directly. `filtered.osm.pbf`'s building-derived
+nodes are untagged way members plus, via `osmium getid --add-referenced`,
+the member nodes and ways of every named qualifying relation.
 
 **Applies to**: `garganorn/sql/osm_import.sql`, `scripts/extract-osm-parquet.sh`
 
+### OSM relation geometry ignores nested relation members and mirrors way bbox conventions
+
+Member resolution in `osm_import.sql`'s relation pipeline resolves only
+node and way members; a relation-type member is never followed, so a
+relation reachable only through nested relations imports nothing (measured
+at 0.38% of qualifying relations, against the 2026-03-27 planet extract,
+probed 2026-08-19). A relation's `bbox` uses the same
+point±0.0001 convention as ways rather than its true member extent —
+consistency with ways was chosen over precision; true-extent bbox would
+apply equally to ways and is out of scope.
+
+**Applies to**: `garganorn/sql/osm_import.sql`
+
 ### Stage 0 merges to one filtered.osm.pbf, relying on osmium's dedup
 
-`extract-osm-parquet.sh`'s building chain is two further `osmium
-tags-filter` passes — `w/building` reads the planet, `w/name` filters that
-intermediate — whose output is merged back into the same
-`filtered.osm.pbf` with `osmium merge`, which drops objects duplicated
-across its inputs by type/id/version. That dedup is what keeps the
-pipeline at one parquet dataset with no SQL-side dedup: a way matched by
-both the tag filter and the building filter (e.g. `building=yes` +
-`amenity=restaurant`) would otherwise import twice and collide on rkey
-`w<id>`, and a node present in both would double-count in `way_centroids`,
-which averages over the join.
+`extract-osm-parquet.sh` produces two further chains beyond the tag
+filter — the buildings chain (`w/building` → `w/name`) and the relation
+closure chain (`osmium getid --add-referenced` over the named-relation
+subset) — whose outputs are merged back into the same `filtered.osm.pbf`
+with `osmium merge`, which drops objects duplicated across its three
+inputs by type/id/version. That dedup is what keeps the pipeline at one
+parquet dataset with no SQL-side dedup: a way matched by both the tag
+filter and the building filter (e.g. `building=yes` + `amenity=restaurant`)
+would otherwise import twice and collide on rkey `w<id>`, a node present in
+both would double-count in `way_centroids`, and an object pulled in by
+both the buildings chain and the relation closure chain would double the
+same way.
+
+**Applies to**: `scripts/extract-osm-parquet.sh`
+
+### The relation extraction chain is kept separate from the existing filter passes
+
+`extract-osm-parquet.sh` resolves relation member closure (`osmium getid
+--add-referenced`) as its own chain rather than folding `r/` selectors
+into the main tag-filter pass. Folding it in would resolve closure for
+every key-matched relation (6.1M), not just the ~1.4M named ones, carrying
+millions of unnamed water bodies and building multipolygons into every
+downstream scan for no time saving.
 
 **Applies to**: `scripts/extract-osm-parquet.sh`
 
@@ -141,11 +171,12 @@ which averages over the join.
 
 Editing `extract-osm-parquet.sh`'s selector list doesn't touch the planet
 PBF's mtime, so a plain freshness check would silently reuse a
-`filtered.osm.pbf` built under the old selectors. Stage 0 writes the exact
-selector list it used to `filter-selectors.txt` on success and re-derives
-`filtered-tags.osm.pbf`, `filtered-buildings.osm.pbf` and
-`filtered.osm.pbf` when that file is missing or its content differs from
-the current list.
+`filtered.osm.pbf` built under the old selectors. Stage 0 writes the
+concatenation of its node/way and relation selector arrays to
+`filter-selectors.txt` on success, and re-derives every intermediate —
+`filtered-tags.osm.pbf`, `filtered-buildings.osm.pbf`, the relation
+closure intermediates, and `filtered.osm.pbf` — when that file is missing
+or its content differs from the current list.
 
 **Applies to**: `scripts/extract-osm-parquet.sh`
 

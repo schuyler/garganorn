@@ -620,11 +620,13 @@ def density_parquet(overture_parquet, tmp_path_factory):
 
 @pytest.fixture(scope="session")
 def osm_parquet(tmp_path_factory):
-    """Write OSM-schema node and way parquet files; return dict with 'node' and 'way' globs."""
+    """Write OSM-schema node, way, and (empty) relation parquet files;
+    return dict with 'node', 'way', and 'relation' globs."""
 
     base = tmp_path_factory.mktemp("osm_parquet")
     node_path = base / "node_data.parquet"
     way_path = base / "way_data.parquet"
+    relation_path = base / "relation_data.parquet"
 
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
@@ -779,12 +781,44 @@ def osm_parquet(tmp_path_factory):
     """)
 
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    # --- Relation parquet (empty: no relation rows in this fixture) ---
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
     conn.close()
 
     return {
         "node": str(base / "node_data.parquet"),
         "way": str(base / "way_data.parquet"),
+        "relation": str(base / "relation_data.parquet"),
     }
+
+
+@pytest.fixture(scope="session")
+def empty_relation_parquet(tmp_path_factory):
+    """Write an empty OSM relation parquet file; return its path."""
+
+    base = tmp_path_factory.mktemp("empty_relation_parquet")
+    relation_path = base / "relation_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return str(relation_path)
 
 
 @pytest.fixture(scope="session")

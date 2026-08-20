@@ -156,9 +156,9 @@ def run_overture_import(conn, parquet_glob, bbox=None, density_rows=None, idf_ro
     conn.execute(sql)
 
 
-def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None, idf_rows=None,
+def run_osm_import(conn, node_glob, way_glob, relation_glob, bbox=None, density_rows=None, idf_rows=None,
                     density_norm=10.0, idf_norm=18.0):
-    """Run osm_import.sql against node_glob/way_glob.
+    """Run osm_import.sql against node_glob/way_glob/relation_glob.
 
     By default (density_rows=None, idf_rows=None) density_tiles/idf_scores are
     created empty.
@@ -167,8 +167,6 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None,
     """
     if bbox is None:
         bbox = OSM_SF_BBOX
-    if way_glob is None:
-        way_glob = node_glob
     density_cte = _density_cte_sql(density_rows)
     idf_cte = _idf_cte_sql(idf_rows)
     # Load OSM category case SQL
@@ -177,6 +175,7 @@ def run_osm_import(conn, node_glob, way_glob=None, bbox=None, density_rows=None,
         "memory_limit": "4GB",
         "node_parquet": node_glob,
         "way_parquet": way_glob,
+        "relation_parquet": relation_glob,
         "xmin": bbox["xmin"],
         "xmax": bbox["xmax"],
         "ymin": bbox["ymin"],

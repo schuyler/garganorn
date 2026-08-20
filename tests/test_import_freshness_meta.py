@@ -99,8 +99,10 @@ def _source_parquet_and_glob(source, overture_parquet, osm_parquet):
     if source == "overture_place":
         return overture_parquet, [overture_parquet]
     else:  # osm
-        node_glob, way_glob = osm_parquet["node"], osm_parquet["way"]
-        return (node_glob, way_glob), [node_glob, way_glob]
+        node_glob, way_glob, relation_glob = (
+            osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]
+        )
+        return (node_glob, way_glob, relation_glob), [node_glob, way_glob, relation_glob]
 
 
 # ---------------------------------------------------------------------------

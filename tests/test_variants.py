@@ -24,7 +24,7 @@ class TestPlacesTableVariantsColumn:
         """OSM places table exposes a variants column."""
         conn = duckdb.connect(str(tmp_path / "osm_variants_col.duckdb"))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         rows = conn.execute(
             "SELECT column_name FROM information_schema.columns "
             "WHERE table_name = 'places' AND column_name = 'variants'"
@@ -91,7 +91,7 @@ class TestOsmVariantsCharacterization:
     def _run(self, osm_parquet, tmp_path, name):
         conn = duckdb.connect(str(tmp_path / f"{name}.duckdb"))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         return conn
 
     def test_seven_base_types(self, osm_parquet, tmp_path):

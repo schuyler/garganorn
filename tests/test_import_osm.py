@@ -7,10 +7,7 @@ import time
 
 import duckdb
 import pytest
-from tests.quadtree_helpers import (
-    REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit,
-    OSM_SF_BBOX, run_osm_import,
-)
+from tests.quadtree_helpers import REPO_ROOT, run_osm_import
 
 import garganorn.stages as _stages
 
@@ -32,7 +29,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_import.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         tables = [row[0] for row in conn.execute("SHOW TABLES").fetchall()]
         conn.close()
         assert "places" in tables
@@ -42,7 +39,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_qk17_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "qk17" in cols, f"qk17 column missing; found columns: {cols}"
@@ -52,7 +49,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_rkey_col.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "rkey" in cols, f"rkey column missing; found columns: {cols}"
@@ -66,7 +63,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_cols.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         cols = {row[0] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         missing = required - cols
@@ -77,7 +74,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_bbox.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
         conn.close()
         assert "n1004" not in rkeys, "Out-of-bbox node n1004 must be excluded"
@@ -87,12 +84,12 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_noname.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
         conn.close()
         assert "n1003" not in rkeys, "No-name node n1003 must be excluded"
 
-    def test_empty_and_whitespace_name_excluded(self, tmp_path):
+    def test_empty_and_whitespace_name_excluded(self, tmp_path, empty_relation_parquet):
         """A node with an empty-string or whitespace-only name tag must be
         excluded, the same as a missing name tag (see test_no_name_excluded).
         Uses a standalone fixture, not the shared osm_parquet fixture, so it
@@ -133,7 +130,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_empty_name.duckdb"
         conn2 = duckdb.connect(str(db_path))
         conn2.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn2, str(node_path), str(way_path))
+        run_osm_import(conn2, str(node_path), str(way_path), empty_relation_parquet)
         rkeys = {row[0] for row in conn2.execute("SELECT rkey FROM places").fetchall()}
         conn2.close()
         assert "n2001" not in rkeys, "Empty-name node n2001 must be excluded"
@@ -145,7 +142,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_survive.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
         conn.close()
         assert "n1001" in rkeys, f"n1001 (Tartine Manufactory) missing; got: {rkeys}"
@@ -156,7 +153,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_qk17_pop.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         nulls = conn.execute("SELECT rkey FROM places WHERE qk17 IS NULL").fetchall()
         conn.close()
         assert not nulls, f"Rows with NULL qk17: {nulls}"
@@ -166,7 +163,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_rkey_fmt.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         # All places imported from nodes in this fixture should have rkey like 'n<id>'
         node_rkeys = conn.execute(
             "SELECT rkey FROM places WHERE osm_type = 'n'"
@@ -186,7 +183,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_geom_type.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "geom" in describe, "geom column not found in places"
@@ -197,7 +194,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_tags_type.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         describe = {row[0]: row[1] for row in conn.execute("DESCRIBE places").fetchall()}
         conn.close()
         assert "tags" in describe, "tags column not found in places"
@@ -210,7 +207,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_quality_filter.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
         conn.close()
         assert "n1006" not in rkeys, "Node with name but no quality tag must be excluded by quality filter"
@@ -220,7 +217,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_way_import.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
         conn.close()
         assert "w2001" in rkeys, (
@@ -232,7 +229,7 @@ class TestOsmImport:
         db_path = tmp_path / "test_osm_variant_tags.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         row = conn.execute(
             "SELECT tags FROM places WHERE rkey = 'n1005'"
         ).fetchone()
@@ -266,7 +263,7 @@ class TestOsmImportCharacterization:
         db_path = tmp_path / "test_osm_variants_empty.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         node_variants = conn.execute(
             "SELECT variants FROM places WHERE rkey = 'n1001'"
         ).fetchone()[0]
@@ -293,7 +290,7 @@ class TestOsmImportCharacterization:
         db_path = tmp_path / "test_osm_way_centroid.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         row = conn.execute(
             "SELECT latitude, longitude FROM places WHERE rkey = 'w2001'"
         ).fetchone()
@@ -331,7 +328,7 @@ class TestOsmImportCharacterization:
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_osm_import(
-            conn, osm_parquet["node"], osm_parquet["way"],
+            conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"],
             density_rows=density_rows, idf_rows=idf_rows,
             density_norm=10.0, idf_norm=18.0,
         )
@@ -364,14 +361,14 @@ class TestOsmImportArtifactPhase2:
     def test_stage_import_writes_places_parquet(self, osm_parquet, tmp_path):
         """stage_import must write places.parquet for osm."""
         output = str(tmp_path / "places.parquet")
-        parquet = (osm_parquet["node"], osm_parquet["way"])
+        parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         _stages.stage_import("osm", parquet, self._BBOX, output)
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_places_parquet_no_geom_column(self, osm_parquet, tmp_path):
         """places.parquet must not contain the 'geom' column."""
         output = str(tmp_path / "places.parquet")
-        parquet = (osm_parquet["node"], osm_parquet["way"])
+        parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         _stages.stage_import("osm", parquet, self._BBOX, output)
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
@@ -401,7 +398,7 @@ class TestOsmImportArtifactPhase2:
         )
 
         output = str(tmp_path / "places.parquet")
-        parquet = (osm_parquet["node"], osm_parquet["way"])
+        parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         _stages.stage_import("osm", parquet, self._BBOX, output)
         con = duckdb.connect()
         output_rkeys = {r[0] for r in con.execute(
@@ -420,7 +417,7 @@ class TestOsmImportArtifactPhase2:
     def test_places_parquet_qk17_sorted_nulls_last(self, osm_parquet, tmp_path):
         """places.parquet must be sorted by qk17 NULLS LAST."""
         output = str(tmp_path / "places.parquet")
-        parquet = (osm_parquet["node"], osm_parquet["way"])
+        parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         _stages.stage_import("osm", parquet, self._BBOX, output)
         con = duckdb.connect()
         rows = [r[0] for r in con.execute(
@@ -434,16 +431,18 @@ class TestOsmImportArtifactPhase2:
 class TestOsmJoinNoFanOut:
     """Regression guard: no lookup join may multiply rows.
 
-    osm_import.sql has four join sites with the same defect the Overture
+    osm_import.sql has six join sites with the same defect the Overture
     guards cover (TestOvertureDensityJoinNoFanOut / ...IdfJoinNoFanOut in
     test_regressions.py) -- node_density and way_density join density_tiles
     on a derived tile_qk15, node_idf and way_idf join idf_scores on
-    primary_category, and none of the four keys is guaranteed unique in its
+    primary_category, and the relation arm carries the same pair (`rd`/`ri`
+    in osm_import.sql); none of the six keys is guaranteed unique in its
     lookup table. A duplicate key yields multiple rows in the helper CTE,
     which the final `LEFT JOIN ... ON rkey = ...` then fans back out into
     duplicate `places` rows for one input record.
 
-    Parametrized over all four join sites so none is left unguarded.
+    Parametrized over all six join sites: node, way, and relation, each with
+    a density and an idf case.
 
     Expected values are read from a baseline run rather than hardcoded, so
     the test calibrates itself against whatever the fixture currently holds.
@@ -451,21 +450,27 @@ class TestOsmJoinNoFanOut:
 
     _DENSITY_BBOX = (-122.55, 37.60, -122.30, 37.85)  # OSM_SF_BBOX, as a tile extent
 
-    @pytest.mark.parametrize("join_site,rkey", [
-        ("node_density", "n1001"),
-        ("node_idf", "n1001"),
-        ("way_density", "w2001"),
-        ("way_idf", "w2001"),
+    @pytest.mark.parametrize("join_site,rkey,parquet_fixture", [
+        ("node_density", "n1001", "osm_parquet"),
+        ("node_idf", "n1001", "osm_parquet"),
+        ("way_density", "w2001", "osm_parquet"),
+        ("way_idf", "w2001", "osm_parquet"),
+        # osm_parquet's relation partition is deliberately empty, so the
+        # relation cases are aimed at relation_parquet instead.
+        ("relation_density", "r40001", "relation_parquet"),
+        ("relation_idf", "r40001", "relation_parquet"),
     ])
     def test_no_row_multiplication_on_duplicate_lookup_key(
-        self, join_site, rkey, osm_parquet, tmp_path
+        self, join_site, rkey, parquet_fixture, request, tmp_path
     ):
+        parquet = request.getfixturevalue(parquet_fixture)
+
         # Baseline with empty lookup tables: the row count a populated-lookup
         # run must reproduce exactly, plus the key values needed to aim the
         # duplicate at this specific record.
         base_conn = duckdb.connect(str(tmp_path / f"baseline_{join_site}.duckdb"))
         base_conn.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(base_conn, osm_parquet["node"], osm_parquet["way"])
+        run_osm_import(base_conn, parquet["node"], parquet["way"], parquet["relation"])
         baseline_total = base_conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
         row = base_conn.execute(
             "SELECT latitude, longitude, primary_category FROM places WHERE rkey = ?",
@@ -499,7 +504,7 @@ class TestOsmJoinNoFanOut:
         conn = duckdb.connect(str(tmp_path / f"dup_{join_site}.duckdb"))
         conn.execute("INSTALL spatial; LOAD spatial;")
         run_osm_import(
-            conn, osm_parquet["node"], osm_parquet["way"],
+            conn, parquet["node"], parquet["way"], parquet["relation"],
             density_rows=density_rows, idf_rows=idf_rows,
         )
         total = conn.execute("SELECT COUNT(*) FROM places").fetchone()[0]
@@ -575,7 +580,7 @@ BUILDING_EXCLUDE_VALUES = [
 
 
 @pytest.fixture(scope="module")
-def whitelisted_keys_parquet(tmp_path_factory):
+def whitelisted_keys_parquet(tmp_path_factory, empty_relation_parquet):
     """One named node per WHITELISTED_KEY_VALUE_PAIRS entry; an empty way parquet
     (this fixture only exercises the node arm, which shares its whitelist
     predicate with the way arm apart from the building branch).
@@ -614,7 +619,7 @@ def whitelisted_keys_parquet(tmp_path_factory):
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
     conn.close()
 
-    return {"node": str(node_path), "way": str(way_path), "ids": ids}
+    return {"node": str(node_path), "way": str(way_path), "relation": empty_relation_parquet, "ids": ids}
 
 
 @pytest.fixture(scope="module")
@@ -625,14 +630,17 @@ def whitelisted_keys_rkeys(whitelisted_keys_parquet):
     """
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
-    run_osm_import(conn, whitelisted_keys_parquet["node"], whitelisted_keys_parquet["way"])
+    run_osm_import(
+        conn, whitelisted_keys_parquet["node"], whitelisted_keys_parquet["way"],
+        whitelisted_keys_parquet["relation"],
+    )
     rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
     conn.close()
     return rkeys
 
 
 @pytest.fixture(scope="module")
-def existing_keys_parquet(tmp_path_factory):
+def existing_keys_parquet(tmp_path_factory, empty_relation_parquet):
     """One named node per EXISTING_WHITELIST_KEY_VALUES entry."""
     base = tmp_path_factory.mktemp("existing_keys_parquet")
     node_path = base / "node_data.parquet"
@@ -668,7 +676,7 @@ def existing_keys_parquet(tmp_path_factory):
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
     conn.close()
 
-    return {"node": str(node_path), "way": str(way_path), "ids": ids}
+    return {"node": str(node_path), "way": str(way_path), "relation": empty_relation_parquet, "ids": ids}
 
 
 @pytest.fixture(scope="module")
@@ -676,14 +684,17 @@ def existing_keys_categories(existing_keys_parquet):
     """Run the import once and return {rkey: primary_category}."""
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
-    run_osm_import(conn, existing_keys_parquet["node"], existing_keys_parquet["way"])
+    run_osm_import(
+        conn, existing_keys_parquet["node"], existing_keys_parquet["way"],
+        existing_keys_parquet["relation"],
+    )
     rows = conn.execute("SELECT rkey, primary_category FROM places").fetchall()
     conn.close()
     return {rkey: category for rkey, category in rows}
 
 
 @pytest.fixture(scope="module")
-def building_parquet(tmp_path_factory):
+def building_parquet(tmp_path_factory, empty_relation_parquet):
     """One named way per BUILDING_INCLUDE_VALUES/BUILDING_EXCLUDE_VALUES
     entry (the subtractive building rule), all referencing the same
     two nodes so every way's centroid resolves.
@@ -728,7 +739,7 @@ def building_parquet(tmp_path_factory):
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
     conn.close()
 
-    return {"node": str(node_path), "way": str(way_path), "ids": ids}
+    return {"node": str(node_path), "way": str(way_path), "relation": empty_relation_parquet, "ids": ids}
 
 
 @pytest.fixture(scope="module")
@@ -736,7 +747,10 @@ def building_rkeys(building_parquet):
     """Run the import once and return the surviving rkeys."""
     conn = duckdb.connect(":memory:")
     conn.execute("INSTALL spatial; LOAD spatial;")
-    run_osm_import(conn, building_parquet["node"], building_parquet["way"])
+    run_osm_import(
+        conn, building_parquet["node"], building_parquet["way"],
+        building_parquet["relation"],
+    )
     rkeys = {row[0] for row in conn.execute("SELECT rkey FROM places").fetchall()}
     conn.close()
     return rkeys
@@ -781,7 +795,7 @@ class TestOsmImportBuildingWhitelist:
             f"building={value} (rkey {excluded}) must stay excluded"
         )
 
-    def test_building_yields_to_amenity_precedence(self, tmp_path):
+    def test_building_yields_to_amenity_precedence(self, tmp_path, empty_relation_parquet):
         """A way tagged building=yes *and* amenity=restaurant, with a name,
         must resolve as amenity=restaurant, not a building category --
         building is appended last in _osm_category_case.sql's CASE,
@@ -829,7 +843,7 @@ class TestOsmImportBuildingWhitelist:
         db_path = tmp_path / "test_precedence.duckdb"
         conn2 = duckdb.connect(str(db_path))
         conn2.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn2, str(node_path), str(way_path))
+        run_osm_import(conn2, str(node_path), str(way_path), empty_relation_parquet)
         row = conn2.execute(
             "SELECT primary_category FROM places WHERE rkey = 'w7001'"
         ).fetchone()
@@ -840,10 +854,10 @@ class TestOsmImportBuildingWhitelist:
             f"building=yes+amenity=restaurant; got {row[0]!r}"
         )
 
-    def test_building_is_way_only(self, tmp_path):
+    def test_building_excluded_from_node_arm(self, tmp_path, empty_relation_parquet):
         """A NODE tagged building=yes with a name and no other whitelisted
-        tag must produce no record -- the building branch lives in
-        the way arm of the whitelist only.
+        tag must produce no record -- the building branch is present in the
+        way and relation arms of the whitelist, but absent from the node arm.
         """
         base = tmp_path / "node_building_fixture"
         base.mkdir()
@@ -881,7 +895,7 @@ class TestOsmImportBuildingWhitelist:
         db_path = tmp_path / "test_node_building.duckdb"
         conn2 = duckdb.connect(str(db_path))
         conn2.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn2, str(node_path), str(way_path))
+        run_osm_import(conn2, str(node_path), str(way_path), empty_relation_parquet)
         rkeys = {row[0] for row in conn2.execute("SELECT rkey FROM places").fetchall()}
         conn2.close()
         assert "n8001" not in rkeys, (
@@ -894,8 +908,10 @@ class TestOsmImportSettledExclusions:
     out even as sibling keys/values are added to the whitelist.
 
     Each case is asserted for both element types: the node arm (`filtered`)
-    and the way arm (`qualifying_ways`) carry the same whitelist predicate
-    written out twice, so a node-only fixture leaves the way arm unexercised.
+    and the way arm (`qualifying_ways`) carry the same whitelist predicate,
+    now written out three times in `osm_import.sql` (node, way, and
+    `qualifying_relations`), so a node-only fixture leaves the way arm
+    unexercised. The relation arm is not exercised by this test.
     """
 
     @pytest.mark.parametrize("key,value", [
@@ -904,7 +920,7 @@ class TestOsmImportSettledExclusions:
         ("public_transport", "platform"),
         ("railway", "platform"),
     ])
-    def test_settled_exclusion_stays_out(self, key, value, tmp_path):
+    def test_settled_exclusion_stays_out(self, key, value, tmp_path, empty_relation_parquet):
         base = tmp_path / f"exclusion_{key}_{value}"
         base.mkdir()
         node_path = base / "node_data.parquet"
@@ -946,7 +962,7 @@ class TestOsmImportSettledExclusions:
         db_path = tmp_path / f"test_exclusion_{key}_{value}.duckdb"
         conn2 = duckdb.connect(str(db_path))
         conn2.execute("INSTALL spatial; LOAD spatial;")
-        run_osm_import(conn2, str(node_path), str(way_path))
+        run_osm_import(conn2, str(node_path), str(way_path), empty_relation_parquet)
         rkeys = {row[0] for row in conn2.execute("SELECT rkey FROM places").fetchall()}
         conn2.close()
         assert "n8500" not in rkeys, f"{key}={value} must stay excluded (node); got {rkeys}"
@@ -968,4 +984,304 @@ class TestOsmImportExistingCategoriesInvariant:
         assert existing_keys_categories.get(rkey) == expected, (
             f"{rkey} ({key}={value}) primary_category changed; "
             f"expected {expected!r}, got {existing_keys_categories.get(rkey)!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Tests: the relation branch of osm_import.sql -- multipolygon import,
+# member-linked and name+location suppression, and nested-relation members.
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def relation_parquet(tmp_path_factory):
+    """Nodes, ways, and relations for the relation-import tests: a
+    multipolygon relation with no incumbent; node- and way-member
+    suppression, each paired with a same-member different-name control
+    that must survive (isolating the name-equality clause from bare
+    membership); name+location suppression of a non-member, paired with
+    a same-extent different-name control; a same-name relation outside
+    its extent that must survive; a relation reachable only through a
+    nested relation member, paired with a partially-resolvable control;
+    a building drop-list value paired with an include-list control; and
+    a relation carrying alt_name for variants derivation.
+    """
+    base = tmp_path_factory.mktemp("relation_parquet")
+    node_path = base / "node_data.parquet"
+    way_path = base / "way_data.parquet"
+    relation_path = base / "relation_data.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    conn.execute("""
+        CREATE TABLE tmp_nodes (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            lat     DOUBLE,
+            lon     DOUBLE
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES
+            -- A: multipolygon ring nodes (member-only, no tags)
+            (40201, map([]::VARCHAR[], []::VARCHAR[]), 37.7900, -122.4110),
+            (40202, map([]::VARCHAR[], []::VARCHAR[]), 37.7900, -122.4090),
+            (40203, map([]::VARCHAR[], []::VARCHAR[]), 37.7920, -122.4090),
+            (40204, map([]::VARCHAR[], []::VARCHAR[]), 37.7920, -122.4110),
+            -- B: existing node place, target of node-member suppression
+            (51001, map(['name', 'leisure'], ['Redwood Grove', 'park']), 37.8000, -122.4300),
+            -- C: nodes for the existing way place (member-only)
+            (52101, map([]::VARCHAR[], []::VARCHAR[]), 37.7950, -122.4250),
+            (52102, map([]::VARCHAR[], []::VARCHAR[]), 37.7952, -122.4252),
+            -- D: existing node place NOT referenced as a member
+            (53001, map(['name', 'tourism'], ['Sunset Overlook', 'attraction']), 37.8100, -122.4400),
+            (53201, map([]::VARCHAR[], []::VARCHAR[]), 37.8080, -122.4420),
+            (53202, map([]::VARCHAR[], []::VARCHAR[]), 37.8120, -122.4380),
+            -- E: existing node place outside the relation's extent
+            (54001, map(['name', 'tourism'], ['Hilltop Vista', 'attraction']), 37.8400, -122.3200),
+            (54201, map([]::VARCHAR[], []::VARCHAR[]), 37.7900, -122.4600),
+            (54202, map([]::VARCHAR[], []::VARCHAR[]), 37.7920, -122.4580),
+            -- F: nested-relation, member-only nodes for the resolvable control
+            (55201, map([]::VARCHAR[], []::VARCHAR[]), 37.8200, -122.4500),
+            (55202, map([]::VARCHAR[], []::VARCHAR[]), 37.8210, -122.4510),
+            -- G: building drop-list, member-only nodes
+            (56201, map([]::VARCHAR[], []::VARCHAR[]), 37.8300, -122.4600),
+            (56202, map([]::VARCHAR[], []::VARCHAR[]), 37.8302, -122.4602),
+            -- H: variants, member-only nodes
+            (57201, map([]::VARCHAR[], []::VARCHAR[]), 37.8400, -122.4700),
+            (57202, map([]::VARCHAR[], []::VARCHAR[]), 37.8402, -122.4702)
+    """)
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_ways (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            nds     STRUCT(ref BIGINT)[]
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_ways VALUES
+            (40101, map([]::VARCHAR[], []::VARCHAR[]),
+             [{'ref': 40201}, {'ref': 40202}, {'ref': 40203}, {'ref': 40204}]::STRUCT(ref BIGINT)[]),
+            (52001, map(['name', 'shop'], ['Market Row', 'mall']),
+             [{'ref': 52101}, {'ref': 52102}]::STRUCT(ref BIGINT)[]),
+            (53101, map([]::VARCHAR[], []::VARCHAR[]),
+             [{'ref': 53201}, {'ref': 53202}]::STRUCT(ref BIGINT)[]),
+            (54101, map([]::VARCHAR[], []::VARCHAR[]),
+             [{'ref': 54201}, {'ref': 54202}]::STRUCT(ref BIGINT)[]),
+            (55101, map([]::VARCHAR[], []::VARCHAR[]),
+             [{'ref': 55201}, {'ref': 55202}]::STRUCT(ref BIGINT)[]),
+            (56101, map([]::VARCHAR[], []::VARCHAR[]),
+             [{'ref': 56201}, {'ref': 56202}]::STRUCT(ref BIGINT)[]),
+            (57101, map([]::VARCHAR[], []::VARCHAR[]),
+             [{'ref': 57201}, {'ref': 57202}]::STRUCT(ref BIGINT)[])
+    """)
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_relations VALUES
+            -- A: multipolygon park, no incumbent
+            (40001, map(['name', 'leisure'], ['Big City Park', 'park']),
+             [{'type': 'way', 'ref': 40101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- B: node-member suppression + same-member different-name control
+            (51002, map(['name', 'leisure'], ['Redwood Grove', 'park']),
+             [{'type': 'node', 'ref': 51001, 'role': 'label'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            (51003, map(['name', 'leisure'], ['Redwood Grove Annex', 'park']),
+             [{'type': 'node', 'ref': 51001, 'role': 'label'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- C: way-member suppression + same-member different-name control
+            (52002, map(['name', 'leisure'], ['Market Row', 'park']),
+             [{'type': 'way', 'ref': 52001, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            (52003, map(['name', 'leisure'], ['Market Row Extension', 'park']),
+             [{'type': 'way', 'ref': 52001, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- D: name+location suppression of a non-member + control
+            (53002, map(['name', 'leisure'], ['Sunset Overlook', 'park']),
+             [{'type': 'way', 'ref': 53101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            (53003, map(['name', 'leisure'], ['Sunset Overlook North', 'park']),
+             [{'type': 'way', 'ref': 53101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- E: same name, outside the extent -- must NOT be suppressed
+            (54002, map(['name', 'leisure'], ['Hilltop Vista', 'park']),
+             [{'type': 'way', 'ref': 54101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- F: reachable only via a relation member (55002 has no row
+            -- in this table) imports nothing; the control has the same
+            -- relation member plus one resolvable way member
+            (55001, map(['name', 'boundary'], ['Region Super', 'protected_area']),
+             [{'type': 'relation', 'ref': 55002, 'role': 'subarea'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            (55003, map(['name', 'boundary'], ['Region Super Real', 'protected_area']),
+             [{'type': 'relation', 'ref': 55002, 'role': 'subarea'},
+              {'type': 'way', 'ref': 55101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- G: building drop-list value excluded, vs. an include-list control
+            (56001, map(['name', 'building'], ['Storage Complex', 'shed']),
+             [{'type': 'way', 'ref': 56101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            (56002, map(['name', 'building'], ['Storage Complex Commercial', 'commercial']),
+             [{'type': 'way', 'ref': 56101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]),
+            -- H: variants populated from a relation name tag
+            (57001, map(['name', 'alt_name', 'leisure'], ['Grand Central Park', 'GCP', 'park']),
+             [{'type': 'way', 'ref': 57101, 'role': 'outer'}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[])
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return {"node": str(node_path), "way": str(way_path), "relation": str(relation_path)}
+
+
+@pytest.fixture(scope="module")
+def relation_import_rows(relation_parquet):
+    """Run the import once against relation_parquet; return {rkey: row dict}."""
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    run_osm_import(
+        conn, relation_parquet["node"], relation_parquet["way"], relation_parquet["relation"]
+    )
+    cols = ["rkey", "osm_type", "name", "latitude", "longitude", "primary_category", "variants"]
+    rows = conn.execute(f"SELECT {', '.join(cols)} FROM places").fetchall()
+    conn.close()
+    return {row[0]: dict(zip(cols, row)) for row in rows}
+
+
+class TestOsmRelationImport:
+    """Tests for the relation branch of osm_import.sql: multipolygon
+    import, member-linked and name+location suppression."""
+
+    def test_multipolygon_relation_imports_with_expected_fields(self, relation_import_rows):
+        """A named multipolygon relation with no incumbent imports as
+        'r' + osm_id, with a representative point inside its member extent
+        -- the flat average of the ring way's four node coords, the same
+        estimator the way pipeline uses for its centroid.
+        """
+        row = relation_import_rows.get("r40001")
+        assert row is not None, "r40001 (Big City Park) missing from places"
+        assert row["osm_type"] == "r"
+        assert row["name"] == "Big City Park"
+        assert row["primary_category"] == "leisure=park"
+        assert row["latitude"] == pytest.approx(37.7910)
+        assert row["longitude"] == pytest.approx(-122.4100)
+        # Representative point within the member extent (ring nodes span
+        # lat [37.7900, 37.7920], lon [-122.4110, -122.4090]).
+        assert 37.7900 <= row["latitude"] <= 37.7920
+        assert -122.4110 <= row["longitude"] <= -122.4090
+
+    def test_node_member_suppression_requires_name_match(self, relation_import_rows):
+        """A relation sharing a name with a node member it links to is
+        suppressed; a relation linking to the same node member under a
+        different name is not -- membership alone is not identity.
+        """
+        assert "n51001" in relation_import_rows, "incumbent node n51001 missing"
+        assert "r51002" not in relation_import_rows, (
+            "r51002 (same name as its node member) must be suppressed"
+        )
+        assert "r51003" in relation_import_rows, (
+            "r51003 (same node member, different name) must NOT be suppressed"
+        )
+
+    def test_way_member_suppression_requires_name_match(self, relation_import_rows):
+        """Mirrors the node-member case for a way member."""
+        assert "w52001" in relation_import_rows, "incumbent way w52001 missing"
+        assert "r52002" not in relation_import_rows, (
+            "r52002 (same name as its way member) must be suppressed"
+        )
+        assert "r52003" in relation_import_rows, (
+            "r52003 (same way member, different name) must NOT be suppressed"
+        )
+
+    def test_name_location_suppression_of_a_non_member(self, relation_import_rows):
+        """A same-name places row need not be a member to suppress a
+        relation -- its point lying inside the relation's member extent is
+        sufficient. A different-name relation with the identical extent is
+        not suppressed.
+        """
+        assert "n53001" in relation_import_rows, "incumbent node n53001 missing"
+        assert "r53002" not in relation_import_rows, (
+            "r53002 (same name, incumbent point inside its extent) must be suppressed"
+        )
+        assert "r53003" in relation_import_rows, (
+            "r53003 (different name, same extent) must NOT be suppressed"
+        )
+
+    def test_same_name_outside_extent_not_suppressed(self, relation_import_rows):
+        """A same-name places row outside the relation's member extent does
+        not suppress it."""
+        assert "n54001" in relation_import_rows
+        assert "r54002" in relation_import_rows, (
+            "r54002 (same name as n54001, but n54001 is outside its extent) "
+            "must NOT be suppressed"
+        )
+
+    def test_existing_nw_rkeys_unchanged_by_relation_insert(self, relation_parquet, empty_relation_parquet):
+        """The relation INSERT must not alter which n/w rkeys survive."""
+        baseline_conn = duckdb.connect(":memory:")
+        baseline_conn.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(baseline_conn, relation_parquet["node"], relation_parquet["way"], empty_relation_parquet)
+        baseline_rkeys = {row[0] for row in baseline_conn.execute("SELECT rkey FROM places").fetchall()}
+        baseline_conn.close()
+
+        full_conn = duckdb.connect(":memory:")
+        full_conn.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(
+            full_conn, relation_parquet["node"], relation_parquet["way"], relation_parquet["relation"]
+        )
+        full_rkeys = {row[0] for row in full_conn.execute("SELECT rkey FROM places").fetchall()}
+        full_conn.close()
+
+        nw_rkeys = {rk for rk in full_rkeys if not rk.startswith("r")}
+        assert nw_rkeys == baseline_rkeys, "the relation INSERT changed which n/w rkeys survive"
+        assert any(rk.startswith("r") for rk in full_rkeys), (
+            "no relation rkey present at all -- the relation INSERT is missing"
+        )
+
+    def test_relation_reachable_only_via_nested_relation_imports_nothing(self, relation_import_rows):
+        """A relation whose only member is another relation has no
+        resolvable coordinates and imports nothing; a relation with the same
+        relation member plus one resolvable way member still imports.
+        """
+        assert "r55001" not in relation_import_rows, (
+            "r55001 (only a relation member) must import nothing"
+        )
+        assert "r55003" in relation_import_rows, (
+            "r55003 (relation member ignored, way member resolvable) must import"
+        )
+
+    def test_building_relation_drop_list_value_excluded(self, relation_import_rows):
+        """The way pipeline's building drop-list extends to relation
+        multipolygons."""
+        assert "r56001" not in relation_import_rows, (
+            "r56001 (building=shed, drop-list) must be excluded"
+        )
+        assert "r56002" in relation_import_rows, (
+            "r56002 (building=commercial, include-list) must resolve"
+        )
+
+    def test_variants_populated_from_relation_name_tags(self, relation_import_rows):
+        """alt_name on a relation derives a variants entry, the same mapping
+        the node/way pipelines use."""
+        row = relation_import_rows.get("r57001")
+        assert row is not None, "r57001 (Grand Central Park) missing from places"
+        assert {"name": "GCP", "type": "alternate", "language": None} in row["variants"], (
+            f"expected alt_name variant for GCP; got {row['variants']!r}"
+        )
+
+
+class TestOsmImportRelationParquetGlob:
+    """stage_import's OSM parquet_glob is a (node, way, relation)
+    triple, unpacked directly from parquet_glob."""
+
+    _BBOX = (-122.55, 37.60, -122.30, 37.85)
+
+    def test_stage_import_accepts_relation_glob_triple(self, relation_parquet, tmp_path):
+        output = str(tmp_path / "places.parquet")
+        parquet = (relation_parquet["node"], relation_parquet["way"], relation_parquet["relation"])
+        _stages.stage_import("osm", parquet, self._BBOX, output)
+        con = duckdb.connect()
+        rkeys = {r[0] for r in con.execute(
+            f"SELECT rkey FROM read_parquet('{output}')"
+        ).fetchall()}
+        con.close()
+        assert "r40001" in rkeys, (
+            "Big City Park relation should survive the full stage_import pipeline"
         )

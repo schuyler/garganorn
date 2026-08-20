@@ -8,6 +8,16 @@ the data turns up something that looks like a bug. Most entries are
 settled won't-fixes; where a disposition is still open, the section says
 so.
 
+## Relation-vs-node/way duplicate suppression is a deliberate exception
+
+The stance above has one exception: `osm_import.sql`'s relation pipeline
+drops a relation when a member or a name+location match finds an existing
+node or way record, keeping the incumbent and never the relation. That is
+the same kind of adjudication the stance above disclaims — but it is
+adjudication within a single source (OSM mapped the same feature twice, as
+a relation and as a node or way), not between two disagreeing sources, and
+it was an approved requirement rather than a drift from the stance.
+
 ## Overlapping same-level administrative boundaries
 
 If two same-level administrative boundaries genuinely overlap according

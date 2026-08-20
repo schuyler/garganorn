@@ -93,11 +93,9 @@ markers before the OSM import stage and either shell out to it automatically
 or fail loudly with instructions, rather than silently proceeding on
 whatever parquet happens to be on disk.
 
-Timing: the re-extraction triggered by the 2026-08-16 incident, run
-standalone against the full planet PBF (91.8 GB, `planet.osm.pbf` dated
-2026-03-27), took 1h08m40s — 64m00s for the two `tags-filter` passes plus
-`osmium merge`, 4m40s for the `osm-pbf-parquet` conversion (1.82B elements),
-producing a 36 GB parquet cache.
+Timing: the extraction chain includes relation closure alongside the
+node/way filter passes and `osmium merge`; there is no current end-to-end
+measurement of the whole chain.
 
 Open questions: whether `quadtree` should invoke the script directly
 (pulling `osmium`/`osm-pbf-parquet` into the pipeline's dependency surface)
@@ -105,28 +103,3 @@ or just check freshness and refuse to proceed; whether the check belongs in
 `stage_import` or earlier, before Overture stages run for nothing; and
 whether a bbox-scoped build (no full planet PBF on disk) should skip the
 check entirely.
-
-## OSM relations are never imported
-
-Status: proposed, not started. No design has been reviewed.
-
-`scripts/extract-osm-parquet.sh` passes only node and way selectors to
-`osmium tags-filter`, so relations never reach the parquet — the
-`type=relation` partition holds zero rows — and `osm_import.sql` has no
-relation pipeline. A feature mapped only as a multipolygon or boundary
-relation is invisible no matter what the whitelist says. This bites tags
-already whitelisted — `leisure=park` has 41K relations and
-`leisure=nature_reserve` 43K, which is where the largest named parks and
-reserves live — and it caps any future `natural=water` import (955K water
-relations).
-
-Fixing it is a pipeline change, not a filter tweak: relations carry member
-lists rather than node refs, so centroid derivation needs member
-resolution, potentially recursive, and the osmium filter and parquet must
-be regenerated with relation selectors.
-
-Open questions: whether a centroid over member-way nodes is an acceptable
-location for a large multipolygon; whether super-relations are worth
-resolving; and what fraction of relation-only places actually carry names,
-which neither the parquet (no rows) nor taginfo (no per-type name splits)
-can answer.

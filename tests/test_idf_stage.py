@@ -67,7 +67,8 @@ def overture_idf_parquet(tmp_path):
 
 @pytest.fixture
 def osm_idf_parquets(tmp_path):
-    """Minimal OSM node and way parquets with known tags.
+    """Minimal OSM node and way parquets with known tags, plus an empty
+    relation parquet.
 
     Schema (node):
         id      BIGINT
@@ -90,6 +91,7 @@ def osm_idf_parquets(tmp_path):
     """
     node_path = tmp_path / "osm_nodes.parquet"
     way_path = tmp_path / "osm_ways.parquet"
+    relation_path = tmp_path / "osm_relations.parquet"
 
     conn = duckdb.connect(":memory:")
 
@@ -131,9 +133,19 @@ def osm_idf_parquets(tmp_path):
     """)
 
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    # --- Relations (empty) ---
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
     conn.close()
 
-    return (str(node_path), str(way_path))
+    return (str(node_path), str(way_path), str(relation_path))
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +252,7 @@ class TestStageIdfOSM:
     def test_produces_parquet(self, osm_idf_parquets, tmp_path):
         """stage_idf('osm', ...) produces output with correct schema.
 
-        OSM takes a tuple of (node_parquet, way_parquet).
+        OSM takes a tuple of (node_parquet, way_parquet, relation_parquet).
         """
         output_path = str(tmp_path / "osm_idf_out.parquet")
         t0 = time.monotonic()
@@ -495,9 +507,9 @@ class TestStageIdfMtimeCaching:
         """OSM freshness check covers both node-glob and way-glob inputs.
 
         artifact_fresh() checks mtime(meta) > mtime(every input). For OSM,
-        input_files = resolved(node_glob) + resolved(way_glob). If EITHER
-        glob's files are newer than meta, artifact_fresh() returns False and
-        the stage re-runs.
+        input_files = resolved(node_glob) + resolved(way_glob) +
+        resolved(relation_glob). If ANY glob's files are newer than meta,
+        artifact_fresh() returns False and the stage re-runs.
 
         This test verifies the two-sided coverage by running two sub-scenarios:
         (A) node newer than meta → re-run
@@ -507,7 +519,7 @@ class TestStageIdfMtimeCaching:
         one glob's parquet is left at its current (newer) mtime while the other
         is also moved to the past. Only the "newer" glob should trigger the re-run.
         """
-        node_path, way_path = osm_idf_parquets
+        node_path, way_path, relation_path = osm_idf_parquets
         output_path = str(tmp_path / "osm_idf_out.parquet")
         meta_path = output_path + ".meta.json"
         t0 = time.monotonic()
@@ -619,6 +631,7 @@ def osm_idf_whitelisted_key_parquets(tmp_path):
     """
     node_path = tmp_path / "osm_nodes_whitelisted_key.parquet"
     way_path = tmp_path / "osm_ways_whitelisted_key.parquet"
+    relation_path = tmp_path / "osm_relations_whitelisted_key.parquet"
 
     conn = duckdb.connect(":memory:")
 
@@ -645,9 +658,18 @@ def osm_idf_whitelisted_key_parquets(tmp_path):
         )
     """)
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
     conn.close()
 
-    return (str(node_path), str(way_path))
+    return (str(node_path), str(way_path), str(relation_path))
 
 
 class TestStageIdfWhitelistedKey:
@@ -675,6 +697,203 @@ class TestStageIdfWhitelistedKey:
         assert row[0] == pytest.approx(expected), (
             f"amenity=cafe idf_score should reflect N.total including the "
             f"landuse=cemetery row (ln(2/1)={expected}); got {row[0]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# TestStageIdfOsmRelations — osm_idf.sql has relation numerator and
+# denominator arms mirroring the node and way arms. stage_idf takes a
+# (node, way, relation) glob triple for OSM.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def osm_idf_relation_numerator_parquets(tmp_path):
+    """A relation carrying tourism=attraction, a category no node or way in
+    this fixture carries -- isolates the relation numerator arm.
+    """
+    node_path = tmp_path / "osm_nodes_rel_numerator.parquet"
+    way_path = tmp_path / "osm_ways_rel_numerator.parquet"
+    relation_path = tmp_path / "osm_relations_rel_numerator.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE tmp_nodes (id BIGINT, tags MAP(VARCHAR, VARCHAR), lat DOUBLE, lon DOUBLE)")
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+
+    conn.execute("CREATE TABLE tmp_ways (id BIGINT, tags MAP(VARCHAR, VARCHAR), nds STRUCT(ref BIGINT)[])")
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_relations VALUES (
+            9001,
+            map(['name', 'tourism'], ['Landmark Ring', 'attraction']),
+            []::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return (str(node_path), str(way_path), str(relation_path))
+
+
+@pytest.fixture
+def osm_idf_relation_denominator_parquets(tmp_path):
+    """Node amenity=cafe (existing key) plus a relation under
+    historic=citywalls, a category no node or way row shares.
+    Isolates the relation denominator arm: if it omits 'historic', the
+    relation is invisible to N.total and idf_score('amenity=cafe') is
+    ln(1/1) == 0 instead of ln(2/1).
+    """
+    node_path = tmp_path / "osm_nodes_rel_denominator.parquet"
+    way_path = tmp_path / "osm_ways_rel_denominator.parquet"
+    relation_path = tmp_path / "osm_relations_rel_denominator.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE tmp_nodes (id BIGINT, tags MAP(VARCHAR, VARCHAR), lat DOUBLE, lon DOUBLE)")
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES
+            (9101, map(['name', 'amenity'], ['Existing Cafe', 'cafe']), 37.77, -122.42)
+    """)
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+
+    conn.execute("CREATE TABLE tmp_ways (id BIGINT, tags MAP(VARCHAR, VARCHAR), nds STRUCT(ref BIGINT)[])")
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_relations VALUES (
+            9102,
+            map(['name', 'historic'], ['City Walls Loop', 'citywalls']),
+            []::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return (str(node_path), str(way_path), str(relation_path))
+
+
+@pytest.fixture
+def osm_idf_relation_building_parquets(tmp_path):
+    """Node amenity=cafe plus a relation carrying building=warehouse.
+    Isolates that 'building' is in the relation arm's presence list, the
+    same as the existing node/way arms.
+    """
+    node_path = tmp_path / "osm_nodes_rel_building.parquet"
+    way_path = tmp_path / "osm_ways_rel_building.parquet"
+    relation_path = tmp_path / "osm_relations_rel_building.parquet"
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE tmp_nodes (id BIGINT, tags MAP(VARCHAR, VARCHAR), lat DOUBLE, lon DOUBLE)")
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES
+            (9201, map(['name', 'amenity'], ['Existing Cafe', 'cafe']), 37.77, -122.42)
+    """)
+    conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
+
+    conn.execute("CREATE TABLE tmp_ways (id BIGINT, tags MAP(VARCHAR, VARCHAR), nds STRUCT(ref BIGINT)[])")
+    conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
+
+    conn.execute("""
+        CREATE TABLE tmp_relations (
+            id      BIGINT,
+            tags    MAP(VARCHAR, VARCHAR),
+            members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute("""
+        INSERT INTO tmp_relations VALUES (
+            9202,
+            map(['name', 'building'], ['Warehouse Ring', 'warehouse']),
+            []::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+    conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
+    conn.close()
+
+    return (str(node_path), str(way_path), str(relation_path))
+
+
+class TestStageIdfOsmRelations:
+    """Relations contribute to both the numerator and the denominator of the
+    OSM IDF score."""
+
+    def test_relation_numerator_counts_named_relations(
+        self, osm_idf_relation_numerator_parquets, tmp_path
+    ):
+        node_path, way_path, relation_path = osm_idf_relation_numerator_parquets
+        output_path = str(tmp_path / "osm_idf_rel_numerator_out.parquet")
+        t0 = time.monotonic()
+
+        stage_idf("osm", (node_path, way_path, relation_path), output_path, t0)
+
+        con = duckdb.connect(":memory:")
+        row = con.execute(
+            f"SELECT n_places FROM read_parquet('{output_path}') "
+            f"WHERE category = 'tourism=attraction'"
+        ).fetchone()
+        con.close()
+
+        assert row is not None, "tourism=attraction (from the relation alone) should appear"
+        assert row[0] == 1, f"expected n_places == 1, got {row[0]}"
+
+    def test_relation_counted_in_denominator_whitelisted_key(
+        self, osm_idf_relation_denominator_parquets, tmp_path
+    ):
+        node_path, way_path, relation_path = osm_idf_relation_denominator_parquets
+        output_path = str(tmp_path / "osm_idf_rel_denominator_out.parquet")
+        t0 = time.monotonic()
+
+        stage_idf("osm", (node_path, way_path, relation_path), output_path, t0)
+
+        con = duckdb.connect(":memory:")
+        row = con.execute(
+            f"SELECT idf_score FROM read_parquet('{output_path}') "
+            f"WHERE category = 'amenity=cafe'"
+        ).fetchone()
+        con.close()
+
+        assert row is not None, "amenity=cafe should appear in idf output"
+        expected = math.log(2 / 1)  # N.total=2 once the citywalls relation is counted
+        assert row[0] == pytest.approx(expected), (
+            f"amenity=cafe idf_score should reflect N.total including the "
+            f"historic=citywalls relation (ln(2/1)={expected}); got {row[0]}"
+        )
+
+    def test_relation_building_tag_counted_in_denominator(
+        self, osm_idf_relation_building_parquets, tmp_path
+    ):
+        node_path, way_path, relation_path = osm_idf_relation_building_parquets
+        output_path = str(tmp_path / "osm_idf_rel_building_out.parquet")
+        t0 = time.monotonic()
+
+        stage_idf("osm", (node_path, way_path, relation_path), output_path, t0)
+
+        con = duckdb.connect(":memory:")
+        row = con.execute(
+            f"SELECT idf_score FROM read_parquet('{output_path}') "
+            f"WHERE category = 'amenity=cafe'"
+        ).fetchone()
+        con.close()
+
+        assert row is not None, "amenity=cafe should appear in idf output"
+        expected = math.log(2 / 1)  # N.total=2 once the building=warehouse relation is counted
+        assert row[0] == pytest.approx(expected), (
+            f"amenity=cafe idf_score should reflect N.total including the "
+            f"building=warehouse relation (ln(2/1)={expected}); got {row[0]}"
         )
 
 

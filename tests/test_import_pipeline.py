@@ -51,14 +51,14 @@ class TestOsmiumPreFilter:
                 f"osmium filter missing way prefix for tag key: w/{key}"
             )
 
-        # building is way-only: it arrives through the merge chain's
-        # w/building pass, not the main filter, so a node arm would be
-        # machinery nothing reaches.
+        # building has no node arm: it arrives through the merge chain's
+        # w/building pass for ways and relation_selectors' r/building entry
+        # for relations, so a node arm would be machinery nothing reaches.
         assert "w/building" in script_content, (
             "osmium filter missing way prefix for tag key: w/building"
         )
         assert "n/building" not in script_content, (
-            "building must not appear as n/building — the rule is way-only"
+            "building must not appear as n/building — there is no node arm for it"
         )
 
     def test_filtered_pbf_cache_variable(self, script_content):

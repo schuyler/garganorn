@@ -139,6 +139,13 @@ class TestQk17AndDensityJoinKeyAgree:
             con.execute(
                 "COPY test_ways TO '" + str(tmpdir / "ways.parquet") + "' (FORMAT PARQUET);"
             )
+            con.execute(
+                "CREATE TABLE test_relations (id BIGINT, tags MAP(VARCHAR, VARCHAR), "
+                "members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]);"
+            )
+            con.execute(
+                "COPY test_relations TO '" + str(tmpdir / "relations.parquet") + "' (FORMAT PARQUET);"
+            )
 
             # Seeded at left(ST_QuadKey(0, 95, 17), 15) -- the wrap tile an
             # unguarded join key would compute for lat=95.
@@ -154,6 +161,7 @@ class TestQk17AndDensityJoinKeyAgree:
                 "memory_limit": "4GB",
                 "node_parquet": str(tmpdir / "nodes.parquet"),
                 "way_parquet": str(tmpdir / "ways.parquet"),
+                "relation_parquet": str(tmpdir / "relations.parquet"),
                 "xmin": -1, "xmax": 1,
                 "ymin": 90, "ymax": 100,
                 "density_cte": density_cte,

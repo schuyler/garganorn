@@ -12,10 +12,11 @@
 set -euo pipefail
 
 # This script handles stages 0 and 1 of the OSM import pipeline: filtering a
-# PBF file to place-relevant OSM tags using osmium, then converting the result
-# to Parquet using osm-pbf-parquet. Both stages cache their output and skip
-# processing when the cache is current. Run standalone to produce Parquet
-# output for the quadtree tile pipeline.
+# PBF file to place-relevant OSM tags and resolving named relations' member
+# closure using osmium, then converting the result to Parquet using
+# osm-pbf-parquet. Both stages cache their output and skip processing when
+# the cache is current. Run standalone to produce Parquet output for the
+# quadtree tile pipeline.
 
 # ─── Dependency checks ────────────────────────────────────────────────────────
 
@@ -124,13 +125,16 @@ safe_rm_rf() {
 # ─── Stage 0: Filter PBF with osmium ─────────────────────────────────────────
 
 # libosmium sizes its decode pool at core count minus two, which idles ~40% of
-# a 4-core host while PBF decode — the bottleneck for both filter passes — is
-# what saturates. getconf reads the count on both Linux and macOS.
+# a 4-core host while PBF decode — the bottleneck across every osmium call
+# below — is what saturates. getconf reads the count on both Linux and macOS.
 export OSMIUM_POOL_THREADS="${OSMIUM_POOL_THREADS:-$(getconf _NPROCESSORS_ONLN)}"
 
 filtered_tags_pbf="${cache_dir}/filtered-tags.osm.pbf"
 buildings_all_tmp="${cache_dir}/buildings-all-tmp.osm.pbf"
 filtered_buildings_pbf="${cache_dir}/filtered-buildings.osm.pbf"
+relations_matched_tmp="${cache_dir}/relations-matched-tmp.osm.pbf"
+relations_named_tmp="${cache_dir}/relations-named-tmp.osm.pbf"
+relations_closure_pbf="${cache_dir}/relations-closure.osm.pbf"
 filtered_pbf="${cache_dir}/filtered.osm.pbf"
 selectors_file="${cache_dir}/filter-selectors.txt"
 
@@ -159,7 +163,20 @@ selectors=(
     w/emergency=ambulance_station
     w/telecom=data_center
 )
-current_selectors="$(printf '%s\n' "${selectors[@]}")"
+relation_selectors=(
+    r/amenity r/shop r/tourism r/leisure r/office r/craft r/healthcare
+    r/historic r/natural r/man_made r/aeroway r/railway r/public_transport r/place
+    r/landuse=cemetery,industrial,quarry,allotments,military,winter_sports
+    r/waterway=dam,waterfall
+    r/power=plant,substation
+    r/boundary=national_park,protected_area,aboriginal_lands
+    r/highway=services,rest_area,trailhead
+    r/barrier=toll_booth
+    r/emergency=ambulance_station
+    r/telecom=data_center
+    r/building
+)
+current_selectors="$(printf '%s\n' "${selectors[@]}" "${relation_selectors[@]}")"
 
 if [ -f "$filtered_pbf" ] && [ ! "$pbf_path" -nt "$filtered_pbf" ] \
     && [ -f "$selectors_file" ] && [ "$current_selectors" = "$(cat "$selectors_file")" ]; then
@@ -173,8 +190,10 @@ else
         exit 1
     fi
 
-    # Buildings are way-only (osm_import.sql's whitelist mirrors this;
-    # osm_idf.sql's does not) and reached in two passes: tags-filter can't
+    # This chain reaches way buildings specifically; relation buildings are
+    # reached separately via r/building below, and osm_import.sql's
+    # whitelist has a building branch in both the way and relation arms
+    # (none in the node arm). Two passes here because tags-filter can't
     # read a pipe when it must add referenced objects, and -R would discard
     # the node closure the centroid needs.
     echo "Filtering buildings with osmium tags-filter..."
@@ -192,15 +211,50 @@ else
     fi
     safe_rm_rf "$buildings_all_tmp"
 
+    # Relations are closed in three passes: tags-filter's -R keeps matched
+    # relations without expanding to their members, a second -R pass narrows
+    # to named relations, then osmium getid re-reads the planet to add member
+    # nodes, member ways, and those ways' nodes for named relations only. A
+    # second full planet read is forced because the named-relation extract
+    # itself holds relation objects only, not their referenced members'
+    # data -- getid can only resolve those against the source planet PBF.
+    echo "Filtering relations with osmium tags-filter..."
+    if ! osmium tags-filter "$pbf_path" "${relation_selectors[@]}" \
+        -R \
+        --overwrite \
+        -o "$relations_matched_tmp"; then
+        echo "osmium tags-filter (relations) failed."
+        exit 1
+    fi
+    if ! osmium tags-filter "$relations_matched_tmp" r/name \
+        -R \
+        --overwrite \
+        -o "$relations_named_tmp"; then
+        echo "osmium tags-filter (named relations) failed."
+        exit 1
+    fi
+    safe_rm_rf "$relations_matched_tmp"
+
+    echo "Computing relation member closure with osmium getid..."
+    if ! osmium getid "$pbf_path" \
+        --id-osm-file "$relations_named_tmp" \
+        --add-referenced \
+        --overwrite \
+        -o "$relations_closure_pbf"; then
+        echo "osmium getid failed."
+        exit 1
+    fi
+    safe_rm_rf "$relations_named_tmp"
+
     echo "Merging filtered PBFs..."
-    if ! osmium merge "$filtered_tags_pbf" "$filtered_buildings_pbf" \
+    if ! osmium merge "$filtered_tags_pbf" "$filtered_buildings_pbf" "$relations_closure_pbf" \
         --overwrite \
         -o "$filtered_pbf"; then
         echo "osmium merge failed."
         exit 1
     fi
 
-    printf '%s\n' "${selectors[@]}" > "$selectors_file"
+    printf '%s\n' "${selectors[@]}" "${relation_selectors[@]}" > "$selectors_file"
 fi
 
 elapsed

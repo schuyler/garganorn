@@ -32,7 +32,7 @@ assert_output_contains() {
     local label="$1"
     local pattern="$2"
     local actual="$3"
-    if echo "$actual" | grep -qF "$pattern"; then
+    if echo "$actual" | grep -qF -- "$pattern"; then
         pass "$label"
     else
         fail "$label (expected output containing '${pattern}', got: ${actual})"
@@ -47,6 +47,15 @@ assert_file_exists() {
     else
         fail "$label (expected file to exist: $path)"
     fi
+}
+
+# extract_after <call_log_line> <token>
+#   Prints the whitespace-separated argument immediately following <token>
+#   (e.g. the path after "-o" or "--id-osm-file"), so chain tests can follow
+#   an intermediate file without hardcoding a name the design doesn't specify.
+extract_after() {
+    local line="$1" token="$2"
+    awk -v t="$token" '{for (i=1;i<=NF;i++) if ($i==t) {print $(i+1); exit}}' <<< "$line"
 }
 
 # ─── Temp directory management ───────────────────────────────────────────────
@@ -726,6 +735,275 @@ test_osmium_pool_threads_override() {
     teardown_tmpdir
 }
 
+# Test 19: Relation selectors — the matched-relations tags-filter call carries
+# r/ versions of the value-restricted selectors plus r/building, reads the
+# planet, and passes -R (stage-0 chain step 1).
+test_relation_selectors_in_matched_filter() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    # r/building is only in this pass, never the r/name pass, so it
+    # disambiguates step 1 from step 2 without hardcoding an output name.
+    local matched_pass
+    matched_pass=$(grep "tags-filter" "$call_log" 2>/dev/null | grep "r/building" | grep -v "r/name" || true)
+    if [ -n "$matched_pass" ]; then
+        pass "relation-selectors: matched-relations tags-filter invocation present"
+    else
+        fail "relation-selectors: expected an 'osmium tags-filter ... r/building ... -R' invocation"
+    fi
+    for key in amenity shop tourism leisure office craft healthcare historic natural man_made \
+        aeroway railway public_transport place landuse waterway power boundary highway barrier \
+        emergency telecom; do
+        assert_output_contains "relation-selectors: r/${key} in matched-relations filter" "r/${key}" "$matched_pass"
+    done
+    assert_output_contains "relation-selectors: -R flag present on matched-relations filter" " -R" "$matched_pass"
+    assert_output_contains "relation-selectors: matched-relations filter reads the input PBF" "$fake_pbf" "$matched_pass"
+
+    teardown_tmpdir
+}
+
+# Test 20: Named-relations pass reads the matched-relations pass's output and
+# filters on r/name with -R (stage-0 chain step 2).
+test_relation_named_pass_reads_matched_output() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local matched_pass matched_output
+    matched_pass=$(grep "tags-filter" "$call_log" 2>/dev/null | grep "r/building" | grep -v "r/name" || true)
+    matched_output=$(extract_after "$matched_pass" "-o")
+
+    local named_pass
+    named_pass=$(grep "tags-filter" "$call_log" 2>/dev/null | grep " r/name" || true)
+    if [ -n "$named_pass" ]; then
+        pass "relation-selectors: named-relations tags-filter invocation present"
+    else
+        fail "relation-selectors: expected an 'osmium tags-filter ... r/name -R' invocation"
+    fi
+    assert_output_contains "relation-selectors: -R flag present on named-relations filter" " -R" "$named_pass"
+    if [ -n "$matched_output" ]; then
+        assert_output_contains "relation-selectors: named-relations filter reads matched-relations output" \
+            "$matched_output" "$named_pass"
+    else
+        fail "relation-selectors: could not determine matched-relations pass's output path"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 21: osmium getid computes the member closure over the planet, keyed by
+# the named-relations pass's output, with --add-referenced (stage-0 chain
+# step 3).
+test_relation_getid_closure() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local named_pass named_output
+    named_pass=$(grep "tags-filter" "$call_log" 2>/dev/null | grep " r/name" || true)
+    named_output=$(extract_after "$named_pass" "-o")
+
+    local getid_call
+    getid_call=$(grep "^osmium getid " "$call_log" 2>/dev/null || true)
+    if [ -n "$getid_call" ]; then
+        pass "relation-closure: osmium getid invocation present"
+    else
+        fail "relation-closure: expected an 'osmium getid' invocation"
+    fi
+    assert_output_contains "relation-closure: getid reads the input PBF" "$fake_pbf" "$getid_call"
+    assert_output_contains "relation-closure: getid adds referenced objects" "--add-referenced" "$getid_call"
+    if [ -n "$named_output" ]; then
+        assert_output_contains "relation-closure: getid's --id-osm-file is the named-relations output" \
+            "$named_output" "$getid_call"
+    else
+        fail "relation-closure: could not determine named-relations pass's output path"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 22: osmium merge combines the main filter output, the buildings-chain
+# output, and the relation closure into filtered.osm.pbf (stage-0 chain
+# step 4).
+test_relation_merge_includes_closure() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local getid_call closure_output
+    getid_call=$(grep "^osmium getid " "$call_log" 2>/dev/null || true)
+    closure_output=$(extract_after "$getid_call" "-o")
+
+    local merge_call
+    merge_call=$(grep "^osmium merge " "$call_log" 2>/dev/null || true)
+    assert_output_contains "relation-merge: merge input is filtered-tags.osm.pbf" "filtered-tags.osm.pbf" "$merge_call"
+    assert_output_contains "relation-merge: merge input is filtered-buildings.osm.pbf" \
+        "filtered-buildings.osm.pbf" "$merge_call"
+    if [ -n "$closure_output" ]; then
+        assert_output_contains "relation-merge: merge input is the relation closure" "$closure_output" "$merge_call"
+    else
+        fail "relation-merge: could not determine the relation-closure pass's output path"
+    fi
+    assert_output_contains "relation-merge: merge output is filtered.osm.pbf" "filtered.osm.pbf" "$merge_call"
+
+    teardown_tmpdir
+}
+
+# Test 23: The relation chain runs in the order the design specifies: matched
+# filter, then named filter, then getid closure, then merge.
+test_relation_chain_order() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local matched_line named_line getid_line merge_line
+    matched_line=$(grep -n "tags-filter" "$call_log" 2>/dev/null | grep "r/building" | grep -v "r/name" \
+        | head -1 | cut -d: -f1)
+    named_line=$(grep -n "tags-filter" "$call_log" 2>/dev/null | grep " r/name" | head -1 | cut -d: -f1)
+    getid_line=$(grep -n "^osmium getid " "$call_log" 2>/dev/null | head -1 | cut -d: -f1)
+    merge_line=$(grep -n "^osmium merge " "$call_log" 2>/dev/null | head -1 | cut -d: -f1)
+
+    if [ -n "$matched_line" ] && [ -n "$named_line" ] && [ "$matched_line" -lt "$named_line" ]; then
+        pass "relation-chain-order: matched-relations pass precedes named-relations pass"
+    else
+        fail "relation-chain-order: matched-relations pass should precede named-relations pass (matched=${matched_line:-none}, named=${named_line:-none})"
+    fi
+    if [ -n "$named_line" ] && [ -n "$getid_line" ] && [ "$named_line" -lt "$getid_line" ]; then
+        pass "relation-chain-order: named-relations pass precedes getid closure"
+    else
+        fail "relation-chain-order: named-relations pass should precede getid closure (named=${named_line:-none}, getid=${getid_line:-none})"
+    fi
+    if [ -n "$getid_line" ] && [ -n "$merge_line" ] && [ "$getid_line" -lt "$merge_line" ]; then
+        pass "relation-chain-order: getid closure precedes merge"
+    else
+        fail "relation-chain-order: getid closure should precede merge (getid=${getid_line:-none}, merge=${merge_line:-none})"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 24: Relation selectors reach the filter-selectors.txt sidecar, which is
+# what makes stage 0 invalidate on a selector-list change.
+test_relation_selectors_in_sidecar() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    assert_file_exists "relation-selectors: sidecar written" "${cache_dir}/filter-selectors.txt"
+    local sidecar_content=""
+    [ -f "${cache_dir}/filter-selectors.txt" ] && sidecar_content="$(cat "${cache_dir}/filter-selectors.txt")"
+    for key in amenity shop tourism leisure office craft healthcare historic natural man_made \
+        aeroway railway public_transport place landuse waterway power boundary highway barrier \
+        emergency telecom; do
+        assert_output_contains "relation-selectors: r/${key} in sidecar" "r/${key}" "$sidecar_content"
+    done
+    assert_output_contains "relation-selectors: r/building in sidecar" "r/building" "$sidecar_content"
+
+    teardown_tmpdir
+}
+
+# Test 25: A cache built before relation selectors existed (sidecar has no
+# r/ lines) is stale once relation selectors are added, even with the input
+# PBF's mtime unchanged — same sidecar-diff mechanism as the existing
+# selector-change tests, applied to the concrete upgrade case.
+test_relation_selector_addition_invalidates_old_cache() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir" "$cache_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    # First run populates the cache and writes whatever selector list the
+    # implementation currently uses.
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+    if [ ! -f "${cache_dir}/filter-selectors.txt" ]; then
+        fail "relation-cache-invalidation: no selector sidecar written by first run"
+        teardown_tmpdir
+        return
+    fi
+
+    # Simulate a pre-relations cache by removing r/ lines from the sidecar
+    # the implementation just wrote, then leave the PBF's mtime untouched.
+    grep -v '^r/' "${cache_dir}/filter-selectors.txt" > "${cache_dir}/filter-selectors.txt.old"
+    mv "${cache_dir}/filter-selectors.txt.old" "${cache_dir}/filter-selectors.txt"
+    touch -t 202001010000 "$fake_pbf"
+
+    rm -f "$call_log"
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    local osmium_calls=0
+    if [ -f "$call_log" ]; then
+        osmium_calls=$(grep -c "^osmium " "$call_log" 2>/dev/null || echo 0)
+    fi
+    if [ "$osmium_calls" -ge 1 ]; then
+        pass "relation-cache-invalidation: osmium re-runs when the sidecar is missing relation selectors"
+    else
+        fail "relation-cache-invalidation: osmium should re-run when the sidecar lacks r/ selectors (calls: $osmium_calls)"
+    fi
+
+    teardown_tmpdir
+}
+
 # ─── Run all tests ────────────────────────────────────────────────────────────
 
 echo "Running tests for scripts/extract-osm-parquet.sh"
@@ -750,6 +1028,13 @@ test_selector_change_invalidates_cache
 test_missing_selector_sidecar_invalidates_cache
 test_osmium_pool_threads_sized_to_host
 test_osmium_pool_threads_override
+test_relation_selectors_in_matched_filter
+test_relation_named_pass_reads_matched_output
+test_relation_getid_closure
+test_relation_merge_includes_closure
+test_relation_chain_order
+test_relation_selectors_in_sidecar
+test_relation_selector_addition_invalidates_old_cache
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

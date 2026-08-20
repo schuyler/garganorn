@@ -69,7 +69,11 @@ import pass just to compute IDF, and makes the artifact cacheable
 independently of any particular bbox or import run. OSM's category
 expression is substituted from the same `_osm_category_case.sql` snippet
 used by `osm_import.sql`, so IDF categories and import categories can't
-drift apart.
+drift apart. OSM's IDF reads node, way, and relation parquet — three
+sources feeding both the numerator and the denominator. The relation
+denominator arm counts `building` the same way the way arm does; the
+import's node arm has no `building` branch at all, which is an
+import-whitelist rule (`design-constraints.md`) rather than an IDF one.
 
 ## 3. `stage_division_import` (`garganorn/stages.py`)
 
@@ -171,12 +175,17 @@ through unchanged (`SELECT * EXCLUDE (geometry)`).
 VARCHAR, name VARCHAR, latitude DOUBLE, longitude DOUBLE, primary_category
 VARCHAR, tags MAP(VARCHAR, VARCHAR), bbox STRUCT(xmin, ymin, xmax, ymax),
 importance INTEGER, qk17 VARCHAR, variants STRUCT(name, type,
-language)[]`. `geom GEOMETRY` is computed during import but excluded from
-the Parquet output (`_GEOM_COL["osm"] = "geom"`). `osm_import.sql` also
-builds an `idx_rkey` index on the ephemeral in-memory `places` table;
-grepping the codebase shows no query anywhere ever looks up `places` by
-`rkey` before the connection closes — apparently dead weight, not confirmed
-in scope here.
+language)[]`. `osm_type` takes `'n'`, `'w'`, or `'r'`; `rkey` correspondingly
+takes an `n`-, `w`-, or `r`-prefixed form (`osm_type || osm_id`), expanded to
+`node:`/`way:`/`relation:` at export (`osm_export_tiles.sql`). `geom
+GEOMETRY` is computed during import but excluded from the Parquet output
+(`_GEOM_COL["osm"] = "geom"`). `osm_import.sql` also builds an `idx_rkey`
+index on the ephemeral in-memory `places` table; grepping the codebase
+shows no query anywhere ever looks up `places` by `rkey` — the relation
+pipeline's two duplicate-suppression anti-joins do read `places` before
+the connection closes, but key on `(osm_type, osm_id)` and on `(name,
+longitude, latitude)`, never `rkey` — so the index itself is apparently
+dead weight, not confirmed in scope here.
 
 **Sort**: both `ORDER BY qk17 NULLS LAST`, kept though nothing prunes this
 parquet by a qk17 range — dropping it makes `places_slim`'s re-sort real,
@@ -193,19 +202,28 @@ already checked by `_assert_density_parquet_unique`, ahead of the
 `overture_division` dispatch — a duplicate key would otherwise silently
 fan out place rows through the `LEFT JOIN`. Both lookup tables are also
 pre-deduplicated (`GROUP BY ... any_value(...)`) at the join site as a second line of
-defense. `overture_place`'s `ov_base` CTE and OSM's `filtered`/`way_base`
+defense. `overture_place`'s `ov_base` CTE and OSM's `filtered`/`way_base`/`rel_base`
 CTEs are each scanned exactly once beyond their own definition — geometry
 is dropped as early as possible (before any join) since `qk17` comes from
 `bbox`, not `geometry`, avoiding a full-width shuffle of the widest
-columns at global-Overture scale. OSM's way pipeline has known debt here:
+columns at global-Overture scale. `places` is additionally scanned twice
+more during the relation pipeline's duplicate suppression, once per
+anti-join. OSM's way and relation pipelines have known debt here:
 `qualifying_ways` and `way_node_refs` are each scanned twice beyond their
 own definition (by `way_node_refs`/`way_base` and by
-`needed_node_ids`/`way_centroids`); measured zero bytes of temp disk at
-10.7M OSM rows and a 32GB memory limit, so neither spills at present
-scale, but nothing structural holds that. OSM ways derive a centroid by
-averaging their referenced nodes' coordinates (`way_centroids`); both the node and
-way pipelines apply the same category allow-list, keeping only named POIs
-in a fixed set of OSM tag categories.
+`needed_node_ids`/`way_centroids`); `qualifying_relations`,
+`rel_way_member_node_refs`, and `rel_node_member_refs` are each scanned
+twice beyond their own definition the same way, and `rel_members` is
+scanned four times, feeding the way-id list, the member-node/member-way
+splits, and the suppression anti-join. The
+zero-bytes-of-temp-disk measurement (10.7M OSM rows, 32GB memory limit)
+predates the relation INSERT and doesn't cover it — the relation
+pipeline's spill behavior is not yet measured, and nothing structural
+holds either finding. OSM nodes carry their own `lat`/`lon` coordinates
+straight through; ways and relations each derive a centroid by averaging
+their referenced or member nodes' coordinates (`way_centroids`,
+`rel_centroids`). All three pipelines apply the same category allow-list,
+keeping only named POIs in a fixed set of OSM tag categories.
 
 **Variants**: all three sources produce them.
 

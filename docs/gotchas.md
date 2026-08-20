@@ -71,11 +71,13 @@ unexpectedly.
 
 **Applies to**: `garganorn/sql/division_containment.sql` (`unnest(d.hierarchies)`
 and `unnest(chain)`, chained) and `garganorn/sql/osm_import.sql`
-(`UNNEST(nds).ref` in `way_node_refs`).
+(`UNNEST(nds).ref` in `way_node_refs`, `UNNEST(qr.members)` in
+`rel_members`, and `UNNEST(nds).ref` in `rel_way_node_refs`).
 
 **Why it matters**: a division whose `hierarchies` is NULL or empty drops out
-of the containment chain entirely, and a way with NULL `nds` drops out of
-`way_node_refs`.
+of the containment chain entirely, a way with NULL `nds` drops out of
+`way_node_refs`, and a relation with NULL or empty `members` silently drops
+out of the import.
 
 ### No unbounded complex-state aggregation
 
@@ -348,11 +350,13 @@ tags-filter` over `planet.osm.pbf` runs 5 threads — main, two
 of 4 cores, because the pool is sized at two. The work is decode-bound, not
 I/O-bound: both workers pegged at 99.8% while the reader idled at 9.8%.
 `OSMIUM_POOL_THREADS` overrides the default; setting it to 6 yields 7 threads
-and 4.07 of 4 cores.
+and 4.07 of 4 cores. The same pool setting governs `osmium getid`: its
+relation member-closure pass over the planet measured 14m05s wall, ~54m
+user (~3.9 cores).
 
 **Applies to**: `scripts/extract-osm-parquet.sh`, which exports
 `OSMIUM_POOL_THREADS="${OSMIUM_POOL_THREADS:-$(getconf _NPROCESSORS_ONLN)}"`
-so all four osmium calls inherit it
+so all seven osmium calls inherit it
 
 **Why it matters**: faster storage does not help a decode-bound pass, and the
 default leaves cores idle already at four — the host this was measured on —
@@ -365,9 +369,14 @@ artifact rather than throughput.
 
 A pass that resolves referenced objects cannot read from a pipe, and `-R` on a
 `w/building` pass yields ways with zero nodes. So a two-pass filter cannot be
-piped together and the large intermediate is unavoidable.
+piped together and the large intermediate is unavoidable. The relation chain
+hits the same constraint a second way: `osmium tags-filter -R` on relations
+still can't resolve their node/way members, so closure is resolved by a
+separate tool, `osmium getid --add-referenced`, over the named-relation
+subset.
 
-**Applies to**: `scripts/extract-osm-parquet.sh` (the buildings chain)
+**Applies to**: `scripts/extract-osm-parquet.sh` (the buildings chain and the
+relation chain)
 
 **Why it matters**: the obvious optimization — pipe pass one into pass two —
 is not available, and the intermediate has to be budgeted for rather than

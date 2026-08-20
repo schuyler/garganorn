@@ -1211,7 +1211,7 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
         source: Source key — one of overture_place, osm.
                 (overture_division is handled by stage_division_import.)
         parquet_glob: Glob/path for source parquet file(s). For osm, a
-                      (node_parquet, way_parquet) tuple.
+                      (node_parquet, way_parquet, relation_parquet) tuple.
         bbox: (xmin, ymin, xmax, ymax) tuple, dict with those keys, or None
               for global.
         output_path: Destination path for places.parquet.
@@ -1275,9 +1275,10 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
 
     # Compute input file list for freshness tracking
     if source == "osm":
-        node_parquet_path, way_parquet_path = parquet_glob
+        node_parquet_path, way_parquet_path, relation_parquet_path = parquet_glob
         input_files = (_resolve_glob_paths(node_parquet_path, required=True)
-                       + _resolve_glob_paths(way_parquet_path, required=True))
+                       + _resolve_glob_paths(way_parquet_path, required=True)
+                       + _resolve_glob_paths(relation_parquet_path, required=True))
     else:
         input_files = _resolve_glob_paths(str(parquet_glob), required=True)
 
@@ -1351,12 +1352,13 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
         no_op_idf_cte = "-- idf_scores loaded and uniqueness-checked above"
 
         if source == "osm":
-            node_parquet_path, way_parquet_path = parquet_glob
+            node_parquet_path, way_parquet_path, relation_parquet_path = parquet_glob
             osm_category_case = (_SQL_DIR / "_osm_category_case.sql").read_text().strip()
             _run_sql(con, source, "import", "osm_import.sql", t0,
                      memory_limit=memory_limit,
                      node_parquet=node_parquet_path,
                      way_parquet=way_parquet_path,
+                     relation_parquet=relation_parquet_path,
                      xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
                      osm_category_case=osm_category_case,
                      density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
@@ -1497,7 +1499,7 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
     Args:
         source: Source key (overture_place, osm).
         parquet_glob: Parquet path(s). String for Overture;
-            (node_glob, way_glob) tuple for OSM.
+            (node_glob, way_glob, relation_glob) tuple for OSM.
         output_path: Destination path for IDF parquet output.
         t0: Start time for logging (monotonic time).
         force: If True, re-run even if output is fresh. Default False.
@@ -1517,9 +1519,10 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
 
     # Resolve input_files unconditionally so finalize_artifact can record them.
     if source == "osm":
-        node_glob, way_glob = parquet_glob
+        node_glob, way_glob, relation_glob = parquet_glob
         input_files = (_resolve_glob_paths(node_glob, required=True)
-                       + _resolve_glob_paths(way_glob, required=True))
+                       + _resolve_glob_paths(way_glob, required=True)
+                       + _resolve_glob_paths(relation_glob, required=True))
     else:
         input_files = _resolve_glob_paths(parquet_glob, required=True)
 
@@ -1532,11 +1535,12 @@ def stage_idf(source, parquet_glob, output_path, t0, force=False,
 
     # For OSM, read the category snippet and pass it as ${osm_category_case}
     if source == "osm":
-        node_glob, way_glob = parquet_glob
+        node_glob, way_glob, relation_glob = parquet_glob
         osm_category_case = (_SQL_DIR / "_osm_category_case.sql").read_text().strip()
         sql = sql.replace("${osm_category_case}", osm_category_case)
         sql = sql.replace("${node_parquet}", str(node_glob))
         sql = sql.replace("${way_parquet}", str(way_glob))
+        sql = sql.replace("${relation_parquet}", str(relation_glob))
     else:
         sql = sql.replace("${parquet_glob}", str(parquet_glob))
 

@@ -1,8 +1,11 @@
--- Compute IDF scores per OSM primary category from raw node and way parquets.
+-- Compute IDF scores per OSM primary category from raw node, way, and relation parquets.
 -- Uses _osm_category_case.sql snippet substitution to share CASE expression with osm_import.sql.
 -- Numerator: named elements only (tags['name'] IS NOT NULL), any category.
 -- Denominator (N.total): named elements additionally passing the 23-key
--- whitelist mirrored from _osm_category_case.sql, on both node and way arms.
+-- whitelist mirrored from _osm_category_case.sql, on node, way, and relation arms.
+-- The building branch below applies to all three arms; osm_import.sql
+-- mirrors that in its way and relation arms, but excludes buildings from
+-- the node arm -- an import-whitelist rule, not an IDF rule.
 DROP TABLE IF EXISTS idf_scores;
 CREATE TABLE idf_scores AS
 SELECT
@@ -20,6 +23,13 @@ FROM (
     SELECT
         ${osm_category_case} AS primary_category
     FROM read_parquet('${way_parquet}')
+    WHERE tags['name'] IS NOT NULL
+
+    UNION ALL
+
+    SELECT
+        ${osm_category_case} AS primary_category
+    FROM read_parquet('${relation_parquet}')
     WHERE tags['name'] IS NOT NULL
 ) combined
 CROSS JOIN (
@@ -58,6 +68,37 @@ CROSS JOIN (
 
         SELECT 1
         FROM read_parquet('${way_parquet}')
+        WHERE tags['name'] IS NOT NULL
+          AND (
+            tags['amenity'] IS NOT NULL
+            OR tags['shop'] IS NOT NULL
+            OR tags['tourism'] IS NOT NULL
+            OR tags['leisure'] IS NOT NULL
+            OR tags['office'] IS NOT NULL
+            OR tags['craft'] IS NOT NULL
+            OR tags['healthcare'] IS NOT NULL
+            OR tags['historic'] IS NOT NULL
+            OR tags['natural'] IS NOT NULL
+            OR tags['man_made'] IS NOT NULL
+            OR tags['aeroway'] IS NOT NULL
+            OR tags['railway'] IS NOT NULL
+            OR tags['public_transport'] IS NOT NULL
+            OR tags['place'] IS NOT NULL
+            OR tags['landuse'] IS NOT NULL
+            OR tags['waterway'] IS NOT NULL
+            OR tags['power'] IS NOT NULL
+            OR tags['boundary'] IS NOT NULL
+            OR tags['highway'] IS NOT NULL
+            OR tags['barrier'] IS NOT NULL
+            OR tags['emergency'] IS NOT NULL
+            OR tags['telecom'] IS NOT NULL
+            OR tags['building'] IS NOT NULL
+          )
+
+        UNION ALL
+
+        SELECT 1
+        FROM read_parquet('${relation_parquet}')
         WHERE tags['name'] IS NOT NULL
           AND (
             tags['amenity'] IS NOT NULL

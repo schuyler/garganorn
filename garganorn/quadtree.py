@@ -292,6 +292,7 @@ def _cmd_idf(args, idf_parser):
         parquet_glob = (
             f"{args.parquet_dir}/type=node/*.parquet",
             f"{args.parquet_dir}/type=way/*.parquet",
+            f"{args.parquet_dir}/type=relation/*.parquet",
         )
     else:
         if args.parquet is None:
@@ -375,6 +376,7 @@ def _cmd_run(args, run_parser):
         parquet_glob = (
             f"{args.parquet_dir}/type=node/*.parquet",
             f"{args.parquet_dir}/type=way/*.parquet",
+            f"{args.parquet_dir}/type=relation/*.parquet",
         )
     elif args.source == "overture_division":
         parquet_glob = (args.division_parquet, args.division_area_parquet)
@@ -467,6 +469,7 @@ def _cmd_all(args):
             parquet_glob = (
                 f"{parquet_dir}/type=node/*.parquet",
                 f"{parquet_dir}/type=way/*.parquet",
+                f"{parquet_dir}/type=relation/*.parquet",
             )
         else:
             parquet_glob = src_cfg.get("parquet")
@@ -501,6 +504,7 @@ def _cmd_all(args):
             parquet_glob = (
                 f"{parquet_dir}/type=node/*.parquet",
                 f"{parquet_dir}/type=way/*.parquet",
+                f"{parquet_dir}/type=relation/*.parquet",
             )
         else:
             parquet_glob = src_cfg.get("parquet")
