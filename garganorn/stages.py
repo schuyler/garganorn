@@ -160,6 +160,42 @@ def _resolve_glob_paths(pattern: str, *, required: bool = False) -> list[str]:
     return paths
 
 
+def resolve_newest_release(patterns: list[str]) -> list[str]:
+    """Rewrite the release segment of each pattern to the newest complete release.
+
+    The release is the path segment that is entirely `*`; if any pattern lacks
+    one, every pattern is returned untouched. A release qualifies only if every
+    pattern matches a file, so a partially downloaded one is skipped rather
+    than built against, and RuntimeError is raised if none qualifies.
+
+    Release names (`YYYY-MM-DD.N`) sort chronologically under a plain reverse
+    sort; a two-digit N would not, and Overture has published none.
+    """
+    split = [pattern.split("/") for pattern in patterns]
+    positions = [
+        next((i for i, part in enumerate(parts) if part == "*"), None)
+        for parts in split
+    ]
+    if any(position is None for position in positions):
+        return list(patterns)
+
+    root = "/".join(split[0][:positions[0]])
+    releases = sorted(
+        (name for name in os.listdir(root)
+         if os.path.isdir(os.path.join(root, name))),
+        reverse=True,
+    )
+    for release in releases:
+        resolved = []
+        for parts, position in zip(split, positions):
+            resolved.append("/".join(parts[:position] + [release] + parts[position + 1:]))
+        if all(glob_module.glob(pattern) for pattern in resolved):
+            return resolved
+    raise RuntimeError(
+        f"no complete Overture release in {root!r}; inspected {releases}"
+    )
+
+
 def _run_sql(con, source, stage, filename, t0, **params):
     """Read SQL from file, substitute ${var} params, execute, and log."""
     log.info("[%s] %s: starting", source, stage)

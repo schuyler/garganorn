@@ -325,13 +325,17 @@ Themes live under `release/<rel>/theme=<t>/type=<ty>/`. Places =
 `theme=places/type=place`; divisions = `theme=divisions/type={division,division_area}`.
 
 **Why it matters**: to reproduce a data run exactly, keep the cached parquet — you
-cannot rely on re-downloading it. Never cache two releases at once: the config
-globs across them and double-counts.
+cannot rely on re-downloading it. Several releases may sit in the cache at once;
+the pipeline resolves the configured globs to the newest release for which every
+one of them matches, so the extras are inert rather than double-counted.
 
 ### `download-overture.sh` is global by default, with no bbox filter
 
 It unconditionally lists and downloads every `places` part-file for a release.
-`--divisions-only` restricts to `division`/`division_area`.
+`--divisions-only` restricts to `division`/`division_area` — which produces a
+release the pipeline will never select, since a release qualifies only when the
+place glob matches too. A build fetching divisions-only keeps using the newest
+*complete* release and silently stops tracking upstream.
 
 **Why it matters**: cache size does not imply geographic scope in either
 direction. A small Overture cache may be genuinely global-but-cheap, or split

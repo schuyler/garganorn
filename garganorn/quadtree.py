@@ -27,6 +27,7 @@ from .stages import (
     stage_division_tile_references,
     stage_summary_division_tile_references,
     stage_export,
+    resolve_newest_release,
 )
 from .covering import stage_covering
 
@@ -432,6 +433,20 @@ def _cmd_all(args):
 
     overture_cfg = sources.get("overture_place")
     division_cfg = sources.get("overture_division")
+
+    # Resolve all three Overture globs against one release together: places and
+    # divisions read from different releases would disagree about what exists.
+    release_keys = [
+        (cfg, key)
+        for cfg, key in ((overture_cfg, "parquet"),
+                         (division_cfg, "division_parquet"),
+                         (division_cfg, "division_area_parquet"))
+        if cfg and cfg.get(key)
+    ]
+    if release_keys:
+        patterns = resolve_newest_release([cfg[key] for cfg, key in release_keys])
+        for (cfg, key), pattern in zip(release_keys, patterns):
+            cfg[key] = pattern
 
     # Derived paths
     shared_dir = os.path.join(output_dir, "shared")
