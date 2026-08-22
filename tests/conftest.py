@@ -590,6 +590,26 @@ def overture_parquet(tmp_path_factory):
         )
     """)
 
+    # ov017 — names.rules has one invalid-language entry ('genitive', the
+    # real defect named in project memory) and one valid-language entry,
+    # to pin the R1 safety net plus a same-fixture regression guard that
+    # the valid entry survives untouched.
+    conn.execute("""
+        INSERT INTO tmp_ov VALUES (
+            'ov017',
+            {'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776},
+            'POINT(-122.419 37.775)',
+            {'primary': 'Invalid Language Place',
+             'common': NULL::MAP(VARCHAR, VARCHAR),
+             'rules':  [
+                 {'language': 'genitive', 'value': 'Invalid Language Name', 'variant': 'official'},
+                 {'language': 'en', 'value': 'Valid Language Name', 'variant': 'alternate'}
+             ]},
+            {'primary': 'coffee_shop'},
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+        )
+    """)
+
     conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
     conn.close()
 
@@ -752,6 +772,81 @@ def osm_parquet(tmp_path_factory):
         )
     """)
 
+    # 1012 — cross-prefix retyping: alt_name:abbr/official_name:carnaval must
+    # retype like name:abbr/name:carnaval, not pass 'abbr'/'carnaval' through
+    # as an (invalid) language.
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1012,
+            map(['name','amenity','alt_name:abbr','official_name:carnaval'],
+                ['Cross Prefix Place','cafe','Short Version','Carnival Official Name']),
+            37.7820, -122.4210
+        )
+    """)
+
+    # 1013 — historical-year suffixes: bare year, leading-hyphen year, year-range.
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1013,
+            map(['name','amenity','name:1933','name:-1935','name:1933-1939'],
+                ['Year Variants Place','cafe','Bare Year Name','Hyphen Year Name','Year Range Name']),
+            37.7830, -122.4220
+        )
+    """)
+
+    # 1014 — scheme-suffix with digits after the underscore (kn_iso15919 shape).
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1014,
+            map(['name','amenity','name:kn_iso15919'],
+                ['Scheme Suffix Place','cafe','Kannada Transliteration']),
+            37.7840, -122.4230
+        )
+    """)
+
+    # 1015 — numbered-duplicate suffixes, no separator (en1) and
+    # underscore-separated (en_1); both salvage 'en'.
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1015,
+            map(['name','amenity','name:en1','name:en_1'],
+                ['Numbered Duplicate Place','cafe','English One','English Underscore One']),
+            37.7850, -122.4240
+        )
+    """)
+
+    # 1016 — hyphenated BCP47 suffixes (zh-hant, en-us) must pass through
+    # unchanged, not get truncated to their leading code.
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1016,
+            map(['name','amenity','name:zh-hant','name:en-us'],
+                ['Hyphenated BCP47 Place','cafe','Traditional Chinese Name','American English Name']),
+            37.7860, -122.4250
+        )
+    """)
+
+    # 1017 — metadata suffix newly added to the drop-list (Mechanism 4).
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1017,
+            map(['name','amenity','name:wikidata'],
+                ['Wikidata Suffix Place','cafe','Q12345']),
+            37.7870, -122.4260
+        )
+    """)
+
+    # 1018 — ambiguous suffix (R5): kept as alternate with language NULL,
+    # not dropped and not misclassified as a language.
+    conn.execute("""
+        INSERT INTO tmp_nodes VALUES (
+            1018,
+            map(['name','amenity','name:popular'],
+                ['Popular Suffix Place','cafe','Popular Name']),
+            37.7880, -122.4270
+        )
+    """)
+
     conn.execute(f"COPY tmp_nodes TO '{node_path}' (FORMAT PARQUET)")
 
     # --- Way parquet ---
@@ -782,7 +877,7 @@ def osm_parquet(tmp_path_factory):
 
     conn.execute(f"COPY tmp_ways TO '{way_path}' (FORMAT PARQUET)")
 
-    # --- Relation parquet (empty: no relation rows in this fixture) ---
+    # --- Relation parquet ---
     conn.execute("""
         CREATE TABLE tmp_relations (
             id      BIGINT,
@@ -790,6 +885,20 @@ def osm_parquet(tmp_path_factory):
             members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
         )
     """)
+
+    # 3001 — exercises osm_variant_type_lang on the relation arm (cross-prefix
+    # retyping, alt_name:abbr -> short/None). Members reuse nodes 9001/9002
+    # (no name tag, so they don't import as places and can't trip suppression).
+    conn.execute("""
+        INSERT INTO tmp_relations VALUES (
+            3001,
+            map(['name','tourism','alt_name:abbr'],
+                ['Relation Variant Place','attraction','RVP']),
+            [{'type': 'node', 'ref': 9001, 'role': ''},
+             {'type': 'node', 'ref': 9002, 'role': ''}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[]
+        )
+    """)
+
     conn.execute(f"COPY tmp_relations TO '{relation_path}' (FORMAT PARQUET)")
     conn.close()
 

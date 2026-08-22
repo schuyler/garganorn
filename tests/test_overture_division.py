@@ -733,6 +733,104 @@ class TestDivisionVariantsDerived:
 
 
 # ---------------------------------------------------------------------------
+# Division variant.language rejects values that fail lexrpc's format
+# ---------------------------------------------------------------------------
+
+class TestDivisionVariantLanguageValidation:
+    """overture_division_import.sql must null out an invalid
+    names.rules.language instead of passing it straight through.
+
+    Module-local fixture, not conftest.division_parquet -- see
+    TestMultiAreaDivisionMerge's docstring above for why.
+    """
+
+    _BBOX = (-10.0, -10.0, 30.0, 30.0)
+
+    @pytest.fixture
+    def division_invalid_language_parquet(self, tmp_path):
+        """One division whose names.rules has an invalid language
+        ('genitive', the real defect named in project memory) alongside a
+        valid one."""
+        division_path = tmp_path / "division.parquet"
+        division_area_path = tmp_path / "division_area.parquet"
+
+        conn = duckdb.connect(":memory:")
+        conn.execute("INSTALL spatial; LOAD spatial;")
+
+        conn.execute("""
+            CREATE TABLE tmp_division (
+                id VARCHAR,
+                names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR), rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
+                subtype VARCHAR,
+                country VARCHAR,
+                region VARCHAR,
+                wikidata VARCHAR,
+                population BIGINT,
+                parent_division_id VARCHAR
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_division VALUES (
+                'div_invalid_lang',
+                {'primary': 'Testland Province',
+                 'common': map([]::VARCHAR[], []::VARCHAR[]),
+                 'rules': [
+                     {'language': 'genitive', 'value': 'Invalid Language Name', 'variant': 'official'},
+                     {'language': 'en', 'value': 'Valid Language Name', 'variant': 'alternate'}
+                 ]},
+                'locality',
+                'US',
+                NULL,
+                'Q3',
+                5000,
+                NULL
+            )
+        """)
+        conn.execute(f"COPY tmp_division TO '{division_path}' (FORMAT PARQUET)")
+
+        conn.execute("""
+            CREATE TABLE tmp_division_area (
+                division_id VARCHAR,
+                admin_level INTEGER,
+                is_land BOOLEAN,
+                geometry VARCHAR,
+                bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO tmp_division_area VALUES (
+                'div_invalid_lang',
+                8,
+                true,
+                'POLYGON((0 0, 0 10, 10 10, 10 0, 0 0))',
+                {'xmin': 0.0, 'ymin': 0.0, 'xmax': 10.0, 'ymax': 10.0}
+            )
+        """)
+        conn.execute(f"COPY tmp_division_area TO '{division_area_path}' (FORMAT PARQUET)")
+        conn.close()
+
+        return (str(division_path), str(division_area_path))
+
+    def test_invalid_rules_language_nulled(self, division_invalid_language_parquet, tmp_path):
+        """The invalid entry's language becomes NULL while name/type
+        survive; the valid entry is untouched (same-fixture regression
+        guard)."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_invalid_language_parquet, self._BBOX, output)
+
+        con = duckdb.connect()
+        variants = con.execute(
+            f"SELECT variants FROM read_parquet('{output}') WHERE id = 'div_invalid_lang'"
+        ).fetchone()[0]
+        con.close()
+
+        assert variants == [
+            {"name": "Invalid Language Name", "type": "official", "language": None},
+            {"name": "Valid Language Name", "type": "alternate", "language": "en"},
+        ], variants
+
+
+# ---------------------------------------------------------------------------
 # _assert_interior_points raises on non-interior points
 # ---------------------------------------------------------------------------
 

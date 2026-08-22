@@ -352,6 +352,27 @@ optional-but-not-nullable field built this way — per element via
 `garganorn/sql/overture_division_export_tiles.sql`,
 `garganorn/sql/osm_export_tiles.sql`
 
+### `variant.language` invalid values are nulled at import, not export
+
+`atgeo_valid_language` — identical `CREATE OR REPLACE MACRO` in each of
+the three import scripts — nulls any `language` value that fails
+lexrpc's `format: language` check before it reaches the `variants`
+struct. Each import script runs as an isolated DuckDB process with no
+shared preamble, so duplicating the two-line macro three times is
+cheaper than inventing one. It's a correctness backstop, not the primary
+mechanism: OSM's `osm_variant_suffix` and Overture's
+`names.rules`/`names.common` derivations classify what they can into a
+real BCP-47 code first, so the backstop only catches whatever shape
+nobody has classified yet. Because it runs at import, the NULL it
+produces still passes through the neighboring
+optional-but-not-nullable-lexicon-fields entry above at export —
+`strip_json_nulls` is what turns that NULL into an omitted key on the
+wire, not this macro.
+
+**Applies to**: `garganorn/sql/osm_import.sql` (`atgeo_valid_language`,
+`osm_variant_suffix`), `garganorn/sql/overture_division_import.sql`,
+`garganorn/sql/overture_place_import.sql`
+
 ---
 
 ## Compatibility Policy

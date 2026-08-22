@@ -27,6 +27,10 @@ DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
 INSTALL spatial; LOAD spatial;
 
+CREATE OR REPLACE MACRO atgeo_valid_language(lang) AS (
+    lang IS NOT NULL AND regexp_matches(lang, '^(i|[a-z]{2,3})(-[A-Za-z0-9-]+)?$')
+);
+
 -- Load density parquet file as temp table (no IDF for divisions)
 -- When parquet path is None, create empty temp table (LEFT JOINs produce NULL, importance defaults to 0)
 ${density_cte}
@@ -121,7 +125,8 @@ SELECT
     list_sort(list_filter(
         list_concat(
             coalesce(list_transform(map_entries(db.names.common),
-                e -> {'name': e.value, 'type': 'alternate', 'language': e.key}), []),
+                e -> {'name': e.value, 'type': 'alternate',
+                      'language': CASE WHEN atgeo_valid_language(e.key) THEN e.key ELSE NULL END}), []),
             coalesce(list_transform(db.names.rules,
                 r -> {'name': r.value,
                       'type': CASE r.variant
@@ -131,7 +136,7 @@ SELECT
                                 WHEN 'short'      THEN 'short'
                                 ELSE 'alternate'
                               END,
-                      'language': r.language}), [])),
+                      'language': CASE WHEN atgeo_valid_language(r.language) THEN r.language ELSE NULL END}), [])),
         v -> v.name IS NOT NULL AND TRIM(v.name) != '')) AS variants
 FROM division_base db
 LEFT JOIN division_density dd USING (id);

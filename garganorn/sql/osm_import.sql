@@ -3,6 +3,10 @@ DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
 INSTALL spatial; LOAD spatial;
 
+CREATE OR REPLACE MACRO atgeo_valid_language(lang) AS (
+    lang IS NOT NULL AND regexp_matches(lang, '^(i|[a-z]{2,3})(-[A-Za-z0-9-]+)?$')
+);
+
 -- osm_dropped_suffix/osm_variant_type_lang derive the `variants` field from
 -- OSM name tags: tag key -> type/language, per the mapping and drop-list
 -- below. OR REPLACE because fixtures that reuse a connection across
@@ -20,7 +24,46 @@ CREATE OR REPLACE MACRO osm_dropped_suffix(suffix) AS (
     OR suffix = 'pronunciation' OR suffix LIKE 'pronunciation:%'
     OR suffix = 'adjective' OR suffix LIKE 'adjective:%'
     OR suffix = 'genitive' OR suffix LIKE 'genitive:%'
+    OR suffix = 'wikidata' OR suffix LIKE 'wikidata:%'
+    OR suffix = 'wikipedia' OR suffix LIKE 'wikipedia:%'
+    OR suffix = 'source' OR suffix LIKE 'source:%'
+    OR suffix = 'note' OR suffix LIKE 'note:%'
+    OR suffix = 'disaster' OR suffix LIKE 'disaster:%'
+    OR suffix = 'historic' OR suffix LIKE 'historic:%'
+    OR suffix = 'sector' OR suffix LIKE 'sector:%'
+    OR suffix = 'technical' OR suffix LIKE 'technical:%'
+    OR suffix = 'direction' OR suffix LIKE 'direction:%'
+    OR suffix = 'start_date' OR suffix LIKE 'start_date:%'
+    OR suffix = 'end_date' OR suffix LIKE 'end_date:%'
+    OR suffix = 'check_date' OR suffix LIKE 'check_date:%'
+    OR suffix = 'survey:date' OR suffix LIKE 'survey:date:%'
     OR regexp_matches(suffix, 'word_stress$')
+);
+
+-- osm_variant_suffix: tag-key suffix -> STRUCT(type, language) for the
+-- name:*-family prefixes (name:, alt_name:, official_name:, short_name:,
+-- loc_name:, old_name:). Classifies year ranges, abbreviation/carnaval
+-- markers, and localized-form suffixes (lang_script, lang+digit variant,
+-- lang:scheme) before falling back to treating the whole suffix as a
+-- language -- atgeo_valid_language nulls whatever of that fallback isn't
+-- a valid BCP-47 primary subtag.
+CREATE OR REPLACE MACRO osm_variant_suffix(default_type, suffix) AS (
+    CASE
+        WHEN osm_dropped_suffix(suffix) THEN NULL
+        WHEN regexp_matches(suffix, '^-?\d{4}-?(\d{4})?$')
+            THEN {'type': 'historical', 'language': NULL}
+        WHEN suffix = 'abbr' THEN {'type': 'short', 'language': NULL}
+        WHEN suffix = 'carnaval' THEN {'type': 'colloquial', 'language': NULL}
+        -- underscore-joined only: a hyphenated suffix (zh-hant, en-us) is
+        -- already valid BCP-47 and must fall through to ELSE untouched.
+        WHEN regexp_matches(suffix, '^[a-z]{2,3}_[a-zA-Z0-9]+$')
+            THEN {'type': default_type, 'language': regexp_extract(suffix, '^([a-z]{2,3})_', 1)}
+        WHEN regexp_matches(suffix, '^[a-z]{2,3}\d{1,2}$')
+            THEN {'type': default_type, 'language': regexp_extract(suffix, '^([a-z]{2,3})', 1)}
+        WHEN regexp_matches(suffix, '^[a-z]{2,3}:')
+            THEN {'type': default_type, 'language': regexp_extract(suffix, '^([a-z]{2,3}):', 1)}
+        ELSE {'type': default_type, 'language': suffix}
+    END
 );
 
 -- osm_variant_type_lang: tag key -> STRUCT(type, language), or NULL for any
@@ -35,37 +78,12 @@ CREATE OR REPLACE MACRO osm_variant_type_lang(tag_key) AS (
         WHEN tag_key = 'short_name' THEN {'type': 'short', 'language': NULL}
         WHEN tag_key = 'loc_name' THEN {'type': 'colloquial', 'language': NULL}
         WHEN tag_key = 'old_name' THEN {'type': 'historical', 'language': NULL}
-        WHEN tag_key LIKE 'name:%' THEN
-            CASE
-                WHEN osm_dropped_suffix(substr(tag_key, length('name:') + 1)) THEN NULL
-                WHEN substr(tag_key, length('name:') + 1) = 'abbr'
-                    THEN {'type': 'short', 'language': NULL}
-                WHEN regexp_matches(substr(tag_key, length('name:') + 1), '^-\d{4}(-\d{4})?$')
-                    THEN {'type': 'historical', 'language': NULL}
-                WHEN substr(tag_key, length('name:') + 1) = 'carnaval'
-                    THEN {'type': 'colloquial', 'language': NULL}
-                ELSE {'type': 'alternate', 'language': substr(tag_key, length('name:') + 1)}
-            END
-        WHEN tag_key LIKE 'alt_name:%' THEN
-            CASE WHEN osm_dropped_suffix(substr(tag_key, length('alt_name:') + 1)) THEN NULL
-                 ELSE {'type': 'alternate', 'language': substr(tag_key, length('alt_name:') + 1)}
-            END
-        WHEN tag_key LIKE 'official_name:%' THEN
-            CASE WHEN osm_dropped_suffix(substr(tag_key, length('official_name:') + 1)) THEN NULL
-                 ELSE {'type': 'official', 'language': substr(tag_key, length('official_name:') + 1)}
-            END
-        WHEN tag_key LIKE 'short_name:%' THEN
-            CASE WHEN osm_dropped_suffix(substr(tag_key, length('short_name:') + 1)) THEN NULL
-                 ELSE {'type': 'short', 'language': substr(tag_key, length('short_name:') + 1)}
-            END
-        WHEN tag_key LIKE 'loc_name:%' THEN
-            CASE WHEN osm_dropped_suffix(substr(tag_key, length('loc_name:') + 1)) THEN NULL
-                 ELSE {'type': 'colloquial', 'language': substr(tag_key, length('loc_name:') + 1)}
-            END
-        WHEN tag_key LIKE 'old_name:%' THEN
-            CASE WHEN osm_dropped_suffix(substr(tag_key, length('old_name:') + 1)) THEN NULL
-                 ELSE {'type': 'historical', 'language': substr(tag_key, length('old_name:') + 1)}
-            END
+        WHEN tag_key LIKE 'name:%' THEN osm_variant_suffix('alternate', substr(tag_key, length('name:') + 1))
+        WHEN tag_key LIKE 'alt_name:%' THEN osm_variant_suffix('alternate', substr(tag_key, length('alt_name:') + 1))
+        WHEN tag_key LIKE 'official_name:%' THEN osm_variant_suffix('official', substr(tag_key, length('official_name:') + 1))
+        WHEN tag_key LIKE 'short_name:%' THEN osm_variant_suffix('short', substr(tag_key, length('short_name:') + 1))
+        WHEN tag_key LIKE 'loc_name:%' THEN osm_variant_suffix('colloquial', substr(tag_key, length('loc_name:') + 1))
+        WHEN tag_key LIKE 'old_name:%' THEN osm_variant_suffix('historical', substr(tag_key, length('old_name:') + 1))
         ELSE NULL
     END
 );
@@ -249,7 +267,8 @@ SELECT
                     list_transform(str_split(e.value, ';'), v -> TRIM(v)),
                     v -> v != '' AND v != TRIM(f.name)
                 ),
-                v -> {'name': v, 'type': e.tl.type, 'language': e.tl.language}
+                v -> {'name': v, 'type': e.tl.type,
+                      'language': CASE WHEN atgeo_valid_language(e.tl.language) THEN e.tl.language ELSE NULL END}
             )
         )
     )) AS variants
@@ -454,7 +473,8 @@ SELECT
                     list_transform(str_split(e.value, ';'), v -> TRIM(v)),
                     v -> v != '' AND v != TRIM(wb.name)
                 ),
-                v -> {'name': v, 'type': e.tl.type, 'language': e.tl.language}
+                v -> {'name': v, 'type': e.tl.type,
+                      'language': CASE WHEN atgeo_valid_language(e.tl.language) THEN e.tl.language ELSE NULL END}
             )
         )
     )) AS variants
@@ -724,7 +744,8 @@ SELECT
                     list_transform(str_split(e.value, ';'), v -> TRIM(v)),
                     v -> v != '' AND v != TRIM(rb.name)
                 ),
-                v -> {'name': v, 'type': e.tl.type, 'language': e.tl.language}
+                v -> {'name': v, 'type': e.tl.type,
+                      'language': CASE WHEN atgeo_valid_language(e.tl.language) THEN e.tl.language ELSE NULL END}
             )
         )
     )) AS variants

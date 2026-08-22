@@ -662,6 +662,25 @@ class TestOvertureVariantsCharacterization:
             f"[name, type, language]; got {list(common_variants[0].keys())}"
         )
 
+    def test_invalid_rules_language_nulled(self, overture_parquet, tmp_path):
+        """ov017: names.rules has an invalid language ('genitive', the
+        real defect named in project memory) alongside a valid one.
+
+        Pins the R1 safety net for overture_place_import.sql: the invalid
+        entry's language becomes NULL while name/type survive, and the
+        valid entry is untouched (same-fixture regression guard).
+        """
+        db_path = tmp_path / "test_variants_ov017.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        run_overture_import(conn, overture_parquet)
+        variants = self._variants_for(conn, "ov017")
+        conn.close()
+        assert variants == [
+            {"name": "Invalid Language Name", "type": "official", "language": None},
+            {"name": "Valid Language Name", "type": "alternate", "language": "en"},
+        ], variants
+
 
 # ---------------------------------------------------------------------------
 # density/idf join must not multiply place rows
