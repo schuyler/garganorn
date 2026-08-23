@@ -1,6 +1,6 @@
 {
     "lexicon": 1,
-    "id": "org.atgeo.describeGazetteer",
+    "id": "org.atgeo.describeService",
     "defs": {
         "main": {
             "type": "query",

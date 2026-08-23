@@ -8,12 +8,12 @@ document is scoped for implementation until its section says so.
 
 ## Collection and service metadata
 
-Status: implemented (`org.atgeo.describeGazetteer`, `org.atgeo.collection`;
+Status: implemented (`org.atgeo.describeService`, `org.atgeo.collection`;
 see `pipeline-artifacts.md`'s `stage_export` section). What remains open:
 
 - A DID-based discovery layer, so a client can learn a service *exists and
   what kind it is* before calling any XRPC method on it — resolved via the
-  operator's DID, not the service's own HTTP surface. `describeGazetteer`
+  operator's DID, not the service's own HTTP surface. `describeService`
   answers from a DID a client already has; nothing yet gets a client that
   DID in the first place.
 - An actionable category/attribute vocabulary, distinct from the current

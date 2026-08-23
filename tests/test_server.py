@@ -207,11 +207,11 @@ def test_get_record_lexicon_schema_not_found():
 
 
 # ---------------------------------------------------------------------------
-# describeGazetteer
+# describeService
 # ---------------------------------------------------------------------------
 
-def test_describe_gazetteer_lists_ready_collections():
-    """describeGazetteer's did is did:web:<repo>, and its collections list is
+def test_describe_service_lists_ready_collections():
+    """describeService's did is did:web:<repo>, and its collections list is
     exactly the keys of tile_manifests -- the same map get_coverage consults
     for CollectionNotFound (R1)."""
     tile_manifests = {
@@ -219,12 +219,12 @@ def test_describe_gazetteer_lists_ready_collections():
         "org.atgeo.places.osm": object(),
     }
     server = _make_server(tile_manifests=tile_manifests)
-    result = server.describe_gazetteer(None)
+    result = server.describe_service(None)
     assert result["did"] == "did:web:places.atgeo.org"
     assert {c["collection"] for c in result["collections"]} == set(tile_manifests)
 
 
-def test_describe_gazetteer_excludes_collections_not_coverage_ready():
+def test_describe_service_excludes_collections_not_coverage_ready():
     """A collection present in tile_collections but absent from tile_manifests
     is not listed -- proves the list comes from tile_manifests, not
     tile_collections. The two maps deliberately differ here (osm is
@@ -235,13 +235,13 @@ def test_describe_gazetteer_excludes_collections_not_coverage_ready():
         "org.atgeo.places.osm": MockTileBackedCollection(collection="org.atgeo.places.osm"),
     }
     server = _make_server(tile_manifests=tile_manifests, tile_collections=tile_collections)
-    result = server.describe_gazetteer(None)
+    result = server.describe_service(None)
     listed = {c["collection"] for c in result["collections"]}
     assert listed == {"org.atgeo.places.overture.place"}
     assert "org.atgeo.places.osm" not in listed
 
 
-def test_describe_gazetteer_metadata_link_reflects_collection_metadata_map():
+def test_describe_service_metadata_link_reflects_collection_metadata_map():
     """A collection with a collection_metadata entry is listed with a
     'metadata' URL of the record_uri form; one without an entry is listed
     with no 'metadata' key at all (not None -- the key is absent)."""
@@ -253,7 +253,7 @@ def test_describe_gazetteer_metadata_link_reflects_collection_metadata_map():
         "org.atgeo.places.overture.place": _collection_record("org.atgeo.places.overture.place"),
     }
     server = _make_server(tile_manifests=tile_manifests, collection_metadata=collection_metadata)
-    result = server.describe_gazetteer(None)
+    result = server.describe_service(None)
     by_collection = {c["collection"]: c for c in result["collections"]}
 
     assert by_collection["org.atgeo.places.overture.place"]["metadata"] == (
@@ -262,16 +262,16 @@ def test_describe_gazetteer_metadata_link_reflects_collection_metadata_map():
     assert "metadata" not in by_collection["org.atgeo.places.osm"]
 
 
-def test_describe_gazetteer_validates_against_lexicon_schema():
-    """describeGazetteer's result validates against org.atgeo.describeGazetteer's
+def test_describe_service_validates_against_lexicon_schema():
+    """describeService's result validates against org.atgeo.describeService's
     own output schema."""
     tile_manifests = {"org.atgeo.places.overture.place": object()}
     collection_metadata = {
         "org.atgeo.places.overture.place": _collection_record("org.atgeo.places.overture.place"),
     }
     server = _make_server(tile_manifests=tile_manifests, collection_metadata=collection_metadata)
-    result = server.describe_gazetteer(None)
-    server.server.validate("org.atgeo.describeGazetteer", "output", result)
+    result = server.describe_service(None)
+    server.server.validate("org.atgeo.describeService", "output", result)
 
 
 # ---------------------------------------------------------------------------

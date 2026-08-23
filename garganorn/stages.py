@@ -840,7 +840,7 @@ def write_collection_json(run_dir, source, source_cls, *, generated_at, manifest
     if not manifest:
         # Zero tiles means zero records: extent is a required field with no
         # honest value to give it, so omit collection.json rather than
-        # fabricate one. describeGazetteer/fetch already handle a run dir
+        # fabricate one. describeService/fetch already handle a run dir
         # with no collection.json.
         return
 

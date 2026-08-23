@@ -56,7 +56,7 @@ class Server:
             """Register bound methods with the server."""
             self.server.register(name, getattr(self, method))
         self.server.register("org.atgeo.getCoverage", self.get_coverage)
-        self.server.register("org.atgeo.describeGazetteer", self.describe_gazetteer)
+        self.server.register("org.atgeo.describeService", self.describe_service)
 
     def record_uri(self, collection, rkey):
         return envelope.record_uri(self.repo, collection, rkey)
@@ -116,7 +116,7 @@ class Server:
             }
         }
 
-    def describe_gazetteer(self, _):
+    def describe_service(self, _):
         """Enumerate served collections. The list is tile_manifests' keys --
         the same map get_coverage consults for CollectionNotFound (R1)."""
         collections = []

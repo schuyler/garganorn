@@ -134,7 +134,7 @@ def create_app():
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 
-    CACHED_QUERIES = {"org.atgeo.getCoverage", "org.atgeo.describeGazetteer"}
+    CACHED_QUERIES = {"org.atgeo.getCoverage", "org.atgeo.describeService"}
 
     @app.after_request
     def add_coverage_cache_control(response):

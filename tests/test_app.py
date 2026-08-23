@@ -743,11 +743,11 @@ def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# org.atgeo.describeGazetteer and org.atgeo.collection
+# org.atgeo.describeService and org.atgeo.collection
 # ---------------------------------------------------------------------------
 
-def test_describe_gazetteer_endpoint_returns_did_and_collections(tmp_path):
-    """GET /xrpc/org.atgeo.describeGazetteer returns 200, cached for 1 hour,
+def test_describe_service_endpoint_returns_did_and_collections(tmp_path):
+    """GET /xrpc/org.atgeo.describeService returns 200, cached for 1 hour,
     with the did and the served collection's metadata URL."""
     tiles_root = tmp_path / "overture_place" / "tiles"
     run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
@@ -758,7 +758,7 @@ def test_describe_gazetteer_endpoint_returns_did_and_collections(tmp_path):
     )
     app = _build_tile_app(tiles_config)
     with app.test_client() as client:
-        resp = client.get("/xrpc/org.atgeo.describeGazetteer")
+        resp = client.get("/xrpc/org.atgeo.describeService")
 
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
@@ -770,8 +770,8 @@ def test_describe_gazetteer_endpoint_returns_did_and_collections(tmp_path):
     }]
 
 
-def test_describe_gazetteer_lexicon_route_lacks_cache_control(tmp_path):
-    """GET /<nsid> (the lexicon route) for org.atgeo.describeGazetteer must
+def test_describe_service_lexicon_route_lacks_cache_control(tmp_path):
+    """GET /<nsid> (the lexicon route) for org.atgeo.describeService must
     not carry the XRPC cache header -- same guard as
     test_getcoverage_lexicon_route_lacks_cache_control, for the new NSID:
     request.endpoint == 'xrpc-endpoint' is what keeps the header off this
@@ -785,7 +785,7 @@ def test_describe_gazetteer_lexicon_route_lacks_cache_control(tmp_path):
     )
     app = _build_tile_app(tiles_config)
     with app.test_client() as client:
-        resp = client.get("/org.atgeo.describeGazetteer")
+        resp = client.get("/org.atgeo.describeService")
 
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") != "public, max-age=3600"
@@ -836,10 +836,10 @@ def test_get_collection_metadata_record_unknown_nsid_404s(tmp_path):
 def test_new_lexicons_served_at_nsid_route(client):
     """Both new lexicon documents are served at GET /<nsid>, like every other
     lexicon (see test_lexicon_known_nsid)."""
-    resp = client.get("/org.atgeo.describeGazetteer")
+    resp = client.get("/org.atgeo.describeService")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["id"] == "org.atgeo.describeGazetteer"
+    assert data["id"] == "org.atgeo.describeService"
     assert data["lexicon"] == 1
 
     resp = client.get("/org.atgeo.collection")
@@ -851,7 +851,7 @@ def test_new_lexicons_served_at_nsid_route(client):
 
 def test_missing_collection_json_omits_metadata_and_404s_on_fetch(tmp_path):
     """A run dir without collection.json (a build from before this feature)
-    still lists its collection via describeGazetteer, just without a
+    still lists its collection via describeService, just without a
     'metadata' link, and get_record on org.atgeo.collection for that nsid
     returns RecordNotFound -- degraded but truthful."""
     tiles_root = tmp_path / "overture_place" / "tiles"
@@ -863,7 +863,7 @@ def test_missing_collection_json_omits_metadata_and_404s_on_fetch(tmp_path):
     )
     app = _build_tile_app(tiles_config)
     with app.test_client() as client:
-        resp = client.get("/xrpc/org.atgeo.describeGazetteer")
+        resp = client.get("/xrpc/org.atgeo.describeService")
         assert resp.status_code == 200
         assert resp.get_json()["collections"] == [{"collection": OVERTURE_COLLECTION}]
 
