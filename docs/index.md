@@ -21,7 +21,7 @@
 | Document | Description |
 |----------|-------------|
 | [atgeo-spec.md](atgeo-spec.md) | Tile format, record envelope, containment levels, and the XRPC methods a client can call (pending overhaul — not normative) |
-| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design: two methods, `searchPlaces` and `getPlace` (unbuilt; pending overhaul — not normative) |
+| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design rationale and port-relevant behavior: two methods, `searchPlaces` and `getPlace` (describes the shipped TypeScript SDK; not normative for the wire) |
 | [atgeo-appview-design.md](atgeo-appview-design.md) | Firehose sidecar serving live location records as tiles (unbuilt; pending overhaul — not normative) |
 | [org.atgeo.tiles.service.json](org.atgeo.tiles.service.json) | Lexicon schema for `org.atgeo.tiles.service` records |
 
