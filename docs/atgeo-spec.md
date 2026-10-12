@@ -42,6 +42,9 @@ the client's job, performed locally — the server never sees what you were
 looking for. There is no pagination, no server-side ranking, and no
 partial-result protocol.
 
+For a region too large to cover with the regular tiles, the result is a
+sample: see [The summary band](#the-summary-band).
+
 ## Tiles
 
 A tile is a set of place records associated with one quadkey cell.
@@ -59,14 +62,15 @@ client nothing because a client always asks `getCoverage` again rather than
 remembering URLs. Old releases are eventually retired, so a hoarded URL will
 in time return 404; that is the penalty for remembering.
 
-**Zoom and assignment.** Tiles exist at zooms 6 through 17. For point
-records, assignment is adaptive: a record goes in the coarsest tile
+**Zoom and assignment.** The regular tiles exist at zooms 6 through 17. For
+point records, assignment is adaptive: a record goes in the coarsest tile
 holding no more than a per-deployment cap of records (1,000 by default),
 falling back to zoom 17 when no coarser tile qualifies. Administrative
 divisions are polygons and instead appear in every tile their geometry
-overlaps; a division's per-tile count is not bounded by that cap.
-Consequences a client must handle: tiles at different zooms coexist in
-one collection, and no fixed zoom may be assumed.
+overlaps; a division's per-tile count is not bounded by that cap. A
+collection may also carry a [summary band](#the-summary-band) at zooms 1
+through 5. Consequences a client must handle: tiles at different zooms
+coexist in one collection, and no fixed zoom may be assumed.
 
 **Deduplicate by `rkey`.** A client concatenating `records` arrays from
 more than one tile in the same collection MUST deduplicate by `rkey`.
@@ -78,8 +82,9 @@ shouldn't require a corresponding client-side change to stay correct.
 Whether duplication actually occurs today varies by collection, as a
 performance characteristic rather than a client-facing guarantee:
 non-division collections currently place each record in exactly one
-tile, so concatenating their tiles produces near-zero redundant bytes
-in practice. The division collection
+regular tile, plus one summary tile for the most important records, and a
+single `getCoverage` answer never mixes the two bands, so concatenating
+its tiles produces near-zero redundant bytes in practice. The division collection
 (`org.atgeo.places.overture.division`) is the current exception: a
 division can be referenced from more than one tile, so real duplication
 should be expected there.
@@ -88,13 +93,38 @@ should be expected there.
 Wire compression is negotiated via standard HTTP content negotiation
 against the request's `Accept-Encoding` — clients should rely on their
 HTTP library's usual behavior rather than assuming any particular
-encoding. Tile responses carry `Access-Control-Allow-Origin: *` so browser
-clients on any origin can read them; servers MUST send it.
+encoding. Every response, tiles included, carries
+`Access-Control-Allow-Origin: *` so browser clients on any origin can read
+it; servers MUST send it.
 
 **Caching.** Because tile URLs are immutable, tiles are served with
 `Cache-Control: public, max-age=604800, immutable` — cache them for a week
-and never revalidate. `getCoverage` responses carry `max-age=3600`, so a
-client learns about a new release within an hour of asking.
+and never revalidate. `getCoverage` and `describeService` responses carry
+`max-age=3600`, so a client learns about a new release within an hour of
+asking.
+
+### The summary band
+
+A collection may carry a coarse band of tiles at zooms 1 through 5 (quadkeys
+shorter than six characters), alongside the regular tiles. It holds the
+10,000 records with the highest `importance` in the collection, plus, for the
+division collection, every division of subtype `country`, `region` or
+`dependency`. A record in the summary band is byte-identical to its copy in
+the regular tiles, so the deduplication rule above covers it. A summary tile
+can hold more records than the per-tile cap.
+
+`getCoverage` uses the band as a fallback. It answers from the regular tiles
+first; if that answer would exceed the deployment's tile budget and the
+collection has a summary band, it returns the summary tiles that intersect the
+box instead, with no budget applied. The band is bounded by construction, a
+few dozen tiles per collection. The result is deliberately a sample of the
+region, not everything in it.
+
+Nothing in the response says which kind of answer it is. `getCoverage`
+returns only `tiles`, and a summary tile looks like any other. A client that
+needs to know can see it only by the quadkey length in the tile URL, which
+this document does not define as part of the interface; tile URLs are
+opaque.
 
 ## The tile payload
 
@@ -277,9 +307,22 @@ an out-of-vocabulary level.
 
 ## XRPC interface
 
-Two methods, both at `/xrpc/{nsid}`. Every error returns HTTP 400 with a
-body of `{"error": name, "message": text}`. Responses may include keys not
+Three methods, all at `/xrpc/{nsid}`. Every XRPC error returns HTTP 400 with
+a body of `{"error": name, "message": text}`. Responses may include keys not
 documented here; per the forward-compatibility rule above, ignore them.
+
+### org.atgeo.describeService
+
+Which collections this deployment serves.
+
+Takes no parameters. Returns `{"did", "collections": [...]}`. `did` is the
+`did:web` the deployment identifies as, the same identifier
+`/.well-known/did.json` carries. Each element of `collections` is
+`{"collection", "metadata"?}`: the collection's NSID and, when the serving
+build produced one, the URL of its [metadata record](#collection-metadata).
+
+The list is authoritative. A collection absent from it returns
+`CollectionNotFound` from `getCoverage`, and the other way around.
 
 ### org.atgeo.getCoverage
 
@@ -310,15 +353,22 @@ Errors, in evaluation order:
 - `CollectionNotFound` — the collection is unknown or not currently
   servable.
 - `BboxTooLarge` — the box covers more tiles than the deployment's budget,
-  50 by default. Ask for a smaller region.
+  50 by default, and the collection has no [summary band](#the-summary-band).
+  Ask for a smaller region. A collection with a summary band never raises
+  this; it answers with the summary tiles instead, and the response does not
+  say that it did.
 
 ### com.atproto.repo.getRecord
 
 One record by key.
 
-Parameters: `repo`, `collection`, `rkey` (all required). `repo` is the
-gazetteer's own hostname. A `cid` parameter is declared for future version
-selection and is not yet honored.
+Parameters: `repo`, `collection`, `rkey` (all required). Clients MUST send
+the `did` from `describeService` as `repo`. The lexicon types `repo` as an
+AT Protocol identifier, and the server rejects any value that is not a valid
+handle or DID. Today it does nothing else with the value, so any valid
+identifier gets the same record; a client that depends on that is not
+conformant. A `cid` parameter is declared for future version selection and
+is not yet honored.
 
 Returns `{"uri", "source", "license", "importance"?, "value"}`. `source`
 and `license` mean what they mean in the tile payload. `importance` appears
@@ -332,12 +382,33 @@ returns the server's own lexicon documents as `{uri, value}` with an
 `at://` URI and no source, license, or importance. Fetching `GET /{nsid}`
 (below) is the simpler way to get the same documents.
 
+The other special case is `collection=org.atgeo.collection` with the
+described collection's NSID as `rkey`, which returns that collection's
+[metadata record](#collection-metadata) as `{uri, source, license, value}`,
+with an HTTP(S) `uri` and no `importance`.
+
 ### Plain HTTP
 
 - `GET /{collection}/{rkey}` returns the bare record value, no envelope.
-  This is what makes the `uri` in every tile record dereferenceable.
+  This is what makes the `uri` in every tile record dereferenceable. It
+  answers HTTP 404 with an `{"error", "message"}` body for an unknown
+  collection or record, where XRPC answers 400.
 - `GET /{nsid}` returns the lexicon document for that NSID.
-- `GET /.well-known/did.json` identifies the server as a `did:web`.
+- `GET /.well-known/did.json` is the server's DID document: `id` is the
+  `did:web` also reported by `describeService`.
+
+## Collection metadata
+
+Each served collection may have an `org.atgeo.collection` record describing
+the build being served, keyed by the collection's NSID and reachable as
+`getRecord` or as `GET /org.atgeo.collection/{nsid}`. `describeService` gives
+its URL. Its fields: `collection`, `source`, `license`, `generatedAt` (the
+release's `generated_at`), `recordCount`, `extent` (a `bbox` aligned to tile
+boundaries), and `locationTypes` are always present; `attribution`,
+`containmentLevels`, `categories` (observed values with counts) and
+`attributes` (keys records may carry) are optional. The vocabularies are
+observed, not closed. The normative schema is the `org.atgeo.collection`
+lexicon.
 
 ## Collections
 
@@ -349,5 +420,5 @@ The producer currently builds three collections:
 | `org.atgeo.places.osm` | [OpenStreetMap](https://www.openstreetmap.org/) | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/) |
 | `org.atgeo.places.overture.division` | [Overture Maps](https://overturemaps.org/) divisions | [Overture attribution](https://docs.overturemaps.org/attribution/) |
 
-A deployment may serve any subset. Ask `getCoverage`; a collection it
-doesn't recognize is a collection the deployment doesn't serve.
+A deployment may serve any subset. Ask `describeService`; a collection absent
+from its list is a collection the deployment doesn't serve.
