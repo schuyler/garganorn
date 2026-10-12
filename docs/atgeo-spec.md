@@ -88,7 +88,8 @@ should be expected there.
 Wire compression is negotiated via standard HTTP content negotiation
 against the request's `Accept-Encoding` — clients should rely on their
 HTTP library's usual behavior rather than assuming any particular
-encoding.
+encoding. Tile responses carry `Access-Control-Allow-Origin: *` so browser
+clients on any origin can read them; servers MUST send it.
 
 **Caching.** Because tile URLs are immutable, tiles are served with
 `Cache-Control: public, max-age=604800, immutable` — cache them for a week

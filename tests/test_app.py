@@ -337,6 +337,13 @@ def test_tile_cache_control_is_constant_immutable(tile_client):
     assert resp.headers.get("Cache-Control") == "public, max-age=604800, immutable"
 
 
+def test_tile_allows_cross_origin_reads(tile_client):
+    """Tiles are fetched by browser pages on other origins."""
+    resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
+    assert resp.status_code == 200
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
 def test_tile_path_traversal_rejected(tmp_path):
     """safe_join blocks paths that escape tiles_dir.
 

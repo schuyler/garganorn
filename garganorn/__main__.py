@@ -132,6 +132,7 @@ def create_app():
             data = f.read()
         response = Response(data, mimetype="application/json")
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
+        response.headers["Access-Control-Allow-Origin"] = "*"
         return response
 
     CACHED_QUERIES = {"org.atgeo.getCoverage", "org.atgeo.describeService"}
