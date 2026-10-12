@@ -30,7 +30,8 @@ class MockTileBackedCollection:
         return self._record
 
 
-def _make_server(tile_collections=None, tile_manifests=None, collection_metadata=None):
+def _make_server(tile_collections=None, tile_manifests=None, collection_metadata=None,
+                 public_base=None):
     """Create a Server with the given tile_collections/tile_manifests/
     collection_metadata maps. tile_manifests and collection_metadata are only
     forwarded when given, so callers that don't need them keep exercising
@@ -41,6 +42,8 @@ def _make_server(tile_collections=None, tile_manifests=None, collection_metadata
         kwargs["tile_manifests"] = tile_manifests
     if collection_metadata is not None:
         kwargs["collection_metadata"] = collection_metadata
+    if public_base is not None:
+        kwargs["public_base"] = public_base
     return Server("places.atgeo.org", logger, tile_collections=tile_collections, **kwargs)
 
 
@@ -347,3 +350,68 @@ def test_get_record_collection_metadata_output_validates_against_lexicon_schema(
     )
 
     server.server.validate("com.atproto.repo.getRecord", "output", result)
+
+
+# ---------------------------------------------------------------------------
+# Configured public base
+# ---------------------------------------------------------------------------
+
+DEV_BASE = "http://localhost:8000"
+
+
+def test_describe_service_metadata_link_uses_public_base():
+    tile_manifests = {"org.atgeo.places.overture.place": object()}
+    collection_metadata = {
+        "org.atgeo.places.overture.place": _collection_record("org.atgeo.places.overture.place"),
+    }
+    server = _make_server(
+        tile_manifests=tile_manifests, collection_metadata=collection_metadata,
+        public_base=DEV_BASE,
+    )
+    result = server.describe_service(None)
+
+    assert result["did"] == "did:web:places.atgeo.org"
+    assert result["collections"][0]["metadata"] == (
+        f"{DEV_BASE}/org.atgeo.collection/org.atgeo.places.overture.place"
+    )
+
+
+def test_get_record_tile_backed_uri_uses_public_base():
+    mock_col = MockTileBackedCollection(record={"rkey": "tile001", "name": "Tile Place"})
+    server = _make_server(
+        tile_collections={TILE_COLLECTION: mock_col}, public_base=DEV_BASE
+    )
+
+    result = server.get_record(
+        {}, repo="places.atgeo.org", collection=TILE_COLLECTION, rkey="tile001"
+    )
+
+    assert result["uri"] == f"{DEV_BASE}/{TILE_COLLECTION}/tile001"
+
+
+def test_get_record_collection_metadata_uri_uses_public_base():
+    described = _collection_record("org.atgeo.places.overture.place")
+    server = _make_server(
+        collection_metadata={"org.atgeo.places.overture.place": described},
+        public_base=DEV_BASE,
+    )
+
+    result = server.get_record(
+        {}, repo="places.atgeo.org", collection=COLLECTION_METADATA_COLLECTION,
+        rkey="org.atgeo.places.overture.place",
+    )
+
+    assert result["uri"] == (
+        f"{DEV_BASE}/org.atgeo.collection/org.atgeo.places.overture.place"
+    )
+
+
+def test_get_record_lexicon_schema_uri_ignores_public_base():
+    server = _make_server(public_base=DEV_BASE)
+
+    result = server.get_record(
+        {}, repo="places.atgeo.org",
+        collection=LEXICON_SCHEMA_COLLECTION, rkey="org.atgeo.place",
+    )
+
+    assert result["uri"] == "at://did:web:places.atgeo.org/com.atproto.lexicon.schema/org.atgeo.place"

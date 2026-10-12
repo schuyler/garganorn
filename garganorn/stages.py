@@ -2278,7 +2278,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
             """
             wrapped = [
                 envelope.wrap_record(
-                    envelope.record_uri(REPO, source_cls.collection, rkey), record_json
+                    envelope.record_uri(f"https://{REPO}", source_cls.collection, rkey), record_json
                 )
                 for rkey, record_json in records
             ]

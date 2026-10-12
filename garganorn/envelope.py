@@ -8,15 +8,16 @@ Imports nothing from garganorn — no import cycle with server.py or stages.py.
 import json
 
 
-def record_uri(repo: str, collection: str, rkey: str) -> str:
+def record_uri(base: str, collection: str, rkey: str) -> str:
     """Build the canonical dereferenceable record URI.
 
-    https://{repo}/{collection}/{rkey} -- not at://; gazetteer records are not
-    repository data. rkey is the record's rkey *after* source transforms (for
+    {base}/{collection}/{rkey} -- not at://; gazetteer records are not
+    repository data. base is the serving deployment's public base URL (no
+    trailing slash). rkey is the record's rkey *after* source transforms (for
     OSM, the node:/way:/relation: form). Colons in rkeys are legal in a URI
     path segment (RFC 3986); no encoding is applied.
     """
-    return f"https://{repo}/{collection}/{rkey}"
+    return f"{base}/{collection}/{rkey}"
 
 
 def wrap_record(uri: str, record_json: str) -> str:

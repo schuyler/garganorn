@@ -124,17 +124,27 @@ keys keep their meaning.
 
 Each element of `records` has exactly three keys:
 
-- **`uri`** — `https://{host}/{collection}/{rkey}`, a dereferenceable URL
-  where a GET returns the bare record value. The rkey is served raw:
-  characters legal in a URI path segment, colons included, are not
-  percent-encoded. This is the same form `getRecord` reports, so tile URIs
-  and XRPC-resolved URIs agree by construction.
+- **`uri`** — `{base}/{collection}/{rkey}`, a dereferenceable URL where a
+  GET returns the bare record value. `{base}` is the public base URL of the
+  deployment serving the data; any host may serve the data under its own
+  base. The base is `https` for any deployment reachable from the open
+  internet. It may be `http` only for a development server on a development
+  host: `localhost`, a `*.localhost` name, or a loopback, private, or
+  link-local IP address. The rkey is served raw: characters legal in a URI
+  path segment, colons included, are not percent-encoded.
+
+  `getRecord` reports the same form, so tile URIs and XRPC-resolved URIs
+  agree when the tiles were exported for the serving deployment's base. A
+  server serving tiles exported for a different base (a development server
+  using production-built tiles, say) reports its own base from `getRecord`,
+  while the tile URIs keep the exporting deployment's base. Clients must not
+  assume the two match in that case.
 
   Gazetteer records never use `at://`. That scheme addresses ATProto
   repository data, and a gazetteer record is not repository-backed: no
   signed commit includes it, so an `at://` URI would promise a verifiability
-  the record cannot deliver. The URI scheme is a provenance signal —
-  `https://` means "not repository data, not commit-verifiable."
+  the record cannot deliver. The URI scheme is a provenance signal — an
+  HTTP(S) URL means "not repository data, not commit-verifiable."
 
 - **`cid`** — currently always the literal `null`, present rather than
   omitted. The reason is cost, not principle. A CID is a content hash and

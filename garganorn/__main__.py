@@ -10,7 +10,7 @@ DEFAULT_CONFIG = "config.yaml"
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
-    repo, tiles_config = load_config(config_path)
+    repo, tiles_config, public_base = load_config(config_path)
 
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
@@ -76,7 +76,8 @@ def create_app():
     gazetteer = Server(repo, app.logger,
                        tile_manifests=tile_manifests, tile_collections=tile_collections,
                        max_coverage_tiles=max_coverage_tiles,
-                       collection_metadata=collection_metadata)
+                       collection_metadata=collection_metadata,
+                       public_base=public_base)
     init_flask(gazetteer.server, app)
 
     lexicon_map = gazetteer.lexicon_map

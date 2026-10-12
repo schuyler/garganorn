@@ -1,4 +1,6 @@
 repo: places.atgeo.org
+# Base for record URIs; defaults to https://{repo}. http only for development hosts.
+# public_base: http://localhost:8000
 
 tiles:
   memory_limit: 48GB

@@ -32,6 +32,15 @@ tiles:
   max_coverage_tiles: 50
 ```
 
+`repo` is the server's hostname; it determines the `did:web` identity and the default base for record URIs. The optional top-level `public_base` sets the base that `getRecord` and `describeService` use when building record URIs and links. It defaults to `https://{repo}`. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
+
+```yaml
+repo: places.atgeo.org
+public_base: http://localhost:8000
+```
+
+URIs baked into tiles at export time keep the exporting deployment's base, so a local server serving production-built tiles reports its own base from `getRecord` while the tile URIs point at production.
+
 `source` and `license` aren't validated — `load_config` just parses the YAML, and omitting either yields an empty string, no error. They matter for `getRecord`: `TileBackedCollection` puts these exact config values in every record's envelope. Tile file headers carry a different source/license, hardcoded per source class in `garganorn/database.py`, independent of this config.
 
 ## Getting source data

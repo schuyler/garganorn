@@ -187,7 +187,7 @@ class TestModuleImports:
         cfg_path = tmp_path / "config.yaml"
         cfg_path.write_text("repo: test.example.org\ntiles:\n  overture_place: {}\n")
 
-        repo, tiles = garganorn.config.load_config(str(cfg_path))
+        repo, tiles, public_base = garganorn.config.load_config(str(cfg_path))
         assert repo == "test.example.org"
         assert tiles == {"overture_place": {}}
 

@@ -249,9 +249,9 @@ def _tile_json(name):
     return json.dumps({"records": [{"value": {"rkey": "r1", "name": name}}]}).encode()
 
 
-def _build_tile_app(tiles_config):
+def _build_tile_app(tiles_config, public_base="https://places.atgeo.org"):
     with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config)
+        mock_load.return_value = ("places.atgeo.org", tiles_config, public_base)
         app = create_app()
     app.config["TESTING"] = True
     return app
@@ -722,7 +722,7 @@ def test_no_manifest_key_still_boots(tmp_path):
         }
     }
     with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config)
+        mock_load.return_value = ("places.atgeo.org", tiles_config, "https://places.atgeo.org")
         app = create_app()  # must not raise
     app.config["TESTING"] = True
     with app.test_client() as client:
@@ -744,7 +744,7 @@ def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):
         base_url="https://places.atgeo.org/tiles/wrong-slug",
     )
     with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config)
+        mock_load.return_value = ("places.atgeo.org", tiles_config, "https://places.atgeo.org")
         with pytest.raises(ValueError, match="base_url must end with '/overture-place'"):
             create_app()
 
@@ -775,6 +775,29 @@ def test_describe_service_endpoint_returns_did_and_collections(tmp_path):
         "collection": OVERTURE_COLLECTION,
         "metadata": f"https://places.atgeo.org/org.atgeo.collection/{OVERTURE_COLLECTION}",
     }]
+
+
+def test_describe_service_metadata_link_uses_configured_public_base(tmp_path):
+    """A configured public_base replaces https://{repo} in the metadata link;
+    the did stays tied to repo."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config, public_base="http://localhost:8000")
+    with app.test_client() as client:
+        resp = client.get("/xrpc/org.atgeo.describeService")
+        did_resp = client.get("/.well-known/did.json")
+
+    data = resp.get_json()
+    assert data["did"] == "did:web:places.atgeo.org"
+    assert data["collections"][0]["metadata"] == (
+        f"http://localhost:8000/org.atgeo.collection/{OVERTURE_COLLECTION}"
+    )
+    assert "localhost" not in did_resp.get_data(as_text=True)
 
 
 def test_describe_service_lexicon_route_lacks_cache_control(tmp_path):

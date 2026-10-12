@@ -42,8 +42,9 @@ class Server:
 
     def __init__(self, repo, logger, tile_manifests=None,
                  tile_collections=None, max_coverage_tiles=50,
-                 collection_metadata=None):
+                 collection_metadata=None, public_base=None):
         self.repo = repo
+        self.public_base = public_base or f"https://{repo}"
         self.tile_manifests = tile_manifests or {}
         self.tile_collections = tile_collections or {}
         self.max_coverage_tiles = max_coverage_tiles
@@ -59,7 +60,7 @@ class Server:
         self.server.register("org.atgeo.describeService", self.describe_service)
 
     def record_uri(self, collection, rkey):
-        return envelope.record_uri(self.repo, collection, rkey)
+        return envelope.record_uri(self.public_base, collection, rkey)
 
     def get_record(self, _, repo: str, collection: str, rkey: str):
         # Lexicon schema collection: serve from in-memory lexicon_map

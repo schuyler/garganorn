@@ -1,7 +1,7 @@
 """Tests for garganorn.envelope, the atgeo v1 tile/record envelope module.
 
 Envelope contract exercised here:
-  - record_uri(repo, collection, rkey) -> "https://{repo}/{collection}/{rkey}",
+  - record_uri(base, collection, rkey) -> "{base}/{collection}/{rkey}",
     never at://; for OSM, rkey is the node:/way:/relation: form, not the raw
     place_id, and its colon is not percent-encoded.
   - wrap_record(uri, record_json) -> a JSON string parsing to exactly
@@ -33,18 +33,24 @@ from garganorn import envelope
 
 class TestRecordUri:
     def test_record_uri_form(self):
-        """record_uri(repo, collection, rkey) == https://{repo}/{collection}/{rkey}."""
+        """record_uri(base, collection, rkey) == {base}/{collection}/{rkey}."""
         uri = envelope.record_uri(
-            "places.atgeo.org", "org.atgeo.places.overture.place", "ov001"
+            "https://places.atgeo.org", "org.atgeo.places.overture.place", "ov001"
         )
         assert uri == "https://places.atgeo.org/org.atgeo.places.overture.place/ov001"
+
+    def test_record_uri_uses_given_base(self):
+        uri = envelope.record_uri(
+            "http://localhost:8000", "org.atgeo.places.overture.place", "ov001"
+        )
+        assert uri == "http://localhost:8000/org.atgeo.places.overture.place/ov001"
 
     def test_record_uri_osm_node_rkey(self):
         """OSM rkey is the node:/way:/relation: transformed form, not the raw
         place_id. Colons are legal in a URI path segment (RFC 3986); no
         encoding needed."""
         uri = envelope.record_uri(
-            "places.atgeo.org", "org.atgeo.places.osm", "node:12345"
+            "https://places.atgeo.org", "org.atgeo.places.osm", "node:12345"
         )
         assert uri == "https://places.atgeo.org/org.atgeo.places.osm/node:12345"
         assert "%3A" not in uri, "colon must not be percent-encoded"
@@ -52,10 +58,10 @@ class TestRecordUri:
     def test_record_uri_osm_way_and_relation(self):
         """way: and relation: rkeys form URIs analogously to node:."""
         way_uri = envelope.record_uri(
-            "places.atgeo.org", "org.atgeo.places.osm", "way:67890"
+            "https://places.atgeo.org", "org.atgeo.places.osm", "way:67890"
         )
         rel_uri = envelope.record_uri(
-            "places.atgeo.org", "org.atgeo.places.osm", "relation:11111"
+            "https://places.atgeo.org", "org.atgeo.places.osm", "relation:11111"
         )
         assert way_uri == "https://places.atgeo.org/org.atgeo.places.osm/way:67890"
         assert rel_uri == "https://places.atgeo.org/org.atgeo.places.osm/relation:11111"
@@ -63,7 +69,7 @@ class TestRecordUri:
     def test_record_uri_not_at_protocol(self):
         """URIs are https://, never at:// -- gazetteer records are not
         repository data and must not mint at:// URIs."""
-        uri = envelope.record_uri("places.atgeo.org", "org.atgeo.places.overture.place", "ov001")
+        uri = envelope.record_uri("https://places.atgeo.org", "org.atgeo.places.overture.place", "ov001")
         assert uri.startswith("https://"), f"URI must be https://, got {uri!r}"
         assert not uri.startswith("at://")
 
