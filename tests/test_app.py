@@ -902,3 +902,54 @@ def test_missing_collection_json_omits_metadata_and_404s_on_fetch(tmp_path):
         data = resp.get_json()
         assert data is not None
         assert data.get("error") == "RecordNotFound"
+
+
+# ---------------------------------------------------------------------------
+# CORS: every route is readable from pages on other origins
+# ---------------------------------------------------------------------------
+
+def test_getcoverage_allows_cross_origin_reads(tile_client):
+    resp = tile_client.get("/xrpc/org.atgeo.getCoverage", query_string={
+        "collection": OVERTURE_COLLECTION, "bbox": "-180,-85,180,85",
+    })
+    assert resp.status_code == 200
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_describe_service_allows_cross_origin_reads(client):
+    resp = client.get("/xrpc/org.atgeo.describeService")
+    assert resp.status_code == 200
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_xrpc_get_record_allows_cross_origin_reads(client):
+    resp = client.get("/xrpc/com.atproto.repo.getRecord", query_string={
+        "repo": "places.atgeo.org", "collection": OVERTURE_COLLECTION, "rkey": "ov001",
+    })
+    assert resp.status_code == 200
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_record_route_allows_cross_origin_reads(client):
+    resp = client.get(f"/{OVERTURE_COLLECTION}/ov001")
+    assert resp.status_code == 200
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_record_route_404_allows_cross_origin_reads(client_no_record):
+    resp = client_no_record.get(f"/{OVERTURE_COLLECTION}/nonexistent")
+    assert resp.status_code == 404
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_xrpc_error_allows_cross_origin_reads(client_no_record):
+    resp = client_no_record.get("/xrpc/com.atproto.repo.getRecord", query_string={
+        "repo": "places.atgeo.org", "collection": OVERTURE_COLLECTION, "rkey": "nonexistent",
+    })
+    assert resp.status_code >= 400
+    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_tile_response_has_exactly_one_cors_header(tile_client):
+    resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
+    assert resp.headers.getlist("Access-Control-Allow-Origin") == ["*"]

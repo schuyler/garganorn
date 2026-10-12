@@ -133,10 +133,15 @@ def create_app():
             data = f.read()
         response = Response(data, mimetype="application/json")
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
-        response.headers["Access-Control-Allow-Origin"] = "*"
         return response
 
     CACHED_QUERIES = {"org.atgeo.getCoverage", "org.atgeo.describeService"}
+
+    @app.after_request
+    def allow_cross_origin_reads(response):
+        # Assignment, not add: lexrpc's XRPC views already set this header.
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        return response
 
     @app.after_request
     def add_coverage_cache_control(response):
