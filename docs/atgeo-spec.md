@@ -120,11 +120,12 @@ box instead, with no budget applied. The band is bounded by construction, a
 few dozen tiles per collection. The result is deliberately a sample of the
 region, not everything in it.
 
-Nothing in the response says which kind of answer it is. `getCoverage`
-returns only `tiles`, and a summary tile looks like any other. A client that
-needs to know can see it only by the quadkey length in the tile URL, which
-this document does not define as part of the interface; tile URLs are
-opaque.
+The response says which kind of answer it is. A summary answer carries
+`"summary": true` alongside `tiles`. A regular answer omits the key, so
+absent means regular, and a server that predates the flag reads as regular.
+A client that needs to know reads the flag; it does not look at the quadkey
+length in the tile URL, which this document does not define as part of the
+interface. Tile URLs are opaque.
 
 ## The tile payload
 
@@ -335,6 +336,11 @@ Returns `{"tiles": [...]}` — a sorted list of fully-formed, opaque tile
 URLs. Fetch them all and merge; filtering and ordering are yours, applied
 after the merge.
 
+When the answer is the [summary band](#the-summary-band) rather than the
+regular tiles, the response also carries `"summary": true`. The key is
+optional and boolean; it is present only when true, and absent means a
+regular answer.
+
 A bbox may cross the antimeridian: `minLon > 0 > maxLon` means the box
 wraps across ±180°. Tiles that merely touch the box at an edge or corner
 count as covering it.
@@ -355,8 +361,8 @@ Errors, in evaluation order:
 - `BboxTooLarge` — the box covers more tiles than the deployment's budget,
   50 by default, and the collection has no [summary band](#the-summary-band).
   Ask for a smaller region. A collection with a summary band never raises
-  this; it answers with the summary tiles instead, and the response does not
-  say that it did.
+  this; it answers with the summary tiles instead, and the response says so with
+  `"summary": true`.
 
 ### com.atproto.repo.getRecord
 

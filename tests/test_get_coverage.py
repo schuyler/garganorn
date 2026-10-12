@@ -1,5 +1,7 @@
 """Tests for the getCoverage XRPC endpoint on garganorn.server.Server."""
+import json
 import logging
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -14,17 +16,17 @@ SAMPLE_TILES = [
 ]
 
 
-def _make_mock_manifest(tiles=None, raises=None):
+def _make_mock_manifest(tiles=None, raises=None, summary=False):
     """Return a mock TileManifest.
 
     If raises is an exception class, get_tiles_for_bbox raises an instance.
-    Otherwise returns tiles (default SAMPLE_TILES).
+    Otherwise returns (tiles, summary); tiles defaults to SAMPLE_TILES.
     """
     mock = MagicMock()
     if raises is not None:
         mock.get_tiles_for_bbox.side_effect = raises()
     else:
-        mock.get_tiles_for_bbox.return_value = list(tiles if tiles is not None else SAMPLE_TILES)
+        mock.get_tiles_for_bbox.return_value = (list(tiles if tiles is not None else SAMPLE_TILES), summary)
     return mock
 
 
@@ -40,6 +42,19 @@ class TestGetCoverage:
         server = _make_server(tile_manifests={OVERTURE_COLLECTION: _make_mock_manifest(tiles=SAMPLE_TILES)})
         result = server.get_coverage({}, collection=OVERTURE_COLLECTION, bbox="-122.55,37.60,-122.30,37.85")
         assert "tiles" in result
+        assert result["tiles"] == sorted(SAMPLE_TILES)
+
+    def test_summary_absent_for_regular_answer(self):
+        """A regular answer has no 'summary' key."""
+        server = _make_server(tile_manifests={OVERTURE_COLLECTION: _make_mock_manifest()})
+        result = server.get_coverage({}, collection=OVERTURE_COLLECTION, bbox="-180,-85,180,85")
+        assert "summary" not in result
+
+    def test_summary_true_when_manifest_reports_summary(self):
+        """A summary-band answer carries 'summary': True."""
+        server = _make_server(tile_manifests={OVERTURE_COLLECTION: _make_mock_manifest(summary=True)})
+        result = server.get_coverage({}, collection=OVERTURE_COLLECTION, bbox="-180,-85,180,85")
+        assert result["summary"] is True
         assert result["tiles"] == sorted(SAMPLE_TILES)
 
     def test_tiles_are_sorted(self):
@@ -196,3 +211,11 @@ class TestBboxPrecision:
             server.get_coverage({}, collection=OVERTURE_COLLECTION,
                                 bbox="-122.41,37.77,-122.419,37.85")
         assert exc_info.value.name == "BboxTooPrecise"
+
+
+def test_coverage_result_lexicon_declares_summary():
+    """coverageResult.json declares a boolean 'summary' property; 'tiles' stays the only required one."""
+    path = Path(__file__).resolve().parent.parent / "garganorn" / "lexicon" / "coverageResult.json"
+    main = json.loads(path.read_text())["defs"]["main"]
+    assert main["properties"]["summary"]["type"] == "boolean"
+    assert main["required"] == ["tiles"]

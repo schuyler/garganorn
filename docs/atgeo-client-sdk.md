@@ -145,12 +145,19 @@ has a summary band does not fail. It answers with the coarse z1-z5 summary
 tiles that intersect the region, which hold only the top records by
 `importance` (see
 [design-constraints.md](design-constraints.md#the-summary-band-is-a-coarse-tile-tier-for-region-less-resolution)).
-The SDK follows tile URLs without interpreting them, so it fetches those tiles,
-filters them to the region, and ranks them like any others. Nothing in the
-response marks the answer as a summary. `complete` is `true`, and the result
-is a deliberately incomplete sample of the region. Callers have no way to
-tell the difference between "everything here" and "the important things
-here"; see the open questions.
+The server marks such an answer with `summary: true` in the `getCoverage`
+response, and the SDK exposes it as `SearchResult.summary`, always present and
+`false` for a regular answer. The SDK follows tile URLs without interpreting
+them, so it never infers the flag from their shape. It fetches the tiles,
+filters them to the region, and ranks them like any others. The result is a
+deliberately incomplete sample of the region, and `summary` is how a caller
+tells "everything here" from "the important things here".
+
+`summary` is independent of `complete`, which means only that no tile fetch
+failed. A summary answer with every tile loaded is `summary: true,
+complete: true`. If any bbox of an antimeridian-split search comes back as a
+summary, the result is `summary: true`. A server that predates the flag
+never sends it, so its answers read as `summary: false`.
 
 `BboxTooLarge` reaches the caller only from a collection with no summary
 band. The SDK does not subdivide an over-large region into several
@@ -306,15 +313,10 @@ results over the same wire format is conformant.
 
 ## Open questions
 
-- **Summary answers are indistinguishable from complete ones.** When the
-  server falls back to the summary band, the SDK reports `complete: true` and
-  has no signal that the answer is a top-by-importance sample. It cannot know:
-  tile URLs are opaque and the response carries no flag. Whether the server
-  should mark summary coverage, or the SDK should infer it from the tile URL
-  shape, is undecided. This is arguably a gap.
 - **`region` stays required.** Whether the SDK should offer an explicit
   world-scale mode on top of the summary band, rather than leaving callers to
-  pass a huge region, is undecided.
+  pass a huge region, is undecided. The `summary` flag in the `getCoverage`
+  response tells such a mode when it got a sample.
 - **Usable search radius in dense cities.** Unmeasured. The 50-tile budget is
   reached in Manhattan-density areas; no one has measured what radius that
   leaves, or what a maximal query costs in bytes on a phone.

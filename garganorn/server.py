@@ -180,6 +180,9 @@ class Server:
     def get_coverage(self, _, collection: str, bbox: str):
         """Return tile URLs covering bbox for the given collection.
 
+        When the regular tiles exceed max_coverage_tiles, answers with the
+        coarse summary band and sets "summary": True.
+
         Raises BboxTooPrecise if any coordinate exceeds 2 decimal places,
         BboxTooLarge if the bbox spans more tiles than max_coverage_tiles,
         CollectionNotFound if collection has no tile manifest, or InvalidBbox
@@ -191,7 +194,10 @@ class Server:
         if manifest is None:
             raise XrpcError(f"Unknown collection: {collection}", "CollectionNotFound")
         try:
-            tiles = manifest.get_tiles_for_bbox(*parsed_bbox, max_tiles=self.max_coverage_tiles)
+            tiles, summary = manifest.get_tiles_for_bbox(*parsed_bbox, max_tiles=self.max_coverage_tiles)
         except BboxTooLarge as e:
             raise XrpcError(str(e), "BboxTooLarge") from e
-        return {"tiles": sorted(tiles)}
+        result = {"tiles": sorted(tiles)}
+        if summary:
+            result["summary"] = True
+        return result

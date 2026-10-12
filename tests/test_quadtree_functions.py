@@ -187,14 +187,15 @@ class TestTileManifest:
         """URLs follow {base_url}/{qk[:6]}/{qk}.json.gz format."""
         path = _make_manifest_db(tmp_path, quadkeys=["023010"])
         tm = TileManifest(str(path), _BASE_URL)
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
+        urls, summary = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert urls == [f"{_BASE_URL}/023010/023010.json.gz"]
+        assert summary is False
 
     def test_returns_all_intersecting_urls(self, tmp_path):
         """All intersecting tiles are returned (caller is responsible for sorting)."""
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
+        urls, _ = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in _MANIFEST_QUADKEYS}
 
     def test_non_intersecting_excluded(self, tmp_path):
@@ -206,7 +207,7 @@ class TestTileManifest:
         tiny = (mid_lon - 0.001, mid_lat - 0.001, mid_lon + 0.001, mid_lat + 0.001)
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
-        urls = tm.get_tiles_for_bbox(*tiny)
+        urls, _ = tm.get_tiles_for_bbox(*tiny)
         assert f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" in urls
         for other in _MANIFEST_QUADKEYS[1:]:
             assert f"{_BASE_URL}/{other[:6]}/{other}.json.gz" not in urls
@@ -224,21 +225,22 @@ class TestTileManifest:
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         # Exactly 4 tiles; max_tiles=4 must succeed
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=4)
+        urls, _ = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=4)
         assert len(urls) == 4
 
     def test_empty_result_when_manifest_empty(self, tmp_path):
         """Empty manifest returns empty list."""
         path = _make_manifest_db(tmp_path, quadkeys=[])
         tm = TileManifest(str(path), _BASE_URL)
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
+        urls, summary = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert urls == []
+        assert summary is False
 
     def test_default_max_tiles_is_50(self, tmp_path):
         """Default max_tiles=50; 4 tiles don't raise."""
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85)
+        urls, _ = tm.get_tiles_for_bbox(-180, -85, 180, 85)
         assert isinstance(urls, list)
         assert len(urls) == 4
 
@@ -265,8 +267,9 @@ class TestSummaryFallback:
         path = _make_manifest_db(tmp_path, quadkeys=regular + summary)
         tm = TileManifest(str(path), _BASE_URL)
 
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
+        urls, is_summary = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
 
+        assert is_summary is True
         assert set(urls) == {f"{_BASE_URL}/{qk}/{qk}.json.gz" for qk in summary}, (
             f"regular count (4) > max_tiles (3) with a summary band present "
             f"must return the summary tiles, not raise; got {urls}"
@@ -281,8 +284,9 @@ class TestSummaryFallback:
         path = _make_manifest_db(tmp_path, quadkeys=regular + summary)
         tm = TileManifest(str(path), _BASE_URL)
 
-        urls = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
+        urls, is_summary = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
 
+        assert is_summary is False
         assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in regular}, (
             f"regular count (2) <= max_tiles (3) must answer from the "
             f"regular band only; got {urls}"

@@ -240,7 +240,7 @@ class TestPolarCapBboxQuery:
         con.close()
 
         tm = TileManifest(str(path), _BASE_URL)
-        urls = tm.get_tiles_for_bbox(5.0, 86.0, 15.0, 89.0)
+        urls, _ = tm.get_tiles_for_bbox(5.0, 86.0, 15.0, 89.0)
         assert urls == [f"{_BASE_URL}/100000/100000.json.gz"], (
             f"bbox (5,86,15,89) lies entirely above tile '100000's reported "
             f"ymax; got {urls}, expected a match"

@@ -14,6 +14,10 @@
                         "type": "string",
                         "format": "uri"
                     }
+                },
+                "summary": {
+                    "type": "boolean",
+                    "description": "True only when the server answered with the coarse summary band; absent means the regular band"
                 }
             }
         }

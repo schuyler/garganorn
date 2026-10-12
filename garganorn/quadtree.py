@@ -248,7 +248,7 @@ class TileManifest:
             if len(qk) >= 6 and bboxes_intersect(quadkey_to_bbox(qk), bbox)
         ]
         if len(regular_urls) <= max_tiles:
-            return regular_urls
+            return regular_urls, False
 
         summary_qks = [qk for qk in self.quadkeys if len(qk) < 6]
         if summary_qks:
@@ -256,7 +256,7 @@ class TileManifest:
                 f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
                 for qk in summary_qks
                 if bboxes_intersect(quadkey_to_bbox(qk), bbox)
-            ]
+            ], True
 
         raise BboxTooLarge(f"Bounding box covers more than {max_tiles} tiles")
 

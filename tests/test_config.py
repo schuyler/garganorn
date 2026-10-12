@@ -174,7 +174,7 @@ def test_url_contract_base_url_slug_and_tile_path_shape():
     # A quadkey that covers the whole world at zoom 0 ensures bbox always hits.
     tm.quadkeys = {sample_qk}
 
-    urls = tm.get_tiles_for_bbox(-180, -90, 180, 90)
+    urls, _ = tm.get_tiles_for_bbox(-180, -90, 180, 90)
     assert len(urls) == 1, f"Expected 1 URL, got {len(urls)}: {urls}"
     url = urls[0]
 
