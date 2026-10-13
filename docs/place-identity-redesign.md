@@ -228,6 +228,19 @@ place-fetch from its own `public_base`. There is no `cid`: it was always
 null, nothing read it, and it only made sense while the tile record imitated
 an atproto record view, which without `uri` it no longer does.
 
+The wrapper exists to hold `importance` outside the value, and the owner
+accepted that grudgingly, so the reason is recorded. Importance is producer
+state: this build's formula ranks this place among the places from the same
+source in this build. A second gazetteer serving the same dataset would
+compute a different number for the same origin, so two services would
+disagree on the bytes of one record. In a user-authored or copied record
+the property is undefined, since there is no producer. And it goes stale on
+copy for the same reason `value.rkey` would have. Keeping it inside the
+value would weaken the one promise the redesign makes, that a value embeds
+unmodified and is the same everywhere. The wrapper itself is not new depth:
+today's tile record is already `{uri, cid, value}`, and this design drops
+two of those fields and keeps the wrapper for one.
+
 Every copy of a multi-tile record must remain byte-identical (a current
 invariant in `design-constraints.md`). Record bytes are unchanged by the
 header; only headers differ between tiles. `importance` is per record and
