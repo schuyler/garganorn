@@ -65,7 +65,7 @@ Tags: S stated by the owner, M from existing docs or memory, I inferred
 - **R2 (S)** A place value is usable if its origin server goes away.
   - **R2a** Provenance: the value carries an `origin` URI whose dataset segment plainly names the upstream source. Licence and attribution travel with the *tile* (see "Attribution"), not with each record. AC: every gazetteer value has an `origin` URN; every tile links the licence and attribution of every `(dataset, collection)` it contains.
   - **R2b (M)** Two places from different datasets or collections with the same upstream ID are distinguishable by value alone. AC: `origin` differs.
-  - **R2c** No producer- or build-relative data in the place. `importance` is not part of the place. AC: no `importance` in the place lexicon or in exported values. **Pending owner decision (O):** `within` is computed by this build against this build's division release, so a second producer may emit a different list for the same origin. The criterion names only `importance`; whether derived relations count as build-relative, or are part of the place's description as decided for relations in the value, is not yet stated.
+  - **R2c** No producer- or build-relative data in the place. `importance` is not part of the place. AC: no `importance` in the place lexicon or in exported values. Derived relations such as `within` are part of the place's description, not build-relative data: they assert real-world fact, usually settled, even though a producer computes them against its own division release. R2c covers ranking and build-parameter data, of which `importance` is the instance.
 - **R3 (I)** `importance` remains available per record in tiles and from place-fetch, outside the value, so client ranking and the summary band are unchanged. AC: SDK ranking tests pass reading importance from outside the value.
 - **R4 (S)** Garganorn implements no `com.atproto.*` method and serves no lexicon claiming a `com.atproto.*` NSID. AC: `/xrpc/com.atproto.repo.getRecord` returns method-not-found; no `com.atproto.*` file in `garganorn/lexicon/`.
 - **R5 (S)** Single-place fetch is an `org.atgeo.*` method whose lexicon requires the view fields; no DID is needed first. AC: the call passes lexrpc output validation with no `repo` param; SDK `getPlace` makes no `describeService` call.
@@ -77,7 +77,7 @@ Tags: S stated by the owner, M from existing docs or memory, I inferred
 - **R11 (M)** The SDK's real-server e2e (Node and browser) passes against a locally rebuilt tileset.
 - **R12 (I)** Docs describe the result: garganorn `atgeo-spec.md`, `atgeo-client-sdk.md`, `explored-and-discarded.md`, `design-constraints.md` (licensing), `README.md`; SDK `README.md`; atgeo-web `place.md` and `api.md`.
 - **R13 (M)** No backward compatibility, migration or deprecation period. Nothing is deployed to users.
-- **R14 (S)** The SDK's default search spans a whole dataset; a collection filter is optional. Nothing else makes sense for OSM, whose node, way and relation collections are one tileset and one body of data. AC: a search with no collection filter returns records from every collection the dataset's tiles carry.
+- **R14 (S)** The SDK's default search spans a whole dataset; a collection filter is optional. Nothing else makes sense for OSM, whose node, way and relation collections are one tileset and one body of data. AC: a search with no collection filter returns records from every collection the dataset's tiles carry. **Pending owner decision (O):** for Overture, an unfiltered search spans places and divisions together. The combined tile count meets the cap sooner than today's place-only search, so the summary band triggers at smaller areas, and division importance is ranked against place importance although the two come from different formulas. Options: the SDK's built-in default for Overture is the `place` collection, with divisions on request; or the dataset-wide default stands and the ranking and summary consequences are accepted.
 - **Out of scope (I):** the check-in lexicon, AppView, `org.atgeo.tiles.service` announcement records, honouring `cid`, and any dedup relation beyond keeping the existing `same_as` definition (see "Identity").
 
 Several items above are decisions in a requirement's clothing (R2a's
@@ -218,10 +218,15 @@ differently need a way to show why. `source` and `attribution` are URLs.
 `licenses` is a list of licence-text URLs, one per licence the pair's data
 is under, because a pair can be under several: Overture divisions are ODbL
 plus CC BY 4.0, Overture places are under three. `references` lists the
-pairs whose data the tileset copies into its records without carrying them:
-every tileset references `(overturemaps.org, division)`, because `within`
-copies a division's name and URN into records of every source, and the
-division release matters for the same churn reason. The optional
+pairs whose data the tileset copies into its records but does not carry; a
+pair appears under `pairs` or `references`, never both. The OSM and
+Overture place tilesets reference `(overturemaps.org, division)`, because
+`within` copies a division's name and URN into their records; the division
+tileset carries it. The division release matters for the same churn
+reason, and `within` URNs resolve only if every theme in an instance was
+built from the same Overture release. That is a build constraint, not a
+mechanism: the `release` fields make a mismatch visible, and T1-R12's
+criterion assumes the match. The optional
 vocabularies are the ones `org.atgeo.collection` carries today, moved per
 pair. Exact property names are settled in the first tranche's design phase;
 the invariant is that the descriptor says which pairs the tileset carries
@@ -257,7 +262,8 @@ two of those fields and keeps the wrapper for one.
 
 Every copy of a multi-tile record must remain byte-identical (a current
 invariant in `design-constraints.md`). Record bytes are unchanged by the
-header; only headers differ between tiles. `importance` is per record and
+header, which is itself the same in every tile of a tileset; only the
+record arrays differ between tiles. `importance` is per record and
 identical in every copy, so moving it outside the value preserves the
 invariant.
 
@@ -265,8 +271,9 @@ invariant.
 
 Each tile carries, for every `(dataset, collection)` its tileset carries or
 references, one entry with the source URL, the licence-text URLs (for
-example the ODbL text) and an attribution URL. An OSM tile's OSM entry
-links `https://www.openstreetmap.org/copyright` as the attribution, and its
+example the ODbL text) and an attribution URL. An OSM tile's three OSM
+entries (node, way, relation) each link
+`https://www.openstreetmap.org/copyright` as the attribution, and its
 division entry carries the ODbL and CC BY 4.0 texts. Entries are keyed by
 `(dataset, collection)` because licences vary inside a dataset, and carry a
 list because they vary inside a collection too.
@@ -336,8 +343,8 @@ that lexrpc validates on output.
 remove `importance` and `rkey`; `relation` becomes `{uri, name, level}` with
 `uri` required; `same_as` stays; the description states the absence rule and
 the URI preference order. `org.atgeo.collection` as a record type goes; its
-content becomes the `pair` object definition shared by the descriptor and
-the tile header.
+content becomes the `pairAttribution` and `pair` definitions under
+"Tilesets".
 
 ### Export SQL
 
@@ -386,9 +393,9 @@ tranche, not items to satisfy: the upstream licences; the user-safety
 principle (no nearest-neighbour or full-text search over the network);
 R13.
 
-**Approval status.** Tranches 0 and 1: approved by the owner 2026-10-13.
-Tranches 2 and 3: provisional until tranche 1 is accepted; the lexicons
-tranche 1 ships are the contract they bind to.
+**Approval status.** Tranches 0, 1 and 2: approved by the owner
+2026-10-13. Tranche 3: provisional until tranche 1 is accepted. The
+lexicons tranche 1 ships are the contract tranches 2 and 3 bind to.
 
 ### Tranche 0: remove the atproto record surface (approved)
 
@@ -406,10 +413,10 @@ handler removes all three.
 ### Tranche 1: identity, export, descriptor, server API (approved)
 
 - **T1-R1 (S)** A gazetteer place value is a valid `org.atgeo.place` record a user can write into their own repo unmodified, so that lookup output is usable as atproto data. AC: every tile record's `value` and every `getPlace` response's `record` pass `goat lex validate` against the lexicon; the lexicon's key type is one atproto accepts; no value contains a float, checked on a fixture whose Overture `sources` array is non-null.
-- **T1-R2 (S)** A place value states its origin dataset, collection and upstream id by value alone, distinguishes same-id places from different datasets or collections, and carries nothing build- or producer-relative, so that the value survives its server. AC: every exported value has `origin` equal to `urn:atgeo:{dataset}:{collection}:{id}` with the dataset string the descriptor states; no value contains `importance`, `rkey` or `uri`; a test shows an OSM node and way with the same numeric id have different origins.
+- **T1-R2 (S)** A place value states its origin dataset, collection and upstream id by value alone, distinguishes same-id places from different datasets or collections, and carries nothing build- or producer-relative, so that the value survives its server. AC: every exported value has `origin` equal to `urn:atgeo:{dataset}:{collection}:{id}` with the dataset string the descriptor states; no value has a top-level `importance`, `rkey` or `uri` property; a test shows an OSM node and way with the same numeric id have different origins.
 - **T1-R3 (I)** Per-record importance stays available to clients from tiles and from place-fetch, outside the value, so that client ranking and the summary band are unchanged. AC: a tile record is `{value, importance}`; `getPlace` output carries importance outside `record`; a fixture's exported importance values equal baseline's.
 - **T1-R4 (S)** A single place is fetchable by its URN with no prior discovery call, so that a client holding an `origin` can resolve it. AC: `org.atgeo.getPlace?uri=urn:...` passes lexrpc output validation with no `repo` parameter; an unknown URN yields an XRPC error, not a 500; `GET /{dataset}/{collection}/{id}` returns the same record.
-- **T1-R5 (S)** Every tileset says which `(dataset, collection)` pairs it carries and which it references, under which upstream release, with each pair's source, licences and attribution; every tile carries the licences and attribution of every pair its tileset carries or references, so that attribution travels with the data. AC: `describeTileset` output validates and lists carried and referenced pairs with `release`, `source`, `licenses` and `attribution`; `GET /tilesets/{slug}` returns the same document; an OSM tile's header carries an OSM entry linking `openstreetmap.org/copyright` and an `(overturemaps.org, division)` entry listing the ODbL and CC BY 4.0 texts; the byte-identical-copies test still passes.
+- **T1-R5 (S)** Every tileset says which `(dataset, collection)` pairs it carries and which it references, under which upstream release, with each pair's source, licences and attribution; every tile carries the licences and attribution of every pair its tileset carries or references, so that attribution travels with the data. AC: `describeTileset` output validates and lists carried and referenced pairs with `release`, `source`, `licenses` and `attribution`; `GET /tilesets/{slug}` returns the same document; an OSM tile's header carries node, way and relation entries each linking `openstreetmap.org/copyright` and an `(overturemaps.org, division)` entry listing the ODbL and CC BY 4.0 texts; the byte-identical-copies test still passes.
 - **T1-R6 (S)** The service document says which datasets and tilesets the instance serves, and every URL in it resolves, so that federation discovery works from one call. AC: `describeService` lists tilesets with their pairs; a GET on every URL it contains returns 200.
 - **T1-R7 (M)** A tileset is portable between hosts without a rebuild: tiles bake in no gazetteer host, coverage answers give absolute tile URLs from the serving configuration, and a place `uri` from place-fetch dereferences on the serving host. AC: no built tile contains the configured host string; every tile URL in a `getCoverage` answer is absolute and built from the configured tile base; `getPlace.uri` starts with the configured `public_base` and a GET on it returns the record.
 - **T1-R8 (S)** `did.json` advertises a tile service, not a PDS, and claims no atproto identity. AC: the service list has `#atgeo_tiles` of type `AtgeoTileService` as `atgeo-appview-design.md` specifies, no `#atproto_pds`, and no `alsoKnownAs` entry with an `at://` value.
@@ -422,7 +429,7 @@ handler removes all three.
 - **Docs in this tranche:** garganorn `README.md`, `design-constraints.md`, and `pipeline-artifacts.md` where the change touches them. `atgeo-spec.md` and `atgeo-client-sdk.md` belong to tranche 3.
 - **Out of scope:** the SDK; publishing lexicons; the planet rebuild and deploy; `same_as` emission.
 
-### Tranche 2: SDK (provisional)
+### Tranche 2: SDK (approved)
 
 - **T2-R1 (S)** The default search spans a whole dataset, with an optional collection filter, so that an OSM search sees nodes, ways and relations together. AC: against the fake server with a tile holding all three, a search with no filter returns all three kinds and `collection: "way"` returns only ways.
 - **T2-R2 (S)** Callers receive the gazetteer value unmodified plus importance outside it; ranking and the summary band are unchanged. AC: the returned place deep-equals the tile value; ranking tests pass reading importance from the wrapper.
@@ -432,6 +439,7 @@ handler removes all three.
 - **T2-R6 (I)** The fake server enforces the server's shapes, so that SDK tests cannot pass against a response the server would never send. AC: the fake validates its responses against lexicon JSON copied from garganorn; removing a required field from a fake response fails a test.
 - **T2-R7 (M)** Node and browser e2e pass against a local tranche-1 server. AC: both scripts exit 0.
 - **T2-R8 (I)** The SDK README describes the shipped behaviour. AC: every example in it runs against the fake.
+- **T2-R9 (S)** The SDK's developer-facing surface does not change meaningfully without the owner's confirmation, so that the SDK keeps abstracting the user-safety mechanics and a developer never has to get them right; it stays as easy to use in development as it is today. AC: every change to an exported name, signature, option or default is listed in the tranche design and approved before Red; the README's examples from before the tranche still run with at most the changes on that list; no new developer-facing option concerns tile fetching, caching or search locality. Changes already expected on the list: the `collection` option becomes `dataset` with an optional collection filter, `getPlace` takes a URN, results identify by `origin`, and the collection-info call becomes tileset and service calls.
 - **Out of scope:** reading `same_as`; querying more than one service.
 
 ### Tranche 3: client-facing docs (provisional)
@@ -473,7 +481,7 @@ handler removes all three.
 Each answer's reasoning is in the section named.
 
 1. **`getPlace` parameters:** one `uri` param carrying the URN. Server API.
-2. **Descriptor and metadata queries:** descriptor `{slug, generated_at, extent, pairs}`; `describeTileset` and `describeService` only, no dataset query. Tilesets; Server API.
+2. **Descriptor and metadata queries:** descriptor `{slug, generated_at, extent, pairs, references}`; `describeTileset` and `describeService` only, no dataset query. Tilesets; Server API.
 3. **Tile record shape:** `{value, importance}`; `cid` dropped. Tilesets.
 4. **Overture places attribution:** per collection, none per record; the pair's attribution URL is Overture's page. Attribution.
 5. **A lone record's attribution:** the URN is adequate provenance; nothing stamped into copies; the owner holds the position. Attribution.
@@ -489,11 +497,13 @@ Each answer's reasoning is in the section named.
 15. **Licences per pair:** a list of licence-text URLs. Tilesets; Attribution.
 16. **Floats:** no value contains one; `sources[].confidence` is cast and the fixture carries a non-null `sources`. Export SQL.
 17. **Two-tileset coverage:** one combined list; the cap and `summary` apply to it. Server API.
+18. **Derived relations and R2c:** `within` is part of the place's description; R2c covers ranking and build-parameter data. Requirements, R2c.
 
 ## Not verified
 
 - The "Current state" items without ✓ come from a read-only survey; their file and line references were not independently checked.
 - The plain-GET route `/<collection>/<path:rkey>` was not tested against other routes.
+- The Overture place export also passes `names` and `brand` through raw. Overture's shared schemas may carry a linear-referencing `between` (a list of doubles) in those structs; the fixtures omit it and for point places it should be null, so no reachable input is known. The float criterion under T1-R1 is what catches it if one exists.
 - OSM's attribution guidelines were read through a fetch tool that summarizes pages; the ODbL text and Overture's attribution page were read raw. Overture's GERS documentation and release notes were read through the summarizing tool; the `2025-06-25.0` id replacement is stated in Overture's own release notes but the quotes are not guaranteed verbatim.
 - The atproto reference linter (`goat lex lint`) has not yet been run on any `org.atgeo.*` lexicon; lexrpc's `uri` validator was read and accepts a URN.
 - No legal review. Registration requirements for a URN namespace were not investigated.
