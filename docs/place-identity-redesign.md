@@ -77,7 +77,7 @@ Tags: S stated by the owner, M from existing docs or memory, I inferred
 - **R11 (M)** The SDK's real-server e2e (Node and browser) passes against a locally rebuilt tileset.
 - **R12 (I)** Docs describe the result: garganorn `atgeo-spec.md`, `atgeo-client-sdk.md`, `explored-and-discarded.md`, `design-constraints.md` (licensing), `README.md`; SDK `README.md`; atgeo-web `place.md` and `api.md`.
 - **R13 (M)** No backward compatibility, migration or deprecation period. Nothing is deployed to users.
-- **R14 (S)** The SDK's default search spans a whole dataset; a collection filter is optional. Nothing else makes sense for OSM, whose node, way and relation collections are one tileset and one body of data. AC: a search with no collection filter returns records from every collection the dataset's tiles carry. **Pending owner decision (O):** for Overture, an unfiltered search spans places and divisions together. The combined tile count meets the cap sooner than today's place-only search, so the summary band triggers at smaller areas, and division importance is ranked against place importance although the two come from different formulas. Options: the SDK's built-in default for Overture is the `place` collection, with divisions on request; or the dataset-wide default stands and the ranking and summary consequences are accepted.
+- **R14 (S)** The SDK's default search spans a whole dataset; a collection filter is optional. Nothing else makes sense for OSM, whose node, way and relation collections are one tileset and one body of data. AC: a search with no collection filter returns records from every collection the dataset's tiles carry. For Overture, the SDK's built-in default is the `place` collection, with divisions on request. An unfiltered Overture search would span places and divisions: the combined tile count meets the cap sooner, so the summary band would trigger at smaller areas, and division importance would be ranked against place importance although the two come from different formulas. This is why tilesets and collections are not isomorphic: a dataset's collections can be one body of data (OSM) or several kinds (Overture), and the SDK's default follows the kind, not the dataset.
 - **Out of scope (I):** the check-in lexicon, AppView, `org.atgeo.tiles.service` announcement records, honouring `cid`, and any dedup relation beyond keeping the existing `same_as` definition (see "Identity").
 
 Several items above are decisions in a requirement's clothing (R2a's
@@ -498,6 +498,7 @@ Each answer's reasoning is in the section named.
 16. **Floats:** no value contains one; `sources[].confidence` is cast and the fixture carries a non-null `sources`. Export SQL.
 17. **Two-tileset coverage:** one combined list; the cap and `summary` apply to it. Server API.
 18. **Derived relations and R2c:** `within` is part of the place's description; R2c covers ranking and build-parameter data. Requirements, R2c.
+19. **Overture default search:** the `place` collection, divisions on request; OSM searches the whole dataset. Requirements, R14.
 
 ## Not verified
 
