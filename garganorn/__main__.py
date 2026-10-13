@@ -1,8 +1,7 @@
-import gzip, json, os, logging
+import gzip, os, logging
 from flask import Flask, abort, request, Response
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
-from lexrpc.base import XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
@@ -15,13 +14,10 @@ def create_app():
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
     tile_manifests = {}
-    tile_collections = {}
-    collection_metadata = {}
     max_coverage_tiles = 50
     tile_dirs = {}  # slug -> tiles_dir
     if tiles_config:
         from garganorn.quadtree import TileManifest
-        from garganorn.tile_reader import TileBackedCollection
         for collection, coll_cfg in tiles_config.get("collections", {}).items():
             manifest_path = coll_cfg.get("manifest")
             base_url = coll_cfg.get("base_url")
@@ -51,18 +47,7 @@ def create_app():
                 stamp = os.path.basename(run_dir)
                 tiles_root = os.path.dirname(run_dir)
                 tile_manifests[collection] = TileManifest(manifest_path, f"{base_url}/{stamp}")
-                collection_json_path = os.path.join(run_dir, "collection.json")
-                if os.path.isfile(collection_json_path):
-                    with open(collection_json_path) as f:
-                        collection_metadata[collection] = json.load(f)
                 if "tiles_dir" in coll_cfg:
-                    tile_collections[collection] = TileBackedCollection(
-                        collection=collection,
-                        manifest_db_path=manifest_path,
-                        tiles_dir=run_dir,
-                        source_url=coll_cfg.get("source", ""),
-                        license_url=coll_cfg.get("license", ""),
-                    )
                     # Gate serving on the SAME readiness condition: the route
                     # must not serve a collection whose tiles are otherwise disabled.
                     if slug:
@@ -74,9 +59,8 @@ def create_app():
                         )
         max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
     gazetteer = Server(repo, app.logger,
-                       tile_manifests=tile_manifests, tile_collections=tile_collections,
+                       tile_manifests=tile_manifests,
                        max_coverage_tiles=max_coverage_tiles,
-                       collection_metadata=collection_metadata,
                        public_base=public_base)
     init_flask(gazetteer.server, app)
 
@@ -106,15 +90,6 @@ def create_app():
     @app.route('/health')
     def health_check():
         return {"status": "ok", "service": "garganorn"}, 200
-
-    @app.route('/<collection>/<path:rkey>')
-    def get_resource(collection, rkey):
-        try:
-            result = gazetteer.get_record({}, gazetteer.repo, collection, rkey)
-            return result["value"]
-        except XrpcError as e:
-            status = 404 if e.name in ("CollectionNotFound", "RecordNotFound") else 400
-            return {"error": e.name, "message": str(e)}, status
 
     @app.route("/tiles/<slug>/<path:tile_path>")
     def serve_tile(slug, tile_path):

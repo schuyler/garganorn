@@ -28,12 +28,7 @@
             "type": "object",
             "required": ["collection"],
             "properties": {
-                "collection": {"type": "string", "format": "nsid"},
-                "metadata": {
-                    "type": "string",
-                    "format": "uri",
-                    "description": "URL of this collection's org.atgeo.collection metadata record. Absent when the serving build predates metadata generation."
-                }
+                "collection": {"type": "string", "format": "nsid"}
             }
         }
     }

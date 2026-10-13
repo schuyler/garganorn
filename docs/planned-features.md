@@ -8,8 +8,10 @@ document is scoped for implementation until its section says so.
 
 ## Collection and service metadata
 
-Status: implemented (`org.atgeo.describeService`, `org.atgeo.collection`;
-see `pipeline-artifacts.md`'s `stage_export` section). What remains open:
+Status: `org.atgeo.describeService` is served. `org.atgeo.collection` is
+written by the export as each run's `collection.json` (see
+`pipeline-artifacts.md`'s `stage_export` section) and served by nothing.
+What remains open:
 
 - A DID-based discovery layer, so a client can learn a service *exists and
   what kind it is* before calling any XRPC method on it — resolved via the

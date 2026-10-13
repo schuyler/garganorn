@@ -76,8 +76,6 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, rkey)
 
@@ -92,6 +90,50 @@ class TestTileBackedCollectionNewEnvelope:
         assert result["name"] == "Test Place"
         assert result["importance"] == 75
 
+    def test_get_record_returns_value_unmodified(self, tmp_path):
+        """get_record returns the tile's value as written: locations, variants,
+        attributes and precomputed relations pass through unchanged."""
+        tile_qk = "023010"
+        rkey = "place001"
+        value = {
+            "rkey": rkey,
+            "name": "Test Place",
+            "locations": [
+                {"$type": "community.lexicon.location.geo",
+                 "latitude": "37.774900", "longitude": "-122.419400"}
+            ],
+            "variants": [{"name": "Lugar de Prueba", "language": "es"}],
+            "attributes": {"category": "cafe"},
+            "relations": {"within": [{"rkey": "org.atgeo.places.overture.division:85922583"}]},
+        }
+        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
+        _write_envelope_tile(tmp_path, tile_qk, [value])
+
+        col = TileBackedCollection(
+            collection=COLLECTION,
+            manifest_db_path=str(manifest_db),
+            tiles_dir=str(tmp_path),
+        )
+        result = col.get_record("repo", COLLECTION, rkey)
+
+        assert result == value
+
+    def test_get_record_without_relations_has_no_relations_key(self, tmp_path):
+        """get_record does not invent a relations key when the value has none."""
+        tile_qk = "023010"
+        rkey = "place001"
+        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
+        _write_envelope_tile(tmp_path, tile_qk, [{"rkey": rkey, "name": "Test Place"}])
+
+        col = TileBackedCollection(
+            collection=COLLECTION,
+            manifest_db_path=str(manifest_db),
+            tiles_dir=str(tmp_path),
+        )
+        result = col.get_record("repo", COLLECTION, rkey)
+
+        assert "relations" not in result
+
     def test_get_record_missing_rkey_returns_none_new_shape(self, tmp_path):
         """rkey not in manifest → None."""
         tile_qk = "023010"
@@ -104,8 +146,6 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, "nonexistent")
 
@@ -127,8 +167,6 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, "place002")
 
@@ -137,9 +175,9 @@ class TestTileBackedCollectionNewEnvelope:
         assert result["name"] == "Second Place"
 
     def test_get_record_mutation_does_not_corrupt_cache(self, tmp_path):
-        """Popping a key from the returned value (as the server layer does with
-        'importance') must not corrupt the lru_cache-held tile dict — the
-        shallow-copy contract must hold for the value sub-object too."""
+        """Popping a key from the returned value must not corrupt the
+        lru_cache-held tile dict — the shallow-copy contract must hold for
+        the value sub-object too."""
         tile_qk = "023010"
         rkey = "place001"
         manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
@@ -151,8 +189,6 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
         )
         first = col.get_record("repo", COLLECTION, rkey)
         first.pop("importance", None)
@@ -176,8 +212,6 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
         )
         result = col.get_record("repo", COLLECTION, rkey)
 
@@ -197,8 +231,6 @@ class TestTileBackedCollectionNewEnvelope:
             collection=COLLECTION,
             manifest_db_path=str(manifest_db),
             tiles_dir=str(tmp_path),
-            source_url=SOURCE_URL,
-            license_url=LICENSE_URL,
         )
 
         with patch("garganorn.tile_reader.gzip.open", wraps=gzip.open) as mock_open:

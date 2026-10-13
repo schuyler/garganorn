@@ -70,7 +70,7 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Summary**: Publishing `org.atgeo.*` lexicons via AT Protocol's standard lexicon resolution mechanism: DNS TXT lookup, DID resolution, and `com.atproto.repo.getRecord` for lexicon schema collection.
 
-**Status**: Partially adopted, not the full mechanism. The DID document route (`/.well-known/did.json`) and `getRecord` serving `com.atproto.lexicon.schema` records both shipped — they're ambient AT Protocol identity plumbing needed regardless of discovery. The DNS TXT record, `listRecords` for the lexicon-schema collection, and `goat`-based verification were not adopted; `listRecords` was implemented once and then removed entirely (unrelated to discovery — see the searchRecords/listRecords removal). Garganorn's actual lexicon-serving interface is `/<nsid>` paths. Standard discovery via DNS/goat tooling is not widely used and hasn't been revisited.
+**Status**: Partially adopted, not the full mechanism. The DID document route (`/.well-known/did.json`) is served — ambient AT Protocol identity plumbing needed regardless of discovery. The DNS TXT record and `goat`-based verification were not adopted. Garganorn serves no `com.atproto.*` method, so neither `getRecord` nor `listRecords` serves the lexicon-schema collection; both were implemented once and removed (`listRecords` for reasons unrelated to discovery — see the searchRecords/listRecords removal). Garganorn's actual lexicon-serving interface is `/<nsid>` paths. Standard discovery via DNS/goat tooling is not widely used and hasn't been revisited.
 
 ## Structured Place Name Model
 

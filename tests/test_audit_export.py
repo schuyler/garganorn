@@ -138,8 +138,6 @@ class TestOSMRkeyFormat:
             collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
-            source_url="https://www.openstreetmap.org/",
-            license_url="https://opendatacommons.org/licenses/odbl/1-0/"
         )
 
         # Try to get record with reformatted rkey (as tile has it)
@@ -156,8 +154,6 @@ class TestOSMRkeyFormat:
             collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
-            source_url="https://www.openstreetmap.org/",
-            license_url="https://opendatacommons.org/licenses/odbl/1-0/"
         )
 
         result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "way:67890")
@@ -173,8 +169,6 @@ class TestOSMRkeyFormat:
             collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
-            source_url="https://www.openstreetmap.org/",
-            license_url="https://opendatacommons.org/licenses/odbl/1-0/"
         )
 
         result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "relation:11111")

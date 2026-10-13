@@ -840,8 +840,7 @@ def write_collection_json(run_dir, source, source_cls, *, generated_at, manifest
     if not manifest:
         # Zero tiles means zero records: extent is a required field with no
         # honest value to give it, so omit collection.json rather than
-        # fabricate one. describeService/fetch already handle a run dir
-        # with no collection.json.
+        # fabricate one.
         return
 
     con = duckdb.connect(os.path.join(run_dir, "manifest.duckdb"), read_only=True)

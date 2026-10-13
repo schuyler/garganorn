@@ -27,21 +27,17 @@ tiles:
       manifest: data/overture_place/tiles/current/manifest.duckdb
       tiles_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
-      source: https://overturemaps.org/
-      license: https://docs.overturemaps.org/attribution/
   max_coverage_tiles: 50
 ```
 
-`repo` is the server's hostname; it determines the `did:web` identity and the default base for record URIs. The optional top-level `public_base` sets the base that `getRecord` and `describeService` use when building record URIs and links. It defaults to `https://{repo}`. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
+`repo` is the server's hostname; it determines the `did:web` identity. The optional top-level `public_base` is the server's public base URL, defaulting to `https://{repo}`; no current endpoint reads it. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
 
 ```yaml
 repo: places.atgeo.org
 public_base: http://localhost:8000
 ```
 
-URIs baked into tiles at export time keep the exporting deployment's base, so a local server serving production-built tiles reports its own base from `getRecord` while the tile URIs point at production.
-
-`source` and `license` aren't validated — `load_config` just parses the YAML, and omitting either yields an empty string, no error. They matter for `getRecord`: `TileBackedCollection` puts these exact config values in every record's envelope. Tile file headers carry a different source/license, hardcoded per source class in `garganorn/database.py`, independent of this config.
+Record URIs baked into tiles at export time always use `https://places.atgeo.org`, whatever `public_base` the serving deployment sets.
 
 ## Getting source data
 
@@ -188,32 +184,6 @@ $ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220
 }
 ```
 
-### getRecord
-
-Look up a single record by collection + rkey instead:
-
-```
-$ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=places.atgeo.org&collection=org.atgeo.places.osm&rkey=node:10080395917'
-{
-  "uri": "https://places.atgeo.org/org.atgeo.places.osm/node:10080395917",
-  "source": "https://www.openstreetmap.org/",
-  "license": "https://opendatacommons.org/licenses/odbl/1-0/",
-  "importance": 0,
-  "value": {
-    "$type": "org.atgeo.place",
-    "rkey": "node:10080395917",
-    "name": "HomeGoods",
-    "locations": [
-      {"$type": "community.lexicon.location.geo", "latitude": "43.288557", "longitude": "-71.575664"}
-    ],
-    "variants": [],
-    "attributes": {"addr:city": "Concord", "addr:street": "Merchants Way", "shop": "houseware"},
-    "relations": {}
-  },
-  "_query": {"parameters": {"repo": "places.atgeo.org", "collection": "org.atgeo.places.osm", "rkey": "node:10080395917"}, "elapsed_ms": 6}
-}
-```
-
 ## Proposed Lexicon schemas
 
 * [`org.atgeo.place`](garganorn/lexicon/place.json)
@@ -221,10 +191,6 @@ $ curl 'http://127.0.0.1:8000/xrpc/com.atproto.repo.getRecord?repo=places.atgeo.
 * [`community.lexicon.location.address`](garganorn/lexicon/address.json)
 
 **NOTE**: These schemas are only *proposed*, and have not been adopted by the Lexicon community.
-
-## Lexicon dependencies
-
-* `com.atproto.repo.getRecord`
 
 ## Development
 

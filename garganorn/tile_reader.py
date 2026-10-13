@@ -8,13 +8,10 @@ from functools import lru_cache
 
 
 class TileBackedCollection:
-    """Serves getRecord from static tile files + manifest.duckdb."""
+    """Reads a record by rkey from static tile files + manifest.duckdb."""
 
-    def __init__(self, collection: str, manifest_db_path: str,
-                 tiles_dir: str, source_url: str, license_url: str):
+    def __init__(self, collection: str, manifest_db_path: str, tiles_dir: str):
         self.collection = collection
-        self.source_url = source_url
-        self.license_url = license_url
         self.tiles_dir = tiles_dir
         self._db_path = manifest_db_path
         self._local = threading.local()
@@ -46,8 +43,8 @@ class TileBackedCollection:
         for record in tile_data["records"]:
             value = record["value"]
             if value["rkey"] == rkey:
-                # Shallow copy prevents mutations by the server layer (e.g., popping
-                # "importance") from corrupting the lru_cache-held tile dict.
+                # Shallow copy keeps a caller's mutation out of the
+                # lru_cache-held tile dict.
                 return copy.copy(value)
         return None
 

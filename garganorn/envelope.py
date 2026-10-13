@@ -3,18 +3,18 @@
 Used by garganorn.stages' export path, so there is exactly one
 implementation of the envelope shape.
 
-Imports nothing from garganorn — no import cycle with server.py or stages.py.
+Imports nothing from garganorn — no import cycle with stages.py.
 """
 import json
 
 
 def record_uri(base: str, collection: str, rkey: str) -> str:
-    """Build the canonical dereferenceable record URI.
+    """Build the record URI.
 
     {base}/{collection}/{rkey} -- not at://; gazetteer records are not
-    repository data. base is the serving deployment's public base URL (no
-    trailing slash). rkey is the record's rkey *after* source transforms (for
-    OSM, the node:/way:/relation: form). Colons in rkeys are legal in a URI
+    repository data. base is the URL prefix (no trailing slash). rkey is the
+    record's rkey *after* source transforms (for OSM, the node:/way:/relation:
+    form). Colons in rkeys are legal in a URI
     path segment (RFC 3986); no encoding is applied.
     """
     return f"{base}/{collection}/{rkey}"

@@ -12,10 +12,9 @@ Envelope contract exercised here:
     wrapped_records) -> bytes whose top-level parses to exactly {collection,
     source, license, generated_at, records}.
 
-Determinism, timestamp coherence, and server round-trip are covered
-end-to-end against the real stage_export/tile_reader production path in
-tests/test_stages.py and tests/test_tile_reader.py -- this module is
-unit-level only, exercising envelope.py's pure functions in isolation.
+Determinism and timestamp coherence are covered end-to-end against the
+real stage_export production path in tests/test_stages.py -- this module
+is unit-level only, exercising envelope.py's pure functions in isolation.
 """
 import gzip
 import json

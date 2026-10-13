@@ -1,5 +1,5 @@
 repo: places.atgeo.org
-# Base for record URIs; defaults to https://{repo}. http only for development hosts.
+# Public base URL; defaults to https://{repo}. http only for development hosts.
 # public_base: http://localhost:8000
 
 tiles:
@@ -10,15 +10,11 @@ tiles:
       manifest: data/overture_place/tiles/current/manifest.duckdb
       tiles_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
-      source: https://overturemaps.org/
-      license: https://docs.overturemaps.org/attribution/
     org.atgeo.places.osm:
       slug: osm
       manifest: data/osm/tiles/current/manifest.duckdb
       tiles_dir: data/osm/tiles/current
       base_url: https://places.atgeo.org/tiles/osm
-      source: https://www.openstreetmap.org/
-      license: https://opendatacommons.org/licenses/odbl/1-0/
   max_coverage_tiles: 50
 
 # Two runs are retained and tiles serve max-age=604800, so a build interval

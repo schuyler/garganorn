@@ -11,7 +11,7 @@
                 "uri": {
                     "type": "string",
                     "format": "uri",
-                    "description": "The record's dereferenceable https:// URI."
+                    "description": "The record's https:// URI."
                 },
                 "cid": {
                     "type": "string",

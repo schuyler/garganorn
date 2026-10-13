@@ -1962,8 +1962,7 @@ class TestMaxTempDirectorySizeThreading:
 # ---------------------------------------------------------------------------
 # collection.json: the org.atgeo.collection record value, written by
 # stage_export between write_manifest_db and write_manifest (see
-# pipeline-artifacts.md's stage_export section). Build-side only;
-# serve-side coverage lives in test_app.py/test_server.py.
+# pipeline-artifacts.md's stage_export section).
 # ---------------------------------------------------------------------------
 
 class TestCollectionMetadata:

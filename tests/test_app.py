@@ -60,60 +60,9 @@ def client(tmp_path):
         yield c
 
 
-@pytest.fixture
-def client_no_record(tmp_path):
-    """Flask test client where the OVERTURE_COLLECTION has no record for the requested rkey."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000")
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    app.config["TESTING"] = True
-    with app.test_client() as c:
-        yield c
-
-
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
-
-def test_resource_success(client):
-    """GET /<collection>/<rkey> returns 200 with record fields, no envelope."""
-    resp = client.get(f"/{OVERTURE_COLLECTION}/ov001")
-    assert resp.status_code == 200
-    assert resp.mimetype == "application/json"
-    data = resp.get_json()
-    # Record fields present
-    assert data["name"] == "Blue Bottle Coffee"
-    assert data["rkey"] == "ov001"
-    assert "locations" in data
-    assert "variants" in data
-    assert "attributes" in data
-    # No XRPC envelope keys
-    assert "uri" not in data
-    assert "_query" not in data
-
-
-def test_resource_collection_not_found(client):
-    """GET with unknown collection returns 404 with CollectionNotFound error."""
-    resp = client.get("/unknown.collection/somekey")
-    assert resp.status_code == 404
-    data = resp.get_json()
-    assert data is not None
-    assert data.get("error") == "CollectionNotFound"
-
-
-def test_resource_record_not_found(client_no_record):
-    """GET with valid collection but unknown rkey returns 404 with RecordNotFound error."""
-    resp = client_no_record.get(f"/{OVERTURE_COLLECTION}/nonexistent")
-    assert resp.status_code == 404
-    data = resp.get_json()
-    assert data is not None
-    assert data.get("error") == "RecordNotFound"
-
 
 def test_health_still_works(client):
     """GET /health still returns 200 (regression check)."""
@@ -135,6 +84,36 @@ def test_lexicon_unknown_nsid(client):
     """GET /<nsid> returns 404 for an unknown NSID."""
     resp = client.get("/nonexistent.lexicon")
     assert resp.status_code == 404
+
+
+def test_xrpc_get_record_not_implemented(client):
+    """com.atproto.repo.getRecord is not served, even for a record the tile holds."""
+    resp = client.get("/xrpc/com.atproto.repo.getRecord", query_string={
+        "repo": "places.atgeo.org", "collection": OVERTURE_COLLECTION, "rkey": "ov001",
+    })
+    assert resp.status_code == 501
+    assert resp.get_json()["error"] == "MethodNotImplemented"
+
+
+def test_repo_style_paths_404(tmp_path):
+    """No two-segment path resolves: not the lexicon schema path, not the
+    collection metadata path, not a record path. The tile holds ov001 and
+    collection.json is on disk, so each 404 can only come from the missing
+    route."""
+    tiles_root = tmp_path / "overture_place" / "tiles"
+    tile_content = json.dumps({"records": [{"value": dict(SAMPLE_RECORD)}]}).encode()
+    run_dir = _make_run(tiles_root, "20260101T000000", tile_content=tile_content, rkey="ov001",
+                        collection_metadata=SAMPLE_COLLECTION_RECORD)
+    tiles_current = _point_current(tiles_root, run_dir)
+    tiles_config = _make_tile_config(
+        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
+        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+    )
+    app = _build_tile_app(tiles_config)
+    with app.test_client() as client:
+        assert client.get("/com.atproto.lexicon.schema/org.atgeo.getCoverage").status_code == 404
+        assert client.get(f"/org.atgeo.collection/{OVERTURE_COLLECTION}").status_code == 404
+        assert client.get(f"/{OVERTURE_COLLECTION}/ov001").status_code == 404
 
 
 def test_did_document(client):
@@ -196,8 +175,6 @@ def _make_tile_config(tiles_dir, manifest_path, slug="overture-place",
         "manifest": str(manifest_path),
         "tiles_dir": str(tiles_dir),
         "base_url": base_url,
-        "source": "https://example.com",
-        "license": "https://example.com",
     }
     return {
         "collections": {
@@ -213,8 +190,7 @@ def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True, 
     unless complete=False -- the manifest.json completeness marker (pass
     complete=False to simulate a run that crashed before writing it).
     collection_metadata, if given, is written as collection.json in the run
-    directory, sibling to manifest.json -- omitted entirely simulates a build
-    from before the collection-metadata feature. Returns the run directory."""
+    directory, sibling to manifest.json. Returns the run directory."""
     run_dir = tiles_root / stamp
     run_dir.mkdir(parents=True)
     manifest_path = run_dir / "manifest.duckdb"
@@ -243,15 +219,9 @@ def _point_current(tiles_root, run_dir):
     return current
 
 
-def _tile_json(name):
-    """A tile file's decoded content: one record with a distinguishing name,
-    shaped for TileBackedCollection.get_record (record.get('value', record))."""
-    return json.dumps({"records": [{"value": {"rkey": "r1", "name": name}}]}).encode()
-
-
-def _build_tile_app(tiles_config, public_base="https://places.atgeo.org"):
+def _build_tile_app(tiles_config):
     with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config, public_base)
+        mock_load.return_value = ("places.atgeo.org", tiles_config, "https://places.atgeo.org")
         app = create_app()
     app.config["TESTING"] = True
     return app
@@ -581,37 +551,6 @@ def test_manifest_files_not_reachable_over_http(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# getRecord reads the run resolved at startup, not 'current' live
-# ---------------------------------------------------------------------------
-
-def test_get_record_reads_run_resolved_at_startup(tmp_path):
-    """getRecord reads tiles from the run getCoverage advertises
-    (frozen at startup), not from wherever 'current' points to at request
-    time."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run1 = _make_run(tiles_root, "20260101T000000", tile_content=_tile_json("RunOne"))
-    run2 = _make_run(tiles_root, "20260102T000000", tile_content=_tile_json("RunTwo"))
-    current = _point_current(tiles_root, run1)
-
-    tiles_config = _make_tile_config(
-        tiles_dir=current, manifest_path=current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)  # frozen while current -> run1
-
-    # A new build completes and repoints 'current' before the server restarts.
-    _point_current(tiles_root, run2)
-
-    with app.test_client() as client:
-        resp = client.get(f"/{OVERTURE_COLLECTION}/r1")
-    assert resp.status_code == 200
-    assert resp.get_json()["name"] == "RunOne", (
-        "getRecord followed the 'current' symlink to the new run instead of "
-        "the run resolved at startup"
-    )
-
-
-# ---------------------------------------------------------------------------
 # Completeness guard -- manifest.duckdb alone must not be enough to serve
 # ---------------------------------------------------------------------------
 
@@ -622,10 +561,10 @@ def test_incomplete_run_not_served(tmp_path):
     org.atgeo.getCoverage.
 
     getCoverage keys off Server.tile_manifests independently of the
-    /tiles/<slug>/... route (garganorn/server.py:213,221-223), so a fix that
+    /tiles/<slug>/... route (Server.get_coverage), so a fix that
     only special-cases serve_tile() would pass a route-only check yet still
     leak coverage URLs for an incomplete collection. A single `ready` gate
-    withholds tile_manifests, tile_collections, AND tile_dirs[slug] together.
+    withholds tile_manifests AND tile_dirs[slug] together.
     """
     # Deliberately complete=False -- simulates a crash between writing
     # manifest.duckdb and the manifest.json marker.
@@ -716,8 +655,6 @@ def test_no_manifest_key_still_boots(tmp_path):
                 "slug": "overture-place",
                 "base_url": "https://places.atgeo.org/tiles/overture-place",
                 # No "manifest" key, no "tiles_dir" key.
-                "source": "https://example.com",
-                "license": "https://example.com",
             },
         }
     }
@@ -755,7 +692,8 @@ def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):
 
 def test_describe_service_endpoint_returns_did_and_collections(tmp_path):
     """GET /xrpc/org.atgeo.describeService returns 200, cached for 1 hour,
-    with the did and the served collection's metadata URL."""
+    with the did and the served collection -- and no URL-bearing key, even
+    with collection.json on disk."""
     tiles_root = tmp_path / "overture_place" / "tiles"
     run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
     tiles_current = _point_current(tiles_root, run_dir)
@@ -771,33 +709,7 @@ def test_describe_service_endpoint_returns_did_and_collections(tmp_path):
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
     data = resp.get_json()
     assert data["did"] == "did:web:places.atgeo.org"
-    assert data["collections"] == [{
-        "collection": OVERTURE_COLLECTION,
-        "metadata": f"https://places.atgeo.org/org.atgeo.collection/{OVERTURE_COLLECTION}",
-    }]
-
-
-def test_describe_service_metadata_link_uses_configured_public_base(tmp_path):
-    """A configured public_base replaces https://{repo} in the metadata link;
-    the did stays tied to repo."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config, public_base="http://localhost:8000")
-    with app.test_client() as client:
-        resp = client.get("/xrpc/org.atgeo.describeService")
-        did_resp = client.get("/.well-known/did.json")
-
-    data = resp.get_json()
-    assert data["did"] == "did:web:places.atgeo.org"
-    assert data["collections"][0]["metadata"] == (
-        f"http://localhost:8000/org.atgeo.collection/{OVERTURE_COLLECTION}"
-    )
-    assert "localhost" not in did_resp.get_data(as_text=True)
+    assert data["collections"] == [{"collection": OVERTURE_COLLECTION}]
 
 
 def test_describe_service_lexicon_route_lacks_cache_control(tmp_path):
@@ -821,48 +733,6 @@ def test_describe_service_lexicon_route_lacks_cache_control(tmp_path):
     assert resp.headers.get("Cache-Control") != "public, max-age=3600"
 
 
-def test_get_collection_metadata_record_returns_bare_value(tmp_path):
-    """GET /org.atgeo.collection/{nsid} returns the bare record value (not
-    the getRecord envelope) through the existing get_resource route."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        resp = client.get(f"/org.atgeo.collection/{OVERTURE_COLLECTION}")
-
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data == SAMPLE_COLLECTION_RECORD
-    assert "uri" not in data
-
-
-def test_get_collection_metadata_record_unknown_nsid_404s(tmp_path):
-    """GET /org.atgeo.collection/{unknown-nsid} returns 404 RecordNotFound --
-    org.atgeo.collection is itself a known collection (a metadata record
-    exists for OVERTURE_COLLECTION); the requested rkey just isn't one of
-    its keys."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        resp = client.get("/org.atgeo.collection/org.atgeo.places.nonexistent")
-
-    assert resp.status_code == 404
-    data = resp.get_json()
-    assert data is not None
-    assert data.get("error") == "RecordNotFound"
-
-
 def test_new_lexicons_served_at_nsid_route(client):
     """Both new lexicon documents are served at GET /<nsid>, like every other
     lexicon (see test_lexicon_known_nsid)."""
@@ -877,31 +747,6 @@ def test_new_lexicons_served_at_nsid_route(client):
     data = resp.get_json()
     assert data["id"] == "org.atgeo.collection"
     assert data["lexicon"] == 1
-
-
-def test_missing_collection_json_omits_metadata_and_404s_on_fetch(tmp_path):
-    """A run dir without collection.json (a build from before this feature)
-    still lists its collection via describeService, just without a
-    'metadata' link, and get_record on org.atgeo.collection for that nsid
-    returns RecordNotFound -- degraded but truthful."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000")  # no collection_metadata
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        resp = client.get("/xrpc/org.atgeo.describeService")
-        assert resp.status_code == 200
-        assert resp.get_json()["collections"] == [{"collection": OVERTURE_COLLECTION}]
-
-        resp = client.get(f"/org.atgeo.collection/{OVERTURE_COLLECTION}")
-        assert resp.status_code == 404
-        data = resp.get_json()
-        assert data is not None
-        assert data.get("error") == "RecordNotFound"
 
 
 # ---------------------------------------------------------------------------
@@ -919,34 +764,6 @@ def test_getcoverage_allows_cross_origin_reads(tile_client):
 def test_describe_service_allows_cross_origin_reads(client):
     resp = client.get("/xrpc/org.atgeo.describeService")
     assert resp.status_code == 200
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
-
-
-def test_xrpc_get_record_allows_cross_origin_reads(client):
-    resp = client.get("/xrpc/com.atproto.repo.getRecord", query_string={
-        "repo": "places.atgeo.org", "collection": OVERTURE_COLLECTION, "rkey": "ov001",
-    })
-    assert resp.status_code == 200
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
-
-
-def test_record_route_allows_cross_origin_reads(client):
-    resp = client.get(f"/{OVERTURE_COLLECTION}/ov001")
-    assert resp.status_code == 200
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
-
-
-def test_record_route_404_allows_cross_origin_reads(client_no_record):
-    resp = client_no_record.get(f"/{OVERTURE_COLLECTION}/nonexistent")
-    assert resp.status_code == 404
-    assert resp.headers.get("Access-Control-Allow-Origin") == "*"
-
-
-def test_xrpc_error_allows_cross_origin_reads(client_no_record):
-    resp = client_no_record.get("/xrpc/com.atproto.repo.getRecord", query_string={
-        "repo": "places.atgeo.org", "collection": OVERTURE_COLLECTION, "rkey": "nonexistent",
-    })
-    assert resp.status_code >= 400
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
 
 

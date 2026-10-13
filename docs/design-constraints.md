@@ -237,7 +237,7 @@ itself. The covering machinery is untouched and still required for places
 and OSM, whose records carry no division references of their own.
 
 An ancestor is kept only if it survived the import's own filters (`is_land`,
-a bbox-scoped build) — an emitted rkey must resolve via `getRecord`, so an
+a bbox-scoped build) — an emitted rkey must resolve in the served data, so an
 ancestor dropped from the imported set is dropped from `relations.within`
 too. Containment fans out over `tile_assignments_combined.parquet`, the same
 union of tile references and summary tile references that `stage_export`
