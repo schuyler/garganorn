@@ -82,9 +82,9 @@ Tags: S stated by the owner, M from existing docs or memory, I inferred
 
 Several items above are decisions in a requirement's clothing (R2a's
 field, R7's `public_base` mechanism, R8, R9's runbook, R12). They stay here
-so the record is complete; the requirements gate of each tranche strips
-them to outcomes and reattaches the mechanisms as acceptance criteria, per
-`.claude/CLAUDE.md`.
+so the record is complete. "Requirements by tranche" below restates them as
+outcomes with the mechanisms as acceptance criteria, per
+`.claude/CLAUDE.md`, and records which lists the owner has approved.
 
 ## Current state
 
@@ -338,6 +338,70 @@ stage runs.
 3. **Docs.** After the SDK, so the spec describes what shipped.
 
 Then the planet rebuild and deploy.
+
+## Requirements by tranche
+
+Tags: **S** stated by the owner, **M** from memory or existing docs, **I**
+inferred and vetoable, **O** open. Each item is an outcome; the mechanisms
+the design fixes appear as acceptance criteria. Premises binding every
+tranche, not items to satisfy: the upstream licences; the user-safety
+principle (no nearest-neighbour or full-text search over the network);
+R13.
+
+**Approval status.** Tranches 0 and 1: approved by the owner 2026-10-13.
+Tranches 2 and 3: provisional until tranche 1 is accepted; the lexicons
+tranche 1 ships are the contract they bind to.
+
+### Tranche 0: remove the atproto record surface (approved)
+
+`get_record` backs three things: the XRPC method, the plain-GET
+`/<collection>/<rkey>` route (places, collection metadata and lexicon
+schemas), and the `metadata` URL `describeService` emits. Removing the
+handler removes all three.
+
+- **T0-R1 (S)** Garganorn serves no `com.atproto.*` method and no lexicon under a `com.atproto.*` NSID, so that it stops presenting itself as an atproto repo it is not. AC: `GET /xrpc/com.atproto.repo.getRecord?...` returns lexrpc's method-not-found response; no file in `garganorn/lexicon/` has an `id` starting `com.atproto.`; the string `com.atproto` appears nowhere under `garganorn/`.
+- **T0-R2 (I)** Every URL the service document advertises resolves, so that a client following `describeService` never reaches a 404. The `metadata` link leaves with its target in this tranche; tranche 1 replaces it with the tileset documents. AC: for every entry in `describeService` output, a GET on each URL it contains returns 200.
+- **T0-R3 (I)** Lexicon documents stay fetchable, so that the one schema-serving path that works (`GET /{nsid}`) survives the removal of the repo-style one. AC: `GET /org.atgeo.getCoverage` returns the lexicon JSON; `GET /com.atproto.lexicon.schema/org.atgeo.getCoverage` returns 404.
+- **T0-R4 (I)** Tests that exercised the handler keep what they assert about record content, so that coverage of tile-backed lookup does not leave with the endpoint. The handler is called directly at 15 sites, all in `test_server.py`; `test_app.py` exercises the plain-GET route; the tile-reader, export and audit tests use the tile reader's own `get_record` and are untouched. AC: no test calls the server handler; assertions about record content in `test_server.py` move to the tile reader or to the XRPC methods that remain, and only assertions about the removed envelope (`uri`, `source`, `license`, `_query`) and the removed routes are dropped; the full suite is green.
+- **Out of scope:** any replacement fetch method, the place alias, the descriptor, SDK changes. The SDK's `getPlace` and `getCollectionInfo` break against a tranche-0 server by design; the SDK's fake keeps its tests green, and e2e does not run until tranche 2.
+
+### Tranche 1: identity, export, descriptor, server API (approved)
+
+- **T1-R1 (S)** A gazetteer place value is a valid `org.atgeo.place` record a user can write into their own repo unmodified, so that lookup output is usable as atproto data. AC: every tile record's `value` and every `getPlace` response's `record` pass `goat lex validate` against the lexicon; the lexicon's key type is one atproto accepts.
+- **T1-R2 (S)** A place value states its origin dataset, collection and upstream id by value alone, distinguishes same-id places from different datasets or collections, and carries nothing build- or producer-relative, so that the value survives its server. AC: every exported value has `origin` equal to `urn:atgeo:{dataset}:{collection}:{id}` with the dataset string the descriptor states; no value contains `importance`, `rkey` or `uri`; a test shows an OSM node and way with the same numeric id have different origins.
+- **T1-R3 (I)** Per-record importance stays available to clients from tiles and from place-fetch, outside the value, so that client ranking and the summary band are unchanged. AC: a tile record is `{value, importance}`; `getPlace` output carries importance outside `record`; a fixture's exported importance values equal baseline's.
+- **T1-R4 (S)** A single place is fetchable by its URN with no prior discovery call, so that a client holding an `origin` can resolve it. AC: `org.atgeo.getPlace?uri=urn:...` passes lexrpc output validation with no `repo` parameter; an unknown URN yields an XRPC error, not a 500; `GET /{dataset}/{collection}/{id}` returns the same record.
+- **T1-R5 (S)** Every tileset says which `(dataset, collection)` pairs it carries, under which upstream release, with each pair's source, licence and attribution; every tile carries the licence and attribution of every pair present in it, so that attribution travels with the data. AC: `describeTileset` output validates and lists pairs with `release`, `source`, `license` and `attribution` URLs; `GET /tilesets/{slug}` returns the same document; a tile containing OSM records carries an entry linking `openstreetmap.org/copyright`; the byte-identical-copies test still passes.
+- **T1-R6 (S)** The service document says which datasets and tilesets the instance serves, and every URL in it resolves, so that federation discovery works from one call. AC: `describeService` lists tilesets with their pairs; a GET on every URL it contains returns 200.
+- **T1-R7 (M)** A tileset is portable between hosts without a rebuild: tiles bake in no gazetteer host, coverage answers give absolute tile URLs from the serving configuration, and a place `uri` from place-fetch dereferences on the serving host. AC: no built tile contains the configured host string; every tile URL in a `getCoverage` answer is absolute and built from the configured tile base; `getPlace.uri` starts with the configured `public_base` and a GET on it returns the record.
+- **T1-R8 (S)** `did.json` advertises a tile service, not a PDS. AC: the service list has `#atgeo_tiles` of type `AtgeoTileService` as `atgeo-appview-design.md` specifies and no `#atproto_pds`.
+- **T1-R9 (S)** Every `org.atgeo.*` lexicon is publishable under `atgeo.org`, so that resolvers can find them by NSID. AC: `goat lex lint` and `goat lex parse` pass on every lexicon file; a runbook in `docs/` states the `_lexicon.atgeo.org` TXT record and the `goat lex publish` and `goat lex check-dns` commands; nothing is published by this tranche.
+- **T1-R10 (I)** Every XRPC success path is proven through output validation, so that a lexicon mismatch cannot ship unnoticed again. AC: no test calls a handler method directly; each registered method has a test through the Flask client whose response lexrpc validated; a mutation removing a required output field from any handler turns a test red.
+- **T1-R11 (S)** Coverage is answerable per dataset with an optional collection filter, so that one OSM tileset serves node, way and relation searches. AC: `getCoverage` with `dataset=openstreetmap.org` returns the OSM tileset's tiles; adding `collection=way` returns the same tiles; an unknown dataset yields an XRPC error.
+- **T1-R12 (I)** References between places are URIs in the shape the lexicon defines, so that containment survives a copy. AC: every `relations.within[].uri` in exported values is the URN of a division present in the served data; no exported relation carries `rkey`.
+- **T1-R13 (I)** A local rebuild of the fixture tileset completes and the one-off id scan finds no character outside the rkey set, so that the manifest key convention is known safe. AC: scan output quoted in the tranche report.
+- **T1-R14 (M)** No compatibility shim, dual format, or deprecation path. AC: no code path reads or writes the old tile shape.
+- **Docs in this tranche:** garganorn `README.md`, `design-constraints.md`, and `pipeline-artifacts.md` where the change touches them. `atgeo-spec.md` and `atgeo-client-sdk.md` belong to tranche 3.
+- **Out of scope:** the SDK; publishing lexicons; the planet rebuild and deploy; `same_as` emission.
+
+### Tranche 2: SDK (provisional)
+
+- **T2-R1 (S)** The default search spans a whole dataset, with an optional collection filter, so that an OSM search sees nodes, ways and relations together. AC: against the fake server with a tile holding all three, a search with no filter returns all three kinds and `collection: "way"` returns only ways.
+- **T2-R2 (S)** Callers receive the gazetteer value unmodified plus importance outside it; ranking and the summary band are unchanged. AC: the returned place deep-equals the tile value; ranking tests pass reading importance from the wrapper.
+- **T2-R3 (S)** `getPlace(uri)` resolves a URN with no discovery call first. AC: the fake records no `describeService` call before `getPlace`; a cache hit returns the record found by origin.
+- **T2-R4 (I)** Merging and ordering key on origin, so that a multi-tile record appears once and ordering is deterministic. AC: two tiles holding the same division record merge to one hit; a tie-break test orders by origin.
+- **T2-R5 (I)** Tileset and service metadata are reachable through the new documents and the old collection-info path is gone. AC: typed calls for `describeService` and `describeTileset`; no reference to `org.atgeo.collection` or `getRecord` in `src/`.
+- **T2-R6 (I)** The fake server enforces the server's shapes, so that SDK tests cannot pass against a response the server would never send. AC: the fake validates its responses against lexicon JSON copied from garganorn; removing a required field from a fake response fails a test.
+- **T2-R7 (M)** Node and browser e2e pass against a local tranche-1 server. AC: both scripts exit 0.
+- **T2-R8 (I)** The SDK README describes the shipped behaviour. AC: every example in it runs against the fake.
+- **Out of scope:** reading `same_as`; querying more than one service.
+
+### Tranche 3: client-facing docs (provisional)
+
+- **T3-R1 (I)** The client-facing docs describe the shipped contract and nothing else: garganorn `atgeo-spec.md`, `atgeo-client-sdk.md`, `explored-and-discarded.md` (kept; sole record of client-side ranking), atgeo-web `place.md`, `api.md`, `usage.md`, `faq.md`. AC: every example request and response validates against the shipped lexicons; every NSID and route named exists on the server; `getRecord`, `org.atgeo.collection` and `record-key` appear nowhere in them.
+- **T3-R2 (I)** The two product claims the redesign was built to make true are true as written: output incorporable without modification, and every place traceable to its origin dataset by a globally unique key. AC: each claim cites the mechanism that delivers it.
+- **T3-R3 (O)** What becomes of this document once implemented. Memory says a planning doc is deleted once implemented and its facts and choices salvaged into living docs. The owner asked for a full record of the decisions and their rationale. Options: salvage the rationale into `design-constraints.md` and `explored-and-discarded.md`, then delete; or keep it as an architecture decision record, which the global rules allow when the record stops a process repeating a mistake. Decided at this tranche's requirements gate.
+- **Out of scope:** the Kotlin and Swift port text in the spec beyond what the TypeScript SDK's behaviour dictates.
 
 ## Alternatives rejected
 
