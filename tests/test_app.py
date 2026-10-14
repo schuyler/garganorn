@@ -1,61 +1,36 @@
 """Tests for Flask app routes in garganorn.__main__."""
 import gzip
 import json
-import os
 import pytest
-from unittest.mock import patch
 
-from garganorn.__main__ import create_app
+from tests.served_runs import (
+    OVERTURE, PUBLIC_BASE, STAMP, TILE_BASE, build_app, make_run, place,
+    point_current, serve_run, tileset_config,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-OVERTURE_COLLECTION = "org.atgeo.places.overture.place"
+QK = "012301"
+WORLD = "-180,-85,180,85"
 
-SAMPLE_RECORD = {
-    "$type": "org.atgeo.place",
-    "collection": OVERTURE_COLLECTION,
-    "rkey": "ov001",
-    "distance_m": 42,
-    "locations": [
-        {"$type": "community.lexicon.location.geo", "latitude": "37.774900", "longitude": "-122.419400"}
-    ],
-    "name": "Blue Bottle Coffee",
-    "variants": [],
-    "attributes": {},
-}
 
-# A realistic org.atgeo.collection record value, matching
-# garganorn/lexicon/collection.json's schema, for OVERTURE_COLLECTION.
-SAMPLE_COLLECTION_RECORD = {
-    "collection": OVERTURE_COLLECTION,
-    "source": "https://overturemaps.org/",
-    "license": "https://docs.overturemaps.org/attribution/",
-    "generatedAt": "2026-01-01T00:00:00Z",
-    "recordCount": 1,
-    "extent": {"north": "37.80", "west": "-122.42", "south": "37.77", "east": "-122.41"},
-    "locationTypes": ["community.lexicon.location.geo"],
-    "containmentLevels": ["locality"],
-    "categories": [{"value": "coffee_shop", "count": 1}],
-    "attributes": ["name", "category"],
-}
+def _tiles_url_paths(client):
+    """The /tiles/<slug>/... routes of every tile getTiles advertises."""
+    resp = client.get("/xrpc/org.atgeo.getTiles", query_string={
+        "dataset": OVERTURE, "bbox": WORLD,
+    })
+    assert resp.status_code == 200
+    return ["/tiles" + url[len(TILE_BASE):] for url in resp.get_json()["tiles"]]
 
 
 @pytest.fixture
 def client(tmp_path):
-    """Flask test client with a real tile-backed OVERTURE_COLLECTION serving SAMPLE_RECORD."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    tile_content = json.dumps({"records": [{"value": dict(SAMPLE_RECORD)}]}).encode()
-    run_dir = _make_run(tiles_root, "20260101T000000", tile_content=tile_content, rkey="ov001")
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    app.config["TESTING"] = True
+    """Flask test client serving one Overture place tileset."""
+    tiles = {QK: [place(OVERTURE, "place", "ov001")]}
+    app = build_app(serve_run(tmp_path, tiles=tiles))
     with app.test_client() as c:
         yield c
 
@@ -89,167 +64,49 @@ def test_lexicon_unknown_nsid(client):
 def test_xrpc_get_record_not_implemented(client):
     """com.atproto.repo.getRecord is not served, even for a record the tile holds."""
     resp = client.get("/xrpc/com.atproto.repo.getRecord", query_string={
-        "repo": "places.atgeo.org", "collection": OVERTURE_COLLECTION, "rkey": "ov001",
+        "repo": "places.atgeo.org", "collection": "org.atgeo.place", "rkey": "ov001",
     })
     assert resp.status_code == 501
     assert resp.get_json()["error"] == "MethodNotImplemented"
 
 
-def test_repo_style_paths_404(tmp_path):
-    """No two-segment path resolves: not the lexicon schema path, not the
-    collection metadata path, not a record path. The tile holds ov001 and
-    collection.json is on disk, so each 404 can only come from the missing
-    route."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    tile_content = json.dumps({"records": [{"value": dict(SAMPLE_RECORD)}]}).encode()
-    run_dir = _make_run(tiles_root, "20260101T000000", tile_content=tile_content, rkey="ov001",
-                        collection_metadata=SAMPLE_COLLECTION_RECORD)
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        assert client.get("/com.atproto.lexicon.schema/org.atgeo.getCoverage").status_code == 404
-        assert client.get(f"/org.atgeo.collection/{OVERTURE_COLLECTION}").status_code == 404
-        assert client.get(f"/{OVERTURE_COLLECTION}/ov001").status_code == 404
+def test_repo_style_paths_404(client):
+    """No two-segment path resolves: not the lexicon schema path, not a
+    dataset/collection path. The tile holds the place and tileset.json is on
+    disk, so each 404 can only come from the missing route."""
+    assert client.get("/com.atproto.lexicon.schema/org.atgeo.getTiles").status_code == 404
+    assert client.get(f"/{OVERTURE}/place").status_code == 404
 
 
 def test_did_document(client):
-    """GET /.well-known/did.json returns a valid DID document."""
+    """GET /.well-known/did.json advertises the tile service and nothing else."""
     resp = client.get("/.well-known/did.json")
     assert resp.status_code == 200
     assert resp.mimetype == "application/json"
-    data = resp.get_json()
-    assert data["id"] == "did:web:places.atgeo.org"
-    assert data["alsoKnownAs"] == ["at://places.atgeo.org"]
-    # PDS service endpoint
-    services = {s["id"]: s for s in data["service"]}
-    assert "#atproto_pds" in services
-    assert services["#atproto_pds"]["type"] == "AtprotoPersonalDataServer"
-    assert services["#atproto_pds"]["serviceEndpoint"] == "https://places.atgeo.org"
+    assert resp.get_json() == {
+        "id": "did:web:places.atgeo.org",
+        "service": [{
+            "id": "#atgeo_tiles",
+            "type": "AtgeoTileService",
+            "serviceEndpoint": PUBLIC_BASE,
+        }],
+    }
 
 
 # ---------------------------------------------------------------------------
 # Tile serving tests
 # ---------------------------------------------------------------------------
 
-import duckdb as _duckdb
-
-
-def _make_manifest_db(path, entries=(("r1", "012301"),)):
-    """Create a minimal manifest.duckdb with a record_tiles table at *path*,
-    seeded with (rkey, tile_qk) *entries*."""
-    con = _duckdb.connect(str(path))
-    try:
-        con.execute(
-            "CREATE TABLE record_tiles (rkey VARCHAR, tile_qk VARCHAR)"
-        )
-        for rkey, qk in entries:
-            con.execute("INSERT INTO record_tiles VALUES (?, ?)", [rkey, qk])
-    finally:
-        con.close()
-
-
-def _make_manifest_json(manifest_db_path):
-    """Write a sibling manifest.json completeness marker next to manifest.duckdb.
-
-    The build writes manifest.duckdb first, then manifest.json LAST as the
-    completeness marker. Content is irrelevant to the guard -- only presence
-    matters -- but keep it minimal and valid JSON.
-    """
-    manifest_json_path = os.path.join(
-        os.path.dirname(str(manifest_db_path)), "manifest.json"
-    )
-    with open(manifest_json_path, "w") as f:
-        json.dump({"complete": True}, f)
-    return manifest_json_path
-
-
-def _make_tile_config(tiles_dir, manifest_path, slug="overture-place",
-                      base_url="https://places.atgeo.org/tiles/overture-place"):
-    """Build a tiles_config dict for one collection using the slug schema."""
-    coll_cfg = {
-        "slug": slug,
-        "manifest": str(manifest_path),
-        "tiles_dir": str(tiles_dir),
-        "base_url": base_url,
-    }
-    return {
-        "collections": {
-            OVERTURE_COLLECTION: coll_cfg,
-        }
-    }
-
-
-def _make_run(tiles_root, stamp, qk="012301", tile_content=None, complete=True, rkey="r1",
-               collection_metadata=None):
-    """Create tiles_root/<stamp>/ with a manifest (record_tiles: rkey -> qk),
-    optionally a tile file at tiles_root/<stamp>/<qk6>/<qk>.json.gz, and --
-    unless complete=False -- the manifest.json completeness marker (pass
-    complete=False to simulate a run that crashed before writing it).
-    collection_metadata, if given, is written as collection.json in the run
-    directory, sibling to manifest.json. Returns the run directory."""
-    run_dir = tiles_root / stamp
-    run_dir.mkdir(parents=True)
-    manifest_path = run_dir / "manifest.duckdb"
-    _make_manifest_db(manifest_path, entries=[(rkey, qk)])
-    if complete:
-        _make_manifest_json(manifest_path)
-    if tile_content is not None:
-        tile_subdir = run_dir / qk[:6]
-        tile_subdir.mkdir(parents=True)
-        with gzip.open(tile_subdir / f"{qk}.json.gz", "wb") as f:
-            f.write(tile_content)
-    if collection_metadata is not None:
-        with open(run_dir / "collection.json", "w") as f:
-            json.dump(collection_metadata, f)
-    return run_dir
-
-
-def _point_current(tiles_root, run_dir):
-    """(Re)point tiles_root/current at run_dir as a symlink -- never a real
-    directory, so the stamp a build resolves to is never the literal string
-    'current', which would hide any bug in stamp derivation."""
-    current = tiles_root / "current"
-    if current.exists() or current.is_symlink():
-        current.unlink()
-    current.symlink_to(run_dir, target_is_directory=True)
-    return current
-
-
-def _build_tile_app(tiles_config):
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config, "https://places.atgeo.org")
-        app = create_app()
-    app.config["TESTING"] = True
-    return app
-
-
 @pytest.fixture
 def tile_client(tmp_path):
-    """Flask test client with a slug-based collection and a real tile on disk.
+    """Flask test client with a real tile on disk.
 
-    Layout: tmp_path/overture_place/tiles/<stamp>/<qk6>/<qk>.json.gz, with
+    Layout: tmp_path/overture-place/tiles/<stamp>/<qk6>/<qk>.json.gz, with
     'current' a symlink to <stamp> -- not a literal directory named 'current'
     (a literal directory would make the run stamp the string "current" and
     hide any bug in stamp derivation).
     """
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(
-        tiles_root, "20260101T000000",
-        tile_content=b'{"attribution": "https://example.com", "records": []}',
-    )
-    tiles_current = _point_current(tiles_root, run_dir)
-
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place",
-        base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
+    app = build_app(serve_run(tmp_path, tiles={QK: []}))
     with app.test_client() as c:
         yield c
 
@@ -257,17 +114,7 @@ def tile_client(tmp_path):
 @pytest.fixture
 def tile_client_empty(tmp_path):
     """Flask test client with a registered slug but no tile files on disk."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000")
-    tiles_current = _point_current(tiles_root, run_dir)
-
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place",
-        base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
+    app = build_app(serve_run(tmp_path))
     with app.test_client() as c:
         yield c
 
@@ -277,9 +124,9 @@ def test_tile_served_successfully(tile_client):
     JSON and no Content-Encoding -- the on-disk file is gzip, but the
     response body is decompressed before serving, so the client's
     Accept-Encoding governs the wire format instead of a forced header.
-    tile_client's run is stamped 20260101T000000 (tiles_dir roots at
-    tiles/, one level above the run, so the stamp is part of the path)."""
-    resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
+    The run is stamped 20260101T000000 (the served root is the run's parent,
+    so the stamp is part of the path)."""
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
     assert resp.status_code == 200
     assert resp.headers.get("Content-Encoding") is None
     assert "application/json" in resp.content_type
@@ -300,22 +147,21 @@ def test_tile_unknown_slug_returns_404(tile_client_empty):
 
 
 def test_tile_cache_control_is_constant_immutable(tile_client):
-    """Tiles serve exactly this Cache-Control header, unconditionally,
-    regardless of collection config."""
-    resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
+    """Tiles serve exactly this Cache-Control header, unconditionally."""
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=604800, immutable"
 
 
 def test_tile_allows_cross_origin_reads(tile_client):
     """Tiles are fetched by browser pages on other origins."""
-    resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
     assert resp.status_code == 200
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
 
 
 def test_tile_path_traversal_rejected(tmp_path):
-    """safe_join blocks paths that escape tiles_dir.
+    """safe_join blocks paths that escape the served tiles root.
 
     Root is {source}/tiles/, one level above the run directory -- so escaping
     to a sibling of tiles/ (places.parquet) takes one '..', and escaping
@@ -330,32 +176,19 @@ def test_tile_path_traversal_rejected(tmp_path):
       - the cross-source target DOES end in .json.gz, so it's the one that
         actually proves safe_join blocks the escape.
     """
-    source_dir = tmp_path / "overture_place"
-    tiles_root = source_dir / "tiles"
-    run_dir = _make_run(
-        tiles_root, "20260101T000000",
-        tile_content=b'{"attribution": "https://example.com", "records": []}',
-    )
-    tiles_current = _point_current(tiles_root, run_dir)
+    source_dir = tmp_path / "overture-place"
+    tileset = serve_run(tmp_path, tiles={QK: []})
 
     # Physically create the escape targets so 404 proves blocking, not absence.
-    places_parquet = source_dir / "places.parquet"
-    places_parquet.write_bytes(b"PAR1")  # minimal parquet magic bytes
+    (source_dir / "places.parquet").write_bytes(b"PAR1")  # minimal parquet magic bytes
 
     # Cross-source escape target: another source's tile file.
-    osm_dir = tmp_path / "osm" / "tiles" / "20260101T000000"
+    osm_dir = tmp_path / "osm" / "tiles" / STAMP
     osm_dir.mkdir(parents=True)
-    cross_source_file = osm_dir / "012301.json.gz"
-    with gzip.open(cross_source_file, "wb") as f:
-        f.write(b'{"attribution": "https://example.com", "records": []}')
+    with gzip.open(osm_dir / "012301.json.gz", "wb") as f:
+        f.write(b'{"records": []}')
 
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place",
-        base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
+    app = build_app(tileset)
 
     with app.test_client() as client:
         # Sibling escape to a non-tile file -- exercises the suffix guard,
@@ -373,8 +206,8 @@ def test_tile_path_traversal_rejected(tmp_path):
         # Cross-source escape to a .json.gz file -- this is the case that
         # actually proves safe_join blocks containment escapes.
         cross_paths = [
-            "/tiles/overture-place/../../osm/tiles/20260101T000000/012301.json.gz",
-            "/tiles/overture-place/%2e%2e/%2e%2e/osm/tiles/20260101T000000/012301.json.gz",
+            f"/tiles/overture-place/../../osm/tiles/{STAMP}/012301.json.gz",
+            f"/tiles/overture-place/%2e%2e/%2e%2e/osm/tiles/{STAMP}/012301.json.gz",
         ]
         for path in cross_paths:
             resp = client.get(path)
@@ -384,169 +217,128 @@ def test_tile_path_traversal_rejected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# getCoverage returns run-stamped tile URLs
+# getTiles returns run-stamped tile URLs
 # ---------------------------------------------------------------------------
 
-def test_consecutive_runs_produce_disjoint_coverage_urls(tmp_path):
-    """getCoverage tile URLs carry the serving run's stamp, so two server
-    builds -- each pinned to a different completed run via 'current' -- emit
-    disjoint URL sets."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run1 = _make_run(tiles_root, "20260101T000000",
-                      tile_content=b'{"attribution": "https://example.com", "records": []}')
-    run2 = _make_run(tiles_root, "20260102T000000",
-                      tile_content=b'{"attribution": "https://example.com", "records": []}')
-    current = _point_current(tiles_root, run1)
+def test_consecutive_runs_produce_disjoint_tile_urls(tmp_path):
+    """getTiles URLs carry the serving run's stamp, so two server builds --
+    each pinned to a different completed run via 'current' -- emit disjoint
+    URL sets."""
+    tiles_root = tmp_path / "overture-place" / "tiles"
+    collections = [(OVERTURE, "place")]
+    run1 = make_run(tiles_root, "20260101T000000", "overture-place", collections, {QK: []})
+    run2 = make_run(tiles_root, "20260102T000000", "overture-place", collections, {QK: []})
+    current = point_current(tiles_root, run1)
+    tileset = tileset_config(current, "overture-place")
 
-    tiles_config = _make_tile_config(
-        tiles_dir=current, manifest_path=current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-
-    def coverage_urls(app):
+    def tile_urls(app):
         with app.test_client() as client:
-            resp = client.get("/xrpc/org.atgeo.getCoverage", query_string={
-                "collection": OVERTURE_COLLECTION, "bbox": "-180,-85,180,85",
+            resp = client.get("/xrpc/org.atgeo.getTiles", query_string={
+                "dataset": OVERTURE, "bbox": WORLD,
             })
         return set(resp.get_json()["tiles"])
 
-    urls1 = coverage_urls(_build_tile_app(tiles_config))
+    urls1 = tile_urls(build_app(tileset))
 
     # Pipeline completes a new run; symlink flips, server not yet restarted.
-    _point_current(tiles_root, run2)
-    urls2 = coverage_urls(_build_tile_app(tiles_config))  # restart
+    point_current(tiles_root, run2)
+    urls2 = tile_urls(build_app(tileset))  # restart
 
-    assert urls1 and urls2, "expected non-empty coverage from both runs"
+    assert urls1 and urls2, "expected non-empty tile lists from both runs"
     assert urls1.isdisjoint(urls2), (
         f"consecutive runs must produce disjoint URL sets; overlap: {urls1 & urls2}"
     )
 
 
 def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
-    """A URL getCoverage advertised for a run that has
-    since been superseded must still resolve to that run's own bytes, as
-    long as the run is still on disk (keep-two retention)."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run1 = _make_run(tiles_root, "20260101T000000", tile_content=b'{"marker": "RunOne"}')
-    run2 = _make_run(tiles_root, "20260102T000000", tile_content=b'{"marker": "RunTwo"}')
-    current = _point_current(tiles_root, run1)
+    """A URL getTiles advertised for a run that has since been superseded
+    must still resolve to that run's own bytes, as long as the run is still
+    on disk (keep-two retention)."""
+    tiles_root = tmp_path / "overture-place" / "tiles"
+    collections = [(OVERTURE, "place")]
+    run1 = make_run(tiles_root, "20260101T000000", "overture-place", collections,
+                    {QK: [place(OVERTURE, "place", "ov001", name="RunOne")]})
+    run2 = make_run(tiles_root, "20260102T000000", "overture-place", collections,
+                    {QK: [place(OVERTURE, "place", "ov001", name="RunTwo")]})
+    tileset = tileset_config(point_current(tiles_root, run1), "overture-place")
 
-    tiles_config = _make_tile_config(
-        tiles_dir=current, manifest_path=current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-
-    app1 = _build_tile_app(tiles_config)
-    with app1.test_client() as client1:
-        resp1 = client1.get("/xrpc/org.atgeo.getCoverage", query_string={
-            "collection": OVERTURE_COLLECTION, "bbox": "-180,-85,180,85",
-        })
-    prior_urls = resp1.get_json()["tiles"]
-    assert prior_urls, "expected at least one coverage URL from the prior run"
+    with build_app(tileset).test_client() as client1:
+        prior_paths = _tiles_url_paths(client1)
+    assert prior_paths, "expected at least one tile URL from the prior run"
 
     # New build completes and repoints 'current'; server restarts pinned to run2.
-    _point_current(tiles_root, run2)
-    app2 = _build_tile_app(tiles_config)
+    point_current(tiles_root, run2)
 
-    with app2.test_client() as client2:
-        for url in prior_urls:
-            path = url[len("https://places.atgeo.org"):]
+    with build_app(tileset).test_client() as client2:
+        for path in prior_paths:
             resp = client2.get(path)
             assert resp.status_code == 200, (
                 f"prior-run URL {path!r} must still resolve after a new build; "
                 f"got {resp.status_code}"
             )
-            body = json.loads(resp.data)
-            assert body == {"marker": "RunOne"}, (
+            names = [r["value"]["name"] for r in json.loads(resp.data)["records"]]
+            assert names == ["RunOne"], (
                 f"prior-run URL {path!r} must serve the PRIOR run's bytes, "
-                f"got {body!r}"
+                f"got {names!r}"
             )
 
 
 # ---------------------------------------------------------------------------
-# tile_dirs[slug] roots at {source}/tiles/
+# The served tile root is the run's parent
 # ---------------------------------------------------------------------------
 
-def test_tile_route_roots_at_tiles_not_run_dir(tmp_path):
-    """tile_dirs[slug] roots at {source}/tiles/, one level above the run
-    directory, so a tile request must include the run's stamp segment to
-    resolve; a path without that segment does not resolve."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    stamp = "20260101T000000"
-    run_dir = _make_run(tiles_root, stamp,
-                         tile_content=b'{"attribution": "https://example.com", "records": []}')
-    current = _point_current(tiles_root, run_dir)
-
-    tiles_config = _make_tile_config(
-        tiles_dir=current, manifest_path=current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
+def test_tile_route_roots_at_tiles_not_run_dir(tile_client):
+    """The served root is {source}/tiles/, one level above the run directory,
+    so a tile request must include the run's stamp segment to resolve; a path
+    without that segment does not resolve."""
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    assert resp.status_code == 200, (
+        f"expected the served root to be tiles/, making {STAMP}/... "
+        f"resolve; got {resp.status_code}"
     )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        resp = client.get(f"/tiles/overture-place/{stamp}/012301/012301.json.gz")
-        assert resp.status_code == 200, (
-            f"expected tile_dirs[slug] to root at tiles/, making {stamp}/... "
-            f"resolve; got {resp.status_code}"
-        )
 
-        resp = client.get("/tiles/overture-place/012301/012301.json.gz")
-        assert resp.status_code == 404, (
-            "the un-stamped path must not resolve, since tiles_dir roots at "
-            f"tiles/, one level above the run dir; got {resp.status_code}"
-        )
+    resp = tile_client.get(f"/tiles/overture-place/{QK}/{QK}.json.gz")
+    assert resp.status_code == 404, (
+        "the un-stamped path must not resolve, since the served root is "
+        f"tiles/, one level above the run dir; got {resp.status_code}"
+    )
 
 
 # ---------------------------------------------------------------------------
-# getCoverage responses are cached; the lexicon route is not
+# getTiles responses are cached; the lexicon route is not
 # ---------------------------------------------------------------------------
 
-def test_getcoverage_response_has_cache_control(tile_client):
-    """getCoverage XRPC responses are cached for 1 hour."""
-    resp = tile_client.get("/xrpc/org.atgeo.getCoverage", query_string={
-        "collection": OVERTURE_COLLECTION, "bbox": "-180,-85,180,85",
+def test_gettiles_response_has_cache_control(tile_client):
+    """getTiles XRPC responses are cached for 1 hour."""
+    resp = tile_client.get("/xrpc/org.atgeo.getTiles", query_string={
+        "dataset": OVERTURE, "bbox": WORLD,
     })
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
 
 
-def test_getcoverage_lexicon_route_lacks_cache_control(tile_client):
+def test_gettiles_lexicon_route_lacks_cache_control(tile_client):
     """Regression guard: GET /<nsid> (the lexicon route) matches
-    view_args == {'nsid': 'org.atgeo.getCoverage'}, identical to the XRPC
+    view_args == {'nsid': 'org.atgeo.getTiles'}, identical to the XRPC
     route's view_args for the same method -- a hook keyed on view_args alone
     would wrongly cache this lexicon response too. The correct key is
     request.endpoint == 'xrpc-endpoint'."""
-    resp = tile_client.get("/org.atgeo.getCoverage")
+    resp = tile_client.get("/org.atgeo.getTiles")
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") != "public, max-age=3600"
 
 
 # ---------------------------------------------------------------------------
-# The manifest is not reachable over HTTP
+# The manifest and descriptor files are not reachable over HTTP
 # ---------------------------------------------------------------------------
 
-def test_manifest_files_not_reachable_over_http(tmp_path):
-    """Neither manifest.duckdb nor manifest.json may be servable via
-    /tiles/<slug>/.... tiles_dir is set directly to the run's parent here
-    (rather than via a 'current' symlink) to isolate this guard from the
-    tiles/-rooted path resolution that
-    test_tile_route_roots_at_tiles_not_run_dir covers."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    stamp = "20260101T000000"
-    run_dir = _make_run(tiles_root, stamp)
-
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_root, manifest_path=run_dir / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        resp = client.get(f"/tiles/overture-place/{stamp}/manifest.duckdb")
+def test_run_files_not_reachable_over_http(tile_client):
+    """None of manifest.duckdb, manifest.json or tileset.json may be servable
+    via /tiles/<slug>/...; the descriptor is served only at /tilesets/<slug>."""
+    for name in ("manifest.duckdb", "manifest.json", "tileset.json"):
+        resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{name}")
         assert resp.status_code == 404, (
-            f"manifest.duckdb must not be reachable over HTTP; got {resp.status_code}"
-        )
-        resp = client.get(f"/tiles/overture-place/{stamp}/manifest.json")
-        assert resp.status_code == 404, (
-            f"manifest.json must not be reachable over HTTP; got {resp.status_code}"
+            f"{name} must not be reachable over HTTP; got {resp.status_code}"
         )
 
 
@@ -554,208 +346,139 @@ def test_manifest_files_not_reachable_over_http(tmp_path):
 # Completeness guard -- manifest.duckdb alone must not be enough to serve
 # ---------------------------------------------------------------------------
 
-def test_incomplete_run_not_served(tmp_path):
-    """A run that crashed after writing manifest.duckdb but before writing the
-    manifest.json completeness marker must NOT be served: the /tiles/<slug>/...
-    route returns 404, AND the collection must not be exposed through
-    org.atgeo.getCoverage.
+@pytest.mark.parametrize("missing", ["manifest.json", "tileset.json"])
+def test_incomplete_run_not_served(tmp_path, missing):
+    """A run lacking its manifest.json completeness marker (a crash after
+    manifest.duckdb) or its tileset.json must NOT be served: the
+    /tiles/<slug>/... route returns 404, AND the dataset must not be exposed
+    through org.atgeo.getTiles or org.atgeo.describeService.
 
-    getCoverage keys off Server.tile_manifests independently of the
-    /tiles/<slug>/... route (Server.get_coverage), so a fix that
-    only special-cases serve_tile() would pass a route-only check yet still
-    leak coverage URLs for an incomplete collection. A single `ready` gate
-    withholds tile_manifests AND tile_dirs[slug] together.
+    getTiles and describeService key off the served-tileset map
+    independently of the /tiles/<slug>/... route, so a fix that only
+    special-cases serve_tile() would pass a route-only check yet still leak
+    tile URLs for an incomplete run. A single `ready` gate withholds the
+    tileset from all of them.
     """
-    # Deliberately complete=False -- simulates a crash between writing
-    # manifest.duckdb and the manifest.json marker.
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    stamp = "20260101T000000"
-    run_dir = _make_run(
-        tiles_root, stamp,
-        tile_content=b'{"attribution": "https://example.com", "records": []}',
-        complete=False,
+    tileset = serve_run(
+        tmp_path, tiles={QK: []},
+        complete=(missing != "manifest.json"), descriptor=(missing != "tileset.json"),
     )
-    tiles_current = _point_current(tiles_root, run_dir)
-
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place",
-        base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
+    app = build_app(tileset)
     with app.test_client() as client:
         # Stamped path -- an unstamped path would 404 on path resolution
-        # alone (tiles_dir roots at tiles/), masking whether the
-        # completeness gate itself withholds tile_dirs[slug].
-        resp = client.get(f"/tiles/overture-place/{stamp}/012301/012301.json.gz")
+        # alone (the served root is tiles/), masking whether the
+        # completeness gate itself withholds the tileset.
+        resp = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
         assert resp.status_code == 404, (
-            "incomplete run (manifest.duckdb without manifest.json) must not "
-            f"be served; got {resp.status_code}"
+            f"run without {missing} must not be served; got {resp.status_code}"
         )
 
-        # Same incompleteness must withhold the collection from getCoverage
-        # too, not just the tile-serving route -- see docstring above.
-        cov_resp = client.get(
-            "/xrpc/org.atgeo.getCoverage",
-            query_string={
-                "collection": OVERTURE_COLLECTION,
-                "bbox": "-180,-85,180,85",
-            },
+        tiles_resp = client.get("/xrpc/org.atgeo.getTiles", query_string={
+            "dataset": OVERTURE, "bbox": WORLD,
+        })
+        assert tiles_resp.status_code != 200, (
+            f"run without {missing} must not be exposed via getTiles; got "
+            f"{tiles_resp.status_code} body={tiles_resp.get_json()!r}"
         )
-        assert cov_resp.status_code != 200, (
-            "incomplete run must not be exposed via getCoverage; got "
-            f"{cov_resp.status_code} body={cov_resp.get_json()!r}"
-        )
-        cov_data = cov_resp.get_json()
-        assert cov_data is not None
-        assert cov_data.get("error") == "CollectionNotFound", (
-            "incomplete collection must appear as CollectionNotFound to "
-            f"getCoverage (i.e. not registered), got {cov_data!r}"
-        )
+        assert tiles_resp.get_json()["error"] == "DatasetNotFound"
+
+        service = client.get("/xrpc/org.atgeo.describeService").get_json()
+        assert service["tilesets"] == []
 
 
-def test_complete_run_served(tmp_path):
-    """Positive control: a run with BOTH manifest.duckdb and manifest.json
-    present is served normally -- it locks in the behavior
-    test_incomplete_run_not_served guards. Requests the stamped path:
-    tiles_dir roots at tiles/, so the un-stamped path does not resolve.
+def test_complete_run_served(tile_client):
+    """Positive control: a run with manifest.duckdb, manifest.json and
+    tileset.json present is served normally -- it locks in the behavior
+    test_incomplete_run_not_served guards. Requests the stamped path: the
+    served root is tiles/, so the un-stamped path does not resolve.
     """
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    stamp = "20260101T000000"
-    run_dir = _make_run(
-        tiles_root, stamp,
-        tile_content=b'{"attribution": "https://example.com", "records": []}',
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    assert resp.status_code == 200, (
+        "complete run (manifest.duckdb + manifest.json + tileset.json) must be "
+        f"served; got {resp.status_code}"
     )
-    tiles_current = _point_current(tiles_root, run_dir)
 
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place",
-        base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
+
+def test_missing_run_dir_still_boots(tmp_path):
+    """Regression guard: a configured tileset whose run directory does not
+    exist must not crash create_app(); it is simply not served."""
+    missing = {"run_dir": str(tmp_path / "nothing" / "current"),
+               "base_url": f"{TILE_BASE}/overture-place"}
+    app = build_app(missing)
     with app.test_client() as client:
-        resp = client.get(f"/tiles/overture-place/{stamp}/012301/012301.json.gz")
-        assert resp.status_code == 200, (
-            "complete run (manifest.duckdb + manifest.json) must be served; "
-            f"got {resp.status_code}"
-        )
-
-
-def test_no_manifest_key_still_boots(tmp_path):
-    """Regression guard: a collection whose config has no 'manifest' key
-    at all must not crash create_app(); the readiness check's short-circuited
-    `and` must gracefully treat the collection as tile-less.
-    """
-    tiles_config = {
-        "collections": {
-            OVERTURE_COLLECTION: {
-                "slug": "overture-place",
-                "base_url": "https://places.atgeo.org/tiles/overture-place",
-                # No "manifest" key, no "tiles_dir" key.
-            },
-        }
-    }
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config, "https://places.atgeo.org")
-        app = create_app()  # must not raise
-    app.config["TESTING"] = True
-    with app.test_client() as client:
-        resp = client.get("/health")
-        assert resp.status_code == 200
+        assert client.get("/health").status_code == 200
+        service = client.get("/xrpc/org.atgeo.describeService").get_json()
+        assert service["tilesets"] == []
 
 
 def test_create_app_raises_on_base_url_slug_mismatch(tmp_path):
-    """create_app raises ValueError when base_url does not end with /<slug>."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000")
-    tiles_current = _point_current(tiles_root, run_dir)
-
-    # slug is "overture-place" but base_url ends with "wrong-slug"
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current,
-        manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place",
-        base_url="https://places.atgeo.org/tiles/wrong-slug",
-    )
-    with patch("garganorn.__main__.load_config") as mock_load:
-        mock_load.return_value = ("places.atgeo.org", tiles_config, "https://places.atgeo.org")
-        with pytest.raises(ValueError, match="base_url must end with '/overture-place'"):
-            create_app()
+    """create_app raises ValueError when base_url does not end with the
+    descriptor's /<slug>."""
+    tileset = serve_run(tmp_path)
+    tileset["base_url"] = f"{TILE_BASE}/wrong-slug"
+    with pytest.raises(ValueError, match="base_url must end with '/overture-place'"):
+        build_app(tileset)
 
 
 # ---------------------------------------------------------------------------
-# org.atgeo.describeService and org.atgeo.collection
+# org.atgeo.describeService
 # ---------------------------------------------------------------------------
 
-def test_describe_service_endpoint_returns_did_and_collections(tmp_path):
+def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     """GET /xrpc/org.atgeo.describeService returns 200, cached for 1 hour,
-    with the did and the served collection -- and no URL-bearing key, even
-    with collection.json on disk."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000", collection_metadata=SAMPLE_COLLECTION_RECORD)
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
+    with the did and the served tileset."""
+    app = build_app(serve_run(tmp_path))
     with app.test_client() as client:
         resp = client.get("/xrpc/org.atgeo.describeService")
 
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
-    data = resp.get_json()
-    assert data["did"] == "did:web:places.atgeo.org"
-    assert data["collections"] == [{"collection": OVERTURE_COLLECTION}]
+    assert resp.get_json() == {
+        "did": "did:web:places.atgeo.org",
+        "tilesets": [{
+            "slug": "overture-place",
+            "collections": [{"dataset": OVERTURE, "collection": "place"}],
+        }],
+    }
 
 
-def test_describe_service_lexicon_route_lacks_cache_control(tmp_path):
+def test_describe_service_lexicon_route_lacks_cache_control(client):
     """GET /<nsid> (the lexicon route) for org.atgeo.describeService must
     not carry the XRPC cache header -- same guard as
-    test_getcoverage_lexicon_route_lacks_cache_control, for the new NSID:
+    test_gettiles_lexicon_route_lacks_cache_control, for the new NSID:
     request.endpoint == 'xrpc-endpoint' is what keeps the header off this
     route, not view_args['nsid'] alone."""
-    tiles_root = tmp_path / "overture_place" / "tiles"
-    run_dir = _make_run(tiles_root, "20260101T000000")
-    tiles_current = _point_current(tiles_root, run_dir)
-    tiles_config = _make_tile_config(
-        tiles_dir=tiles_current, manifest_path=tiles_current / "manifest.duckdb",
-        slug="overture-place", base_url="https://places.atgeo.org/tiles/overture-place",
-    )
-    app = _build_tile_app(tiles_config)
-    with app.test_client() as client:
-        resp = client.get("/org.atgeo.describeService")
-
+    resp = client.get("/org.atgeo.describeService")
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") != "public, max-age=3600"
 
 
-def test_new_lexicons_served_at_nsid_route(client):
-    """Both new lexicon documents are served at GET /<nsid>, like every other
+@pytest.mark.parametrize("nsid", [
+    "org.atgeo.describeService", "org.atgeo.describeTileset",
+    "org.atgeo.getPlace", "org.atgeo.getTiles", "org.atgeo.defs",
+])
+def test_lexicons_served_at_nsid_route(client, nsid):
+    """Each lexicon document is served at GET /<nsid>, like every other
     lexicon (see test_lexicon_known_nsid)."""
-    resp = client.get("/org.atgeo.describeService")
+    resp = client.get(f"/{nsid}")
     assert resp.status_code == 200
     data = resp.get_json()
-    assert data["id"] == "org.atgeo.describeService"
+    assert data["id"] == nsid
     assert data["lexicon"] == 1
 
-    resp = client.get("/org.atgeo.collection")
-    assert resp.status_code == 200
-    data = resp.get_json()
-    assert data["id"] == "org.atgeo.collection"
-    assert data["lexicon"] == 1
+
+@pytest.mark.parametrize("nsid", ["org.atgeo.collection", "org.atgeo.getCoverage"])
+def test_removed_lexicons_not_served(client, nsid):
+    assert client.get(f"/{nsid}").status_code == 404
 
 
 # ---------------------------------------------------------------------------
 # CORS: every route is readable from pages on other origins
 # ---------------------------------------------------------------------------
 
-def test_getcoverage_allows_cross_origin_reads(tile_client):
-    resp = tile_client.get("/xrpc/org.atgeo.getCoverage", query_string={
-        "collection": OVERTURE_COLLECTION, "bbox": "-180,-85,180,85",
+def test_gettiles_allows_cross_origin_reads(tile_client):
+    resp = tile_client.get("/xrpc/org.atgeo.getTiles", query_string={
+        "dataset": OVERTURE, "bbox": WORLD,
     })
     assert resp.status_code == 200
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
@@ -768,5 +491,5 @@ def test_describe_service_allows_cross_origin_reads(client):
 
 
 def test_tile_response_has_exactly_one_cors_header(tile_client):
-    resp = tile_client.get("/tiles/overture-place/20260101T000000/012301/012301.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
     assert resp.headers.getlist("Access-Control-Allow-Origin") == ["*"]

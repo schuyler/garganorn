@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
-"""getCoverage + tile smoke test against a live garganorn deployment.
+"""getTiles + tile smoke test against a live garganorn deployment.
 
-Calls org.atgeo.getCoverage for a collection/bbox, validates the result
-against its lexicon schema and checks the tiles cover the requested bbox,
-then fetches one tile and validates its envelope and records.
+Calls org.atgeo.getTiles for a dataset (and optional collection) and bbox,
+validates the result against its lexicon schema and checks the tiles cover
+the requested bbox, then fetches one tile and validates its envelope and
+records.
 """
 
 import argparse
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import lexrpc
@@ -46,7 +48,8 @@ def quadkey_from_tile_url(url):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("collection", help="Collection NSID, e.g. org.atgeo.places.overture.place")
+    parser.add_argument("--dataset", required=True, help="e.g. overturemaps.org")
+    parser.add_argument("--collection", help="e.g. place; default: every collection of the dataset")
     parser.add_argument(
         "--bbox", required=True,
         help="xmin,ymin,xmax,ymax in WGS84 decimal degrees, <=2 decimal places",
@@ -57,21 +60,21 @@ def main(argv=None):
     server = lexrpc.Server(lexicons=load_lexicons())
     requested_bbox = tuple(float(p) for p in args.bbox.split(","))
 
-    coverage_url = (
-        f"{args.base_url}/xrpc/org.atgeo.getCoverage"
-        f"?collection={args.collection}&bbox={args.bbox}"
-    )
-    coverage = fetch_json(coverage_url)
-    check(server.validate, "org.atgeo.getCoverage", "output", coverage)
-    tiles = coverage["tiles"]
-    assert tiles, "getCoverage returned no tiles"
+    query = {"dataset": args.dataset, "bbox": args.bbox}
+    if args.collection:
+        query["collection"] = args.collection
+    tiles_url = f"{args.base_url}/xrpc/org.atgeo.getTiles?{urllib.parse.urlencode(query)}"
+    result = fetch_json(tiles_url)
+    check(server.validate, "org.atgeo.getTiles", "output", result)
+    tiles = result["tiles"]
+    assert tiles, "getTiles returned no tiles"
     for tile_url in tiles:
         qk = quadkey_from_tile_url(tile_url)
         tile_bbox = quadkey_to_bbox(qk)
         assert bboxes_intersect(tile_bbox, requested_bbox), (
             f"tile {qk} bbox {tile_bbox} does not intersect requested bbox {requested_bbox}"
         )
-    print(f"getCoverage: {len(tiles)} tile(s), all intersect the requested bbox")
+    print(f"getTiles: {len(tiles)} tile(s), all intersect the requested bbox")
 
     tile_payload = fetch_json(tiles[0])
     tile_schema = server.defs["org.atgeo.tilePayload"]

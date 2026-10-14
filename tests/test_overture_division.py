@@ -11,6 +11,7 @@ import duckdb
 import pytest
 
 import garganorn.stages as _stages
+from garganorn.quadtree import SOURCES
 
 from tests.quadtree_helpers import REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit
 
@@ -33,47 +34,6 @@ class TestSources:
         assert SOURCES["overture_division"].source_pk == "id", (
             f"Expected SOURCES['overture_division'].source_pk == 'id', "
             f"got {SOURCES['overture_division'].source_pk!r}"
-        )
-
-    def test_overture_division_has_attribution(self):
-        from garganorn.quadtree import SOURCES
-        assert hasattr(SOURCES["overture_division"], "attribution"), (
-            f"SOURCES['overture_division'] must have 'attribution' attribute"
-        )
-        assert SOURCES["overture_division"].attribution == "https://docs.overturemaps.org/attribution/", (
-            f"Expected overture attribution URL, "
-            f"got {SOURCES['overture_division'].attribution!r}"
-        )
-
-    def test_overture_division_has_collection(self):
-        from garganorn.quadtree import SOURCES
-        assert hasattr(SOURCES["overture_division"], "collection"), (
-            f"SOURCES['overture_division'] must have 'collection' attribute"
-        )
-        assert SOURCES["overture_division"].collection == "org.atgeo.places.overture.division", (
-            f"Expected 'org.atgeo.places.overture.division', "
-            f"got {SOURCES['overture_division'].collection!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# overture_division attribution checks
-# ---------------------------------------------------------------------------
-
-class TestAttribution:
-    """overture_division must be registered in SOURCES with its attribution URL."""
-
-    def test_overture_division_key_exists(self):
-        from garganorn.quadtree import SOURCES
-        assert "overture_division" in SOURCES, (
-            f"SOURCES missing 'overture_division'; keys: {list(SOURCES.keys())}"
-        )
-
-    def test_overture_division_attribution_url(self):
-        from garganorn.quadtree import SOURCES
-        assert SOURCES["overture_division"].attribution == "https://docs.overturemaps.org/attribution/", (
-            f"Expected overture attribution URL, "
-            f"got {SOURCES['overture_division'].attribution!r}"
         )
 
 
@@ -302,7 +262,7 @@ class TestExportStripJsonNulls:
         _make_division_export_db(conn)
 
         raw_sql = _load_sql("overture_division_export_tiles.sql",
-                            {"repo": "https://example.com"})
+                            {"manifest_key": SOURCES["overture_division"].manifest_key_sql("p.id")})
         sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
         conn.execute(sql)
 
@@ -315,29 +275,28 @@ class TestExportStripJsonNulls:
 
         for (record_json,) in rows:
             record = json.loads(record_json)
-            attrs = record["attributes"]
-            rkey = record["rkey"]
+            attrs = record["value"]["attributes"]
+            div_id = record["value"]["origin"].rsplit(":", 1)[1]
 
             null_keys = [k for k, v in attrs.items() if v is None]
             assert not null_keys, (
-                f"Record {rkey} has null-valued attribute keys: {null_keys}. "
+                f"Record {div_id} has null-valued attribute keys: {null_keys}. "
                 f"Attributes: {attrs}"
             )
 
-            if rkey == "div001":
+            if div_id == "div001":
                 assert attrs["country"] == "US"
                 assert attrs["population"] == 1000000
                 assert "region" not in attrs
                 assert "wikidata" not in attrs
-            elif rkey == "div002":
+            elif div_id == "div002":
                 assert attrs["country"] == "US"
                 assert attrs["region"] == "CA"
                 assert attrs["wikidata"] == "Q123"
                 assert "population" not in attrs
-            elif rkey == "div003":
+            elif div_id == "div003":
                 assert attrs["subtype"] == "county"
-                assert attrs["level"] == 35  # LEVEL_VOCAB["county"]
-                assert set(attrs.keys()) == {"subtype", "level"}
+                assert set(attrs.keys()) == {"subtype"}
 
 
 # ---------------------------------------------------------------------------
@@ -362,8 +321,8 @@ class TestDivisionMultiTileContainmentJoin:
 
         tile_qks = ["023010", "023011", "023012"]
         relations = json.dumps({"within": [
-            {"rkey": "org.atgeo.places.overture.division:div000",
-             "name": "Testcontinent", "level": 0}
+            {"uri": "urn:atgeo:overturemaps.org:division:div000",
+             "name": "Testcountry", "type": "country"}
         ]})
 
         # Replace the helper's single assignment with one per tile, and give
@@ -378,7 +337,7 @@ class TestDivisionMultiTileContainmentJoin:
             )
 
         raw_sql = _load_sql("overture_division_export_tiles.sql",
-                            {"repo": "https://example.com"})
+                            {"manifest_key": SOURCES["overture_division"].manifest_key_sql("p.id")})
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
 
         rows = conn.execute(
@@ -390,12 +349,12 @@ class TestDivisionMultiTileContainmentJoin:
             f"expected one row per referencing tile, got {len(rows)} rows: "
             f"{[t for t, _ in rows]}"
         )
-        # Every copy must be byte-identical: the spec's dedup-by-rkey rule
+        # Every copy must be byte-identical: the spec's dedup-by-key rule
         # drops all but one, so any per-tile divergence is silent data loss.
         assert len({record_json for _, record_json in rows}) == 1, (
             "a division's record must be identical in every tile referencing it"
         )
-        assert json.loads(rows[0][1])["relations"] == json.loads(relations)
+        assert json.loads(rows[0][1])["value"]["relations"] == json.loads(relations)
 
 
 # ---------------------------------------------------------------------------

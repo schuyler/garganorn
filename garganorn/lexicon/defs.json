@@ -1,0 +1,209 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.defs",
+    "defs": {
+        "collectionRef": {
+            "type": "object",
+            "description": "Names one collection of one dataset. The dataset is the upstream publisher's domain; the collection is a sub-division the dataset defines. Neither contains a colon, so that an origin URN can be split unambiguously.",
+            "required": [
+                "dataset",
+                "collection"
+            ],
+            "properties": {
+                "dataset": {
+                    "type": "string",
+                    "maxLength": 253,
+                    "description": "e.g. openstreetmap.org. Contains no colon."
+                },
+                "collection": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "e.g. way. Contains no colon."
+                }
+            }
+        },
+        "collectionAttribution": {
+            "type": "object",
+            "description": "Where one collection's data comes from, which upstream release it was built from, and the terms it is under.",
+            "required": [
+                "dataset",
+                "collection"
+            ],
+            "properties": {
+                "dataset": {
+                    "type": "string",
+                    "maxLength": 253,
+                    "description": "e.g. openstreetmap.org. Contains no colon."
+                },
+                "collection": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "e.g. way. Contains no colon."
+                },
+                "release": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The upstream's own version string: an Overture release id, or an OSM replication timestamp."
+                },
+                "source": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URL of the upstream dataset."
+                },
+                "licenses": {
+                    "type": "array",
+                    "minLength": 1,
+                    "items": {
+                        "type": "string",
+                        "format": "uri"
+                    },
+                    "description": "URLs of the text of every licence the collection's data is under."
+                },
+                "attribution": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "URL of the upstream's attribution or copyright page."
+                }
+            }
+        },
+        "collectionInfo": {
+            "type": "object",
+            "description": "A collection a tileset carries: its attribution plus counts and vocabularies observed in this tileset. Vocabularies are observed, not closed: an absent value means no record in the tileset carries it.",
+            "required": [
+                "dataset",
+                "collection"
+            ],
+            "properties": {
+                "dataset": {
+                    "type": "string",
+                    "maxLength": 253,
+                    "description": "e.g. openstreetmap.org. Contains no colon."
+                },
+                "collection": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "e.g. way. Contains no colon."
+                },
+                "release": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "As in collectionAttribution."
+                },
+                "source": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "As in collectionAttribution."
+                },
+                "licenses": {
+                    "type": "array",
+                    "minLength": 1,
+                    "items": {
+                        "type": "string",
+                        "format": "uri"
+                    },
+                    "description": "As in collectionAttribution."
+                },
+                "attribution": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "As in collectionAttribution."
+                },
+                "recordCount": {
+                    "type": "integer",
+                    "minimum": 0
+                },
+                "locationFormats": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "format": "nsid"
+                    },
+                    "description": "The $type values of the location objects this collection's records carry, e.g. community.lexicon.location.geo."
+                },
+                "containmentTypes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 64
+                    },
+                    "description": "The types (relation.type) observed in the records' within relations, listed broadest first. Absent when records carry none."
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "type": "ref",
+                        "ref": "#categoryCount"
+                    },
+                    "description": "Values of the records' primary category, the dataset's main classification of a place (e.g. amenity=cafe in OpenStreetMap), with record counts, descending by count."
+                },
+                "attributes": {
+                    "type": "array",
+                    "items": {
+                        "type": "string",
+                        "maxLength": 3000
+                    },
+                    "description": "Attribute keys this collection's records may carry."
+                }
+            }
+        },
+        "categoryCount": {
+            "type": "object",
+            "required": [
+                "value",
+                "count"
+            ],
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "maxLength": 3000
+                },
+                "count": {
+                    "type": "integer",
+                    "minimum": 0
+                }
+            }
+        },
+        "tileset": {
+            "type": "object",
+            "description": "A tileset descriptor. A gazetteer serves a tileset under its slug. A collection appears in collections or references, never both. Values describe one build, not a promise about future builds.",
+            "required": [
+                "slug",
+                "collections"
+            ],
+            "properties": {
+                "slug": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The tileset's name, fixed when it is built; conventionally lowercase letters, digits and hyphens. Every gazetteer serving the tileset serves it under this slug."
+                },
+                "publishedAt": {
+                    "type": "string",
+                    "format": "datetime",
+                    "description": "When the tileset was created. Identical to publishedAt in every tile of the tileset that carries one."
+                },
+                "extent": {
+                    "type": "ref",
+                    "ref": "community.lexicon.location.bbox",
+                    "description": "Bounding box of the tileset's records."
+                },
+                "collections": {
+                    "type": "array",
+                    "minLength": 1,
+                    "items": {
+                        "type": "ref",
+                        "ref": "#collectionInfo"
+                    },
+                    "description": "The collections whose records the tileset carries."
+                },
+                "references": {
+                    "type": "array",
+                    "items": {
+                        "type": "ref",
+                        "ref": "#collectionAttribution"
+                    },
+                    "description": "Collections the tileset does not carry but whose data its records include, for example a containing division's name and URN in a within relation."
+                }
+            }
+        }
+    }
+}

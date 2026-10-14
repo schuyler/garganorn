@@ -4,31 +4,51 @@
     "defs": {
         "main": {
             "type": "query",
-            "description": "Enumerates the collections this gazetteer serves. The list is authoritative: a collection absent from it returns CollectionNotFound from org.atgeo.getCoverage.",
+            "description": "Enumerates the tilesets this gazetteer serves and the collections each carries. The list is authoritative: a dataset absent from it returns DatasetNotFound from org.atgeo.getTiles.",
             "output": {
                 "encoding": "application/json",
                 "schema": {
                     "type": "object",
-                    "required": ["did", "collections"],
+                    "required": [
+                        "did",
+                        "tilesets"
+                    ],
                     "properties": {
                         "did": {
                             "type": "string",
                             "format": "did",
-                            "description": "The DID this deployment identifies as, matching /.well-known/did.json."
+                            "description": "The DID this service identifies as."
                         },
-                        "collections": {
+                        "tilesets": {
                             "type": "array",
-                            "items": {"type": "ref", "ref": "#servedCollection"}
+                            "items": {
+                                "type": "ref",
+                                "ref": "#servedTileset"
+                            }
                         }
                     }
                 }
             }
         },
-        "servedCollection": {
+        "servedTileset": {
             "type": "object",
-            "required": ["collection"],
+            "required": [
+                "slug",
+                "collections"
+            ],
             "properties": {
-                "collection": {"type": "string", "format": "nsid"}
+                "slug": {
+                    "type": "string",
+                    "maxLength": 64
+                },
+                "collections": {
+                    "type": "array",
+                    "items": {
+                        "type": "ref",
+                        "ref": "org.atgeo.defs#collectionRef"
+                    },
+                    "minLength": 1
+                }
             }
         }
     }

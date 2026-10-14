@@ -6,14 +6,14 @@
 -- because substitution is plain string replacement and would corrupt the
 -- comment text):
 --   division_parquet          : raw division parquet glob (hierarchies col)
---   places_parquet             : imported places.parquet (level, names)
+--   places_parquet             : imported places.parquet (level, subtype, names)
 --   tile_assignments_parquet   : tile_assignments_combined.parquet
---   collection_prefix          : rkey NSID prefix
+--   division_urn_prefix        : URN prefix of a division's origin
 --
 -- Two chained unnests (nested unnest in one SELECT isn't supported) because
 -- hierarchies is a list of chains, each chain a list of (division_id,
 -- subtype, name) structs; flatten and dedup rather than assume a single
--- chain. level and name are taken from the ancestor's own row in
+-- chain. level, subtype and name are taken from the ancestor's own row in
 -- places_parquet, not the hierarchies struct, so a client sees the same name
 -- in a reference as it would fetching that record directly.
 --
@@ -33,14 +33,14 @@ ancestors AS (
     WHERE h.division_id != place_id
 ),
 resolved AS (
-    SELECT a.place_id, a.ancestor_id, p.level, p.names."primary" AS name
+    SELECT a.place_id, a.ancestor_id, p.level, p.subtype, p.names."primary" AS name
     FROM ancestors a
     JOIN read_parquet('${places_parquet}') p ON p.id = a.ancestor_id
 )
 SELECT ta.tile_qk, r.place_id,
-       to_json({within: list({rkey: '${collection_prefix}:' || r.ancestor_id,
+       to_json({within: list({uri: '${division_urn_prefix}' || r.ancestor_id,
                               name: r.name,
-                              level: r.level}
+                              type: r.subtype}
                              ORDER BY r.level ASC, r.ancestor_id ASC)})::VARCHAR
            AS relations_json
 FROM resolved r

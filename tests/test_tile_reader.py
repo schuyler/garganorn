@@ -1,8 +1,8 @@
 """Tests for garganorn.tile_reader.TileBackedCollection.
 
-Tiles are atgeo v1 {uri, cid, value}-wrapped records. get_record() matches
-on `record["value"]["rkey"]` and returns `copy.copy(record["value"])` — the
-value sub-object, not the wrapper.
+Tiles hold {value, importance} records. get_record() matches on
+`record["value"]["origin"] == "urn:atgeo:" + key` and returns
+`copy.copy(record)` -- the tile record, with its importance.
 """
 import gzip
 import json
@@ -10,232 +10,151 @@ import os
 from unittest.mock import patch
 
 import duckdb
-import pytest
 
 from garganorn.tile_reader import TileBackedCollection
 
-COLLECTION = "org.atgeo.places.test"
-SOURCE_URL = "https://example.com/tile-source"
-LICENSE_URL = "https://example.com/tile-license"
+PREFIX = "overturemaps.org:place:"
 
 
 def _make_manifest_db(tmp_path, entries):
-    """Create a manifest.duckdb with the given (rkey, tile_qk) entries."""
+    """Create a manifest.duckdb with the given (key, tile_qk) entries."""
     p = tmp_path / "manifest.duckdb"
     con = duckdb.connect(str(p))
-    con.execute("CREATE TABLE record_tiles (rkey VARCHAR, tile_qk VARCHAR)")
-    for rkey, tile_qk in entries:
-        con.execute("INSERT INTO record_tiles VALUES (?, ?)", [rkey, tile_qk])
-    con.execute("CREATE TABLE metadata (source VARCHAR, generated_at VARCHAR)")
-    con.execute("INSERT INTO metadata VALUES ('test', '2026-01-01T00:00:00+00:00')")
+    con.execute("CREATE TABLE record_tiles (key VARCHAR, tile_qk VARCHAR)")
+    for key, tile_qk in entries:
+        con.execute("INSERT INTO record_tiles VALUES (?, ?)", [key, tile_qk])
     con.close()
     return p
 
 
-def _write_envelope_tile(tiles_dir, tile_qk, values, generated_at="2026-07-09T18:00:00Z"):
-    """Write a gzipped JSON tile file in the atgeo v1 {uri, cid, value} shape.
+def _record(id, name="Test Place", importance=75, **value):
+    return {
+        "value": {"origin": f"urn:atgeo:{PREFIX}{id}", "name": name, **value},
+        "importance": importance,
+    }
 
-    `values` is a list of record value dicts (e.g. {"rkey": ..., "name": ...});
-    each is wrapped as {"uri": ..., "cid": None, "value": <value>}.
-    """
+
+def _write_tile(tiles_dir, tile_qk, records):
+    """Write a gzipped JSON tile file in the {publishedAt, attribution, records} shape."""
     subdir = os.path.join(str(tiles_dir), tile_qk[:6])
     os.makedirs(subdir, exist_ok=True)
     path = os.path.join(subdir, f"{tile_qk}.json.gz")
-    records = [
-        {"uri": f"https://places.atgeo.org/{COLLECTION}/{v['rkey']}", "cid": None, "value": v}
-        for v in values
-    ]
     with gzip.open(path, "wt") as f:
         json.dump({
-            "collection": COLLECTION, "source": SOURCE_URL, "license": LICENSE_URL,
-            "generated_at": generated_at, "records": records,
+            "publishedAt": "2026-07-09T18:00:00Z", "attribution": [], "records": records,
         }, f)
     return path
 
 
-class TestTileBackedCollectionNewEnvelope:
-    """get_record() against {uri, cid, value}-wrapped tiles.
+def _collection(tmp_path, manifest_db):
+    return TileBackedCollection(
+        manifest_db_path=str(manifest_db), tiles_dir=str(tmp_path),
+    )
 
-    Verifies get_record() matches `record["value"]["rkey"]` and returns
-    `copy.copy(record["value"])` — the value sub-object, not the wrapper.
-    """
+
+class TestTileBackedCollection:
+    """get_record() against {value, importance} tile records."""
 
     def setup_method(self):
         TileBackedCollection._cached_read_tile.cache_clear()
 
-    def test_get_record_returns_value_not_wrapper(self, tmp_path):
-        """get_record returns the value dict, not the {uri, cid, value} wrapper."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_envelope_tile(tmp_path, tile_qk, [
-            {"rkey": rkey, "name": "Test Place", "importance": 75}
-        ])
+    def test_get_record_returns_the_tile_record(self, tmp_path):
+        """get_record returns {value, importance}, importance outside the value."""
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        _write_tile(tmp_path, "023010", [_record("place001")])
 
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
-        result = col.get_record("repo", COLLECTION, rkey)
+        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001")
 
-        assert result is not None
-        assert "uri" not in result, (
-            f"get_record must return record['value'], not the {{uri,cid,value}} wrapper; "
-            f"got {result}"
-        )
-        assert "cid" not in result
-        assert "value" not in result
-        assert result["rkey"] == rkey
-        assert result["name"] == "Test Place"
+        assert set(result) == {"value", "importance"}
         assert result["importance"] == 75
+        assert result["value"]["origin"] == f"urn:atgeo:{PREFIX}place001"
+        assert result["value"]["name"] == "Test Place"
+        assert "importance" not in result["value"]
 
-    def test_get_record_returns_value_unmodified(self, tmp_path):
-        """get_record returns the tile's value as written: locations, variants,
-        attributes and precomputed relations pass through unchanged."""
-        tile_qk = "023010"
-        rkey = "place001"
-        value = {
-            "rkey": rkey,
-            "name": "Test Place",
-            "locations": [
-                {"$type": "community.lexicon.location.geo",
-                 "latitude": "37.774900", "longitude": "-122.419400"}
-            ],
-            "variants": [{"name": "Lugar de Prueba", "language": "es"}],
-            "attributes": {"category": "cafe"},
-            "relations": {"within": [{"rkey": "org.atgeo.places.overture.division:85922583"}]},
-        }
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_envelope_tile(tmp_path, tile_qk, [value])
-
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
+    def test_get_record_returns_record_unmodified(self, tmp_path):
+        """locations, variants, attributes and precomputed relations pass through unchanged."""
+        record = _record(
+            "place001",
+            locations=[{"$type": "community.lexicon.location.geo",
+                        "latitude": "37.774900", "longitude": "-122.419400"}],
+            variants=[{"name": "Lugar de Prueba", "language": "es"}],
+            attributes={"category": "cafe"},
+            relations={"within": [{"uri": "urn:atgeo:overturemaps.org:division:85922583",
+                                   "name": "Somewhere", "type": "region"}]},
         )
-        result = col.get_record("repo", COLLECTION, rkey)
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        _write_tile(tmp_path, "023010", [record])
 
-        assert result == value
+        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001")
+
+        assert result == record
 
     def test_get_record_without_relations_has_no_relations_key(self, tmp_path):
         """get_record does not invent a relations key when the value has none."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_envelope_tile(tmp_path, tile_qk, [{"rkey": rkey, "name": "Test Place"}])
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        _write_tile(tmp_path, "023010", [_record("place001")])
 
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
-        result = col.get_record("repo", COLLECTION, rkey)
+        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001")
 
-        assert "relations" not in result
+        assert "relations" not in result["value"]
 
-    def test_get_record_missing_rkey_returns_none_new_shape(self, tmp_path):
-        """rkey not in manifest → None."""
-        tile_qk = "023010"
-        manifest_db = _make_manifest_db(tmp_path, [("place001", tile_qk)])
-        _write_envelope_tile(tmp_path, tile_qk, [
-            {"rkey": "place001", "name": "Test Place"}
-        ])
+    def test_get_record_missing_key_returns_none(self, tmp_path):
+        """key not in manifest -> None."""
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        _write_tile(tmp_path, "023010", [_record("place001")])
 
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
-        result = col.get_record("repo", COLLECTION, "nonexistent")
-
-        assert result is None
+        assert _collection(tmp_path, manifest_db).get_record(f"{PREFIX}nonexistent") is None
 
     def test_get_record_finds_correct_record_among_several(self, tmp_path):
-        """Multiple wrapped records in one tile → correct value.rkey match returned."""
-        tile_qk = "023010"
+        """Multiple records in one tile -> the one whose value.origin matches the key."""
         manifest_db = _make_manifest_db(tmp_path, [
-            ("place001", tile_qk),
-            ("place002", tile_qk),
+            (f"{PREFIX}place001", "023010"),
+            (f"{PREFIX}place002", "023010"),
         ])
-        _write_envelope_tile(tmp_path, tile_qk, [
-            {"rkey": "place001", "name": "First Place"},
-            {"rkey": "place002", "name": "Second Place"},
+        _write_tile(tmp_path, "023010", [
+            _record("place001", name="First Place", importance=10),
+            _record("place002", name="Second Place", importance=20),
         ])
 
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
-        result = col.get_record("repo", COLLECTION, "place002")
+        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place002")
 
-        assert result is not None
-        assert result["rkey"] == "place002"
-        assert result["name"] == "Second Place"
+        assert result["value"]["name"] == "Second Place"
+        assert result["importance"] == 20
 
     def test_get_record_mutation_does_not_corrupt_cache(self, tmp_path):
-        """Popping a key from the returned value must not corrupt the
-        lru_cache-held tile dict — the shallow-copy contract must hold for
-        the value sub-object too."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_envelope_tile(tmp_path, tile_qk, [
-            {"rkey": rkey, "name": "Test Place", "importance": 75}
-        ])
+        """Popping a key from the returned record must not corrupt the
+        lru_cache-held tile dict -- the shallow-copy contract."""
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        _write_tile(tmp_path, "023010", [_record("place001")])
+        col = _collection(tmp_path, manifest_db)
 
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
-        first = col.get_record("repo", COLLECTION, rkey)
-        first.pop("importance", None)
+        first = col.get_record(f"{PREFIX}place001")
+        first.pop("importance")
 
-        second = col.get_record("repo", COLLECTION, rkey)
+        second = col.get_record(f"{PREFIX}place001")
         assert "importance" in second, (
             "mutating one get_record() result must not affect a subsequent call "
             "(cache corruption via shared reference)"
         )
 
     def test_get_record_missing_tile_file_returns_none(self, tmp_path):
-        """rkey is in the manifest but the tile file itself is missing on disk
-        (e.g. deleted after manifest generation) → get_record() catches
-        FileNotFoundError and returns None instead of raising."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
+        """key is in the manifest but the tile file itself is missing on disk
+        (e.g. deleted after manifest generation) -> None instead of raising."""
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         # Deliberately do not write the tile file.
 
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
-        result = col.get_record("repo", COLLECTION, rkey)
-
-        assert result is None
+        assert _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001") is None
 
     def test_tile_caching(self, tmp_path):
         """Two get_record() calls against the same tile only read the tile
         file from disk once (_cached_read_tile is lru_cache-backed)."""
-        tile_qk = "023010"
-        rkey = "place001"
-        manifest_db = _make_manifest_db(tmp_path, [(rkey, tile_qk)])
-        _write_envelope_tile(tmp_path, tile_qk, [
-            {"rkey": rkey, "name": "Test Place", "importance": 75}
-        ])
-
-        col = TileBackedCollection(
-            collection=COLLECTION,
-            manifest_db_path=str(manifest_db),
-            tiles_dir=str(tmp_path),
-        )
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        _write_tile(tmp_path, "023010", [_record("place001")])
+        col = _collection(tmp_path, manifest_db)
 
         with patch("garganorn.tile_reader.gzip.open", wraps=gzip.open) as mock_open:
-            col.get_record("repo", COLLECTION, rkey)
-            col.get_record("repo", COLLECTION, rkey)
+            col.get_record(f"{PREFIX}place001")
+            col.get_record(f"{PREFIX}place001")
 
         assert mock_open.call_count == 1, (
             "second get_record() for the same tile should hit the cache, "

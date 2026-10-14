@@ -177,7 +177,8 @@ VARCHAR, tags MAP(VARCHAR, VARCHAR), bbox STRUCT(xmin, ymin, xmax, ymax),
 importance INTEGER, qk17 VARCHAR, variants STRUCT(name, type,
 language)[]`. `osm_type` takes `'n'`, `'w'`, or `'r'`; `rkey` correspondingly
 takes an `n`-, `w`-, or `r`-prefixed form (`osm_type || osm_id`), expanded to
-`node:`/`way:`/`relation:` at export (`osm_export_tiles.sql`). `geom
+`openstreetmap.org:node:`/`:way:`/`:relation:` keys at export
+(`manifest_key_sql` in `database.py`). `geom
 GEOMETRY` is computed during import but excluded from the Parquet output
 (`_GEOM_COL["osm"] = "geom"`). `osm_import.sql` also builds an `idx_rkey`
 index on the ephemeral in-memory `places` table; grepping the codebase
@@ -318,18 +319,21 @@ coarser tile.
 
 **Writes**: a new timestamped run directory,
 `<tiles_root>/<YYYYMMDDTHHMMSS>/<qk[:6]>/<qk>.json.gz` (one gzip file per
-tile), plus `manifest.duckdb` and `manifest.json` in the run dir, then
+tile), plus `manifest.duckdb`, `tileset.json` and `manifest.json` in the run dir, then
 swaps the `<tiles_root>/current` symlink to point at it. `qk[:6]` returns
 the whole key for the summary band's sub-6-char quadkeys, so those tiles
 land at `<qk>/<qk>.json.gz` in the same layout.
 
-**Schema** (tile payload, per `envelope.py`): `{collection, source,
-license, generated_at, records: [{uri, cid: null, value: <record>}]}`.
-`value` is one `org.atgeo.place` record per `<source>_export_tiles.sql`
-(`rkey, name, importance, locations[], variants[], attributes, relations`).
-`manifest.duckdb` has `record_tiles(rkey VARCHAR, tile_qk VARCHAR)` and
-`metadata(source, collection, generated_at)`. `manifest.json` is just
-`{generated_at}`.
+**Schema** (tile payload, per `envelope.py`): `{publishedAt, attribution:
+[collectionAttribution], records: [{value, importance}]}`. `attribution` is
+the tileset's carried collections then its referenced ones, identical in
+every tile. `value` is one `org.atgeo.place` record per
+`<source>_export_tiles.sql` (`origin, name, locations[], variants[],
+attributes, relations`); `importance` sits beside it, not in it.
+`manifest.duckdb` has one table, `record_tiles(key VARCHAR, tile_qk
+VARCHAR)`, where `key` is `{dataset}:{collection}:{id}` (the place's
+`origin` without `urn:atgeo:`), built by the source class's
+`manifest_key_sql`. `manifest.json` is just `{generated_at}`.
 
 **Sort**: two passes. Pass 1 copies the export query's output into a
 staging directory, Hive-partitioned by `left(tile_qk,
@@ -341,7 +345,7 @@ at a time with `ORDER BY tile_qk, place_id` and streams it to the flush
 loop below. `place_id` is a deterministic tiebreaker with no meaning
 downstream, kept solely so repeated runs over identical inputs produce
 byte-identical gzip output. `manifest.duckdb`'s `record_tiles` is sorted
-by `rkey`, since lookups against it are by record key.
+by `key`, since lookups against it are by record key.
 
 **Shape**: the staging directory is private to the stage, which creates
 and destroys it, so it never appears in `Writes` above. It sits beside
@@ -376,42 +380,70 @@ references come from the covering artifact rather than their own `qk17`,
 so a places-side filter would drop them silently. A second export
 mechanism is not worth buying back a few dozen GB.
 
-**`collection.json`**: `write_collection_json` runs between
-`write_manifest_db` and `write_manifest`, writing the `org.atgeo.collection`
-record value as `collection.json`, sibling to `manifest.json` in the run
-dir. This seam is the only point where every input is simultaneously in
-hand: the per-tile histogram, the freshly written `record_tiles`,
-`places.parquet`, the containment artifacts, and the export's single
-`run_now`. `write_manifest` still runs last, so `manifest.json` stays the
-sole completeness marker — an interrupted run can leave `collection.json`
-on disk without `manifest.json`, same as any other partial output. A
-zero-tile run omits `collection.json` entirely rather than fabricate a
-required `extent`. `idf.parquet` joins `stage_export`'s freshness inputs
-for `overture_place` and `osm` (divisions have no IDF artifact), so a
-category-vocabulary refresh forces a re-export.
+**`tileset.json`**: `write_tileset_json` runs between `write_manifest_db`
+and `write_manifest`, writing the `org.atgeo.defs#tileset` descriptor as
+`tileset.json`, sibling to `manifest.json` in the run dir. This seam is the
+only point where every input is simultaneously in hand: the per-tile
+histogram, the freshly written `record_tiles`, `places.parquet`, the
+containment artifacts, and the export's single `run_now`. `write_manifest`
+still runs last, so `manifest.json` stays the sole completeness marker — an
+interrupted run can leave `tileset.json` on disk without `manifest.json`,
+same as any other partial output. It is written for every run, including a
+zero-tile run, which omits `extent` and gives each carried collection
+`recordCount: 0`; the server reads it from every ready run. `idf.parquet`
+joins `stage_export`'s freshness inputs for `overture_place` and `osm`
+(divisions have no IDF artifact), so a category-vocabulary refresh forces a
+re-export.
 
-Most fields are read straight from artifacts already open for the tile
-export (`source`/`license` from the source class, `recordCount` from
-`record_tiles`, `extent` from the regular-band quadkey histogram,
-`containmentLevels` from the containment artifacts mapped through
-`LEVEL_VOCAB`). `categories` comes from `idf.parquet` for `overture_place`
-and `osm`, and from `GROUP BY subtype` over `places.parquet` for
-`overture_division`. `locationTypes` is `community.lexicon.location.geo`
-for `overture_place` (plus `.address` iff at least one exported record has
-a country-bearing address) and for `osm` (unconditional, one location per
-record), and `.bbox` for `overture_division` (unconditional). `attributes`
-is source-specific: `overture_place` and
-`overture_division` capture it directly from `tile_export`'s rendered JSON
-on the export connection (`json_keys(record_json, '$.attributes')`) — the
-actual served shape, immune by construction to any upstream column
-filtering. `osm` instead reads `places.parquet`'s `tags` column directly,
-to avoid a full JSON-materialization scan over planet-scale data; because
-`osm_import.sql` deliberately strips each record's primary-category key out
-of `tags` (it's already carried in the separate `primary_category` column,
-and `osm_export_tiles.sql` re-adds it at export time via `map_concat`),
-`write_collection_json`'s OSM branch closes the same gap by unioning in the
-category keys already fetched from `idf.parquet` — reusing that read rather
-than re-deriving from `tags` a second time.
+The descriptor is `{slug, publishedAt, extent, collections, references}`.
+`slug` is the source class's slug (`osm`, `overture-place`,
+`overture-division`), fixed here so that every server serves the tileset
+under it. `extent` is the regular-band quadkey histogram's bounding box, or
+the full histogram's when the run has no regular-band tile.
+`collections` has one entry per collection the tileset carries
+(OSM: `node`, `way`, `relation`); `references` lists the collections whose
+data the records include without carrying them — `(overturemaps.org,
+division)` exactly when the build's containment has at least one row and the
+tileset is not the division tileset, else `[]`. Each entry holds the
+collection's attribution — `release`, `source`, `licenses`, `attribution`,
+from `COLLECTION_TERMS` in `database.py` and the `--release` values — and
+for carried ones, statistics:
+
+- `recordCount`: distinct `record_tiles.key` values with that
+  `{dataset}:{collection}:` prefix.
+- `containmentTypes`: the distinct `within[*].type` values from the
+  containment artifacts, sorted by `LEVEL_VOCAB` (broadest first).
+- `categories`: from `idf.parquet` for `overture_place`; from `GROUP BY
+  subtype` over `places.parquet` for `overture_division`; from `GROUP BY
+  primary_category` over `places.parquet` for `osm`, so OSM counts are this
+  build's places per collection, not the IDF artifact's global counts.
+- `locationFormats`: `community.lexicon.location.geo` for `overture_place`
+  (plus `.address` iff at least one record has a country-bearing address)
+  and `osm` (unconditional, one location per record), `.bbox` for
+  `overture_division` (unconditional).
+- `attributes` is source-specific: `overture_place` and
+  `overture_division` capture it directly from `tile_export`'s rendered JSON
+  on the export connection (`json_keys(record_json, '$.attributes')`) — the
+  actual served shape, immune by construction to any upstream column
+  filtering. `osm` instead reads `places.parquet`'s `tags` column directly,
+  to avoid a full JSON-materialization scan over planet-scale data; because
+  `osm_import.sql` deliberately strips each record's primary-category key out
+  of `tags` (it's already carried in the separate `primary_category` column,
+  and `osm_export_tiles.sql` re-adds it at export time via `map_concat`),
+  `write_tileset_json`'s OSM branch closes the same gap by unioning in the
+  category keys.
+
+Absent optional fields are omitted.
+
+**Releases**: `stage_export` takes `releases: {dataset: release}` and raises
+`KeyError` naming the first carried or referenced collection's dataset
+without one. `quadtree run` takes them as repeatable `--release
+DATASET=VALUE`. `quadtree all` resolves the Overture release from the
+configured globs (`resolve_newest_release`; a glob with no `*` release
+segment is an error) and reads the OSM release from the `release` file in
+`osm`'s `parquet_dir`, written by `scripts/extract-osm-parquet.sh` on every
+run from the PBF's `osmosis_replication_timestamp`. An OSM-only build with
+no containment rows references nothing and needs no Overture release.
 
 ## How the stages compose
 

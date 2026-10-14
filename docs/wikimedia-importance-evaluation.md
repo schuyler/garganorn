@@ -7,9 +7,10 @@ Evaluated 2026-04-11. Not yet implemented.
 Garganorn's importance formula (`60 * density + 40 * idf` for places; division
 scoring differs — see `design-constraints.md`, "Importance scoring varies by
 entity type") has no notability signal. Garganorn doesn't serve text queries
-today — it registers only `getCoverage` and `describeService` — but if it did, there
-would be nothing to distinguish the Golden Gate Bridge from a nearby dentist's
-office with similar density: both would rank equally.
+today — it registers only `getTiles`, `getPlace`, `describeTileset` and
+`describeService` — but if it did, there would be nothing to distinguish the
+Golden Gate Bridge from a nearby dentist's office with similar density: both
+would rank equally.
 
 ## Nominatim's Approach
 

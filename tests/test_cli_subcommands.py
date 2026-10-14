@@ -13,6 +13,29 @@ import pytest
 from garganorn import quadtree as _qt
 
 
+def _overture_cache(root):
+    """Create one complete Overture release under root; return its config keys."""
+    for sub in ("", "division/", "division_area/"):
+        d = root / "2026-08-19.0" / sub
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "part-00000.parquet").write_text("")
+    return {
+        "parquet": f"{root}/*/part-*.parquet",
+        "division_parquet": f"{root}/*/division/*.parquet",
+        "division_area_parquet": f"{root}/*/division_area/*.parquet",
+    }
+
+
+def _run_all(config, monkeypatch):
+    """Run 'all' with every stage mocked; return the run_pipeline mock."""
+    monkeypatch.setattr(sys, "argv", ["qt", "all", "--config", str(config)])
+    with patch.object(_qt, "stage_density_extract", return_value=None), \
+         patch.object(_qt, "stage_idf", return_value=None), \
+         patch.object(_qt, "run_pipeline", return_value=None) as mock_pipeline:
+        _qt.main()
+    return mock_pipeline
+
+
 # ---------------------------------------------------------------------------
 # Each subcommand parses its grammar
 # ---------------------------------------------------------------------------
@@ -135,16 +158,17 @@ class TestAllSubcommandOrder:
 
     def test_all_calls_density_before_idf(self, tmp_path, monkeypatch):
         """'all' must call stage_density_extract before any stage_idf calls."""
+        cache = _overture_cache(tmp_path / "overture")
         config = tmp_path / "config.yaml"
         config.write_text(f"""
 pipeline:
   output: {tmp_path}/tiles
   sources:
     overture_place:
-      parquet: /fake/overture/*.parquet
+      parquet: {cache["parquet"]}
     overture_division:
-      division_parquet: /fake/division/*.parquet
-      division_area_parquet: /fake/area/*.parquet
+      division_parquet: {cache["division_parquet"]}
+      division_area_parquet: {cache["division_area_parquet"]}
 """)
         call_order = []
 
@@ -181,16 +205,17 @@ pipeline:
 
     def test_all_division_before_other_sources(self, tmp_path, monkeypatch):
         """'all' must run overture_division before other place sources."""
+        cache = _overture_cache(tmp_path / "overture")
         config = tmp_path / "config.yaml"
         config.write_text(f"""
 pipeline:
   output: {tmp_path}/tiles
   sources:
     overture_place:
-      parquet: /fake/overture/*.parquet
+      parquet: {cache["parquet"]}
     overture_division:
-      division_parquet: /fake/division/*.parquet
-      division_area_parquet: /fake/area/*.parquet
+      division_parquet: {cache["division_parquet"]}
+      division_area_parquet: {cache["division_area_parquet"]}
 """)
         call_order = []
 
@@ -218,13 +243,14 @@ pipeline:
 
     def test_all_missing_division_passes_boundaries_none(self, tmp_path, monkeypatch):
         """With no overture_division config, 'all' must pass boundaries_db=None to run_pipeline."""
+        cache = _overture_cache(tmp_path / "overture")
         config = tmp_path / "config.yaml"
         config.write_text(f"""
 pipeline:
   output: {tmp_path}/tiles
   sources:
     overture_place:
-      parquet: /fake/overture/*.parquet
+      parquet: {cache["parquet"]}
 """)
         pipeline_kwargs = {}
 
@@ -248,6 +274,95 @@ pipeline:
         assert boundaries is None, (
             f"boundaries_db must be None when overture_division is absent; got {boundaries!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Release plumbing
+# ---------------------------------------------------------------------------
+
+class TestReleases:
+    """Dataset releases reach run_pipeline from 'run --release' and 'all'."""
+
+    def test_run_release_flags_reach_run_pipeline(self, tmp_path, overture_parquet,
+                                                  monkeypatch):
+        monkeypatch.setattr(sys, "argv", [
+            "qt", "run",
+            "--source", "overture_place",
+            "--parquet", overture_parquet,
+            "--output", str(tmp_path),
+            "--release", "openstreetmap.org=X",
+            "--release", "overturemaps.org=Y",
+        ])
+        with patch.object(_qt, "run_pipeline", return_value=None) as mock_pipeline:
+            _qt.main()
+
+        assert mock_pipeline.call_args.kwargs["releases"] == {
+            "openstreetmap.org": "X",
+            "overturemaps.org": "Y",
+        }
+
+    def test_all_passes_resolved_releases_to_every_run(self, tmp_path, monkeypatch):
+        cache = _overture_cache(tmp_path / "overture")
+        osm_dir = tmp_path / "osm"
+        osm_dir.mkdir()
+        (osm_dir / "release").write_text("2026-09-01T00:00:00Z\n")
+        config = tmp_path / "config.yaml"
+        config.write_text(f"""
+pipeline:
+  output: {tmp_path}/tiles
+  sources:
+    overture_place:
+      parquet: {cache["parquet"]}
+    overture_division:
+      division_parquet: {cache["division_parquet"]}
+      division_area_parquet: {cache["division_area_parquet"]}
+    osm:
+      parquet_dir: {osm_dir}
+""")
+
+        mock_pipeline = _run_all(config, monkeypatch)
+
+        assert mock_pipeline.call_count == 3
+        for c in mock_pipeline.call_args_list:
+            assert c.kwargs["releases"] == {
+                "overturemaps.org": "2026-08-19.0",
+                "openstreetmap.org": "2026-09-01T00:00:00Z",
+            }
+
+    def test_all_exits_when_overture_patterns_resolve_no_release(self, tmp_path,
+                                                                 monkeypatch):
+        config = tmp_path / "config.yaml"
+        config.write_text(f"""
+pipeline:
+  output: {tmp_path}/tiles
+  sources:
+    overture_place:
+      parquet: {tmp_path}/overture/*.parquet
+""")
+
+        with pytest.raises(SystemExit) as exc_info:
+            _run_all(config, monkeypatch)
+
+        assert isinstance(exc_info.value.code, str)
+        assert "overture" in exc_info.value.code.lower()
+
+    def test_all_exits_naming_missing_osm_release_file(self, tmp_path, monkeypatch):
+        osm_dir = tmp_path / "osm"
+        osm_dir.mkdir()
+        config = tmp_path / "config.yaml"
+        config.write_text(f"""
+pipeline:
+  output: {tmp_path}/tiles
+  sources:
+    osm:
+      parquet_dir: {osm_dir}
+""")
+
+        with pytest.raises(SystemExit) as exc_info:
+            _run_all(config, monkeypatch)
+
+        assert isinstance(exc_info.value.code, str)
+        assert "release" in exc_info.value.code
 
 
 # ---------------------------------------------------------------------------

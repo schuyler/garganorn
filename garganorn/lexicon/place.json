@@ -4,34 +4,42 @@
     "defs": {
         "relation": {
             "type": "object",
-            "description": "A reference to a related place record.",
-            "required": ["rkey"],
+            "description": "A reference to a related place. Producers prefer an ATGeo URN (see origin) where the related place has one, then an AT-URI, then any other URI. Consumers compare uris as exact strings.",
+            "required": [
+                "uri"
+            ],
             "properties": {
-                "rkey": {
+                "uri": {
                     "type": "string",
-                    "description": "Collection-qualified record key (e.g. org.atgeo.places.{source}:{id}).",
-                    "format": "record-key"
+                    "format": "uri",
+                    "description": "The related place's identity, e.g. urn:atgeo:overturemaps.org:division:{id}."
                 },
                 "name": {
                     "type": "string",
+                    "maxLength": 3000,
                     "description": "Display name of the related place."
                 },
-                "level": {
-                    "type": "integer",
-                    "description": "Containment level of the related place, when applicable (see the level vocabulary)."
+                "type": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "The related place's type in its dataset's own vocabulary, e.g. an Overture division subtype such as region."
                 }
             }
         },
         "variant": {
             "type": "object",
-            "required": ["name"],
+            "required": [
+                "name"
+            ],
             "properties": {
                 "name": {
                     "type": "string",
+                    "maxLength": 3000,
                     "description": "The variant name text."
                 },
                 "type": {
                     "type": "string",
+                    "maxLength": 64,
                     "description": "The kind of variant: official, alternate, short, colloquial, historical."
                 },
                 "language": {
@@ -43,20 +51,18 @@
         },
         "main": {
             "type": "record",
-            "key": "record-key",
-            "description": "A geographic place with location, name, and other attributes.",
+            "key": "any",
+            "description": "A geographic place with location, name, and other attributes. A copy keeps its source's origin, or takes the source's at:// URI as origin when the source has none; a place with no origin is its own origin, identified by its at:// URI.",
             "record": {
                 "type": "object",
-                "required": ["name"],
+                "required": [
+                    "name"
+                ],
                 "properties": {
-                    "$type": {
+                    "origin": {
                         "type": "string",
-                        "description": "The record's lexicon type, always \"org.atgeo.place\"."
-                    },
-                    "rkey": {
-                        "type": "string",
-                        "description": "A globally unique identifier for this place record.",
-                        "format": "record-key"
+                        "format": "uri",
+                        "description": "What this place describes. For a gazetteer place, an ATGeo URN: urn:atgeo:{dataset}:{collection}:{id}, where the dataset and collection contain no colon and the id is everything after the fourth colon; consumers compare origins as exact strings and may match on a prefix they construct (urn:atgeo:{dataset}:{collection}:); only a gazetteer serving the dataset splits one. For a copy of a repo record that has no origin, that record's at:// URI. Unchanged by copying or editing."
                     },
                     "locations": {
                         "type": "array",
@@ -73,6 +79,7 @@
                     },
                     "name": {
                         "type": "string",
+                        "maxLength": 3000,
                         "description": "The primary display name of the place."
                     },
                     "variants": {
@@ -85,32 +92,28 @@
                     },
                     "attributes": {
                         "type": "unknown",
-                        "description": "Additional, source-dependent attributes of the place."
+                        "description": "Additional attributes of the place, as the dataset defines them."
                     },
-                    "published_at": {
+                    "updatedAt": {
                         "type": "string",
-                        "description": "The date when the place record was last updated",
+                        "description": "The data provider's stated date for this place's data.",
                         "format": "datetime"
-                    },
-                    "importance": {
-                        "type": "integer",
-                        "description": "Relative importance rank among places from the same source."
                     },
                     "relations": {
                         "type": "object",
-                        "description": "Related records, keyed by relation type.",
+                        "description": "Related places, keyed by relation type.",
                         "properties": {
                             "within": {
                                 "type": "array",
-                                "description": "Admin regions that geographically contain this place, ordered broadest to most specific.",
+                                "description": "Places that geographically contain this place, ordered broadest to most specific.",
                                 "items": {
                                     "type": "ref",
                                     "ref": "#relation"
                                 }
                             },
-                            "same_as": {
+                            "sameAs": {
                                 "type": "array",
-                                "description": "Records in other collections or datasets that represent the same place.",
+                                "description": "Other URIs that name the same place.",
                                 "items": {
                                     "type": "ref",
                                     "ref": "#relation"

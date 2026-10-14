@@ -107,6 +107,7 @@ def _make_division_db(path):
             id            VARCHAR,
             geometry      GEOMETRY,
             level         INTEGER,
+            subtype       VARCHAR,
             names         STRUCT("primary" VARCHAR),
             min_latitude  DOUBLE,
             max_latitude  DOUBLE,
@@ -119,6 +120,7 @@ def _make_division_db(path):
             '85922583',
             ST_GeomFromText('POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))'),
             50,
+            'locality',
             {'primary': 'San Francisco'},
             37.6, 37.85, -122.55, -122.3
         )
@@ -203,10 +205,10 @@ class TestComputeContainmentOverture:
         check_con.close()
         assert len(rows) == 1, f"Expected 1 containment row, got {len(rows)}"
         assert rows[0][0] == "ovr001"
-        assert "org.atgeo.places.overture.division:85922583" in rows[0][1]
+        assert "urn:atgeo:overturemaps.org:division:85922583" in rows[0][1]
 
-    def test_overture_containment_result_has_correct_division_rkey(self, tmp_path):
-        """The containment record for an overture place references the expected division rkey."""
+    def test_overture_containment_result_has_correct_division_uri(self, tmp_path):
+        """The containment record for an overture place references the expected division URN."""
         division_path = str(tmp_path / "division.duckdb")
         _make_division_db(division_path)
 
@@ -269,9 +271,9 @@ class TestComputeContainmentOverture:
         assert len(rows) == 1
         relations = json.loads(rows[0][1])
         within = relations.get("within", [])
-        rkeys = [r["rkey"] for r in within]
-        assert any("85922583" in rk for rk in rkeys), \
-            f"Expected division rkey containing '85922583' in relations: {rkeys}"
+        assert [(r["uri"], r["name"], r["type"]) for r in within] == [
+            ("urn:atgeo:overturemaps.org:division:85922583", "San Francisco", "locality")
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +332,7 @@ class TestComputeContainmentDivisionCrescent:
                 id            VARCHAR,
                 geometry      GEOMETRY,
                 level         INTEGER,
+                subtype       VARCHAR,
                 names         STRUCT("primary" VARCHAR),
                 min_latitude  DOUBLE,
                 max_latitude  DOUBLE,
@@ -343,7 +346,7 @@ class TestComputeContainmentDivisionCrescent:
         ]:
             con.execute(f"""
                 INSERT INTO places
-                SELECT '{div_id}', g, 35, {{'primary': '{name}'}},
+                SELECT '{div_id}', g, 35, 'county', {{'primary': '{name}'}},
                        ST_YMin(g), ST_YMax(g), ST_XMin(g), ST_XMax(g)
                 FROM (SELECT ST_GeomFromText('{wkt}') AS g)
             """)
@@ -423,10 +426,10 @@ class TestComputeContainmentDivisionCrescent:
             f"Expected 1 containment row for crescent_child, got {len(rows)}: {rows}"
         )
         relations = json.loads(rows[0][1])
-        rkeys = [r["rkey"] for r in relations.get("within", [])]
-        assert any("county_a" in rk for rk in rkeys), (
+        uris = [r["uri"] for r in relations.get("within", [])]
+        assert uris == ["urn:atgeo:overturemaps.org:division:county_a"], (
             f"Expected crescent_child to be within County A (its true "
-            f"containing division), got: {rkeys}. The bbox-midpoint "
+            f"containing division), got: {uris}. The bbox-midpoint "
             f"_coord_exprs('overture_division') expression lands in "
             f"County B's territory instead -- this is the "
             f"representative-candidate-point bug."

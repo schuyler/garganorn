@@ -1,7 +1,8 @@
-import gzip, os, logging
+import gzip, json, os, logging
 from flask import Flask, abort, request, Response
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
+from lexrpc.base import XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
@@ -13,55 +14,44 @@ def create_app():
 
     app = Flask("garganorn")
     app.logger.setLevel(logging.INFO)
-    tile_manifests = {}
-    max_coverage_tiles = 50
-    tile_dirs = {}  # slug -> tiles_dir
+    tilesets = {}  # slug -> ServedTileset, in config order
+    tile_dirs = {}  # slug -> directory holding the run directories
+    max_tiles = 50
     if tiles_config:
         from garganorn.quadtree import TileManifest
-        for collection, coll_cfg in tiles_config.get("collections", {}).items():
-            manifest_path = coll_cfg.get("manifest")
-            base_url = coll_cfg.get("base_url")
-            slug = coll_cfg.get("slug")
-            # Config sanity — fires regardless of manifest presence: a getCoverage URL
-            # that no route can serve is a config error, not a dev-checkout state.
-            if base_url and slug and not base_url.rstrip("/").endswith("/" + slug):
-                raise ValueError(
-                    f"{collection}: base_url must end with '/{slug}' to match its serving route"
-                )
-            # Completeness guard: a run is only ready to serve when BOTH
-            # manifest.duckdb AND its sibling manifest.json (the completeness
-            # marker, written last) exist. `and` short-circuits so
-            # os.path.dirname never sees manifest_path=None.
-            ready = (
-                bool(manifest_path)
-                and os.path.isfile(manifest_path)
-                and os.path.isfile(os.path.join(os.path.dirname(manifest_path), "manifest.json"))
-            )
-            if manifest_path and not ready:
+        from garganorn.server import ServedTileset
+        from garganorn.tile_reader import TileBackedCollection
+        for cfg in tiles_config.get("tilesets", []):
+            # A run is only ready to serve when manifest.json (the completeness
+            # marker, written last) exists beside manifest.duckdb and tileset.json.
+            run_dir = os.path.realpath(cfg["run_dir"])
+            if not all(os.path.isfile(os.path.join(run_dir, f))
+                       for f in ("manifest.duckdb", "manifest.json", "tileset.json")):
                 app.logger.warning(
-                    "Tile run for %s is incomplete or missing (no manifest.json completeness "
-                    "marker); tile serving disabled for this collection", collection,
+                    "Tile run %s is incomplete or missing; tile serving disabled for it",
+                    cfg["run_dir"],
                 )
-            if ready:
-                run_dir = os.path.realpath(os.path.dirname(manifest_path))
-                stamp = os.path.basename(run_dir)
-                tiles_root = os.path.dirname(run_dir)
-                tile_manifests[collection] = TileManifest(manifest_path, f"{base_url}/{stamp}")
-                if "tiles_dir" in coll_cfg:
-                    # Gate serving on the SAME readiness condition: the route
-                    # must not serve a collection whose tiles are otherwise disabled.
-                    if slug:
-                        tile_dirs[slug] = tiles_root
-                    elif base_url:
-                        app.logger.warning(
-                            "Collection %s has base_url but no slug; getCoverage URLs will 404",
-                            collection,
-                        )
-        max_coverage_tiles = tiles_config.get("max_coverage_tiles", 50)
-    gazetteer = Server(repo, app.logger,
-                       tile_manifests=tile_manifests,
-                       max_coverage_tiles=max_coverage_tiles,
-                       public_base=public_base)
+                continue
+            with open(os.path.join(run_dir, "tileset.json")) as f:
+                descriptor = json.load(f)
+            slug = descriptor["slug"]
+            base_url = cfg["base_url"]
+            if not base_url.rstrip("/").endswith("/" + slug):
+                raise ValueError(
+                    f"base_url must end with '/{slug}' to match its serving route"
+                )
+            if slug in tilesets:
+                raise ValueError(f"two tilesets share the slug '{slug}'")
+            manifest_path = os.path.join(run_dir, "manifest.duckdb")
+            stamp = os.path.basename(run_dir)
+            tilesets[slug] = ServedTileset(
+                descriptor,
+                TileManifest(manifest_path, f"{base_url}/{stamp}"),
+                TileBackedCollection(manifest_path, run_dir),
+            )
+            tile_dirs[slug] = os.path.dirname(run_dir)
+        max_tiles = tiles_config.get("max_tiles", 50)
+    gazetteer = Server(repo, tilesets, max_tiles, public_base)
     init_flask(gazetteer.server, app)
 
     lexicon_map = gazetteer.lexicon_map
@@ -77,15 +67,30 @@ def create_app():
     def did_document():
         return {
             "id": f"did:web:{gazetteer.repo}",
-            "alsoKnownAs": [f"at://{gazetteer.repo}"],
             "service": [
                 {
-                    "id": "#atproto_pds",
-                    "type": "AtprotoPersonalDataServer",
-                    "serviceEndpoint": f"https://{gazetteer.repo}",
+                    "id": "#atgeo_tiles",
+                    "type": "AtgeoTileService",
+                    "serviceEndpoint": gazetteer.public_base,
                 }
             ],
         }
+
+    @app.route("/tilesets/<slug>")
+    def tileset_descriptor(slug):
+        tileset = gazetteer.tilesets.get(slug)
+        if tileset is None:
+            abort(404)
+        return tileset.descriptor
+
+    @app.route("/<dataset>/<collection>/<id>")
+    def place(dataset, collection, id):
+        if "." not in dataset:
+            abort(404)
+        try:
+            return gazetteer.get_place(None, f"urn:atgeo:{dataset}:{collection}:{id}")
+        except XrpcError:
+            abort(404)
 
     @app.route('/health')
     def health_check():
@@ -110,7 +115,7 @@ def create_app():
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 
-    CACHED_QUERIES = {"org.atgeo.getCoverage", "org.atgeo.describeService"}
+    CACHED_QUERIES = {"org.atgeo.getTiles", "org.atgeo.describeService"}
 
     @app.after_request
     def allow_cross_origin_reads(response):
@@ -119,7 +124,7 @@ def create_app():
         return response
 
     @app.after_request
-    def add_coverage_cache_control(response):
+    def add_cache_control(response):
         if (
             request.endpoint == "xrpc-endpoint"
             and request.view_args.get("nsid") in CACHED_QUERIES

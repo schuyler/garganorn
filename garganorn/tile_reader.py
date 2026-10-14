@@ -8,10 +8,9 @@ from functools import lru_cache
 
 
 class TileBackedCollection:
-    """Reads a record by rkey from static tile files + manifest.duckdb."""
+    """Reads a tile record by manifest key from static tile files + manifest.duckdb."""
 
-    def __init__(self, collection: str, manifest_db_path: str, tiles_dir: str):
-        self.collection = collection
+    def __init__(self, manifest_db_path: str, tiles_dir: str):
         self.tiles_dir = tiles_dir
         self._db_path = manifest_db_path
         self._local = threading.local()
@@ -23,29 +22,28 @@ class TileBackedCollection:
             self._local.con = duckdb.connect(self._db_path, read_only=True)
         return self._local.con
 
-    def get_record(self, _repo: str, _collection: str, rkey: str):
-        """Look up which tile contains this rkey, read the tile, find the record.
+    def get_record(self, key: str):
+        """Look up which tile contains this key, read the tile, find the record.
 
-        fetchone() picks one row arbitrarily when a division rkey has N
+        fetchone() picks one row arbitrarily when a division key has N
         record_tiles rows (one per overlapping tile) -- correct only because
         all copies of a division's record are byte-identical.
         """
         result = self._con.execute(
-            "SELECT tile_qk FROM record_tiles WHERE rkey = ?", [rkey]
+            "SELECT tile_qk FROM record_tiles WHERE key = ?", [key]
         ).fetchone()
         if result is None:
             return None
-        tile_qk = result[0]
         try:
-            tile_data = self._read_tile(tile_qk)
+            tile_data = self._read_tile(result[0])
         except FileNotFoundError:
             return None
+        origin = "urn:atgeo:" + key
         for record in tile_data["records"]:
-            value = record["value"]
-            if value["rkey"] == rkey:
-                # Shallow copy keeps a caller's mutation out of the
-                # lru_cache-held tile dict.
-                return copy.copy(value)
+            if record["value"]["origin"] == origin:
+                # Shallow copy: a caller may replace top-level keys, but
+                # `value` is the lru_cache-held dict.
+                return copy.copy(record)
         return None
 
     def _read_tile(self, tile_qk: str) -> dict:

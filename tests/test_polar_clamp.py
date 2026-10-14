@@ -228,19 +228,17 @@ class TestDensityExtractRejectsImpossibleCoordinates:
 # ---------------------------------------------------------------------------
 
 class TestPolarCapBboxQuery:
-    """TileManifest.get_tiles_for_bbox must return a tile whose top row extends to the pole."""
+    """TileManifest.regular_tiles must return a tile whose top row extends to the pole."""
 
     def test_bbox_above_merc_limit_matches_outermost_row_tile(self, tmp_path):
         path = tmp_path / "manifest.duckdb"
         con = duckdb.connect(str(path))
-        con.execute("CREATE TABLE record_tiles (rkey VARCHAR, tile_qk VARCHAR)")
-        con.execute("INSERT INTO record_tiles VALUES ('place0', '100000')")
-        con.execute("CREATE TABLE metadata (source VARCHAR, generated_at VARCHAR)")
-        con.execute("INSERT INTO metadata VALUES ('test', '2026-01-01T00:00:00+00:00')")
+        con.execute("CREATE TABLE record_tiles (key VARCHAR, tile_qk VARCHAR)")
+        con.execute("INSERT INTO record_tiles VALUES ('overturemaps.org:place:p0', '100000')")
         con.close()
 
         tm = TileManifest(str(path), _BASE_URL)
-        urls, _ = tm.get_tiles_for_bbox(5.0, 86.0, 15.0, 89.0)
+        urls = tm.regular_tiles((5.0, 86.0, 15.0, 89.0))
         assert urls == [f"{_BASE_URL}/100000/100000.json.gz"], (
             f"bbox (5,86,15,89) lies entirely above tile '100000's reported "
             f"ymax; got {urls}, expected a match"

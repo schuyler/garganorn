@@ -12,13 +12,35 @@ import duckdb
 DEG_TO_M = 111194.927
 DEG_TO_RAD = math.pi / 180
 
+ODBL = "https://opendatacommons.org/licenses/odbl/1-0/"
+CC_BY_4 = "https://creativecommons.org/licenses/by/4.0/legalcode"
+CDLA_P2 = "https://cdla.dev/permissive-2-0/"
+APACHE_2 = "https://www.apache.org/licenses/LICENSE-2.0"
+CC0 = "https://creativecommons.org/publicdomain/zero/1.0/legalcode"
+
+_OSM_TERMS = {
+    "source": "https://www.openstreetmap.org/",
+    "licenses": [ODBL],
+    "attribution": "https://www.openstreetmap.org/copyright",
+}
+_OVERTURE_SOURCE = {
+    "source": "https://overturemaps.org/",
+    "attribution": "https://docs.overturemaps.org/attribution/",
+}
+
+COLLECTION_TERMS = {
+    ("openstreetmap.org", "node"): _OSM_TERMS,
+    ("openstreetmap.org", "way"): _OSM_TERMS,
+    ("openstreetmap.org", "relation"): _OSM_TERMS,
+    ("overturemaps.org", "place"): {**_OVERTURE_SOURCE, "licenses": [CDLA_P2, APACHE_2, CC0]},
+    ("overturemaps.org", "division"): {**_OVERTURE_SOURCE, "licenses": [ODBL, CC_BY_4]},
+}
+
+DIVISION_URN_PREFIX = "urn:atgeo:overturemaps.org:division:"
+
 
 class Database:
     """DuckDB handler for gazetteer database with spatial capabilities."""
-    collection: str = "org.atgeo"
-    source_url: str = ""
-    license_url: str = ""
-    attribution: str = ""
 
     def __init__(self, db_path):
         """
@@ -101,27 +123,40 @@ class Database:
 
 
 class OverturePlaces(Database):
-    collection = "org.atgeo.places.overture.place"
     source_key = "overture_place"
     source_pk = "id"
-    attribution = "https://docs.overturemaps.org/attribution/"
-    source_url = "https://overturemaps.org/"
-    license_url = "https://docs.overturemaps.org/attribution/"
+    dataset = "overturemaps.org"
+    collections = ("place",)
+    slug = "overture-place"
+
+    @staticmethod
+    def manifest_key_sql(col):
+        return f"'overturemaps.org:place:' || {col}"
 
 
 class OpenStreetMap(Database):
-    collection = "org.atgeo.places.osm"
     source_key = "osm"
     source_pk = "rkey"
-    attribution = "https://www.openstreetmap.org/copyright"
-    source_url = "https://www.openstreetmap.org/"
-    license_url = "https://opendatacommons.org/licenses/odbl/1-0/"
+    dataset = "openstreetmap.org"
+    collections = ("node", "way", "relation")
+    slug = "osm"
+
+    @staticmethod
+    def manifest_key_sql(col):
+        return (
+            f"'openstreetmap.org:' || CASE left({col}, 1) "
+            f"WHEN 'n' THEN 'node' WHEN 'w' THEN 'way' WHEN 'r' THEN 'relation' END "
+            f"|| ':' || substr({col}, 2)"
+        )
 
 
 class OvertureDivisions(Database):
-    collection = "org.atgeo.places.overture.division"
     source_key = "overture_division"
     source_pk = "id"
-    attribution = "https://docs.overturemaps.org/attribution/"
-    source_url = "https://overturemaps.org/"
-    license_url = "https://docs.overturemaps.org/attribution/"
+    dataset = "overturemaps.org"
+    collections = ("division",)
+    slug = "overture-division"
+
+    @staticmethod
+    def manifest_key_sql(col):
+        return f"'overturemaps.org:division:' || {col}"

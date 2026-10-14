@@ -1,5 +1,5 @@
 """Tests for quadtree Python functions: quadkey_to_bbox, bboxes_intersect,
-BboxTooLarge, and TileManifest.
+and TileManifest.
 """
 import fcntl
 import math
@@ -11,7 +11,6 @@ import duckdb
 import pytest
 
 from garganorn.quadtree import (
-    BboxTooLarge,
     TileManifest,
     bboxes_intersect,
     quadkey_to_bbox,
@@ -19,6 +18,7 @@ from garganorn.quadtree import (
 )
 
 POLE_YMAX = 90.0
+WORLD = (-180, -85, 180, 85)
 _BASE_URL = "https://tiles.example.com"
 
 # Four zoom-6 quadkeys in distinct geographic areas.
@@ -36,11 +36,9 @@ def _make_manifest_db(tmp_path, quadkeys=None):
         quadkeys = _MANIFEST_QUADKEYS
     p = tmp_path / "manifest.duckdb"
     con = duckdb.connect(str(p))
-    con.execute("CREATE TABLE record_tiles (rkey VARCHAR, tile_qk VARCHAR)")
+    con.execute("CREATE TABLE record_tiles (key VARCHAR, tile_qk VARCHAR)")
     for i, qk in enumerate(quadkeys):
-        con.execute("INSERT INTO record_tiles VALUES (?, ?)", [f"place{i}", qk])
-    con.execute("CREATE TABLE metadata (source VARCHAR, generated_at VARCHAR)")
-    con.execute("INSERT INTO metadata VALUES ('test', '2026-01-01T00:00:00+00:00')")
+        con.execute("INSERT INTO record_tiles VALUES (?, ?)", [f"overturemaps.org:place:p{i}", qk])
     con.close()
     return p
 
@@ -150,52 +148,24 @@ class TestBboxesIntersect:
 
 
 # ---------------------------------------------------------------------------
-# BboxTooLarge
-# ---------------------------------------------------------------------------
-
-class TestBboxTooLarge:
-    """BboxTooLarge is a plain Exception (not XrpcError)."""
-
-    def test_is_exception_subclass(self):
-        assert issubclass(BboxTooLarge, Exception)
-
-    def test_is_not_xrpc_error(self):
-        """BboxTooLarge must NOT be an XrpcError — it's caught and re-raised by the server."""
-        from lexrpc.base import XrpcError
-        assert not issubclass(BboxTooLarge, XrpcError), (
-            "BboxTooLarge should be a plain Exception; the server layer converts it to XrpcError"
-        )
-
-    def test_can_be_raised_and_caught(self):
-        with pytest.raises(BboxTooLarge):
-            raise BboxTooLarge()
-
-    def test_message_preserved(self):
-        with pytest.raises(BboxTooLarge) as exc_info:
-            raise BboxTooLarge("too many tiles")
-        assert "too many tiles" in str(exc_info.value)
-
-
-# ---------------------------------------------------------------------------
 # TileManifest
 # ---------------------------------------------------------------------------
 
 class TestTileManifest:
-    """TileManifest(manifest_path, base_url).get_tiles_for_bbox(...)."""
+    """TileManifest(manifest_path, base_url).regular_tiles(bbox) and
+    .overview_tiles(bbox)."""
 
     def test_url_format(self, tmp_path):
         """URLs follow {base_url}/{qk[:6]}/{qk}.json.gz format."""
         path = _make_manifest_db(tmp_path, quadkeys=["023010"])
         tm = TileManifest(str(path), _BASE_URL)
-        urls, summary = tm.get_tiles_for_bbox(-180, -85, 180, 85)
-        assert urls == [f"{_BASE_URL}/023010/023010.json.gz"]
-        assert summary is False
+        assert tm.regular_tiles(WORLD) == [f"{_BASE_URL}/023010/023010.json.gz"]
 
     def test_returns_all_intersecting_urls(self, tmp_path):
         """All intersecting tiles are returned (caller is responsible for sorting)."""
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
-        urls, _ = tm.get_tiles_for_bbox(-180, -85, 180, 85)
+        urls = tm.regular_tiles(WORLD)
         assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in _MANIFEST_QUADKEYS}
 
     def test_non_intersecting_excluded(self, tmp_path):
@@ -207,90 +177,68 @@ class TestTileManifest:
         tiny = (mid_lon - 0.001, mid_lat - 0.001, mid_lon + 0.001, mid_lat + 0.001)
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
-        urls, _ = tm.get_tiles_for_bbox(*tiny)
+        urls = tm.regular_tiles(tiny)
         assert f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" in urls
         for other in _MANIFEST_QUADKEYS[1:]:
             assert f"{_BASE_URL}/{other[:6]}/{other}.json.gz" not in urls
 
-    def test_raises_when_exceeds_max_tiles(self, tmp_path):
-        """Raises BboxTooLarge when count exceeds max_tiles."""
-        path = _make_manifest_db(tmp_path)
+    def test_regular_tiles_are_not_capped(self, tmp_path):
+        """The cap belongs to the server, which sums across tilesets."""
+        qks = [f"023{a}{b}{c}" for a in "0123" for b in "0123" for c in "0123"]
+        path = _make_manifest_db(tmp_path, quadkeys=qks)
         tm = TileManifest(str(path), _BASE_URL)
-        # 4 tiles match; max_tiles=2 should raise
-        with pytest.raises(BboxTooLarge):
-            tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=2)
-
-    def test_no_raise_when_exactly_max_tiles(self, tmp_path):
-        """Does NOT raise when count equals max_tiles (> not >= semantics)."""
-        path = _make_manifest_db(tmp_path)
-        tm = TileManifest(str(path), _BASE_URL)
-        # Exactly 4 tiles; max_tiles=4 must succeed
-        urls, _ = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=4)
-        assert len(urls) == 4
+        assert len(tm.regular_tiles(WORLD)) == 64
 
     def test_empty_result_when_manifest_empty(self, tmp_path):
-        """Empty manifest returns empty list."""
+        """Empty manifest returns an empty list and has no overview tiles."""
         path = _make_manifest_db(tmp_path, quadkeys=[])
         tm = TileManifest(str(path), _BASE_URL)
-        urls, summary = tm.get_tiles_for_bbox(-180, -85, 180, 85)
-        assert urls == []
-        assert summary is False
+        assert tm.regular_tiles(WORLD) == []
+        assert tm.overview_tiles(WORLD) is None
 
-    def test_default_max_tiles_is_50(self, tmp_path):
-        """Default max_tiles=50; 4 tiles don't raise."""
+
+# ---------------------------------------------------------------------------
+# Overview tiles are keyed by quadkey length < 6 (the regular band's
+# min_zoom); regular_tiles never lists them and overview_tiles lists only them.
+# ---------------------------------------------------------------------------
+
+class TestOverviewTiles:
+    def test_overview_tiles_are_the_short_keys(self, tmp_path):
+        """Overview keys of length 1, 3, and 5 exercise the qk[:6]/qk URL
+        shape for keys shorter than 6 characters; regular keys are not listed."""
+        overview = ["0", "023", "20111"]
+        path = _make_manifest_db(tmp_path, quadkeys=list(_MANIFEST_QUADKEYS) + overview)
+        tm = TileManifest(str(path), _BASE_URL)
+
+        assert set(tm.overview_tiles(WORLD)) == {f"{_BASE_URL}/{qk}/{qk}.json.gz" for qk in overview}
+
+    def test_overview_tiles_exclude_non_intersecting(self, tmp_path):
+        path = _make_manifest_db(tmp_path, quadkeys=["0", "3"])
+        tm = TileManifest(str(path), _BASE_URL)
+        northwest = (-170.0, 10.0, -100.0, 60.0)
+
+        assert tm.overview_tiles(northwest) == [f"{_BASE_URL}/0/0.json.gz"]
+
+    def test_no_overview_leak_into_regular_tiles(self, tmp_path):
+        regular = _MANIFEST_QUADKEYS[:2]
+        path = _make_manifest_db(tmp_path, quadkeys=regular + ["0"])
+        tm = TileManifest(str(path), _BASE_URL)
+
+        assert set(tm.regular_tiles(WORLD)) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in regular}
+
+    def test_no_overview_tiles_is_none(self, tmp_path):
+        """None, not an empty list: the server tells 'no overview tier' from
+        'nothing in this bbox'."""
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
-        urls, _ = tm.get_tiles_for_bbox(-180, -85, 180, 85)
-        assert isinstance(urls, list)
-        assert len(urls) == 4
 
+        assert tm.overview_tiles(WORLD) is None
 
-# ---------------------------------------------------------------------------
-# Summary fallback vs BboxTooLarge.
-#
-# TileManifest partitions its loaded quadkeys by key length: a summary tile
-# is one whose tile_qk is shorter than 6 characters (the regular band's
-# min_zoom). get_tiles_for_bbox answers from the regular band first; when
-# the regular count exceeds max_tiles it returns the intersecting summary
-# tiles instead of raising, uncapped by max_tiles (the band is bounded by
-# construction, not by the coverage budget).
-# ---------------------------------------------------------------------------
-
-class TestSummaryFallback:
-    def test_falls_back_to_summary_tiles_when_regular_exceeds_max_tiles(self, tmp_path):
-        """4 regular tiles > max_tiles=3, with a summary band present, must
-        return the (uncapped) summary tiles instead of raising. Summary keys
-        of length 1, 3, and 5 also exercise the qk[:6]/qk URL shape for keys
-        shorter than 6 characters."""
-        regular = list(_MANIFEST_QUADKEYS)
-        summary = ["0", "023", "20111"]
-        path = _make_manifest_db(tmp_path, quadkeys=regular + summary)
+    def test_overview_tiles_empty_list_when_none_intersect(self, tmp_path):
+        path = _make_manifest_db(tmp_path, quadkeys=["3"])
         tm = TileManifest(str(path), _BASE_URL)
 
-        urls, is_summary = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
-
-        assert is_summary is True
-        assert set(urls) == {f"{_BASE_URL}/{qk}/{qk}.json.gz" for qk in summary}, (
-            f"regular count (4) > max_tiles (3) with a summary band present "
-            f"must return the summary tiles, not raise; got {urls}"
-        )
-
-    def test_no_summary_leak_when_regular_answers_within_max_tiles(self, tmp_path):
-        """A summary band must not be returned when the regular band already
-        answers within max_tiles -- the fallback is 'instead of', not
-        'in addition to'."""
-        regular = _MANIFEST_QUADKEYS[:2]
-        summary = ["0"]
-        path = _make_manifest_db(tmp_path, quadkeys=regular + summary)
-        tm = TileManifest(str(path), _BASE_URL)
-
-        urls, is_summary = tm.get_tiles_for_bbox(-180, -85, 180, 85, max_tiles=3)
-
-        assert is_summary is False
-        assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in regular}, (
-            f"regular count (2) <= max_tiles (3) must answer from the "
-            f"regular band only; got {urls}"
-        )
+        assert tm.overview_tiles((-170.0, 10.0, -100.0, 60.0)) == []
 
 
 class TestAcquireBuildLock:

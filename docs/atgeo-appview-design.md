@@ -164,10 +164,10 @@ transaction.
 
 ## Serving
 
-**The AppView serves `org.atgeo.getCoverage`, not a manifest.** This is the
+**The AppView serves `org.atgeo.getTiles`, not a manifest.** This is the
 one place the extracted design has been changed rather than trimmed. The
 original assumed clients hold a manifest and intersect it locally; the
-gazetteer does not distribute one and the SDK is built on `getCoverage`, so an
+gazetteer does not distribute one and the SDK is built on `getTiles`, so an
 AppView serving only a manifest could not be talked to by any ATGeo client.
 Same lexicon, same errors, same coarse-bbox privacy floor.
 
@@ -185,14 +185,14 @@ Eventual consistency of one flush interval is the freshness contract.
 `atgeo-spec.md` states that a tile URL never serves two different byte
 streams. The gazetteer earns this with run-stamped paths and keep-two
 retention. An AppView rewriting a tile every fifteen seconds cannot stamp
-whole runs, but it does not have to: `getCoverage` returns whole opaque URLs,
+whole runs, but it does not have to: `getTiles` returns whole opaque URLs,
 so each tile can carry its own stamp from the flush that last wrote it, and
 tiles of different ages can coexist in one coverage response. Old versions are
 retired after a short retention window.
 
 This keeps the immutability invariant intact across both producer types, which
 matters more than it looks — it is what lets one SDK cache policy work against
-both. `getCoverage` responses themselves are short-lived, with `max-age` at
+both. `getTiles` responses themselves are short-lived, with `max-age` at
 the flush interval rather than the gazetteer's hour.
 
 *This resolution is new here and has not been reviewed.* The alternative is
@@ -284,6 +284,6 @@ flushes, tombstones applied, cursor lag. Log counters; no APM dependency.
 - **Tile stamping under a fifteen-second flush.** The retention window, and
   whether per-tile stamps churn CDN cache keys faster than they help.
 - **Whether the coverage index needs its own storage.** The gazetteer keeps
-  one in DuckDB alongside the tiles; the AppView could serve `getCoverage`
+  one in DuckDB alongside the tiles; the AppView could serve `getTiles`
   straight from the SQLite index, which is one fewer artifact to keep
   consistent but puts a read path in front of the write path.

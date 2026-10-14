@@ -2,59 +2,54 @@
     "lexicon": 1,
     "id": "org.atgeo.tilePayload",
     "defs": {
-        "wrappedRecord": {
+        "tileRecord": {
             "type": "object",
-            "description": "A single record as it appears in a tile's records array.",
-            "required": ["uri", "cid", "value"],
-            "nullable": ["cid"],
+            "description": "A single record as it appears in a tile's records array. A record is identified by value.origin, or by uri when the value has no origin; a record with neither cannot be told apart from another.",
+            "required": [
+                "value"
+            ],
             "properties": {
+                "value": {
+                    "type": "unknown",
+                    "description": "An org.atgeo.place record value."
+                },
                 "uri": {
                     "type": "string",
                     "format": "uri",
-                    "description": "The record's https:// URI."
+                    "description": "The record's own URI, for a record with no origin, such as an at:// URI for a repo record. Records with an origin omit it."
                 },
-                "cid": {
-                    "type": "string",
-                    "format": "cid",
-                    "description": "The record's content hash, or null when the producer computes none. Gazetteer records are always null."
-                },
-                "value": {
-                    "type": "unknown",
-                    "description": "The record itself."
+                "importance": {
+                    "type": "integer",
+                    "description": "The producer's importance score for this place among the tileset's records; larger values sort first. Not part of the place."
                 }
             }
         },
         "main": {
             "type": "object",
-            "description": "The top-level JSON envelope of a gazetteer tile file.",
-            "required": ["collection", "source", "license", "generated_at", "records"],
+            "description": "The top-level JSON envelope of a tile file.",
+            "required": [
+                "records"
+            ],
             "properties": {
-                "collection": {
-                    "type": "string",
-                    "format": "nsid",
-                    "description": "The NSID of the record collection contained in this tile."
-                },
-                "source": {
-                    "type": "string",
-                    "format": "uri",
-                    "description": "URL of the collection's source dataset."
-                },
-                "license": {
-                    "type": "string",
-                    "format": "uri",
-                    "description": "URL of the source dataset's license."
-                },
-                "generated_at": {
+                "publishedAt": {
                     "type": "string",
                     "format": "datetime",
-                    "description": "When this tile was generated."
+                    "description": "When the tileset was created."
+                },
+                "attribution": {
+                    "type": "array",
+                    "description": "One entry for every collection the tileset carries or references; the same list in every tile of the tileset.",
+                    "items": {
+                        "type": "ref",
+                        "ref": "org.atgeo.defs#collectionAttribution"
+                    }
                 },
                 "records": {
                     "type": "array",
                     "description": "The tile's records.",
                     "items": {
                         "type": "ref",
-                        "ref": "#wrappedRecord"
+                        "ref": "#tileRecord"
                     }
                 }
             }

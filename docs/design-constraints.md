@@ -149,7 +149,7 @@ with `osmium merge`, which drops objects duplicated across its three
 inputs by type/id/version. That dedup is what keeps the pipeline at one
 parquet dataset with no SQL-side dedup: a way matched by both the tag
 filter and the building filter (e.g. `building=yes` + `amenity=restaurant`)
-would otherwise import twice and collide on rkey `w<id>`, a node present in
+would otherwise import twice and collide on the `w<id>` key, a node present in
 both would double-count in `way_centroids`, and an object pulled in by
 both the buildings chain and the relation closure chain would double the
 same way.
@@ -237,7 +237,7 @@ itself. The covering machinery is untouched and still required for places
 and OSM, whose records carry no division references of their own.
 
 An ancestor is kept only if it survived the import's own filters (`is_land`,
-a bbox-scoped build) — an emitted rkey must resolve in the served data, so an
+a bbox-scoped build) — an emitted `within[].uri` must resolve in the served data, so an
 ancestor dropped from the imported set is dropped from `relations.within`
 too. Containment fans out over `tile_assignments_combined.parquet`, the same
 union of tile references and summary tile references that `stage_export`
@@ -255,9 +255,10 @@ tile holding its interior point. Places are points and keep the single
 tile `stage_tile_assignment` assigns them.
 
 Every copy of a multi-tile record must be byte-identical across the
-tiles carrying it. The spec's dedup-by-rkey rule keeps one arbitrary
-copy and drops the rest, so a per-tile divergence is data loss with no
-error to surface it.
+tiles carrying it. A reader dedups by the record's identity (`origin`)
+and keeps one arbitrary copy, so a per-tile divergence is data loss with
+no error to surface it. The same holds for a tile's header: `publishedAt`
+and `attribution` are identical in every tile of a tileset.
 
 Any join of the tile-assignment artifact (`tile_assignments.parquet` or
 `tile_references.parquet`) against another per-place artifact that can
@@ -289,31 +290,34 @@ z0 is excluded because its quadkey is the empty string, which degenerates
 the `qk[:6]` partition and URL slice; z6 is excluded because it would
 collide with the regular band's filenames. Quadkey length under six
 characters is what marks a tile summary-band, both on disk and in
-`TileManifest.get_tiles_for_bbox`. z5 is a hard floor — tiling cannot
+`TileManifest`. z5 is a hard floor — tiling cannot
 split a fine cell further — so a z5 tile may hold more than
 `max_per_tile` records; this is expected, not an error.
 
-`get_tiles_for_bbox` answers from the regular band first; when that
-answer would exceed `max_tiles`, it returns the intersecting summary-band
-tiles instead of raising `BboxTooLarge`. The summary answer is uncapped —
+`getTiles` answers from the regular band first; when the combined answer
+would exceed `max_tiles`, it returns the intersecting summary-band tiles
+(`overview: true`) instead of raising `BboxTooLarge`; it raises only when
+a selected tileset has no summary band. The summary answer is uncapped —
 the band is bounded by construction, a few dozen tiles per source at
 N=10,000 — and is deliberately incomplete rather than an error.
 
 **Applies to**: `stages.py` (`stage_summary_tile_assignment`,
 `stage_summary_division_tile_references`), `quadtree.py`
-(`TileManifest.get_tiles_for_bbox`)
+(`TileManifest.regular_tiles`, `TileManifest.overview_tiles`), `server.py`
+(`get_tiles`)
 
 ### Tile serving uses three distinct, deliberately separate namespaces
 
-NSID dotted (`org.atgeo.places.overture.place`, a config key) → disk
-`source_key` snake_case (`overture_place`, private, never appears in a
-URL) → public `slug` kebab-case (`overture-place`, in the tile URL path).
-The serving route is `/tiles/<slug>/<path:tile_path>`, resolving a public
-slug to that collection's own `tiles_dir` — not a route rooted at a
-source directory, which would let `GET .../places.parquet` or
+Collection `(dataset, collection)` → disk `source_key` snake_case
+(`overture_place`, private, never appears in a URL) → public `slug`
+kebab-case (`overture-place`, in the tile URL path). The slug is fixed at
+build time and stored in `tileset.json`; the config names a run directory,
+not a slug. The serving route is `/tiles/<slug>/<path:tile_path>`,
+resolving a public slug to that tileset's own run parent — not a route
+rooted at a source directory, which would let `GET .../places.parquet` or
 `containment/` resolve on disk (`safe_join` blocks `..`, not sibling
 paths). This also means public URLs never mirror the on-disk snake_case
-layout. `base_url` must end with `/<slug>` or `getCoverage` emits URLs no
+layout. `base_url` must end with `/<slug>` or `getTiles` emits URLs no
 route can serve — checked at startup, not discovered at request time.
 
 **Applies to**: `garganorn/__main__.py` (`serve_tile` route, `base_url`
@@ -332,7 +336,7 @@ the two answer different threats and neither subsumes the other.
 `tile-privacy-design.md` holds the reasoning.
 
 **Applies to**: `garganorn/server.py` (`_check_bbox_precision`),
-`garganorn/lexicon/getCoverage.json`
+`garganorn/lexicon/getTiles.json`
 
 ### Optional-but-not-nullable lexicon fields must be omitted, not null
 
@@ -380,7 +384,7 @@ wire, not this macro.
 Backwards compatibility with prior tile/record formats is a non-goal —
 the atgeo lexicons have never been in production use and the API has
 only ever been published as beta. This is what unblocks format changes
-(envelope shape, level vocabulary, tile layout) without a consumer
+(envelope shape, relation shape, tile layout) without a consumer
 migration path. The one compatibility that does matter is internal: the
 server's own coupling to the tiles it reads, which is why a deploy ships
 server-then-re-export in that order, not the other way around.
@@ -390,7 +394,12 @@ server-then-re-export in that order, not the other way around.
 ## Licensing Posture
 
 The OSM tileset is an ODbL Derivative Database: it is served under ODbL with
-attribution, which the tile envelope's `source` and `license` links provide.
+attribution. Every tile's header carries the attribution of every collection
+the tileset carries or references — release, source, licences, attribution
+URL — so a tile that holds only OSM records still names the
+`(overturemaps.org, division)` data (ODbL, CC BY 4.0) that its `within`
+relations are derived from. The terms live in one table, `COLLECTION_TERMS`
+in `database.py`.
 The density artifact is a Produced Work, not a database extraction, so
 blending Overture-derived density scores into OSM importance does not make
 the OSM tileset a derivative of Overture data. This is why per-source score

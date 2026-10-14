@@ -12,7 +12,7 @@ The project is named after the earliest recorded [mammoth goose](https://en.wiki
 
 ## What it serves
 
-Three collections today: [Overture Maps](https://overturemaps.org/) places (`org.atgeo.places.overture.place`), [OpenStreetMap](https://www.openstreetmap.org/) (`org.atgeo.places.osm`), and Overture administrative divisions (`org.atgeo.places.overture.division`). Tiles are pre-built and stored gzip-compressed on disk, but served as plain JSON — wire compression is negotiated separately via `Accept-Encoding`. There's no live search or query-by-name; you discover tiles for a bounding box and fetch them.
+Three tilesets today, one per source: [Overture Maps](https://overturemaps.org/) places (slug `overture-place`, collection `(overturemaps.org, place)`), [OpenStreetMap](https://www.openstreetmap.org/) (slug `osm`, collections `(openstreetmap.org, node)`, `way` and `relation`), and Overture administrative divisions (slug `overture-division`, collection `(overturemaps.org, division)`). A collection is one sub-division of one dataset; it names the places' URNs (`urn:atgeo:openstreetmap.org:way:{id}`) and is the unit of licensing. Tiles are pre-built and stored gzip-compressed on disk, but served as plain JSON — wire compression is negotiated separately via `Accept-Encoding`. There's no live search or query-by-name; you discover tiles for a bounding box and fetch them.
 
 ## Configuration
 
@@ -21,23 +21,24 @@ Garganorn loads its data sources from a YAML config file. By default it looks fo
 ```yaml
 repo: places.atgeo.org
 tiles:
-  collections:
-    org.atgeo.places.overture.place:
-      slug: overture-place
-      manifest: data/overture_place/tiles/current/manifest.duckdb
-      tiles_dir: data/overture_place/tiles/current
+  tilesets:
+    - run_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
-  max_coverage_tiles: 50
+  max_tiles: 50
 ```
 
-`repo` is the server's hostname; it determines the `did:web` identity. The optional top-level `public_base` is the server's public base URL, defaulting to `https://{repo}`; no current endpoint reads it. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
+`repo` is the server's hostname; it determines the `did:web` identity. `run_dir` is a tile run directory (or the `current` symlink to one); the server reads `manifest.duckdb`, `manifest.json` and `tileset.json` from it and resolves the symlink once, at startup. `max_tiles` caps the tiles in a `getTiles` answer before it falls back to overview tiles.
+
+A tileset's slug is fixed when it is built, stored in its `tileset.json`, and the tileset is served under it: tiles at `/tiles/{slug}/...`, the descriptor at `/tilesets/{slug}`. `base_url` must end in `/{slug}`, or the tile URLs `getTiles` emits would not resolve. Two tilesets with the same slug fail startup.
+
+The optional top-level `public_base` is the server's public base URL, defaulting to `https://{repo}`. It is the `serviceEndpoint` in `did.json` and the prefix of `getPlace`'s `uri`, where a place's URN dereferences. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
 
 ```yaml
 repo: places.atgeo.org
 public_base: http://localhost:8000
 ```
 
-Record URIs baked into tiles at export time always use `https://places.atgeo.org`, whatever `public_base` the serving deployment sets.
+Tiles contain no gazetteer host: a tileset can be served from any host, under its slug.
 
 ## Getting source data
 
@@ -56,27 +57,29 @@ scripts/download-osm.sh --region north-america/us-northeast --cache-dir db/cache
 scripts/extract-osm-parquet.sh db/cache/osm/us-northeast-latest.osm.pbf --cache-dir db/cache/osm
 ```
 
+The extract script also writes `release` into the parquet directory: the PBF's replication timestamp, which becomes the OSM release in the tileset's attribution. It fails if the PBF header has none.
+
 Use a smaller Geofabrik region for local testing — the default `north-america` extract is large.
 
 ## Tile export pipeline
 
 `python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, and `density`, `idf`, and `covering` build the shared artifacts the sources depend on. Invoking it with no subcommand is an error — use `run`.
 
-Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless.
+Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless. A run also writes `tileset.json`, the tileset's descriptor, and `manifest.duckdb` beside the tiles; see [`docs/pipeline-artifacts.md`](docs/pipeline-artifacts.md).
 
 Supported sources (for `run --source`):
 
 | `--source` | Input | Collection |
 |---|---|---|
-| `overture_place` | `--parquet <glob>` | `org.atgeo.places.overture.place` |
-| `osm` | `--parquet-dir <dir>` | `org.atgeo.places.osm` |
-| `overture_division` | `--division-parquet <path> --division-area-parquet <path>` | `org.atgeo.places.overture.division` |
+| `overture_place` | `--parquet <glob>` | `(overturemaps.org, place)` |
+| `osm` | `--parquet-dir <dir>` | `(openstreetmap.org, node)`, `(openstreetmap.org, way)`, `(openstreetmap.org, relation)` |
+| `overture_division` | `--division-parquet <path> --division-area-parquet <path>` | `(overturemaps.org, division)` |
 
 ### overture_division
 
 Imports Overture Maps administrative boundaries from the `division` and `division_area` parquet themes. Produces two outputs:
 
-- **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, level, wikidata, population).
+- **Tile files** under `<output>/overture_division/tiles/current/` — one gzipped JSON file per quadtree tile, each record carrying a `community.lexicon.location.bbox` location and attributes (subtype, country, region, wikidata, population).
 - **`boundaries.duckdb`** at `<output>/overture_division/boundaries.duckdb` — a DuckDB file with an R-tree spatial index for point-in-polygon containment queries, alongside a `covering/` directory of quadtree-to-boundary index parquet. Used by other sources' tile pipelines via `--boundaries`.
 
 ```
@@ -84,6 +87,7 @@ python -m garganorn.quadtree run \
   --source overture_division \
   --division-parquet db/cache/overture/*/division/*.parquet \
   --division-area-parquet db/cache/overture/*/division_area/*.parquet \
+  --release overturemaps.org=2026-09-17.0 \
   --output data
 ```
 
@@ -94,6 +98,7 @@ python -m garganorn.quadtree run \
   --source overture_place \
   --parquet 'db/cache/overture/*/part-*.parquet' \
   --boundaries data/overture_division/boundaries.duckdb \
+  --release overturemaps.org=2026-09-17.0 \
   --output data
 ```
 
@@ -107,6 +112,7 @@ Optional arguments (`run`, all sources):
 | `--temp-directory` | DuckDB default | Volume DuckDB spills to when a stage exceeds `--memory-limit` |
 | `--max-temp-directory-size` | `250GB` | Ceiling on that spill; a runaway query fails with "temp directory full" instead of filling the volume |
 | `--export-workers` | unset (`ThreadPoolExecutor` default: `min(32, cpu_count + 4)`) | Threads for tile gzip compression |
+| `--release DATASET=VALUE` | none | Release of a dataset the tileset carries or references, e.g. `overturemaps.org=2026-09-17.0`; repeatable. Export fails, naming the first dataset left without one |
 | `--force` | off | Rebuild every stage, ignoring artifact freshness |
 | `--config` | none | YAML config file; `run` reads `memory_limit`, `max_per_tile`, `temp_directory`, and `max_temp_directory_size` from the `pipeline:` section (`all` reads the rest) |
 
@@ -121,7 +127,7 @@ To build every configured source in one shot:
 python -m garganorn.quadtree all --config config.yaml
 ```
 
-`all` runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
+`all` supplies the releases itself. The Overture release is the one the configured globs' `*` release segment resolves to (newest); the OSM release is read from the `release` file `scripts/extract-osm-parquet.sh` writes into the parquet directory. `all` stops with a message if a configured source's release is missing. It runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
 
 ## Running the server
 
@@ -138,35 +144,53 @@ For production, use gunicorn:
 gunicorn "garganorn.__main__:create_app()" --bind 0.0.0.0:8000 --workers 2
 ```
 
-## Querying the XRPC service
+## Querying the service
 
 There's no search — you ask for tile coverage over a bounding box, then fetch the tiles directly. Bounding boxes must be snapped to a 0.01° grid (that's the privacy model: coarse enough that the server can't infer a client's precise location from requests).
 
-### getCoverage
+| Endpoint | Returns |
+|---|---|
+| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox; `collection` is optional |
+| `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance |
+| `GET /xrpc/org.atgeo.describeTileset?slug=` | A tileset's descriptor: slug, extent, carried and referenced collections with release, licences and attribution |
+| `GET /xrpc/org.atgeo.describeService` | The service's DID and the slug and collections of each tileset |
+| `GET /tilesets/{slug}` | The same document as `describeTileset` |
+| `GET /{dataset}/{collection}/{id}` | The same place as `getPlace` for `urn:atgeo:{dataset}:{collection}:{id}`; this is what `getPlace.uri` points at |
+| `GET /tiles/{slug}/...` | Tile files |
+| `GET /.well-known/did.json` | The `did:web` document, advertising the tile service as `#atgeo_tiles` (`AtgeoTileService`) at `public_base` |
+
+### getTiles
 
 ```
-$ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getCoverage?collection=org.atgeo.places.osm&bbox=-71.55,43.20,-71.50,43.25'
+$ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getTiles?dataset=openstreetmap.org&collection=way&bbox=-71.55,43.20,-71.50,43.25'
 {"tiles":["https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz","https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json.gz"]}
 ```
 
-Fetch one of those URLs directly — despite the `.json.gz` name, the server always decompresses it and returns plain JSON (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client); source/license are included in the header so you don't need a separate lookup. OSM rkeys carry one of three prefixes — `node:`, `way:`, `relation:` — naming the source OSM element type:
+A bbox covering more than `max_tiles` tiles is answered with coarse overview tiles holding only the most important places, and `"overview": true`; if a selected tileset has no overview tiles, the answer is `BboxTooLarge`.
+
+Fetch one of those URLs directly — despite the `.json.gz` name, the server always decompresses it and returns plain JSON (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client). The header carries the attribution of every collection the tileset carries or references, so you don't need a separate lookup. A place's `origin` is its URN; for OSM the collection is `node`, `way` or `relation`, naming the source element type. `importance` sits beside the place, not in it:
 
 ```
 $ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz'
 {
-  "collection": "org.atgeo.places.osm",
-  "source": "https://www.openstreetmap.org/",
-  "license": "https://opendatacommons.org/licenses/odbl/1-0/",
-  "generated_at": "2026-08-08T06:16:21Z",
+  "publishedAt": "2026-08-08T06:16:21Z",
+  "attribution": [
+    {
+      "dataset": "openstreetmap.org",
+      "collection": "node",
+      "release": "2026-08-07T20:21:15Z",
+      "source": "https://www.openstreetmap.org/",
+      "licenses": ["https://opendatacommons.org/licenses/odbl/1-0/"],
+      "attribution": "https://www.openstreetmap.org/copyright"
+    }
+    // ... way, relation, and any referenced collection ...
+  ],
   "records": [
     {
-      "uri": "https://places.atgeo.org/org.atgeo.places.osm/node:10080395917",
-      "cid": null,
       "value": {
         "$type": "org.atgeo.place",
-        "rkey": "node:10080395917",
+        "origin": "urn:atgeo:openstreetmap.org:node:10080395917",
         "name": "HomeGoods",
-        "importance": 0,
         "locations": [
           {"$type": "community.lexicon.location.geo", "latitude": "43.288557", "longitude": "-71.575664"}
         ],
@@ -177,20 +201,39 @@ $ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220
           "shop": "houseware"
         },
         "relations": {}
-      }
+      },
+      "importance": 0
     }
     // ... more records ...
   ]
 }
 ```
 
-## Proposed Lexicon schemas
+### getPlace
+
+`getPlace` takes the URN from a record's `origin`; no discovery call is needed. The record is the tile's `value`, and `importance` is beside it:
+
+```
+$ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetmap.org:node:10080395917'
+{"uri":"https://places.atgeo.org/openstreetmap.org/node/10080395917","importance":0,"record":{...}}
+```
+
+An unknown or unserved URN is a `PlaceNotFound` error.
+
+## Lexicon schemas
 
 * [`org.atgeo.place`](garganorn/lexicon/place.json)
+* [`org.atgeo.defs`](garganorn/lexicon/defs.json)
+* [`org.atgeo.tilePayload`](garganorn/lexicon/tilePayload.json)
+* [`org.atgeo.getTiles`](garganorn/lexicon/getTiles.json)
+* [`org.atgeo.getPlace`](garganorn/lexicon/getPlace.json)
+* [`org.atgeo.describeTileset`](garganorn/lexicon/describeTileset.json)
+* [`org.atgeo.describeService`](garganorn/lexicon/describeService.json)
 * [`community.lexicon.location.geo`](garganorn/lexicon/geo.json)
 * [`community.lexicon.location.address`](garganorn/lexicon/address.json)
+* [`community.lexicon.location.bbox`](garganorn/lexicon/bbox.json)
 
-**NOTE**: These schemas are only *proposed*, and have not been adopted by the Lexicon community.
+**NOTE**: These schemas are only *proposed*, and have not been adopted by the Lexicon community. [`docs/lexicon-publication.md`](docs/lexicon-publication.md) is the runbook for publishing the `org.atgeo.*` ones.
 
 ## Development
 

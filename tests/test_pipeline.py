@@ -13,6 +13,8 @@ from unittest.mock import patch
 import duckdb
 import pytest
 
+RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
+
 
 # ---------------------------------------------------------------------------
 # Tests: run_pipeline() Python function
@@ -43,6 +45,7 @@ class TestRunPipeline:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
 
         # At least one tile file under output_dir/overture_place/tiles/current/
@@ -69,9 +72,8 @@ class TestRunPipeline:
         )
 
     def test_overture_manifest_db(self, overture_parquet, density_parquet, tmp_path):
-        """run_pipeline must write manifest.duckdb with record_tiles and metadata tables (Overture)."""
+        """run_pipeline must write manifest.duckdb with a record_tiles table (Overture)."""
         import duckdb as _duckdb
-        from datetime import datetime
         try:
             from garganorn.quadtree import run_pipeline
         except (ImportError, ModuleNotFoundError):
@@ -88,6 +90,7 @@ class TestRunPipeline:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
 
         ov_dir = output_dir / "overture_place"
@@ -102,8 +105,8 @@ class TestRunPipeline:
             count = con.execute("SELECT COUNT(*) FROM record_tiles").fetchone()[0]
             assert count > 0, f"record_tiles must have rows; got {count}"
 
-            rkeys = [r[0] for r in con.execute("SELECT rkey FROM record_tiles").fetchall()]
-            assert all(rkeys), "all rkeys must be non-empty strings"
+            keys = [r[0] for r in con.execute("SELECT key FROM record_tiles").fetchall()]
+            assert all(keys), "all keys must be non-empty strings"
 
             tile_qks = [r[0] for r in con.execute("SELECT tile_qk FROM record_tiles").fetchall()]
             assert all(tile_qks), "all tile_qk values must be non-empty strings"
@@ -111,11 +114,6 @@ class TestRunPipeline:
                 f"tile_qk values must be numeric quadkey strings; got {tile_qks[:5]!r}"
             )
 
-            meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
-            assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
-            source, generated_at = meta[0]
-            assert source == "overture_place", f"metadata source must be 'overture'; got {source!r}"
-            datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
         finally:
             con.close()
 
@@ -125,9 +123,8 @@ class TestRunPipeline:
         )
 
     def test_osm_manifest_db(self, osm_parquet, density_parquet, tmp_path):
-        """run_pipeline must write manifest.duckdb with record_tiles and metadata tables (OSM)."""
+        """run_pipeline must write manifest.duckdb with a record_tiles table (OSM)."""
         import duckdb as _duckdb
-        from datetime import datetime
         try:
             from garganorn.quadtree import run_pipeline
         except (ImportError, ModuleNotFoundError):
@@ -144,6 +141,7 @@ class TestRunPipeline:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
 
         osm_dir = output_dir / "osm"
@@ -158,8 +156,8 @@ class TestRunPipeline:
             count = con.execute("SELECT COUNT(*) FROM record_tiles").fetchone()[0]
             assert count > 0, f"record_tiles must have rows; got {count}"
 
-            rkeys = [r[0] for r in con.execute("SELECT rkey FROM record_tiles").fetchall()]
-            assert all(rkeys), "all rkeys must be non-empty strings"
+            keys = [r[0] for r in con.execute("SELECT key FROM record_tiles").fetchall()]
+            assert all(keys), "all keys must be non-empty strings"
 
             tile_qks = [r[0] for r in con.execute("SELECT tile_qk FROM record_tiles").fetchall()]
             assert all(tile_qks), "all tile_qk values must be non-empty strings"
@@ -167,11 +165,6 @@ class TestRunPipeline:
                 f"tile_qk values must be numeric quadkey strings; got {tile_qks[:5]!r}"
             )
 
-            meta = con.execute("SELECT source, generated_at FROM metadata").fetchall()
-            assert len(meta) == 1, f"metadata must have exactly one row; got {len(meta)}"
-            source, generated_at = meta[0]
-            assert source == "osm", f"metadata source must be 'osm'; got {source!r}"
-            datetime.fromisoformat(generated_at)  # raises ValueError if not ISO 8601
         finally:
             con.close()
 
@@ -202,6 +195,7 @@ class TestRunPipeline:
                 str(output_dir),
                 memory_limit="4GB",
                 max_per_tile=100,
+                releases=RELEASES,
             )
 
 
@@ -733,6 +727,7 @@ class TestRunPipelineStaleDb:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
 
     def test_osm_pipeline_succeeds_with_stale_places_table(self, osm_parquet, density_parquet, tmp_path):
@@ -759,6 +754,7 @@ class TestRunPipelineStaleDb:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
 
 
@@ -787,6 +783,7 @@ class TestTimestampedExport:
             max_per_tile=100,
             density_parquet=density_parquet,
             force=True,
+            releases=RELEASES,
         )
 
     def test_creates_timestamped_subdir(self, overture_parquet, density_parquet, tmp_path):
@@ -947,6 +944,7 @@ class TestTimestampedExport:
                     memory_limit="4GB",
                     max_per_tile=100,
                     density_parquet=density_parquet,
+                    releases=RELEASES,
                 )
 
         ov_dir = output_dir / "overture_place"
@@ -1025,7 +1023,7 @@ class TestRunPipelineMtime:
                 brand       VARCHAR,
                 confidence  DOUBLE,
                 version     INTEGER,
-                sources     VARCHAR[]
+                sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[]
             )
         """)
 
@@ -1110,6 +1108,7 @@ class TestRunPipelineMtime:
                 str(output_dir),
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
+                releases=RELEASES,
             )
 
         # Verify first run created output
@@ -1134,6 +1133,7 @@ class TestRunPipelineMtime:
                 str(output_dir),
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
+                releases=RELEASES,
             )
 
         # Verify no new timestamped dir was created
@@ -1168,6 +1168,7 @@ class TestRunPipelineMtime:
                 str(output_dir),
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
+                releases=RELEASES,
             )
 
         # Verify output was created
@@ -1193,6 +1194,7 @@ class TestRunPipelineMtime:
             str(output_dir),
             memory_limit="4GB",
             density_parquet=small_density_parquet,
+            releases=RELEASES,
         )
 
         ov_dir = output_dir / "overture_place"
@@ -1226,6 +1228,7 @@ class TestRunPipelineMtime:
                 str(output_dir),
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
+                releases=RELEASES,
             )
 
         # Verify new timestamped dir was created
@@ -1250,6 +1253,7 @@ class TestRunPipelineMtime:
             str(output_dir),
             memory_limit="4GB",
             density_parquet=small_density_parquet,
+            releases=RELEASES,
         )
 
         ov_dir = output_dir / "overture_place"
@@ -1273,6 +1277,7 @@ class TestRunPipelineMtime:
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
                 force=True,
+                releases=RELEASES,
             )
 
         # Verify new timestamped dir was created
@@ -1306,6 +1311,7 @@ class TestExportPhase2:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         # tiles live under <src>/tiles/current/
         tiles_current = output_dir / "overture_place" / "tiles" / "current"
@@ -1330,6 +1336,7 @@ class TestExportPhase2:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         # Find the timestamped run dir via the current symlink
         tiles_current = output_dir / "overture_place" / "tiles" / "current"
@@ -1363,6 +1370,7 @@ class TestExportPhase2:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         # Only manifest.duckdb and boundaries.duckdb are permitted .duckdb files
         duckdb_files = [

@@ -1,68 +1,76 @@
-"""Tests for antimeridian bbox handling: _parse_bbox and bboxes_intersect
+"""Tests for antimeridian bbox handling: getTiles and bboxes_intersect
 detect xmin > xmax as antimeridian crossing and handle it correctly.
 """
 import pytest
-from garganorn.server import Server
 from garganorn.stages import bboxes_intersect
+from tests.served_runs import OVERTURE, build_app, serve_run, tile_url
 
 
 # ---------------------------------------------------------------------------
-# Test _parse_bbox antimeridian handling
+# getTiles bbox handling of antimeridian crossing
 # ---------------------------------------------------------------------------
 
-class TestParseBboxAntimeridian:
-    """Tests for Server._parse_bbox with antimeridian-crossing bboxes."""
+FIJI = "311133"  # lon 178, lat -17
+SAN_FRANCISCO = "023010"
 
-    def test_parse_bbox_accepts_antimeridian_crossing(self):
-        """_parse_bbox accepts bbox with xmin > xmax (antimeridian crossing)
-        and returns the tuple as-is."""
-        server = Server("places.atgeo.org", [], None)
 
-        # Fiji-like bbox crossing the antimeridian
-        bbox_str = "170,-20,-170,-10"
-        result = server._parse_bbox(bbox_str)
+@pytest.fixture
+def client(tmp_path):
+    tiles = {qk: [] for qk in (FIJI, SAN_FRANCISCO)}
+    with build_app(serve_run(tmp_path, tiles=tiles)).test_client() as c:
+        yield c
 
-        assert result == (170, -20, -170, -10), (
-            f"Antimeridian bbox should parse as-is, got {result}"
-        )
 
-    def test_parse_bbox_normal_bbox_still_works(self):
-        """Normal bboxes (xmin < xmax) should continue to work."""
-        server = Server("places.atgeo.org", [], None)
+def _get_tiles(client, bbox):
+    return client.get("/xrpc/org.atgeo.getTiles", query_string={
+        "dataset": OVERTURE, "bbox": bbox,
+    })
 
-        # San Francisco bbox
-        bbox_str = "-122.5,37.7,-122.3,37.8"
-        result = server._parse_bbox(bbox_str)
 
-        assert result == (-122.5, 37.7, -122.3, 37.8)
+def _tiles(client, bbox):
+    resp = _get_tiles(client, bbox)
+    assert resp.status_code == 200, resp.get_json()
+    return resp.get_json()["tiles"]
 
-    def test_parse_bbox_invalid_ymin_ymax_raises_error(self):
-        """Invalid bbox with ymin >= ymax should still raise InvalidBbox."""
-        server = Server("places.atgeo.org", [], None)
 
-        with pytest.raises(Exception) as exc_info:
-            server._parse_bbox("-122.5,37.8,-122.3,37.7")
+class TestGetTilesAntimeridian:
+    """getTiles accepts a bbox with xmin > xmax as an antimeridian crossing
+    and selects the tiles on both sides of it."""
 
-        assert exc_info.value.name == "InvalidBbox"
+    def test_accepts_antimeridian_crossing(self, client):
+        """A Fiji-like bbox crossing the antimeridian lists Fiji's tile and
+        not San Francisco's."""
+        assert _tiles(client, "170,-20,-170,-10") == [tile_url("overture-place", FIJI)]
 
-    def test_parse_bbox_antimeridian_with_invalid_lat_raises_error(self):
-        """Antimeridian bbox with invalid latitude should raise InvalidBbox."""
-        server = Server("places.atgeo.org", [], None)
+    def test_normal_bbox_still_works(self, client):
+        """Normal bboxes (xmin < xmax) continue to work: a San Francisco bbox
+        lists San Francisco's tile and not Fiji's."""
+        assert _tiles(client, "-122.5,37.7,-122.3,37.8") == [tile_url("overture-place", SAN_FRANCISCO)]
 
-        # Valid longitude (xmin > xmax) but invalid latitude (ymin >= ymax)
-        with pytest.raises(Exception) as exc_info:
-            server._parse_bbox("170, -10, -170, -20")
+    def test_invalid_ymin_ymax_raises_error(self, client):
+        """Invalid bbox with ymin >= ymax still raises InvalidBbox."""
+        resp = _get_tiles(client, "-122.5,37.8,-122.3,37.7")
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "InvalidBbox"
 
-        assert exc_info.value.name == "InvalidBbox"
+    def test_antimeridian_with_invalid_lat_raises_error(self, client):
+        """Valid longitude (xmin > xmax) but invalid latitude (ymin >= ymax)."""
+        resp = _get_tiles(client, "170,-10,-170,-20")
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "InvalidBbox"
 
-    def test_parse_bbox_extreme_antimeridian(self):
-        """Extreme antimeridian bbox (e.g., 179 to -179) should be accepted."""
-        server = Server("places.atgeo.org", [], None)
+    def test_extreme_antimeridian(self, client):
+        """Extreme antimeridian bbox (179 to -179) is accepted."""
+        assert _tiles(client, "179,-10,-179,10") == []
 
-        bbox_str = "179,-10,-179,10"
-        result = server._parse_bbox(bbox_str)
+    def test_bbox_exact_180_meridian(self, client):
+        """xmin=180 with xmax=-180 is accepted."""
+        assert _tiles(client, "180,-10,-180,10") == []
 
-        assert result == (179, -10, -179, 10)
+    def test_bbox_nearly_global_antimeridian(self, client):
+        """Nearly global bbox crossing the antimeridian is accepted and
+        selects Fiji's tile."""
+        assert _tiles(client, "170,-85,-170,85") == [tile_url("overture-place", FIJI)]
 
 
 # ---------------------------------------------------------------------------
@@ -134,26 +142,6 @@ class TestBboxesIntersectAntimeridian:
 
 class TestAntimeridianEdgeCases:
     """Tests for edge cases and boundary conditions."""
-
-    def test_bbox_exact_180_meridian(self):
-        """Bbox with xmin=180 or xmax=-180 should be handled correctly."""
-        server = Server("places.atgeo.org", [], None)
-
-        # Bbox that exactly spans the antimeridian
-        bbox_str = "180,-10,-180,10"
-        result = server._parse_bbox(bbox_str)
-
-        assert result == (180, -10, -180, 10)
-
-    def test_bbox_nearly_global_antimeridian(self):
-        """Nearly global bbox crossing antimeridian should be accepted."""
-        server = Server("places.atgeo.org", [], None)
-
-        # Most of the world, crossing the antimeridian
-        bbox_str = "170,-90,-170,90"
-        result = server._parse_bbox(bbox_str)
-
-        assert result == (170, -90, -170, 90)
 
     def test_centroid_dateline_crossing_small(self):
         """Small bbox crossing the antimeridian should have correct centroid.

@@ -1,0 +1,79 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.getTiles",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Get the URLs of the tiles covering a bounding box for a dataset, optionally narrowed to one of its collections. Tiles may hold records of other collections: a caller that asked for a collection keeps the records whose origin starts with urn:atgeo:{dataset}:{collection}:, and a record with no origin matches no collection. There is deliberately no text or name search parameter: the server learns only a coarse area, never what the user is looking for.",
+            "parameters": {
+                "type": "params",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "maxLength": 253,
+                        "description": "The dataset to get tiles for, e.g. 'openstreetmap.org'"
+                    },
+                    "collection": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "description": "Narrow to the tilesets carrying this collection of the dataset, e.g. 'way'"
+                    },
+                    "bbox": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "description": "Bounding box as xmin,ymin,xmax,ymax in WGS84 decimal degrees"
+                    }
+                },
+                "required": [
+                    "dataset",
+                    "bbox"
+                ]
+            },
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "tiles"
+                    ],
+                    "properties": {
+                        "tiles": {
+                            "type": "array",
+                            "description": "Tile file URLs, in ascending string order",
+                            "items": {
+                                "type": "string",
+                                "format": "uri"
+                            }
+                        },
+                        "overview": {
+                            "type": "boolean",
+                            "description": "True when the area was too large for full-detail tiles and the server answered with coarse overview tiles holding only the most important places; absent means full detail"
+                        }
+                    }
+                }
+            },
+            "errors": [
+                {
+                    "name": "BboxTooLarge",
+                    "description": "The bounding box covers too many tiles"
+                },
+                {
+                    "name": "BboxTooPrecise",
+                    "description": "One or more bbox coordinates have more than 2 decimal places (finer than 0.01° precision)"
+                },
+                {
+                    "name": "DatasetNotFound",
+                    "description": "This server serves no tileset carrying the dataset"
+                },
+                {
+                    "name": "CollectionNotFound",
+                    "description": "This server serves the dataset but no tileset carrying the collection"
+                },
+                {
+                    "name": "InvalidBbox",
+                    "description": "The bbox parameter must be four comma-separated numbers with ymin < ymax and xmin < xmax, except that a box crossing the antimeridian has xmin > 0 > xmax"
+                }
+            ]
+        }
+    }
+}

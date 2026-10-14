@@ -1,7 +1,7 @@
 """Tests for export and query path bug fixes.
 
 These tests verify that the export pipeline correctly handles:
-- OSM rkey format consistency between export and manifest
+- OSM manifest key format consistency between export and manifest
 """
 
 import gzip
@@ -17,10 +17,10 @@ from garganorn.tile_reader import TileBackedCollection
 from garganorn.stages import write_manifest_db
 
 
-class TestOSMRkeyFormat:
-    """manifest.record_tiles.rkey uses the same node:/way:/relation: prefix
-    as the export tiles' JSON rkey, so get_record lookups by the exported
-    rkey succeed.
+class TestOSMManifestKeyFormat:
+    """manifest.record_tiles.key is {dataset}:{collection}:{id}, the origin URN
+    without its urn:atgeo: prefix, so get_record lookups by the exported
+    origin succeed.
     """
 
     @pytest.fixture
@@ -32,7 +32,7 @@ class TestOSMRkeyFormat:
         - A manifest.duckdb written by write_manifest_db()
         - A mock tile file with test records
 
-        Returns tuple: (manifest_db_path, tiles_dir, test_rkey_mapping)
+        Returns tuple: (manifest_db_path, tiles_dir)
         """
         # Create output directory structure first
         tiles_dir = tmp_path / "tiles"
@@ -75,17 +75,12 @@ class TestOSMRkeyFormat:
             FROM places
         """)
 
-        # Write mock tile file with reformatted rkeys (as export SQL does),
-        # wrapped in the current {uri, cid, value} envelope shape.
-        def _envelope(rkey, name, lat, lon):
+        def _record(key, name, lat, lon):
             return {
-                "uri": f"https://places.atgeo.org/org.atgeo.places.osm/{rkey}",
-                "cid": None,
                 "value": {
                     "$type": "org.atgeo.place",
-                    "rkey": rkey,
+                    "origin": f"urn:atgeo:{key}",
                     "name": name,
-                    "importance": 10,
                     "locations": [{
                         "$type": "community.lexicon.location.geo",
                         "latitude": lat,
@@ -94,16 +89,16 @@ class TestOSMRkeyFormat:
                     "variants": [],
                     "attributes": {}
                 },
+                "importance": 10,
             }
 
         tile_data = {
-            "collection": "org.atgeo.places.osm",
-            "source": "https://www.openstreetmap.org/",
-            "license": "https://opendatacommons.org/licenses/odbl/1-0/",
+            "publishedAt": "2026-10-01T00:00:00Z",
+            "attribution": [],
             "records": [
-                _envelope("node:12345", "Node Place", "37.774900", "-122.419400"),  # Reformatted from n12345
-                _envelope("way:67890", "Way Place", "37.775000", "-122.419500"),  # Reformatted from w67890
-                _envelope("relation:11111", "Relation Place", "37.775100", "-122.419600"),  # Reformatted from r11111
+                _record("openstreetmap.org:node:12345", "Node Place", "37.774900", "-122.419400"),
+                _record("openstreetmap.org:way:67890", "Way Place", "37.775000", "-122.419500"),
+                _record("openstreetmap.org:relation:11111", "Relation Place", "37.775100", "-122.419600"),
             ]
         }
 
@@ -112,7 +107,7 @@ class TestOSMRkeyFormat:
             json.dump(tile_data, f)
 
         # Write manifest.duckdb using the stage function
-        # This stores place_id (raw rkey) as rkey in record_tiles
+        # This stores the manifest key derived from place_id in record_tiles
         ta_tmp = str(tiles_dir.parent / "ta_tmp.parquet")
         con.execute(f"COPY tile_assignments TO '{ta_tmp}' (FORMAT PARQUET)")
         con.close()
@@ -120,83 +115,63 @@ class TestOSMRkeyFormat:
 
         manifest_db_path = tiles_dir / "manifest.duckdb"
 
-        # Mapping: reformatted rkey → original rkey
-        rkey_mapping = {
-            "node:12345": "n12345",
-            "way:67890": "w67890",
-            "relation:11111": "r11111",
-        }
+        return manifest_db_path, tiles_dir
 
-        return manifest_db_path, tiles_dir, rkey_mapping
-
-    def test_get_record_with_reformatted_node_rkey(self, osm_manifest_db):
-        """get_record finds a place by its reformatted node rkey "node:12345"."""
-        manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
+    def test_get_record_with_node_key(self, osm_manifest_db):
+        """get_record finds a place by its key "openstreetmap.org:node:12345"."""
+        manifest_db_path, tiles_dir = osm_manifest_db
 
         # Create TileBackedCollection to test get_record
         tbc = TileBackedCollection(
-            collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
         )
 
-        # Try to get record with reformatted rkey (as tile has it)
-        result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "node:12345")
+        # Look up by the manifest key
+        result = tbc.get_record("openstreetmap.org:node:12345")
 
-        assert result is not None, "get_record should find record with reformatted rkey 'node:12345'"
-        assert result["name"] == "Node Place"
+        assert result is not None, "get_record should find record with key 'openstreetmap.org:node:12345'"
+        assert result["value"]["name"] == "Node Place"
 
-    def test_get_record_with_reformatted_way_rkey(self, osm_manifest_db):
-        """get_record finds a place by its reformatted way rkey "way:67890"."""
-        manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
+    def test_get_record_with_way_key(self, osm_manifest_db):
+        """get_record finds a place by its key "openstreetmap.org:way:67890"."""
+        manifest_db_path, tiles_dir = osm_manifest_db
 
         tbc = TileBackedCollection(
-            collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
         )
 
-        result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "way:67890")
+        result = tbc.get_record("openstreetmap.org:way:67890")
 
-        assert result is not None, "get_record should find record with reformatted rkey 'way:67890'"
-        assert result["name"] == "Way Place"
+        assert result is not None, "get_record should find record with key 'openstreetmap.org:way:67890'"
+        assert result["value"]["name"] == "Way Place"
 
-    def test_get_record_with_reformatted_relation_rkey(self, osm_manifest_db):
-        """get_record finds a place by its reformatted relation rkey "relation:11111"."""
-        manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
+    def test_get_record_with_relation_key(self, osm_manifest_db):
+        """get_record finds a place by its key "openstreetmap.org:relation:11111"."""
+        manifest_db_path, tiles_dir = osm_manifest_db
 
         tbc = TileBackedCollection(
-            collection="org.atgeo.places.osm",
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
         )
 
-        result = tbc.get_record("places.atgeo.org", "org.atgeo.places.osm", "relation:11111")
+        result = tbc.get_record("openstreetmap.org:relation:11111")
 
-        assert result is not None, "get_record should find record with reformatted rkey 'relation:11111'"
-        assert result["name"] == "Relation Place"
+        assert result is not None, "get_record should find record with key 'openstreetmap.org:relation:11111'"
+        assert result["value"]["name"] == "Relation Place"
 
-    def test_manifest_rkey_format_matches_export(self, osm_manifest_db):
-        """Test that manifest record_tiles table uses reformatted rkeys.
-
-        Direct test of the manifest database structure.
-        """
-        manifest_db_path, tiles_dir, rkey_mapping = osm_manifest_db
+    def test_manifest_key_format_matches_export(self, osm_manifest_db):
+        """Manifest record_tiles holds {dataset}:{collection}:{id} keys, not raw place_ids."""
+        manifest_db_path, tiles_dir = osm_manifest_db
 
         con = duckdb.connect(str(manifest_db_path), read_only=True)
-
-        # Query the record_tiles table
-        rows = con.execute("SELECT rkey, tile_qk FROM record_tiles ORDER BY rkey").fetchall()
+        keys = [r[0] for r in con.execute(
+            "SELECT key FROM record_tiles ORDER BY key").fetchall()]
         con.close()
 
-        # Check that rkeys are in reformatted format
-        rkeys_in_manifest = [row[0] for row in rows]
-
-        assert "node:12345" in rkeys_in_manifest, "Manifest should contain reformatted rkey 'node:12345'"
-        assert "way:67890" in rkeys_in_manifest, "Manifest should contain reformatted rkey 'way:67890'"
-        assert "relation:11111" in rkeys_in_manifest, "Manifest should contain reformatted rkey 'relation:11111'"
-
-        # Raw place_id prefixes must not leak into the manifest rkey
-        assert "n12345" not in rkeys_in_manifest, "Manifest should not contain raw place_id 'n12345'"
-        assert "w67890" not in rkeys_in_manifest, "Manifest should not contain raw place_id 'w67890'"
-        assert "r11111" not in rkeys_in_manifest, "Manifest should not contain raw place_id 'r11111'"
+        assert keys == [
+            "openstreetmap.org:node:12345",
+            "openstreetmap.org:relation:11111",
+            "openstreetmap.org:way:67890",
+        ]

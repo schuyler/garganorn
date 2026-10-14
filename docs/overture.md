@@ -84,7 +84,7 @@ The schema permits several `division_area` rows per division, and the import mer
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `id` | String | Overture GERS identifier; used as `rkey` |
+| `id` | String | Overture GERS identifier; the id in the place's `urn:atgeo:overturemaps.org:division:{id}` origin |
 | `names.primary` | String | Primary name |
 | `subtype` | String | Administrative unit type (e.g. `country`, `region`, `county`, `locality`) |
 | `country` | String | ISO 3166-1 alpha-2 country code |
@@ -105,7 +105,7 @@ The schema permits several `division_area` rows per division, and the import mer
 
 ## Garganorn Collection
 
-Collection name: `org.atgeo.places.overture.division`
+Collection: `(overturemaps.org, division)`
 
 Tile records use `community.lexicon.location.bbox` (north/south/east/west extents of the geometry) rather than a point location. No polygon geometry appears in tile output. The full geometry is stored in `boundaries.duckdb` for point-in-polygon containment queries.
 
@@ -116,7 +116,6 @@ Record attributes:
 | `subtype` | `division.subtype` |
 | `country` | `division.country` |
 | `region` | `division.region` |
-| `level` | atgeo containment level, derived from `division.subtype` |
 | `wikidata` | `division.wikidata` |
 | `population` | `division.population` |
 

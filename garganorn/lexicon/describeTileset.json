@@ -1,0 +1,36 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.describeTileset",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Get a served tileset's descriptor.",
+            "parameters": {
+                "type": "params",
+                "properties": {
+                    "slug": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "description": "The tileset's slug, as listed by org.atgeo.describeService"
+                    }
+                },
+                "required": [
+                    "slug"
+                ]
+            },
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "ref",
+                    "ref": "org.atgeo.defs#tileset"
+                }
+            },
+            "errors": [
+                {
+                    "name": "TilesetNotFound",
+                    "description": "This server serves no tileset with that slug"
+                }
+            ]
+        }
+    }
+}

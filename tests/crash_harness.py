@@ -107,6 +107,7 @@ def main():
         args.output,
         memory_limit=args.memory_limit,
         max_per_tile=100,
+        releases={"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"},
     )
 
 

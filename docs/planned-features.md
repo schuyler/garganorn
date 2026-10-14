@@ -8,10 +8,9 @@ document is scoped for implementation until its section says so.
 
 ## Collection and service metadata
 
-Status: `org.atgeo.describeService` is served. `org.atgeo.collection` is
-written by the export as each run's `collection.json` (see
-`pipeline-artifacts.md`'s `stage_export` section) and served by nothing.
-What remains open:
+Status: `org.atgeo.describeService` and `org.atgeo.describeTileset` are
+served; the latter returns each run's `tileset.json` (see
+`pipeline-artifacts.md`'s `stage_export` section). What remains open:
 
 - A DID-based discovery layer, so a client can learn a service *exists and
   what kind it is* before calling any XRPC method on it — resolved via the
@@ -23,8 +22,8 @@ What remains open:
   can't act on them (e.g. filter a query by category) without additional
   per-collection structure.
 - Whether summary-band facts (band existence, its top-N cap, its record
-  count) belong in `org.atgeo.collection` — deliberately excluded from the
-  current record for lack of an approved requirement.
+  count) belong in `org.atgeo.defs#tileset` — deliberately excluded from the
+  descriptor for lack of an approved requirement.
 
 ## Two introductory tutorials, in both directions
 

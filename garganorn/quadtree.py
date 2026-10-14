@@ -80,7 +80,7 @@ def _union_tile_assignments(regular_path, summary_path, output_path, *,
     finalize_artifact(tmp_output, output_path, params={}, inputs=inputs)
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB"):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB", releases=None):
     """Orchestrates import → covering → tile-assign → containment → export."""
     source_dir = os.path.join(output_dir, source)
     tiles_root = os.path.join(source_dir, "tiles")
@@ -216,49 +216,40 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                  t0, export_workers=export_workers, memory_limit=memory_limit,
                  temp_directory=temp_directory,
                  max_temp_directory_size=max_temp_directory_size,
-                 force=force, idf_parquet=idf_parquet)
+                 force=force, idf_parquet=idf_parquet, releases=releases)
 
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
 
 
-class BboxTooLarge(Exception):
-    pass
-
-
 class TileManifest:
+    # Summary-band tiles are keyed by quadkey length < 6 (the regular band's
+    # min_zoom).
     def __init__(self, manifest_path: str, base_url: str):
         con = duckdb.connect(manifest_path, read_only=True)
         try:
             rows = con.execute("SELECT DISTINCT tile_qk FROM record_tiles").fetchall()
-            self.quadkeys = set(row[0] for row in rows)
+            quadkeys = [row[0] for row in rows]
         finally:
             con.close()
+        self.regular_qks = [qk for qk in quadkeys if len(qk) >= 6]
+        self.overview_qks = [qk for qk in quadkeys if len(qk) < 6]
         self.base_url = base_url.rstrip("/")
 
-    def get_tiles_for_bbox(self, xmin, ymin, xmax, ymax, max_tiles=50):
-        # Summary tiles are keyed by quadkey length < 6 (the regular band's
-        # min_zoom); answer from the regular band first, and fall back to
-        # the summary band -- uncapped, since it is bounded by construction
-        # -- only when the regular answer exceeds max_tiles
-        # (docs/design-constraints.md).
-        bbox = (xmin, ymin, xmax, ymax)
-        regular_urls = [
+    def _urls(self, quadkeys, bbox):
+        return [
             f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
-            for qk in self.quadkeys
-            if len(qk) >= 6 and bboxes_intersect(quadkey_to_bbox(qk), bbox)
+            for qk in quadkeys
+            if bboxes_intersect(quadkey_to_bbox(qk), bbox)
         ]
-        if len(regular_urls) <= max_tiles:
-            return regular_urls, False
 
-        summary_qks = [qk for qk in self.quadkeys if len(qk) < 6]
-        if summary_qks:
-            return [
-                f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
-                for qk in summary_qks
-                if bboxes_intersect(quadkey_to_bbox(qk), bbox)
-            ], True
+    def regular_tiles(self, bbox):
+        return self._urls(self.regular_qks, bbox)
 
-        raise BboxTooLarge(f"Bounding box covers more than {max_tiles} tiles")
+    def overview_tiles(self, bbox):
+        """None when the run has no overview tiles at all."""
+        if not self.overview_qks:
+            return None
+        return self._urls(self.overview_qks, bbox)
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +361,7 @@ def _cmd_run(args, run_parser):
         config.get("max_temp_directory_size") if config.get("max_temp_directory_size") is not None else "250GB"
     )
     boundaries_db = args.boundaries
+    releases = dict(item.split("=", 1) for item in args.release)
 
     bbox = tuple(args.bbox) if args.bbox is not None else None
 
@@ -398,6 +390,7 @@ def _cmd_run(args, run_parser):
         temp_directory=temp_directory,
         max_temp_directory_size=max_temp_directory_size,
         force=args.force,
+        releases=releases,
     )
 
 
@@ -443,10 +436,28 @@ def _cmd_all(args):
                          (division_cfg, "division_area_parquet"))
         if cfg and cfg.get(key)
     ]
+    releases = {}
     if release_keys:
-        patterns = resolve_newest_release([cfg[key] for cfg, key in release_keys])
+        release, patterns = resolve_newest_release([cfg[key] for cfg, key in release_keys])
+        if release is None:
+            raise SystemExit(
+                "quadtree all: the Overture globs have no release segment (a path "
+                "segment that is entirely `*`), so the release cannot be named"
+            )
+        releases["overturemaps.org"] = release
         for (cfg, key), pattern in zip(release_keys, patterns):
             cfg[key] = pattern
+
+    osm_cfg = sources.get("osm")
+    if osm_cfg:
+        release_path = os.path.join(osm_cfg.get("parquet_dir"), "release")
+        if not os.path.exists(release_path):
+            raise SystemExit(
+                f"quadtree all: {release_path} is missing; re-run "
+                f"scripts/extract-osm-parquet.sh to write the OSM release"
+            )
+        with open(release_path) as f:
+            releases["openstreetmap.org"] = f.read().strip()
 
     # Derived paths
     shared_dir = os.path.join(output_dir, "shared")
@@ -505,6 +516,7 @@ def _cmd_all(args):
             temp_directory=temp_directory,
             max_temp_directory_size=max_temp_directory_size,
             force=args.force,
+            releases=releases,
         )
 
     # Step 4: run each remaining configured place source
@@ -536,6 +548,7 @@ def _cmd_all(args):
             temp_directory=temp_directory,
             max_temp_directory_size=max_temp_directory_size,
             force=args.force,
+            releases=releases,
         )
 
 
@@ -661,6 +674,9 @@ def main():
                        dest="max_temp_directory_size",
                        help="DuckDB max_temp_directory_size (e.g. 250GB); "
                             "bounds spill under --temp-directory")
+    run_p.add_argument("--release", action="append", default=[], metavar="DATASET=VALUE",
+                       help="Release of a dataset the tileset carries or references "
+                            "(repeatable), e.g. overturemaps.org=2026-09-17.0")
     run_p.add_argument("--force", action="store_true", default=False,
                        help="Delete and rebuild all stage outputs before running")
 

@@ -5,7 +5,7 @@ boundaries DuckDB, plus covering_dir/containment_dir, and writes containment
 parquet files keyed by tile_qk.
 
 Test class mapping:
-  1. Rkey/name/level relation shape         → TestContainmentBehaviorPorts
+  1. Uri/name/type relation shape           → TestContainmentBehaviorPorts
   2. Ordering (within by level ASC)         → TestContainmentOrdering
   3. Brute-force oracle parity              → TestBruteForceOracle
   4. Containment artifact layout            → TestContainmentArtifacts
@@ -23,6 +23,7 @@ import time
 import duckdb
 import pytest
 
+from garganorn.database import DIVISION_URN_PREFIX
 from garganorn.stages import compute_containment, quadkey_to_bbox
 from garganorn.quadtree import run_pipeline
 
@@ -30,40 +31,31 @@ from garganorn.quadtree import run_pipeline
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-_COLLECTION_PREFIX = "org.atgeo.places.overture.division"
+RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
 # Minimal boundaries DB schema (what bnd.places must look like for compute_containment)
 # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB):
-# country=10, region=25, locality=50. div_continent_na and div_borough_manhattan
-# have no vocabulary entry among this fixture's modeled subtypes (continent has no
-# producer entry in the containment level vocabulary; this fixture's "borough" is a locality-shaped
-# boundary used only to test partial containment, not vocabulary mapping) -- 0 and 50
-# respectively are chosen to preserve ascending/partial-containment
-# behavior without asserting a specific subtype mapping for them.
+# country=10, region=25, locality=50. div_borough_manhattan is a locality-shaped
+# boundary used only to test partial containment, not vocabulary mapping.
 _SIMPLE_BOUNDARIES = [
-    # (id, level, wkt, min_lat, min_lon, max_lat, max_lon)
+    # (id, level, subtype, wkt, min_lat, min_lon, max_lat, max_lon)
     (
-        "div_continent_na", 0,
-        "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
-        20.0, -130.0, 55.0, -60.0,
-    ),
-    (
-        "div_country_us", 10,
+        "div_country_us", 10, "country",
         "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
         24.0, -125.0, 50.0, -66.0,
     ),
     (
-        "div_region_ca", 25,
+        "div_region_ca", 25, "region",
         "POLYGON((-125 34, -125 42, -118 42, -118 34, -125 34))",
         34.0, -125.0, 42.0, -118.0,
     ),
     (
-        "div_locality_sf", 50,
+        "div_locality_sf", 50, "locality",
         "POLYGON((-122.55 37.6, -122.55 37.85, -122.3 37.85, -122.3 37.6, -122.55 37.6))",
         37.6, -122.55, 37.85, -122.3,
     ),
     (
-        "div_borough_manhattan", 50,
+        "div_borough_manhattan", 50, "locality",
         "POLYGON((-74.05 40.68, -74.05 40.88, -73.90 40.88, -73.90 40.68, -74.05 40.68))",
         40.68, -74.05, 40.88, -73.90,
     ),
@@ -82,13 +74,14 @@ def _create_simple_boundaries_db(db_path):
             min_latitude DOUBLE,
             max_latitude DOUBLE,
             min_longitude DOUBLE,
-            max_longitude DOUBLE
+            max_longitude DOUBLE,
+            subtype VARCHAR
         )
     """)
-    for bid, level, wkt, min_lat, min_lon, max_lat, max_lon in _SIMPLE_BOUNDARIES:
+    for bid, level, subtype, wkt, min_lat, min_lon, max_lat, max_lon in _SIMPLE_BOUNDARIES:
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
-            [bid, wkt, level, bid, min_lat, max_lat, min_lon, max_lon],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?, ?)",
+            [bid, wkt, level, bid, min_lat, max_lat, min_lon, max_lon, subtype],
         )
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
@@ -138,9 +131,7 @@ def _make_places_con(places, tile_qk_map=None):
 # ---------------------------------------------------------------------------
 
 class TestContainmentBehaviorPorts:
-    """Rkey-only relations, division prefix, SF point expected IDs,
-    collection_prefix kwarg.
-    """
+    """Relation shape, division URN prefix, SF point expected IDs."""
 
     def test_new_signature_has_covering_dir_not_max_boundaries(self):
         """compute_containment takes covering_dir/containment_dir, not max_boundaries/max_zoom."""
@@ -158,35 +149,22 @@ class TestContainmentBehaviorPorts:
             f"compute_containment should not have 'max_zoom': {sig}"
         )
 
-    def test_collection_prefix_default_and_new_signature(self):
-        """collection_prefix default unchanged; covering_dir/containment_dir present in the signature."""
-        sig = inspect.signature(compute_containment)
-        assert "covering_dir" in sig.parameters, (
-            f"covering_dir missing from compute_containment signature: {sig}"
-        )
-        assert "collection_prefix" in sig.parameters, "collection_prefix param missing"
-        default = sig.parameters["collection_prefix"].default
-        assert default == _COLLECTION_PREFIX, (
-            f"Expected default '{_COLLECTION_PREFIX}', got {default!r}"
-        )
-
     def test_relation_shape_sf_point(self, simple_boundaries_db, tmp_path):
-        """SF point: place_containment relations have rkey/name/level keys, division prefix."""
+        """SF point: place_containment relations have uri/name/type keys, division URN prefix."""
         places_parquet = _make_parquet_places(
-            tmp_path, [("p_sf", -122.4194, 37.7749)], "rkeys_places.parquet"
+            tmp_path, [("p_sf", -122.4194, 37.7749)], "uris_places.parquet"
         )
         ta_parquet = _make_parquet_tile_assignments(
-            tmp_path, [("p_sf", "023010")], "rkeys_ta.parquet"
+            tmp_path, [("p_sf", "023010")], "uris_ta.parquet"
         )
-        covering_dir = str(tmp_path / "rkeys_covering")
+        covering_dir = str(tmp_path / "uris_covering")
         from garganorn.covering import stage_covering
         stage_covering(str(simple_boundaries_db), covering_dir, cover_min_zoom=4, cover_max_zoom=12)
 
-        containment_dir = str(tmp_path / "rkeys_containment")
+        containment_dir = str(tmp_path / "uris_containment")
         compute_containment(
             places_parquet, ta_parquet, str(simple_boundaries_db),
             "place_id", "longitude", "latitude", containment_dir,
-            collection_prefix=_COLLECTION_PREFIX,
             covering_dir=covering_dir,
             force=True,
         )
@@ -205,16 +183,16 @@ class TestContainmentBehaviorPorts:
             within = data.get("within", [])
             assert len(within) > 0
             for entry in within:
-                assert set(entry.keys()) == {"rkey", "name", "level"}, (
-                    f"Relation must have rkey/name/level, got {set(entry.keys())}: {entry}"
+                assert set(entry.keys()) == {"uri", "name", "type"}, (
+                    f"Relation must have uri/name/type, got {set(entry.keys())}: {entry}"
                 )
-                assert entry["rkey"].startswith(_COLLECTION_PREFIX + ":"), (
-                    f"rkey missing division prefix: {entry['rkey']}"
+                assert entry["uri"].startswith(DIVISION_URN_PREFIX), (
+                    f"uri missing division URN prefix: {entry['uri']}"
                 )
                 assert entry["name"], f"name must be non-empty: {entry}"
 
     def test_sf_point_expected_boundary_ids(self, simple_boundaries_db, tmp_path):
-        """SF point: rkeys include continent, country, region, locality; exclude Manhattan."""
+        """SF point: uris include country, region, locality; exclude Manhattan."""
         places_parquet = _make_parquet_places(
             tmp_path, [("p_sf", -122.4194, 37.7749)], "sfid_places.parquet"
         )
@@ -241,16 +219,15 @@ class TestContainmentBehaviorPorts:
         ).fetchall()
         check_con.close()
         assert len(rows) > 0
-        rkeys = {
-            e["rkey"]
+        uris = {
+            e["uri"]
             for _, rel_json in rows
             for e in json.loads(rel_json)["within"]
         }
-        assert f"{_COLLECTION_PREFIX}:div_continent_na" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_country_us" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_region_ca" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_locality_sf" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_borough_manhattan" not in rkeys
+        assert DIVISION_URN_PREFIX + "div_country_us" in uris
+        assert DIVISION_URN_PREFIX + "div_region_ca" in uris
+        assert DIVISION_URN_PREFIX + "div_locality_sf" in uris
+        assert DIVISION_URN_PREFIX + "div_borough_manhattan" not in uris
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +242,7 @@ class TestContainmentOrdering:
     """Within list ordered by level ASC, ties broken by id."""
 
     def test_within_ordered_by_level_asc(self, simple_boundaries_db, tmp_path):
-        """The within list is sorted by level ASC (continent=0 first, locality=50 last)."""
+        """The within list is sorted by level ASC (country=10 first, locality=50 last)."""
         from garganorn.covering import stage_covering
         ord_covering = str(tmp_path / "ord_covering")
         stage_covering(str(simple_boundaries_db), ord_covering, cover_min_zoom=4, cover_max_zoom=12)
@@ -302,17 +279,17 @@ class TestContainmentOrdering:
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
             assert len(within) > 1, "SF point should be in multiple boundaries"
-            rkeys = [e["rkey"] for e in within]
-            continent_idx = next(
-                (i for i, r in enumerate(rkeys) if r.endswith(":div_continent_na")), None
+            uris = [e["uri"] for e in within]
+            country_idx = next(
+                (i for i, r in enumerate(uris) if r.endswith(":div_country_us")), None
             )
             locality_idx = next(
-                (i for i, r in enumerate(rkeys) if r.endswith(":div_locality_sf")), None
+                (i for i, r in enumerate(uris) if r.endswith(":div_locality_sf")), None
             )
-            assert continent_idx is not None, "div_continent_na not in within"
+            assert country_idx is not None, "div_country_us not in within"
             assert locality_idx is not None, "div_locality_sf not in within"
-            assert continent_idx < locality_idx, (
-                f"continent (idx={continent_idx}) should come before locality (idx={locality_idx})"
+            assert country_idx < locality_idx, (
+                f"country (idx={country_idx}) should come before locality (idx={locality_idx})"
             )
 
     def test_no_null_levels_in_boundaries_db(self, tmp_path):
@@ -337,19 +314,20 @@ class TestContainmentOrdering:
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
-                max_longitude DOUBLE
+                max_longitude DOUBLE,
+                subtype VARCHAR
             )
         """)
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_named', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
-                25, {'primary': 'r_named'}, -10.0, 10.0, -10.0, 10.0
+                25, {'primary': 'r_named'}, -10.0, 10.0, -10.0, 10.0, 'region'
             )
         """)
         conn.execute("""
             INSERT INTO places VALUES (
                 'r_null', ST_GeomFromText('POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))'),
-                NULL, {'primary': 'r_null'}, -10.0, 10.0, -10.0, 10.0
+                NULL, {'primary': 'r_null'}, -10.0, 10.0, -10.0, 10.0, 'region'
             )
         """)
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
@@ -390,9 +368,9 @@ class TestContainmentOrdering:
         assert len(rows) > 0
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
-            rkeys = [e["rkey"] for e in within]
-            named_idx = next((i for i, r in enumerate(rkeys) if r.endswith(":r_named")), None)
-            null_idx = next((i for i, r in enumerate(rkeys) if r.endswith(":r_null")), None)
+            uris = [e["uri"] for e in within]
+            named_idx = next((i for i, r in enumerate(uris) if r.endswith(":r_named")), None)
+            null_idx = next((i for i, r in enumerate(uris) if r.endswith(":r_null")), None)
             if named_idx is not None and null_idx is not None:
                 assert named_idx < null_idx, (
                     "Non-NULL level boundary should appear before NULL level boundary in within"
@@ -498,7 +476,7 @@ class TestBruteForceOracle:
                 [parquet_files],
             ).fetchall():
                 for entry in json.loads(rel_json)["within"]:
-                    boundary_id = entry["rkey"].split(":", 1)[1]
+                    boundary_id = entry["uri"].removeprefix(DIVISION_URN_PREFIX)
                     cc_pairs.add((place_id, boundary_id))
 
         # brute-force oracle via ST_Contains
@@ -519,7 +497,7 @@ class TestBruteForceOracle:
             f"  In oracle but not CC: {oracle_pairs - cc_pairs}"
         )
 
-    def test_no_duplicate_rkeys_in_within(self, simple_boundaries_db, tmp_path):
+    def test_no_duplicate_uris_in_within(self, simple_boundaries_db, tmp_path):
         """Each boundary appears at most once in a place's within list."""
         from garganorn.covering import stage_covering
 
@@ -563,9 +541,9 @@ class TestBruteForceOracle:
         assert len(rows) > 0
         for (rel_json,) in rows:
             within = json.loads(rel_json)["within"]
-            rkeys = [e["rkey"] for e in within]
-            assert len(rkeys) == len(set(rkeys)), (
-                f"Duplicate rkeys in within list: {[r for r in rkeys if rkeys.count(r) > 1]}"
+            uris = [e["uri"] for e in within]
+            assert len(uris) == len(set(uris)), (
+                f"Duplicate uris in within list: {[r for r in uris if uris.count(r) > 1]}"
             )
 
 
@@ -885,6 +863,7 @@ class TestExportIntegration:
             output_dir,
             memory_limit="4GB",
             max_per_tile=100,
+            releases=RELEASES,
         )
 
         expected_covering = os.path.join(output_dir, "overture_division", "covering")
@@ -925,6 +904,7 @@ class TestExportIntegration:
             max_per_tile=100,
             boundaries_db=str(bnd_path),
             density_parquet=density_parquet,
+            releases=RELEASES,
             force=True,
         )
 
@@ -1061,7 +1041,7 @@ class TestAntimeridianEdgeArm:
     (b) GAP ASSERTIONS (test_gap_place_absent_from_containment and the gap
         assertions in test_all_three_places_via_compute_containment): these are
         end-to-end sanity checks.  The gap place (lon=0) must NOT appear under
-        ami_boundary's rkey — this is guaranteed structurally, not by the antimeridian
+        ami_boundary's uri — this is guaranteed structurally, not by the antimeridian
         CASE branch.  The covering seed SQL uses the same antimeridian OR-condition on
         the boundary's bbox; gap tiles (xmax < 170 AND xmin > -170) never pass it, so
         ami_boundary contributes no covering tiles in the gap region and no
@@ -1069,7 +1049,7 @@ class TestAntimeridianEdgeArm:
         row somehow entered the join, ST_Contains(ami_boundary, gap_point) = false
         (the geometry has no interior in the gap), so the antimeridian CASE exclusion
         would be masked by ST_Contains anyway.  The gap assertions therefore test
-        end-to-end correctness (gap place gets gap_boundary's rkey, never
+        end-to-end correctness (gap place gets gap_boundary's uri, never
         ami_boundary's), NOT the antimeridian CASE's exclusion branch, which is
         structurally unreachable for gap points and masked by ST_Contains even where
         reachable.
@@ -1098,7 +1078,8 @@ class TestAntimeridianEdgeArm:
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
-                max_longitude DOUBLE
+                max_longitude DOUBLE,
+                subtype VARCHAR
             )
         """)
         # Antimeridian-crossing boundary: lobes [170,180] and [-180,-170], lat [-15, 15]
@@ -1109,17 +1090,17 @@ class TestAntimeridianEdgeArm:
             "((-180 -15, -170 -15, -170 15, -180 15, -180 -15)))"  # west lobe
         )
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
-            ["ami_boundary", ami_wkt, 10, "ami_boundary", -15.0, 15.0, 170.0, -170.0],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?, ?)",
+            ["ami_boundary", ami_wkt, 10, "ami_boundary", -15.0, 15.0, 170.0, -170.0, "country"],
         )
         # Non-antimeridian boundary covering the gap area around lon=0.
-        # Ensures the gap place has a valid containment result (gap_boundary's rkey)
+        # Ensures the gap place has a valid containment result (gap_boundary's uri)
         # so the gap assertion is a meaningful end-to-end check rather than
         # vacuously asserting absence from an empty result set.
         gap_wkt = "POLYGON((-10 -10, -10 10, 10 10, 10 -10, -10 -10))"
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
-            ["gap_boundary", gap_wkt, 25, "gap_boundary", -10.0, 10.0, -10.0, 10.0],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?, ?)",
+            ["gap_boundary", gap_wkt, 25, "gap_boundary", -10.0, 10.0, -10.0, 10.0, "region"],
         )
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
         conn.close()
@@ -1214,13 +1195,13 @@ class TestAntimeridianEdgeArm:
         )
 
     def test_gap_place_absent_from_containment(self, antimeridian_boundaries_db, tmp_path):
-        """Gap place (lon=0) appears with gap_boundary's rkey; never with ami_boundary's.
+        """Gap place (lon=0) appears with gap_boundary's uri; never with ami_boundary's.
 
         This is an end-to-end sanity check, not a test of the antimeridian CASE exclusion
         branch.  ami_boundary seeds no covering tiles in the gap region (the seed SQL's
         antimeridian condition on the boundary bbox excludes gap tiles entirely), so no
         (gap_place, ami_boundary) row can enter the arm join regardless of the CASE
-        predicate.  gap_boundary provides the gap place's rkey, confirming that covering
+        predicate.  gap_boundary provides the gap place's uri, confirming that covering
         was built and containment ran successfully for the gap region.
         """
         from garganorn.covering import stage_covering
@@ -1255,24 +1236,24 @@ class TestAntimeridianEdgeArm:
             for f in os.listdir(containment_dir)
             if f.endswith(".parquet")
         ]
-        rkeys = set()
+        uris = set()
         if parquet_files:
             check_con = duckdb.connect()
             for (rel_json,) in check_con.execute(
                 f"SELECT relations_json FROM read_parquet({parquet_files!r}) WHERE place_id = 'p_gap'"
             ).fetchall():
                 for e in json.loads(rel_json)["within"]:
-                    rkeys.add(e["rkey"])
+                    uris.add(e["uri"])
             check_con.close()
-        ami_rkey = f"{_COLLECTION_PREFIX}:ami_boundary"
-        gap_rkey = f"{_COLLECTION_PREFIX}:gap_boundary"
-        assert ami_rkey not in rkeys, (
+        ami_uri = DIVISION_URN_PREFIX + "ami_boundary"
+        gap_uri = DIVISION_URN_PREFIX + "gap_boundary"
+        assert ami_uri not in uris, (
             f"Gap place (lon=0) must NOT appear under ami_boundary (antimeridian CASE "
-            f"must exclude it); rkeys found: {rkeys}"
+            f"must exclude it); uris found: {uris}"
         )
-        assert gap_rkey in rkeys, (
+        assert gap_uri in uris, (
             f"Gap place (lon=0) should appear under gap_boundary (confirms covering was "
-            f"seeded for the gap region); rkeys found: {rkeys}"
+            f"seeded for the gap region); uris found: {uris}"
         )
 
     def test_all_three_places_via_compute_containment(
@@ -1286,7 +1267,7 @@ class TestAntimeridianEdgeArm:
         - Gap assertion (p_gap): end-to-end sanity.  ami_boundary has no covering tiles
           in the gap region (structural exclusion by the seed SQL), so the gap place is
           absent from ami_boundary's results regardless of the CASE predicate.
-          gap_boundary's rkey on the gap place confirms covering was seeded correctly.
+          gap_boundary's uri on the gap place confirms covering was seeded correctly.
         """
         from garganorn.covering import stage_covering
 
@@ -1326,34 +1307,34 @@ class TestAntimeridianEdgeArm:
             force=True,
         )
 
-        ami_rkey = f"{_COLLECTION_PREFIX}:ami_boundary"
-        gap_rkey = f"{_COLLECTION_PREFIX}:gap_boundary"
+        ami_uri = DIVISION_URN_PREFIX + "ami_boundary"
+        gap_uri = DIVISION_URN_PREFIX + "gap_boundary"
 
         parquet_files = [
             os.path.join(containment_dir, f)
             for f in os.listdir(containment_dir)
             if f.endswith(".parquet")
         ]
-        place_rkeys = {}
+        place_uris = {}
         if parquet_files:
             check_con = duckdb.connect()
             for place_id, rel_json in check_con.execute(
                 f"SELECT place_id, relations_json FROM read_parquet({parquet_files!r})"
             ).fetchall():
-                place_rkeys[place_id] = {e["rkey"] for e in json.loads(rel_json)["within"]}
+                place_uris[place_id] = {e["uri"] for e in json.loads(rel_json)["within"]}
             check_con.close()
 
-        assert ami_rkey in place_rkeys.get("p_east", set()), (
+        assert ami_uri in place_uris.get("p_east", set()), (
             "East lobe place (lon=175) should appear with ami_boundary"
         )
-        assert ami_rkey in place_rkeys.get("p_west", set()), (
+        assert ami_uri in place_uris.get("p_west", set()), (
             "West lobe place (lon=-175) should appear with ami_boundary"
         )
-        assert ami_rkey not in place_rkeys.get("p_gap", set()), (
+        assert ami_uri not in place_uris.get("p_gap", set()), (
             "Gap place (lon=0) must NOT appear with ami_boundary "
             "(the antimeridian CASE must exclude it even when gap_boundary seeds covering tiles nearby)"
         )
-        assert gap_rkey in place_rkeys.get("p_gap", set()), (
+        assert gap_uri in place_uris.get("p_gap", set()), (
             "Gap place (lon=0) should appear with gap_boundary "
             "(confirms the covering was seeded for the gap region)"
         )
@@ -1392,12 +1373,13 @@ class TestInteriorOnlyPartitionContainment:
                 min_latitude DOUBLE,
                 max_latitude DOUBLE,
                 min_longitude DOUBLE,
-                max_longitude DOUBLE
+                max_longitude DOUBLE,
+                subtype VARCHAR
             )
         """)
         conn.execute(
-            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?)",
-            ["spill_boundary", wkt, 50, "spill_boundary", bymin, bymax, bxmin, bxmax],
+            "INSERT INTO places VALUES (?, ST_GeomFromText(?), ?, {'primary': ?}, ?, ?, ?, ?, ?)",
+            ["spill_boundary", wkt, 50, "spill_boundary", bymin, bymax, bxmin, bxmax, "locality"],
         )
         conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
         conn.close()
@@ -1442,10 +1424,10 @@ class TestInteriorOnlyPartitionContainment:
         (rel_json,) = check_con.execute(
             f"SELECT relations_json FROM read_parquet({parquet_files!r}) WHERE place_id = 'p1'"
         ).fetchone()
-        rkeys = {e["rkey"] for e in json.loads(rel_json)["within"]}
-        expected_rkey = f"{_COLLECTION_PREFIX}:spill_boundary"
-        assert expected_rkey in rkeys, (
-            f"spill_boundary should appear in p1's within relations; got {rkeys}"
+        uris = {e["uri"] for e in json.loads(rel_json)["within"]}
+        expected_uri = DIVISION_URN_PREFIX + "spill_boundary"
+        assert expected_uri in uris, (
+            f"spill_boundary should appear in p1's within relations; got {uris}"
         )
 
 
@@ -1909,8 +1891,8 @@ class TestContainmentPartitionZoom:
         "0230" (same z4 covering file, same z4 output batch) but differ at
         qk17[:6] ("023010" vs "023012" -- different z6 output batches). Verified
         empirically at test-write time with ST_QuadKey(lon, lat, 17) against these
-        exact coordinates. Both points fall inside div_continent_na's,
-        div_country_us's, and div_region_ca's bboxes; p_a additionally falls
+        exact coordinates. Both points fall inside div_country_us's
+        and div_region_ca's bboxes; p_a additionally falls
         inside div_locality_sf's bbox, p_e does not -- so both produce
         non-trivial, comparable containment relations.
         """

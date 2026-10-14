@@ -25,31 +25,28 @@ import pytest
 from garganorn.quadtree import run_pipeline
 import garganorn.stages as _stages
 
+RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
+
 
 # ---------------------------------------------------------------------------
 # Helper: canonical tile comparison
 # ---------------------------------------------------------------------------
 
 def _canonical_tile(gz_path):
-    """Read a .json.gz tile, sort records, strip the run-scoped generated_at,
+    """Read a .json.gz tile, sort records, strip the run-scoped publishedAt,
     return canonical JSON string.
 
-    generated_at is derived from the export run's timestamp and legitimately
+    publishedAt is derived from the export run's timestamp and legitimately
     differs between the control run and a recovery run executed at a
     different wall-clock time, so it is stripped here the same way
     scripts/tile_parity.py's canonicalizer does; otherwise every
     crash-recovery comparison would spuriously fail on timestamp drift alone.
-    Records are {uri, cid, value}-wrapped, so the sort/dedup key is
-    value.rkey, not a top-level rkey.
+    Records are {value, importance}, so the sort key is value.origin.
     """
     with gzip.open(gz_path) as f:
         obj = json.load(f)
-    obj.pop("generated_at", None)
-    if "records" in obj:
-        obj["records"] = sorted(
-            obj["records"],
-            key=lambda r: (r.get("value") or r).get("rkey", "") if isinstance(r.get("value", r), dict) else "",
-        )
+    obj.pop("publishedAt", None)
+    obj["records"] = sorted(obj["records"], key=lambda r: r["value"]["origin"])
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -86,6 +83,7 @@ def control_run(overture_parquet, density_parquet, tmp_path_factory):
         memory_limit="4GB",
         max_per_tile=100,
         density_parquet=density_parquet,
+        releases=RELEASES,
     )
     tiles_current = _find_tiles_current(out, "overture_place")
     canonical = _collect_tiles(str(tiles_current))
@@ -115,6 +113,7 @@ class TestCrashStateMatrix:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         tiles_current = _find_tiles_current(output_dir, "overture_place")
         return _collect_tiles(str(tiles_current))
@@ -152,6 +151,7 @@ class TestCrashStateMatrix:
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         tiles_root = output_dir / "overture_place" / "tiles"
         # Plant a fake incomplete run dir (has tile files but no manifest.json)
@@ -167,6 +167,7 @@ class TestCrashStateMatrix:
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, force=True,
+            releases=RELEASES,
         )
         assert not fake_run.exists(), (
             f"Incomplete run dir {fake_run} must be deleted at next export start"
@@ -185,6 +186,7 @@ class TestCrashStateMatrix:
             (-122.55, 37.60, -122.30, 37.85),
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         ov_dir = output_dir / "overture_place"
         places = ov_dir / "places.parquet"
@@ -276,6 +278,7 @@ class TestCrashStateMatrix:
                     str(output_dir),
                     memory_limit="4GB",
                     max_per_tile=100,
+                    releases=RELEASES,
                 )
             except Exception:
                 pass  # Pipeline may fail for other reasons; we check explicit WAL deletion
@@ -338,6 +341,7 @@ class TestKillNineAcceptance:
             memory_limit="4GB",
             max_per_tile=100,
             density_parquet=density_parquet,
+            releases=RELEASES,
         )
         tiles_current = _find_tiles_current(output_dir, "overture_place")
         recovered_tiles = _collect_tiles(str(tiles_current))

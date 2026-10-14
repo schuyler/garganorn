@@ -91,7 +91,9 @@ run_script() {
 
 # write_mock_osmium <bin_dir> <call_log> [exit_code]
 #   Creates a mock osmium that:
-#     - appends its invocation to call_log
+#     - answers `fileinfo` with the contents of <bin_dir>/replication_timestamp
+#       (default 2026-01-01T00:00:00Z), without logging the call
+#     - appends any other invocation to call_log
 #     - on success (exit_code=0): creates the -o <output_path> file
 #     - exits with exit_code
 write_mock_osmium() {
@@ -100,6 +102,14 @@ write_mock_osmium() {
     local exit_code="${3:-0}"
     cat > "${bin_dir}/osmium" <<MOCK
 #!/bin/bash
+if [ "\$1" = "fileinfo" ]; then
+    if [ -f "${bin_dir}/replication_timestamp" ]; then
+        cat "${bin_dir}/replication_timestamp"
+    else
+        echo "2026-01-01T00:00:00Z"
+    fi
+    exit 0
+fi
 echo "osmium \$*" >> "${call_log}"
 if [ "${exit_code}" -eq 0 ]; then
     output_path=""
@@ -162,6 +172,10 @@ write_mock_osmium_env() {
     local env_log="$2"
     cat > "${bin_dir}/osmium" <<MOCK
 #!/bin/bash
+if [ "\$1" = "fileinfo" ]; then
+    echo "2026-01-01T00:00:00Z"
+    exit 0
+fi
 echo "OSMIUM_POOL_THREADS=\${OSMIUM_POOL_THREADS:-unset}" >> "${env_log}"
 output_path=""
 args=("\$@")
@@ -1004,6 +1018,90 @@ test_relation_selector_addition_invalidates_old_cache() {
     teardown_tmpdir
 }
 
+# Test 26: The release file carries the PBF's replication timestamp.
+test_release_file_written() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "${TMPROOT}/calls.log"
+    write_mock_osm_pbf_parquet "$bin_dir" "${TMPROOT}/calls.log"
+    echo "2026-09-01T20:21:22Z" > "${bin_dir}/replication_timestamp"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    assert_file_exists "release: parquet/release exists" "${cache_dir}/parquet/release"
+    if [ "$(cat "${cache_dir}/parquet/release" 2>/dev/null)" = "2026-09-01T20:21:22Z" ]; then
+        pass "release: file holds the osmosis_replication_timestamp value"
+    else
+        fail "release: expected 2026-09-01T20:21:22Z, got '$(cat "${cache_dir}/parquet/release" 2>/dev/null)'"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 27: A fully cached run re-reads the release without re-extracting.
+test_release_file_written_on_cached_run() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+    echo "2026-09-01T20:21:22Z" > "${bin_dir}/replication_timestamp"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+    touch -t 202001010000 "$fake_pbf"
+    rm -f "$call_log" "${cache_dir}/parquet/release"
+    echo "2026-09-02T00:00:00Z" > "${bin_dir}/replication_timestamp"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    if [ -f "$call_log" ]; then
+        fail "release-cached: tools re-ran on a cached run (calls: $(cat "$call_log"))"
+    else
+        pass "release-cached: no extraction on the cached run"
+    fi
+    if [ "$(cat "${cache_dir}/parquet/release" 2>/dev/null)" = "2026-09-02T00:00:00Z" ]; then
+        pass "release-cached: release file rewritten on the cached run"
+    else
+        fail "release-cached: expected 2026-09-02T00:00:00Z, got '$(cat "${cache_dir}/parquet/release" 2>/dev/null)'"
+    fi
+
+    teardown_tmpdir
+}
+
+# Test 28: An empty timestamp header fails the run.
+test_empty_release_fails() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium "$bin_dir" "${TMPROOT}/calls.log"
+    write_mock_osm_pbf_parquet "$bin_dir" "${TMPROOT}/calls.log"
+    : > "${bin_dir}/replication_timestamp"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    if [ "$RUN_EXIT" -ne 0 ]; then
+        pass "release-empty: exits non-zero"
+    else
+        fail "release-empty: expected non-zero exit, got 0 (output: $RUN_OUTPUT)"
+    fi
+
+    teardown_tmpdir
+}
+
 # ─── Run all tests ────────────────────────────────────────────────────────────
 
 echo "Running tests for scripts/extract-osm-parquet.sh"
@@ -1035,6 +1133,9 @@ test_relation_merge_includes_closure
 test_relation_chain_order
 test_relation_selectors_in_sidecar
 test_relation_selector_addition_invalidates_old_cache
+test_release_file_written
+test_release_file_written_on_cached_run
+test_empty_release_fails
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"

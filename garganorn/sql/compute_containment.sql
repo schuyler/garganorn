@@ -3,9 +3,9 @@
 -- Parameters substituted by compute_containment() in stages.py (dollar-brace
 -- placeholders; not repeated literally in these comments because substitution
 -- is plain string replacement and would corrupt the comment text):
---   arms              : UNION ALL of arm SELECTs (one per zoom level L in
---                        [cover_min_zoom, cover_max_zoom])
---   collection_prefix : rkey NSID prefix (org.atgeo.places.overture.division)
+--   arms                 : UNION ALL of arm SELECTs (one per zoom level L in
+--                           [cover_min_zoom, cover_max_zoom])
+--   division_urn_prefix  : URN prefix of a division's origin
 --
 -- Preconditions (set up by compute_containment before executing this):
 --   - LOAD spatial; ATTACH boundaries_db AS bnd (READ_ONLY)
@@ -38,9 +38,9 @@ ${arms}
 )
 SELECT ta.tile_qk,
        m.place_id,
-       to_json({within: list({rkey: '${collection_prefix}:' || m.boundary_id,
+       to_json({within: list({uri: '${division_urn_prefix}' || m.boundary_id,
                                name: bp.names."primary",
-                               level: m.level}
+                               type: bp.subtype}
                               ORDER BY m.level ASC, m.boundary_id ASC)})::VARCHAR AS relations_json
 FROM matches m
 JOIN tile_assignments ta ON ta.place_id = m.place_id

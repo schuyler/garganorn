@@ -120,23 +120,11 @@ def overture_db_path(tmp_path_factory):
 # ---------------------------------------------------------------------------
 
 # id, level, wkt_geom, min_lat, min_lon, max_lat, max_lon,
-#   names (dict or None), subtype, country, region, wikidata, population, importance, variants
+#   names (dict), subtype, country, region, wikidata, population, importance, variants
 #
 # level values are the atgeo containment vocabulary (garganorn.levels.LEVEL_VOCAB),
-# not raw Overture admin_level. div_continent_na has subtype=None (continent has
-# no producer entry in LEVEL_VOCAB) -- level 0 is a synthetic sentinel
-# above country=10, chosen only to keep this pre-built boundaries.duckdb-shaped
-# fixture's ascending order; the real import pipeline never emits it since
-# admin_level's continent row (subtype NULL) would trip the fail-loud guard).
+# not raw Overture admin_level.
 DIVISION_BOUNDARIES = [
-    (
-        "div_continent_na", 0,
-        "POLYGON((-130 20, -130 55, -60 55, -60 20, -130 20))",
-        20.0, -130.0, 55.0, -60.0,
-        None,  # names=NULL (for test_null_names_returns_empty_name_and_variants)
-        None, None, None, None, None,
-        0, [],
-    ),
     (
         "div_country_us", 10,
         "POLYGON((-125 24, -125 50, -66 50, -66 24, -125 24))",
@@ -204,60 +192,36 @@ def _create_division_db(db_path):
          names, subtype, country, region, wikidata, population,
          importance, variants) = row
 
-        if names is None:
-            names_sql = "NULL"
-            names_params = []
+        # Build the common MAP from the dict
+        common_dict = names.get("common", {})
+        if common_dict:
+            keys_list = list(common_dict.keys())
+            vals_list = list(common_dict.values())
+            common_sql = "map(" + str(keys_list) + "::VARCHAR[], " + str(vals_list) + "::VARCHAR[])"
+            # Use DuckDB literal for simplicity
+            keys_literal = "[" + ", ".join(f"'{k}'" for k in keys_list) + "]"
+            vals_literal = "[" + ", ".join(f"'{v}'" for v in vals_list) + "]"
+            common_sql = f"map({keys_literal}::VARCHAR[], {vals_literal}::VARCHAR[])"
         else:
-            # Build the common MAP from the dict
-            common_dict = names.get("common", {})
-            if common_dict:
-                keys_list = list(common_dict.keys())
-                vals_list = list(common_dict.values())
-                common_sql = "map(" + str(keys_list) + "::VARCHAR[], " + str(vals_list) + "::VARCHAR[])"
-                # Use DuckDB literal for simplicity
-                keys_literal = "[" + ", ".join(f"'{k}'" for k in keys_list) + "]"
-                vals_literal = "[" + ", ".join(f"'{v}'" for v in vals_list) + "]"
-                common_sql = f"map({keys_literal}::VARCHAR[], {vals_literal}::VARCHAR[])"
-            else:
-                common_sql = "map([]::VARCHAR[], []::VARCHAR[])"
-            primary_val = names.get("primary")
-            names_sql = f"{{'primary': ?, 'common': {common_sql}, 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]}}"
-            names_params = [primary_val]
+            common_sql = "map([]::VARCHAR[], []::VARCHAR[])"
+        names_sql = f"{{'primary': ?, 'common': {common_sql}, 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]}}"
 
-        if not names_params:
-            conn.execute(f"""
-                INSERT INTO places (id, geometry, level, names, subtype, country, region,
-                    wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
-                    importance, variants)
-                VALUES (
-                    ?, ST_GeomFromText(?), ?,
-                    {names_sql},
-                    ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?,
-                    ?,
-                    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
-                )
-            """, [bid, wkt, level,
-                  subtype, country, region, wikidata, population,
-                  min_lat, max_lat, min_lon, max_lon,
-                  importance])
-        else:
-            conn.execute(f"""
-                INSERT INTO places (id, geometry, level, names, subtype, country, region,
-                    wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
-                    importance, variants)
-                VALUES (
-                    ?, ST_GeomFromText(?), ?,
-                    {names_sql},
-                    ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?,
-                    ?,
-                    []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
-                )
-            """, [bid, wkt, level] + names_params + [
-                  subtype, country, region, wikidata, population,
-                  min_lat, max_lat, min_lon, max_lon,
-                  importance])
+        conn.execute(f"""
+            INSERT INTO places (id, geometry, level, names, subtype, country, region,
+                wikidata, population, min_latitude, max_latitude, min_longitude, max_longitude,
+                importance, variants)
+            VALUES (
+                ?, ST_GeomFromText(?), ?,
+                {names_sql},
+                ?, ?, ?, ?, ?,
+                ?, ?, ?, ?,
+                ?,
+                []::STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[]
+            )
+        """, [bid, wkt, level, names.get("primary"),
+              subtype, country, region, wikidata, population,
+              min_lat, max_lat, min_lon, max_lon,
+              importance])
 
     conn.execute("CREATE INDEX places_rtree ON places USING RTREE (geometry)")
     conn.close()
@@ -311,7 +275,7 @@ def overture_parquet(tmp_path_factory):
             brand       VARCHAR,
             confidence  DOUBLE,
             version     INTEGER,
-            sources     VARCHAR[]
+            sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[]
         )
     """)
 
@@ -326,7 +290,8 @@ def overture_parquet(tmp_path_factory):
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
             {'primary': 'coffee_shop'},
             [{'country': 'US', 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '66 Mint St', 'region': 'US-CA'}],
-            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+            [{'property': '', 'dataset': 'meta', 'record_id': '123', 'confidence': 0.95}]
         )
     """)
 

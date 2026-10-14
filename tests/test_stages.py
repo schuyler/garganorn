@@ -6,13 +6,13 @@ Tests are organized by stage function:
 - TestStageExport: tests for stage_export()
 - TestStageManifest: tests for write_manifest() and write_manifest_db()
 - TestStageDensityExtractMtime: mtime-based caching tests for stage_density_extract()
-- TestEnvelopeShape: atgeo v1 envelope shape on the real stage_export
-  production path. Tile top-level is exactly {collection, source, license,
-  generated_at, records}; each record is exactly {uri, cid, value}-wrapped
-  with cid always null.
-- TestGeneratedAtCoherence: fixed-timestamp injection seam,
-  determinism, and run-dir/tile/manifest/manifest.duckdb generated_at
+- TestEnvelopeShape: tile envelope shape on the real stage_export
+  production path. Tile top-level is exactly {publishedAt, attribution,
+  records}.
+- TestPublishedAtDeterminismAndCoherence: fixed-timestamp injection seam,
+  determinism, and run-dir/tile/manifest.json/tileset.json timestamp
   agreement.
+- TestTilesetJson: the tileset.json descriptor stage_export writes.
 """
 import argparse
 import time
@@ -26,7 +26,6 @@ from pathlib import Path
 
 import pytest
 import duckdb
-import lexrpc
 
 from garganorn.stages import (
     stage_import,
@@ -40,11 +39,12 @@ from garganorn.stages import (
     _coord_exprs,
     quadkey_to_bbox,
 )
-from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
 from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline, SOURCES
-from garganorn.server import load_lexicons
 from tests.duckdb_spy import spy_on_duckdb_connect
+from tests.lexicon_helpers import validate_def
+
+RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
 
 class TestStageTileAssignment:
@@ -199,7 +199,7 @@ class TestStageExport:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, releases=RELEASES)
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         gz_files = list(tiles_current.rglob("*.json.gz"))
@@ -214,7 +214,7 @@ class TestStageManifest:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, releases=RELEASES)
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_path = tiles_current / "manifest.json"
@@ -229,7 +229,7 @@ class TestStageManifest:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, releases=RELEASES)
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_db = tiles_current / "manifest.duckdb"
@@ -242,9 +242,8 @@ class TestStageManifest:
 
 
 # ---------------------------------------------------------------------------
-# atgeo v1 record envelope: tile top-level is exactly {collection, source,
-# license, generated_at, records}; each record is {uri, cid, value}-wrapped
-# with cid always null.
+# Tile envelope: tile top-level is exactly {publishedAt, attribution,
+# records}.
 # ---------------------------------------------------------------------------
 #
 # These tests exercise the REAL stage_export production path (via
@@ -265,65 +264,24 @@ class TestEnvelopeShape:
     """Envelope shape on the real stage_export production path."""
 
     def test_tile_top_level_keys_exact(self, overture_parquet, density_parquet, tmp_path):
-        """Tile top-level == exactly {collection, source, license,
-        generated_at, records}."""
+        """Tile top-level == exactly {publishedAt, attribution, records}."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, releases=RELEASES)
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
-        assert set(tile.keys()) == {"collection", "source", "license", "generated_at", "records"}, (
-            f"tile top-level must be exactly {{collection, source, license, generated_at, "
-            f"records}}; got {list(tile)}"
+        assert set(tile.keys()) == {"publishedAt", "attribution", "records"}, (
+            f"tile top-level must be exactly {{publishedAt, attribution, records}}; "
+            f"got {list(tile)}"
         )
-
-    def test_tile_records_are_uri_cid_value_wrapped(self, overture_parquet, density_parquet, tmp_path):
-        """Each record == exactly {uri, cid, value} with cid is None."""
-        run_pipeline("overture_place", overture_parquet,
-                     (-122.55, 37.60, -122.30, 37.85),
-                     str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
-        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
-        tile = _read_one_tile(tiles_current)
-        assert tile["records"], "tile must have at least one record"
-        for rec in tile["records"]:
-            assert set(rec.keys()) == {"uri", "cid", "value"}, (
-                f"record must be exactly {{uri, cid, value}}; got {list(rec)}"
-            )
-            assert rec["cid"] is None
-
-    def test_tile_record_uri_form_and_rkey_agreement(self, overture_parquet, density_parquet, tmp_path):
-        """uri == https://{repo}/{collection}/{rkey}; uri's rkey segment ==
-        value.rkey == record_tiles.rkey for sampled records."""
-        run_pipeline("overture_place", overture_parquet,
-                     (-122.55, 37.60, -122.30, 37.85),
-                     str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
-        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
-        tile = _read_one_tile(tiles_current)
-
-        manifest_db = tiles_current / "manifest.duckdb"
-        con = duckdb.connect(str(manifest_db), read_only=True)
-        manifest_rkeys = {row[0] for row in con.execute("SELECT rkey FROM record_tiles").fetchall()}
-        con.close()
-
-        for rec in tile["records"]:
-            uri_rkey = rec["uri"].rsplit("/", 1)[-1]
-            assert uri_rkey == rec["value"]["rkey"], (
-                f"uri rkey segment {uri_rkey!r} must equal value.rkey {rec['value']['rkey']!r}"
-            )
-            assert rec["uri"] == f"https://places.atgeo.org/org.atgeo.places.overture.place/{uri_rkey}"
-            assert uri_rkey in manifest_rkeys, (
-                f"uri rkey {uri_rkey!r} must appear in manifest.duckdb record_tiles.rkey"
-            )
 
     def test_manifest_json_field_set(self, overture_parquet, density_parquet, tmp_path):
         """manifest.json matches the manifest-shape field set."""
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, releases=RELEASES)
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         with open(tiles_current / "manifest.json") as f:
             manifest = json.load(f)
@@ -331,33 +289,15 @@ class TestEnvelopeShape:
             f"manifest.json must match the manifest-shape field set; got {sorted(manifest.keys())}"
         )
 
-    def test_manifest_duckdb_metadata_has_collection(self, overture_parquet, density_parquet, tmp_path):
-        """manifest.duckdb metadata has a collection column."""
-        run_pipeline("overture_place", overture_parquet,
-                     (-122.55, 37.60, -122.30, 37.85),
-                     str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet)
-        tiles_current = tmp_path / "overture_place" / "tiles" / "current"
-        con = duckdb.connect(str(tiles_current / "manifest.duckdb"), read_only=True)
-        cols = {row[1] for row in con.execute("PRAGMA table_info('metadata')").fetchall()}
-        row = con.execute("SELECT collection, source, generated_at FROM metadata").fetchone()
-        con.close()
-        assert "collection" in cols, (
-            f"manifest.duckdb metadata must have a collection column; got {cols}"
-        )
-        collection, source, generated_at = row
-        assert collection == "org.atgeo.places.overture.place"
-
-
-class TestGeneratedAtDeterminismAndCoherence:
+class TestPublishedAtDeterminismAndCoherence:
     """Fixed-timestamp injection, determinism, coherence.
 
     Seam under test: stage_export accepts an optional `now: datetime` keyword
     argument (aware, UTC). When provided, it is used BOTH to name the run
     directory (`now.strftime("%Y%m%dT%H%M%S")`, in place of stage_export's
     internal `datetime.now(timezone.utc)` call) AND to derive the
-    shared `generated_at` RFC 3339 Z string stamped into every tile,
-    manifest.json, and manifest.duckdb metadata. When omitted, stage_export
+    shared `publishedAt` RFC 3339 Z string stamped into every tile and
+    tileset.json, and `generated_at` into manifest.json. When omitted, stage_export
     defaults to the current wall-clock time. One timestamp covers an entire
     export run, derived from the run-dir name (which already produces
     %Y%m%dT%H%M%S UTC) — injecting `now` and deriving both the dir name and
@@ -404,14 +344,14 @@ class TestGeneratedAtDeterminismAndCoherence:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, now=fixed_now)
+                               force=True, now=fixed_now, releases=RELEASES)
 
         assert os.path.basename(run_dir.rstrip("/")) == "20260709T180000", (
             f"run dir must be named from the injected now; got {run_dir}"
         )
 
-    def test_generated_at_derived_from_injected_now(self, overture_parquet, density_parquet, tmp_path):
-        """generated_at (tile + manifest.json + manifest.duckdb metadata) ==
+    def test_published_at_derived_from_injected_now(self, overture_parquet, density_parquet, tmp_path):
+        """publishedAt (tile + tileset.json) and manifest.json's generated_at ==
         RFC 3339 Z rendering of the injected now."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
             overture_parquet, density_parquet, tmp_path, "inputs_b"
@@ -422,26 +362,24 @@ class TestGeneratedAtDeterminismAndCoherence:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, now=fixed_now)
+                               force=True, now=fixed_now, releases=RELEASES)
         run_dir = Path(run_dir)
 
         tile = _read_one_tile(run_dir)
-        assert tile["generated_at"] == expected_ts
+        assert tile["publishedAt"] == expected_ts
 
         with open(run_dir / "manifest.json") as f:
             manifest = json.load(f)
         assert manifest["generated_at"] == expected_ts
 
-        con = duckdb.connect(str(run_dir / "manifest.duckdb"), read_only=True)
-        db_generated_at = con.execute("SELECT generated_at FROM metadata").fetchone()[0]
-        con.close()
-        assert db_generated_at == expected_ts
+        with open(run_dir / "tileset.json") as f:
+            assert json.load(f)["publishedAt"] == expected_ts
 
-        # Coherence: run-dir name, tile, manifest.json, and manifest.duckdb all agree.
+        # Coherence: run-dir name, tile, manifest.json, and tileset.json all agree.
         assert os.path.basename(str(run_dir)) == "20260709T180000"
 
-    def test_every_tile_shares_the_same_generated_at(self, overture_parquet, density_parquet, tmp_path):
-        """Every tile in a multi-tile run carries the identical generated_at."""
+    def test_every_tile_shares_the_same_published_at(self, overture_parquet, density_parquet, tmp_path):
+        """Every tile in a multi-tile run carries the identical publishedAt."""
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
             overture_parquet, density_parquet, tmp_path, "inputs_c"
         )
@@ -450,16 +388,16 @@ class TestGeneratedAtDeterminismAndCoherence:
 
         run_dir = Path(stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                     tiles_root, time.monotonic(), memory_limit="4GB",
-                                    force=True, now=fixed_now))
+                                    force=True, now=fixed_now, releases=RELEASES))
 
         gz_files = list(run_dir.rglob("*.json.gz"))
         assert gz_files, "expected at least one tile"
-        generated_ats = set()
+        published_ats = set()
         for gz in gz_files:
             with gzip.open(gz, "rt") as f:
-                generated_ats.add(json.load(f)["generated_at"])
-        assert generated_ats == {"2026-07-09T18:00:00Z"}, (
-            f"all tiles must share one generated_at; got {generated_ats}"
+                published_ats.add(json.load(f)["publishedAt"])
+        assert published_ats == {"2026-07-09T18:00:00Z"}, (
+            f"all tiles must share one publishedAt; got {published_ats}"
         )
 
     def test_two_runs_with_identical_injected_now_are_byte_identical(
@@ -477,10 +415,10 @@ class TestGeneratedAtDeterminismAndCoherence:
 
         run_dir_a = Path(stage_export("overture_place", places_a, ta_a, cont_a,
                                       str(tmp_path / "tiles_d1"), time.monotonic(),
-                                      memory_limit="4GB", force=True, now=fixed_now))
+                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES))
         run_dir_b = Path(stage_export("overture_place", places_b, ta_b, cont_b,
                                       str(tmp_path / "tiles_d2"), time.monotonic(),
-                                      memory_limit="4GB", force=True, now=fixed_now))
+                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES))
 
         def _tile_bytes(run_dir):
             out = {}
@@ -706,7 +644,7 @@ class TestStageExportTempDirectory:
         # Must not raise TypeError for an unexpected keyword argument.
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
-                     force=True, temp_directory=str(scratch))
+                     force=True, temp_directory=str(scratch), releases=RELEASES)
 
     def test_honors_temp_directory_for_spill_location(
         self, overture_parquet, tmp_path, monkeypatch
@@ -727,7 +665,7 @@ class TestStageExportTempDirectory:
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
-                     force=True, temp_directory=str(scratch))
+                     force=True, temp_directory=str(scratch), releases=RELEASES)
 
         before = _statements_before_write_manifest_db(statements)
         temp_dir_stmts = [s for s in before if "SET temp_directory" in s]
@@ -762,7 +700,7 @@ class TestStageExportTempDirectory:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True)
+                               force=True, releases=RELEASES)
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, f"no SET temp_directory statement recorded: {statements}"
@@ -1555,7 +1493,7 @@ class TestStageExportMaxTempDirectorySize:
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds1"), time.monotonic(),
-                     memory_limit="4GB", force=True)
+                     memory_limit="4GB", force=True, releases=RELEASES)
 
         before = _statements_before_write_manifest_db(statements)
         stmts = _max_temp_stmts(before)
@@ -1581,7 +1519,7 @@ class TestStageExportMaxTempDirectorySize:
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds2"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
-                     max_temp_directory_size="9GB")
+                     max_temp_directory_size="9GB", releases=RELEASES)
 
         before = _statements_before_write_manifest_db(statements)
         stmts = _max_temp_stmts(before)
@@ -1691,7 +1629,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_wmdb4"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
-                     max_temp_directory_size="12GB")
+                     max_temp_directory_size="12GB", releases=RELEASES)
 
         assert calls, "stage_export must have called write_manifest_db"
         assert calls[-1].get("temp_directory") == str(scratch), (
@@ -1763,6 +1701,8 @@ class TestMaxTempDirectorySizeThreading:
         fail."""
         import garganorn.quadtree as quadtree_mod
 
+        (tmp_path / "overture" / "2026-09-17.0").mkdir(parents=True)
+        (tmp_path / "overture" / "2026-09-17.0" / "places.parquet").touch()
         config = tmp_path / "config.yaml"
         config.write_text(
             "pipeline:\n"
@@ -1771,7 +1711,7 @@ class TestMaxTempDirectorySizeThreading:
             "  max_temp_directory_size: 17GB\n"
             "  sources:\n"
             "    overture_place:\n"
-            "      parquet: /nonexistent/*.parquet\n"
+            f"      parquet: {tmp_path}/overture/*/places.parquet\n"
         )
 
         calls = []
@@ -1794,6 +1734,8 @@ class TestMaxTempDirectorySizeThreading:
         """A config that predates the setting must still get a bound."""
         import garganorn.quadtree as quadtree_mod
 
+        (tmp_path / "overture" / "2026-09-17.0").mkdir(parents=True)
+        (tmp_path / "overture" / "2026-09-17.0" / "places.parquet").touch()
         config = tmp_path / "config_nodefault.yaml"
         config.write_text(
             "pipeline:\n"
@@ -1801,7 +1743,7 @@ class TestMaxTempDirectorySizeThreading:
             "  memory_limit: 4GB\n"
             "  sources:\n"
             "    overture_place:\n"
-            "      parquet: /nonexistent/*.parquet\n"
+            f"      parquet: {tmp_path}/overture/*/places.parquet\n"
         )
 
         calls = []
@@ -1831,6 +1773,7 @@ class TestMaxTempDirectorySizeThreading:
             memory_limit=None, max_per_tile=None, boundaries=None,
             export_workers=None, density_parquet=None, idf_parquet=None,
             temp_directory=None, max_temp_directory_size=None, force=False,
+            release=[],
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -1960,14 +1903,14 @@ class TestMaxTempDirectorySizeThreading:
 
 
 # ---------------------------------------------------------------------------
-# collection.json: the org.atgeo.collection record value, written by
+# tileset.json: the org.atgeo.defs#tileset descriptor, written by
 # stage_export between write_manifest_db and write_manifest (see
 # pipeline-artifacts.md's stage_export section).
 # ---------------------------------------------------------------------------
 
-class TestCollectionMetadata:
-    """stage_export writes collection.json (the org.atgeo.collection record
-    value) into the run dir, derived from the same inputs as the tiles."""
+class TestTilesetJson:
+    """stage_export writes tileset.json (the org.atgeo.defs#tileset
+    descriptor) into the run dir, derived from the same inputs as the tiles."""
 
     def _build_export_inputs(self, overture_parquet, tmp_path, subdir):
         return _build_export_inputs(overture_parquet, tmp_path, subdir)
@@ -1985,64 +1928,24 @@ class TestCollectionMetadata:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB",
             force=True, idf_parquet=idf_parquet,
+            releases=RELEASES,
         ))
         return run_dir, idf_parquet, places_parquet
 
-    def test_collection_json_written_in_run_dir(self, overture_parquet, tmp_path):
-        """An exported fixture run contains collection.json, sibling to manifest.json."""
-        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm1")
-        assert (run_dir / "collection.json").exists(), (
-            f"collection.json must be written into the run dir; run_dir={run_dir}, "
-            f"contents={list(run_dir.iterdir())}"
-        )
-
-    def test_required_fields_present_and_collection_value(self, overture_parquet, tmp_path):
-        """Every required org.atgeo.collection key is present; collection ==
-        org.atgeo.places.overture.place."""
-        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm2")
-        collection = json.loads((run_dir / "collection.json").read_text())
-        required = {"collection", "source", "license", "generatedAt",
-                    "recordCount", "extent", "locationTypes"}
-        missing = required - set(collection)
-        assert not missing, f"collection.json missing required keys: {missing}"
-        assert collection["collection"] == "org.atgeo.places.overture.place"
-
-    def test_source_license_attribution_match_tile_envelope(self, overture_parquet, tmp_path):
-        """source/license/attribution equal OverturePlaces' class constants,
-        and equal the values a real tile of the same run carries (R2)."""
-        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm3")
-        collection = json.loads((run_dir / "collection.json").read_text())
-        tile = _read_one_tile(run_dir)
-
-        assert collection["source"] == OverturePlaces.source_url == tile["source"]
-        assert collection["license"] == OverturePlaces.license_url == tile["license"]
-        assert collection.get("attribution") == OverturePlaces.attribution
-
-    def test_record_count_equals_distinct_rkeys_in_manifest_db(self, overture_parquet, tmp_path):
-        """recordCount == COUNT(DISTINCT rkey) FROM record_tiles in manifest.duckdb."""
-        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm4")
-        collection = json.loads((run_dir / "collection.json").read_text())
-
-        con = duckdb.connect(str(run_dir / "manifest.duckdb"), read_only=True)
-        expected = con.execute("SELECT COUNT(DISTINCT rkey) FROM record_tiles").fetchone()[0]
-        con.close()
-
-        assert collection["recordCount"] == expected
-
-    def test_generated_at_matches_manifest_json(self, overture_parquet, tmp_path):
-        """generatedAt equals manifest.json's generated_at (the single run_now)."""
+    def test_published_at_matches_manifest_json(self, overture_parquet, tmp_path):
+        """publishedAt equals manifest.json's generated_at (the single run_now)."""
         run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm5")
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
         manifest = json.loads((run_dir / "manifest.json").read_text())
 
-        assert collection["generatedAt"] == manifest["generated_at"]
+        assert tileset["publishedAt"] == manifest["generated_at"]
 
     def test_categories_match_idf_parquet(self, overture_parquet, tmp_path):
         """categories carries idf.parquet's (category, n_places) pairs,
         descending by count. Tie order among equal counts is unspecified, so
         only the value set and the descending property are pinned."""
         run_dir, idf_parquet, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm6")
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
         con = duckdb.connect()
         rows = con.execute(
@@ -2051,7 +1954,7 @@ class TestCollectionMetadata:
         con.close()
         expected_pairs = {(cat, n) for cat, n in rows}
 
-        categories = collection.get("categories")
+        categories = tileset["collections"][0].get("categories")
         assert categories, "categories must be present and non-empty for overture_place"
         actual_pairs = {(c["value"], c["count"]) for c in categories}
         assert actual_pairs == expected_pairs, (
@@ -2075,8 +1978,9 @@ class TestCollectionMetadata:
         run_dir = Path(stage_export(
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+            releases=RELEASES,
         ))
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
         quadkeys = [p.name[: -len(".json.gz")] for p in run_dir.glob("*/*.json.gz")]
         regular_qks = [qk for qk in quadkeys if len(qk) >= 6]
@@ -2089,7 +1993,7 @@ class TestCollectionMetadata:
             "north": max(b[3] for b in bboxes),
         }
 
-        extent = collection["extent"]
+        extent = tileset["extent"]
         for key in expected:
             assert isinstance(extent[key], str) and re.match(r"^-?\d+\.\d{6}$", extent[key]), (
                 f"extent.{key} must be a decimal string with exactly 6 decimal places "
@@ -2133,8 +2037,9 @@ class TestCollectionMetadata:
         run_dir = Path(stage_export(
             "overture_place", places_parquet, short_ta, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+            releases=RELEASES,
         ))
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
         quadkeys = [p.name[: -len(".json.gz")] for p in run_dir.glob("*/*.json.gz")]
         assert quadkeys and all(len(qk) < 6 for qk in quadkeys), (
@@ -2149,7 +2054,7 @@ class TestCollectionMetadata:
             "north": max(b[3] for b in bboxes),
         }
 
-        extent = collection["extent"]
+        extent = tileset["extent"]
         for key in expected:
             assert isinstance(extent[key], str) and re.match(r"^-?\d+\.\d{6}$", extent[key]), (
                 f"extent.{key} must be a decimal string with exactly 6 decimal "
@@ -2161,12 +2066,12 @@ class TestCollectionMetadata:
             f"when no regular-band tile exists; expected {expected}, got {actual}"
         )
 
-    def test_zero_tile_run_omits_collection_json_but_keeps_manifest(
+    def test_zero_tile_run_omits_extent_but_keeps_manifest(
         self, overture_parquet, tmp_path
     ):
         """A run with zero exported tiles (bbox matches no fixture rows) must
-        complete without raising, must NOT write collection.json -- there is
-        no honest extent for zero records -- and must still write
+        complete without raising, must write tileset.json without an extent --
+        there is no honest extent for zero records -- and must still write
         manifest.json, so the run stays a valid, complete, servable run."""
         base = tmp_path / "cm14"
         base.mkdir()
@@ -2191,18 +2096,18 @@ class TestCollectionMetadata:
         run_dir = Path(stage_export(
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+            releases=RELEASES,
         ))
 
-        assert not (run_dir / "collection.json").exists(), (
-            "a zero-tile run must not write collection.json"
-        )
+        tileset = json.loads((run_dir / "tileset.json").read_text())
+        assert "extent" not in tileset, "a zero-tile run must not state an extent"
         assert (run_dir / "manifest.json").exists(), (
             "a zero-tile run must still write manifest.json as the "
             "completeness marker"
         )
 
-    def test_location_types_includes_geo_and_address(self, overture_parquet, tmp_path):
-        """locationTypes is exactly {.geo, .address} for overture_place with
+    def test_location_formats_includes_geo_and_address(self, overture_parquet, tmp_path):
+        """locationFormats is exactly {.geo, .address} for overture_place with
         this fixture: .geo unconditional, .address because the fixture has
         records with a country-bearing address (ov001, ov009) -- the same
         predicate overture_place_export_tiles.sql uses."""
@@ -2224,16 +2129,17 @@ class TestCollectionMetadata:
         run_dir = Path(stage_export(
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+            releases=RELEASES,
         ))
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
-        location_types = collection["locationTypes"]
-        assert set(location_types) == {
+        location_formats = tileset["collections"][0]["locationFormats"]
+        assert set(location_formats) == {
             "community.lexicon.location.geo", "community.lexicon.location.address",
-        }, f"expected exactly geo+address; got locationTypes={location_types}"
+        }, f"expected exactly geo+address; got locationFormats={location_formats}"
 
-    def test_containment_levels_are_subtype_names(self, overture_parquet, division_db_path, tmp_path):
-        """containmentLevels holds LEVEL_VOCAB subtype NAMES (not integer
+    def test_containment_types_are_subtype_names(self, overture_parquet, division_db_path, tmp_path):
+        """containmentTypes holds LEVEL_VOCAB subtype NAMES (not integer
         levels). The fixture's only divisions are continent/country/region/
         locality (div_borough_manhattan's subtype is 'locality', not
         'borough' -- no borough-subtype division exists in the fixture at
@@ -2265,56 +2171,18 @@ class TestCollectionMetadata:
         run_dir = Path(stage_export(
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
+            releases=RELEASES,
         ))
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
-        levels = set(collection.get("containmentLevels") or [])
+        levels = set(tileset["collections"][0].get("containmentTypes") or [])
         assert levels <= set(LEVEL_VOCAB), (
-            f"containmentLevels must be subtype names from LEVEL_VOCAB's keys; got {levels}"
+            f"containmentTypes must be subtype names from LEVEL_VOCAB's keys; got {levels}"
         )
         assert levels == {"country", "region", "locality"}, (
             f"the fixture's only division subtypes are country/region/locality "
             f"(plus continent, which has no LEVEL_VOCAB entry); expected exactly "
             f"{{'country', 'region', 'locality'}}, got {levels}"
-        )
-
-    def test_attributes_match_export_struct_fields(self, overture_parquet, tmp_path):
-        """attributes is drawn from the field names of tile_export's
-        attributes struct (overture_place_export_tiles.sql), not a
-        hardcoded guess or every column: every key observed in an exported
-        record's attributes must be among them, and a non-attribute record
-        field ('name') must not be. Optional fields the export's
-        strip_json_nulls omits when null (see
-        test_attribute_fields_union_recovers_key_null_in_sampled_row for
-        the union-across-rows guarantee) aren't required here -- only
-        every emitted key's provenance is."""
-        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm11")
-        collection = json.loads((run_dir / "collection.json").read_text())
-
-        max_possible = {
-            "id", "names", "categories", "websites", "socials",
-            "emails", "phones", "brand", "confidence", "version", "sources",
-        }
-        always_present = {"id", "names", "categories"}
-        attributes = set(collection.get("attributes") or [])
-        assert always_present <= attributes <= max_possible, (
-            f"attributes must be drawn from tile_export's attributes struct "
-            f"field names, and always include the never-null ones; "
-            f"max_possible={max_possible}, got {attributes}"
-        )
-
-        observed = set()
-        for gz in run_dir.glob("*/*.json.gz"):
-            with gzip.open(gz, "rt") as f:
-                data = json.load(f)
-            for rec in data["records"]:
-                observed |= set(rec["value"].get("attributes", {}))
-        assert observed <= attributes, (
-            f"declared attributes must be a superset of observed keys; "
-            f"observed - declared = {observed - attributes}"
-        )
-        assert "name" not in attributes, (
-            "attributes must not include the top-level record field 'name'"
         )
 
     def test_osm_attributes_include_primary_category_key(self, osm_parquet, tmp_path):
@@ -2351,21 +2219,23 @@ class TestCollectionMetadata:
             "osm", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB",
             force=True, idf_parquet=idf_parquet,
+            releases=RELEASES,
         ))
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
         # The fixture's 'Tartine Manufactory' node carries amenity=cafe and
         # lands inside the bbox with a name, so it survives stage_import;
         # its served attributes struct includes 'amenity' by construction
         # (osm_export_tiles.sql's map_concat).
-        assert "amenity" in (collection.get("attributes") or []), (
+        node = next(c for c in tileset["collections"] if c["collection"] == "node")
+        assert "amenity" in (node.get("attributes") or []), (
             "attributes must include primary-category keys like 'amenity' -- "
             "every served OSM record with a primary_category carries one, "
-            f"but got {collection.get('attributes')}"
+            f"but got {node.get('attributes')}"
         )
 
     def test_attribute_fields_union_recovers_key_null_in_sampled_row(self, tmp_path):
-        """collection.json's attribute-field union for overture_place must
+        """tileset.json's attribute-field union for overture_place must
         recover a key like 'brand' from wherever it's non-null, even when
         the row an unordered LIMIT 1 happens to sample carries it NULL.
 
@@ -2374,7 +2244,7 @@ class TestCollectionMetadata:
         entirely -- checked directly below on the 'brandnull' record, and
         currently red because that stripping isn't implemented yet. The
         second assertion pins the requirement this test is really about:
-        collection.json's declared attribute vocabulary must not
+        tileset.json's declared attribute vocabulary must not
         under-report keys just because today's overture_place branch
         samples a single row (LIMIT 1) instead of unioning across rows the
         way overture_division's DISTINCT UNNEST branch already does. See
@@ -2405,14 +2275,14 @@ class TestCollectionMetadata:
                 brand       VARCHAR,
                 confidence  DOUBLE,
                 version     INTEGER,
-                sources     VARCHAR[]
+                sources     STRUCT(property VARCHAR, dataset VARCHAR, record_id VARCHAR, confidence DOUBLE)[]
             )
         """)
         # Each row is missing a DIFFERENT optional field ('brandnull' lacks
         # brand but carries confidence; 'brandset' lacks confidence but
         # carries brand), so neither row's own post-strip key set is a
         # superset of the other's. That makes the union assertion below
-        # deterministically red without the collection.json attribute_fields
+        # deterministically red without the tileset.json attribute_fields
         # branch collapse, regardless of which row an unordered LIMIT 1
         # draws (stage_export sets preserve_insertion_order=false, so row
         # order can't be relied on).
@@ -2443,14 +2313,14 @@ class TestCollectionMetadata:
 
         overture_glob = str(base / "*.parquet")
         run_dir, _, _ = self._run_export_with_idf(overture_glob, tmp_path, "cm_brand_union")
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
         record = None
         for gz in run_dir.glob("*/*.json.gz"):
             with gzip.open(gz, "rt") as f:
                 data = json.load(f)
             for rec in data["records"]:
-                if rec["value"]["rkey"] == "brandnull":
+                if rec["value"]["origin"] == "urn:atgeo:overturemaps.org:place:brandnull":
                     record = rec["value"]
         assert record is not None, "expected the 'brandnull' record to be exported"
         assert "brand" not in record["attributes"], (
@@ -2459,9 +2329,9 @@ class TestCollectionMetadata:
             f"{record['attributes']}"
         )
 
-        attributes = set(collection.get("attributes") or [])
+        attributes = set(tileset["collections"][0].get("attributes") or [])
         assert "brand" in attributes and "confidence" in attributes, (
-            f"collection.json's attribute vocabulary must recover the "
+            f"tileset.json's attribute vocabulary must recover the "
             f"union across rows -- 'brand' is set only on 'brandset' and "
             f"'confidence' only on 'brandnull', so a single-row sample "
             f"(whichever row an unordered LIMIT 1 draws) would report at "
@@ -2470,24 +2340,19 @@ class TestCollectionMetadata:
         )
 
     def test_generated_record_validates_against_lexicon(self, overture_parquet, tmp_path):
-        """A real generated collection.json validates against
-        org.atgeo.collection's record schema (categories populated via the
-        IDF path), catching a Green implementation that satisfies the other
-        tests' field checks but violates its own lexicon."""
+        """A real generated tileset.json validates against
+        org.atgeo.defs#tileset (categories populated via the IDF path),
+        catching an implementation that satisfies the other tests' field
+        checks but violates its own lexicon."""
         run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm12")
-        collection = json.loads((run_dir / "collection.json").read_text())
+        tileset = json.loads((run_dir / "tileset.json").read_text())
 
-        server = lexrpc.Server(lexicons=load_lexicons())
-        schema = server.defs["org.atgeo.collection"]["record"]
-        server._validate_schema(
-            name="record", val=collection, type_name="org.atgeo.collection",
-            lexicon="org.atgeo.collection", schema=schema,
-        )
+        validate_def("org.atgeo.defs#tileset", tileset)
 
     def test_manifest_json_still_written_last(self, overture_parquet, tmp_path, monkeypatch):
-        """collection.json lands before manifest.json, the sole completeness
+        """tileset.json lands before manifest.json, the sole completeness
         marker: interrupting the run at write_manifest must leave
-        collection.json on disk without manifest.json existing."""
+        tileset.json on disk without manifest.json existing."""
         import garganorn.stages as stages_mod
 
         places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
@@ -2502,14 +2367,14 @@ class TestCollectionMetadata:
 
         with pytest.raises(RuntimeError, match="simulated crash"):
             stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
-                         tiles_root, time.monotonic(), memory_limit="4GB", force=True)
+                         tiles_root, time.monotonic(), memory_limit="4GB", force=True, releases=RELEASES)
 
         run_dirs = [d for d in Path(tiles_root).iterdir() if d.is_dir() and not d.is_symlink()]
         assert run_dirs, "expected the interrupted run dir to remain on disk"
         run_dir = run_dirs[0]
 
-        assert (run_dir / "collection.json").exists(), (
-            "collection.json must be written before write_manifest runs"
+        assert (run_dir / "tileset.json").exists(), (
+            "tileset.json must be written before write_manifest runs"
         )
         assert not (run_dir / "manifest.json").exists(), (
             "manifest.json must not exist when write_manifest was never reached"

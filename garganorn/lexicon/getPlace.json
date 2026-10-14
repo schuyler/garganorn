@@ -1,0 +1,58 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.getPlace",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Fetch one place by the URI in its origin.",
+            "parameters": {
+                "type": "params",
+                "properties": {
+                    "uri": {
+                        "type": "string",
+                        "format": "uri",
+                        "description": "The place's origin, e.g. urn:atgeo:openstreetmap.org:way:123456"
+                    }
+                },
+                "required": [
+                    "uri"
+                ]
+            },
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "ref",
+                    "ref": "#placeView"
+                }
+            },
+            "errors": [
+                {
+                    "name": "PlaceNotFound",
+                    "description": "This server serves no place with that origin"
+                }
+            ]
+        },
+        "placeView": {
+            "type": "object",
+            "required": [
+                "uri",
+                "record"
+            ],
+            "properties": {
+                "uri": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "A URL on this server that returns this view."
+                },
+                "importance": {
+                    "type": "integer",
+                    "description": "The producer's importance score for this place among its tileset's records; larger values sort first. Not part of the place."
+                },
+                "record": {
+                    "type": "unknown",
+                    "description": "The org.atgeo.place record value, unmodified."
+                }
+            }
+        }
+    }
+}

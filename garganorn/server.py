@@ -1,10 +1,10 @@
 """Garganorn package for serving ATProtocol XRPC for org.atgeo."""
 import json, math, logging
 from importlib.resources import files
+from typing import NamedTuple
 
 import lexrpc
 from lexrpc.base import XrpcError
-from garganorn.quadtree import BboxTooLarge
 
 _log = logging.getLogger(__name__)
 
@@ -30,29 +30,70 @@ def load_lexicons():
     return lexicons
 
 
-class Server:
-    nsid = "org.atgeo"
+class ServedTileset(NamedTuple):
+    descriptor: dict
+    manifest: object  # quadtree.TileManifest
+    reader: object  # tile_reader.TileBackedCollection
 
-    def __init__(self, repo, logger, tile_manifests=None,
-                 max_coverage_tiles=50, public_base=None):
+
+URN_PREFIX = "urn:atgeo:"
+
+
+class Server:
+    def __init__(self, repo, tilesets, max_tiles, public_base):
+        """tilesets: dict[slug, ServedTileset] in config order."""
         self.repo = repo
-        self.public_base = public_base or f"https://{repo}"
-        self.tile_manifests = tile_manifests or {}
-        self.max_coverage_tiles = max_coverage_tiles
+        self.public_base = public_base
+        self.tilesets = tilesets
+        self.max_tiles = max_tiles
         self.lexicons = load_lexicons()
         self.lexicon_map = {lex["id"]: lex for lex in self.lexicons}
         self.server = lexrpc.Server(lexicons=self.lexicons)
-        self.logger = logger
-        self.server.register("org.atgeo.getCoverage", self.get_coverage)
+        self.server.register("org.atgeo.getTiles", self.get_tiles)
+        self.server.register("org.atgeo.getPlace", self.get_place)
+        self.server.register("org.atgeo.describeTileset", self.describe_tileset)
         self.server.register("org.atgeo.describeService", self.describe_service)
 
     def describe_service(self, _):
-        """Enumerate served collections. The list is tile_manifests' keys --
-        the same map get_coverage consults for CollectionNotFound (R1)."""
         return {
             "did": f"did:web:{self.repo}",
-            "collections": [{"collection": c} for c in self.tile_manifests],
+            "tilesets": [
+                {
+                    "slug": slug,
+                    "collections": [
+                        {"dataset": c["dataset"], "collection": c["collection"]}
+                        for c in ts.descriptor["collections"]
+                    ],
+                }
+                for slug, ts in self.tilesets.items()
+            ],
         }
+
+    def describe_tileset(self, _, slug: str):
+        ts = self.tilesets.get(slug)
+        if ts is None:
+            raise XrpcError(f"Unknown tileset: {slug}", "TilesetNotFound")
+        return ts.descriptor
+
+    def get_place(self, _, uri: str):
+        """Answer from the first tileset carrying the URN's collection that holds the key."""
+        key = uri.removeprefix(URN_PREFIX) if uri.startswith(URN_PREFIX) else ""
+        parts = key.split(":", 2)
+        if len(parts) != 3:
+            raise XrpcError(f"No such place: {uri}", "PlaceNotFound")
+        dataset, collection, id = parts
+        for ts in self.tilesets.values():
+            if not any(c["dataset"] == dataset and c["collection"] == collection
+                       for c in ts.descriptor["collections"]):
+                continue
+            record = ts.reader.get_record(key)
+            if record is not None:
+                return {
+                    "uri": f"{self.public_base}/{dataset}/{collection}/{id}",
+                    "importance": record["importance"],
+                    "record": record["value"],
+                }
+        raise XrpcError(f"No such place: {uri}", "PlaceNotFound")
 
     def _parse_bbox(self, bbox_str):
         """Parse and validate bbox string 'xmin,ymin,xmax,ymax'. Returns tuple or raises XrpcError."""
@@ -79,7 +120,7 @@ class Server:
 
         Enforces the 0.01° grid required by the tile-based privacy model: clients must
         snap bounding boxes to coarse grid boundaries so the server cannot infer precise
-        user location from getCoverage requests.
+        user location from getTiles requests.
 
         Precision is checked by string inspection, not float comparison, so
         '37.770' (3 chars after '.') and '1e2' (scientific notation) are both rejected.
@@ -103,27 +144,39 @@ class Server:
                     "BboxTooPrecise",
                 )
 
-    def get_coverage(self, _, collection: str, bbox: str):
-        """Return tile URLs covering bbox for the given collection.
+    def get_tiles(self, _, dataset: str, bbox: str, collection: str = None):
+        """Return tile URLs covering bbox for the dataset (and collection, if given).
 
-        When the regular tiles exceed max_coverage_tiles, answers with the
-        coarse summary band and sets "summary": True.
+        When the combined regular tiles exceed max_tiles, answers with the
+        selected tilesets' overview tiles and sets "overview": True.
 
         Raises BboxTooPrecise if any coordinate exceeds 2 decimal places,
-        BboxTooLarge if the bbox spans more tiles than max_coverage_tiles,
-        CollectionNotFound if collection has no tile manifest, or InvalidBbox
-        if the bbox string is malformed.
+        InvalidBbox if the bbox string is malformed, DatasetNotFound or
+        CollectionNotFound if no tileset carries them, and BboxTooLarge if the
+        bbox exceeds max_tiles and a selected tileset has no overview tiles.
         """
         self._check_bbox_precision(bbox)
         parsed_bbox = self._parse_bbox(bbox)
-        manifest = self.tile_manifests.get(collection)
-        if manifest is None:
-            raise XrpcError(f"Unknown collection: {collection}", "CollectionNotFound")
-        try:
-            tiles, summary = manifest.get_tiles_for_bbox(*parsed_bbox, max_tiles=self.max_coverage_tiles)
-        except BboxTooLarge as e:
-            raise XrpcError(str(e), "BboxTooLarge") from e
-        result = {"tiles": sorted(tiles)}
-        if summary:
-            result["summary"] = True
-        return result
+        in_dataset = [
+            ts for ts in self.tilesets.values()
+            if any(c["dataset"] == dataset for c in ts.descriptor["collections"])
+        ]
+        if not in_dataset:
+            raise XrpcError(f"Unknown dataset: {dataset}", "DatasetNotFound")
+        selected = [
+            ts for ts in in_dataset
+            if collection is None
+            or any(c["dataset"] == dataset and c["collection"] == collection
+                   for c in ts.descriptor["collections"])
+        ]
+        if not selected:
+            raise XrpcError(f"Unknown collection: {dataset}/{collection}", "CollectionNotFound")
+        tiles = [u for ts in selected for u in ts.manifest.regular_tiles(parsed_bbox)]
+        if len(tiles) <= self.max_tiles:
+            return {"tiles": sorted(tiles)}
+        overviews = [ts.manifest.overview_tiles(parsed_bbox) for ts in selected]
+        if any(o is None for o in overviews):
+            raise XrpcError(
+                f"bbox covers {len(tiles)} tiles; the limit is {self.max_tiles}", "BboxTooLarge",
+            )
+        return {"tiles": sorted(u for o in overviews for u in o), "overview": True}

@@ -286,3 +286,12 @@ else
 fi
 
 elapsed
+
+# The release is the PBF's replication timestamp. It is re-read on every run so
+# a cached parquet directory gains the file without a re-extract.
+release="$(osmium fileinfo -g header.option.osmosis_replication_timestamp "$pbf_path")"
+if [ -z "$release" ]; then
+    echo "PBF header has no osmosis_replication_timestamp: $pbf_path"
+    exit 1
+fi
+echo "$release" > "${parquet_dir}/release"

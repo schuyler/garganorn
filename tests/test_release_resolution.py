@@ -33,8 +33,9 @@ def test_newest_of_two_complete_releases_wins(tmp_path):
     _make_release(tmp_path, "2026-07-22.0")
     _make_release(tmp_path, "2026-08-19.0")
 
-    resolved = resolve_newest_release(_patterns(tmp_path))
+    release, resolved = resolve_newest_release(_patterns(tmp_path))
 
+    assert release == "2026-08-19.0"
     assert all("2026-08-19.0" in p for p in resolved)
     assert not any("2026-07-22.0" in p for p in resolved)
 
@@ -45,7 +46,7 @@ def test_incomplete_newer_release_is_skipped(tmp_path):
     _make_release(tmp_path, "2026-07-22.0")
     _make_release(tmp_path, "2026-08-19.0", parts=("division", "division_area"))
 
-    resolved = resolve_newest_release(_patterns(tmp_path))
+    _, resolved = resolve_newest_release(_patterns(tmp_path))
 
     assert all("2026-07-22.0" in p for p in resolved)
 
@@ -53,7 +54,7 @@ def test_incomplete_newer_release_is_skipped(tmp_path):
 def test_single_release_resolves_to_itself(tmp_path):
     _make_release(tmp_path, "2026-08-19.0")
 
-    resolved = resolve_newest_release(_patterns(tmp_path))
+    _, resolved = resolve_newest_release(_patterns(tmp_path))
 
     assert all("2026-08-19.0" in p for p in resolved)
 
@@ -74,7 +75,10 @@ def test_patterns_without_a_release_segment_pass_through(tmp_path):
     must not have its filename wildcard mistaken for one."""
     patterns = [f"{tmp_path}/overture/*.parquet"]
 
-    assert resolve_newest_release(patterns) == patterns
+    release, resolved = resolve_newest_release(patterns)
+
+    assert resolved == patterns
+    assert release is None
 
 
 def test_resolved_patterns_match_only_one_release_on_disk(tmp_path):
@@ -85,7 +89,7 @@ def test_resolved_patterns_match_only_one_release_on_disk(tmp_path):
     _make_release(tmp_path, "2026-07-22.0")
     _make_release(tmp_path, "2026-08-19.0")
 
-    resolved = resolve_newest_release(_patterns(tmp_path))
+    _, resolved = resolve_newest_release(_patterns(tmp_path))
 
     division_files = glob_module.glob(resolved[1])
     assert len(division_files) == 1

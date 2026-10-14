@@ -6,8 +6,9 @@ Two subcommands:
   diff    <ref_dir> <captured_dir> — compare two captures; nonzero exit on any diff.
 
 Canonical form neutralizes record ordering, JSON key ordering, and the
-non-deterministic manifest `generated_at` timestamp so that only genuine
-value differences are reported. Zero-tolerance: any difference exits nonzero.
+non-deterministic `publishedAt` and manifest `generated_at` timestamps so
+that only genuine value differences are reported. Zero-tolerance: any
+difference exits nonzero.
 """
 
 import argparse
@@ -20,27 +21,17 @@ import duckdb
 
 
 def canonical_tile(gz_path):
-    """Read a .json.gz tile, sort records by value.rkey, return canonical JSON string.
+    """Read a .json.gz tile, sort records by value.origin, return canonical JSON string.
 
-    Records are atgeo v1 {uri, cid, value}-wrapped; sorted by their
-    value["rkey"] (missing rkey sorts as empty string). Tile-level
-    `generated_at` is stripped -- it is a run-scoped timestamp, not a
+    Tile-level `publishedAt` is stripped -- it is a run-scoped timestamp, not a
     value difference. Keys are sorted and whitespace is stripped so the
     string is stable across runs that differ only in ordering.
     """
-    def _sort_key(r):
-        # New envelope: {uri, cid, value: {..., rkey, ...}}. Old (pre-envelope)
-        # shape: flat record dict with a top-level rkey. Fall back to the
-        # top-level key so captures of either shape canonicalize correctly.
-        if "value" in r:
-            return r["value"].get("rkey", "")
-        return r.get("rkey", "")
-
     with gzip.open(gz_path) as f:
         obj = json.load(f)
-    obj.pop("generated_at", None)
+    obj.pop("publishedAt", None)
     if "records" in obj:
-        obj["records"] = sorted(obj["records"], key=_sort_key)
+        obj["records"] = sorted(obj["records"], key=lambda r: r["value"]["origin"])
     return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -70,11 +61,11 @@ def iter_tiles(tiles_dir):
 
 
 def manifest_rows(manifest_db_path):
-    """Return [(rkey, tile_qk), ...] ordered by rkey, tile_qk from manifest.duckdb."""
+    """Return [(key, tile_qk), ...] ordered by key, tile_qk from manifest.duckdb."""
     con = duckdb.connect(manifest_db_path, read_only=True)
     try:
         rows = con.execute(
-            "SELECT rkey, tile_qk FROM record_tiles ORDER BY rkey, tile_qk"
+            "SELECT key, tile_qk FROM record_tiles ORDER BY key, tile_qk"
         ).fetchall()
     finally:
         con.close()
@@ -87,7 +78,7 @@ def capture(tiles_dir, out_dir):
     Writes:
       <out_dir>/<qk>.canon        — canonical JSON string per tile.
       <out_dir>/manifest.json     — manifest with `generated_at` removed.
-      <out_dir>/manifest_rows.json — sorted [rkey, tile_qk] pairs from manifest.duckdb.
+      <out_dir>/manifest_rows.json — sorted [key, tile_qk] pairs from manifest.duckdb.
     """
     os.makedirs(out_dir, exist_ok=True)
 
@@ -124,7 +115,7 @@ def _tile_value_diffs(qk, ref_text, cap_text):
     """Return diff messages for a tile whose canonical bytes differ.
 
     Called only when ref and captured strings are already known to differ.
-    Checks record presence/values per rkey and envelope-level metadata.
+    Checks record presence/values per origin and envelope-level metadata.
     Returns a list of human-readable difference strings (never empty on entry).
     """
     diffs = []
@@ -134,18 +125,18 @@ def _tile_value_diffs(qk, ref_text, cap_text):
     except json.JSONDecodeError as e:
         return [f"tile {qk}: could not parse canonical form: {e}"]
 
-    ref_recs = {r.get("rkey", ""): r for r in ref_obj.get("records", [])}
-    cap_recs = {r.get("rkey", ""): r for r in cap_obj.get("records", [])}
+    ref_recs = {r["value"]["origin"]: r for r in ref_obj.get("records", [])}
+    cap_recs = {r["value"]["origin"]: r for r in cap_obj.get("records", [])}
 
-    for rkey in sorted(set(ref_recs) - set(cap_recs)):
-        diffs.append(f"tile {qk} rkey {rkey}: present in ref, missing in captured")
-    for rkey in sorted(set(cap_recs) - set(ref_recs)):
-        diffs.append(f"tile {qk} rkey {rkey}: present in captured, missing in ref")
-    for rkey in sorted(set(ref_recs) & set(cap_recs)):
-        if ref_recs[rkey] != cap_recs[rkey]:
-            diffs.append(f"tile {qk} rkey {rkey}: record value differs")
+    for origin in sorted(set(ref_recs) - set(cap_recs)):
+        diffs.append(f"tile {qk} origin {origin}: present in ref, missing in captured")
+    for origin in sorted(set(cap_recs) - set(ref_recs)):
+        diffs.append(f"tile {qk} origin {origin}: present in captured, missing in ref")
+    for origin in sorted(set(ref_recs) & set(cap_recs)):
+        if ref_recs[origin] != cap_recs[origin]:
+            diffs.append(f"tile {qk} origin {origin}: record value differs")
 
-    # Envelope-level differences (collection, source, license, etc.).
+    # Envelope-level differences (attribution etc.).
     ref_env = {k: v for k, v in ref_obj.items() if k != "records"}
     cap_env = {k: v for k, v in cap_obj.items() if k != "records"}
     if ref_env != cap_env:
@@ -190,7 +181,7 @@ def diff_captures(ref_dir, captured_dir):
         if rm != cm:
             diffs.append(f"manifest.json: differs (ref={rm!r} captured={cm!r})")
 
-    # manifest_rows.json (sorted [rkey, tile_qk] pairs).
+    # manifest_rows.json (sorted [key, tile_qk] pairs).
     ref_r = os.path.join(ref_dir, "manifest_rows.json")
     cap_r = os.path.join(captured_dir, "manifest_rows.json")
     if os.path.exists(ref_r) != os.path.exists(cap_r):
@@ -200,10 +191,10 @@ def diff_captures(ref_dir, captured_dir):
             rr = {tuple(x) for x in json.load(f)}
         with open(cap_r) as f:
             cr = {tuple(x) for x in json.load(f)}
-        for rkey, tile_qk in sorted(rr - cr):
-            diffs.append(f"manifest row rkey {rkey} tile {tile_qk}: in ref, not captured")
-        for rkey, tile_qk in sorted(cr - rr):
-            diffs.append(f"manifest row rkey {rkey} tile {tile_qk}: in captured, not ref")
+        for key, tile_qk in sorted(rr - cr):
+            diffs.append(f"manifest row key {key} tile {tile_qk}: in ref, not captured")
+        for key, tile_qk in sorted(cr - rr):
+            diffs.append(f"manifest row key {key} tile {tile_qk}: in captured, not ref")
 
     return diffs
 

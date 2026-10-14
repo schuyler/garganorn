@@ -24,7 +24,9 @@ from pathlib import Path
 import duckdb
 
 from garganorn import envelope
-from garganorn.database import OverturePlaces, OpenStreetMap, OvertureDivisions
+from garganorn.database import (
+    COLLECTION_TERMS, DIVISION_URN_PREFIX, OverturePlaces, OpenStreetMap, OvertureDivisions,
+)
 from garganorn.levels import LEVEL_VOCAB, level_case_sql
 
 log = logging.getLogger(__name__)
@@ -34,7 +36,6 @@ _SOURCES = {
     for cls in [OverturePlaces, OpenStreetMap, OvertureDivisions]
 }
 
-REPO = "places.atgeo.org"
 _SQL_DIR = Path(__file__).parent / "sql"
 
 # Compiled pattern for timestamp directory names produced by run_pipeline / stage_export.
@@ -160,11 +161,12 @@ def _resolve_glob_paths(pattern: str, *, required: bool = False) -> list[str]:
     return paths
 
 
-def resolve_newest_release(patterns: list[str]) -> list[str]:
+def resolve_newest_release(patterns: list[str]) -> tuple[str | None, list[str]]:
     """Rewrite the release segment of each pattern to the newest complete release.
 
-    The release is the path segment that is entirely `*`; if any pattern lacks
-    one, every pattern is returned untouched. A release qualifies only if every
+    Returns (release, patterns). The release is the path segment that is
+    entirely `*`; if any pattern lacks one, every pattern is returned
+    untouched with release None. A release qualifies only if every
     pattern matches a file, so a partially downloaded one is skipped rather
     than built against, and RuntimeError is raised if none qualifies.
 
@@ -177,7 +179,7 @@ def resolve_newest_release(patterns: list[str]) -> list[str]:
         for parts in split
     ]
     if any(position is None for position in positions):
-        return list(patterns)
+        return None, list(patterns)
 
     root = "/".join(split[0][:positions[0]])
     releases = sorted(
@@ -190,7 +192,7 @@ def resolve_newest_release(patterns: list[str]) -> list[str]:
         for parts, position in zip(split, positions):
             resolved.append("/".join(parts[:position] + [release] + parts[position + 1:]))
         if all(glob_module.glob(pattern) for pattern in resolved):
-            return resolved
+            return release, resolved
     raise RuntimeError(
         f"no complete Overture release in {root!r}; inspected {releases}"
     )
@@ -366,7 +368,6 @@ def compute_containment(
     lat_expr,
     containment_dir,
     *,
-    collection_prefix="org.atgeo.places.overture.division",
     covering_dir=None,
     memory_limit="48GB",
     temp_directory=None,
@@ -394,7 +395,6 @@ def compute_containment(
         lon_expr: SQL expression for the longitude column in places parquet.
         lat_expr: SQL expression for the latitude column in places parquet.
         containment_dir: Directory to write containment parquet files and _meta.json.
-        collection_prefix: NSID prefix for rkey values.
         covering_dir: Directory containing covering parquet files (from stage_covering).
         memory_limit: DuckDB memory_limit string.
         temp_directory: DuckDB temp_directory for spill (optional).
@@ -440,7 +440,7 @@ def compute_containment(
         inputs.append(str(boundaries_db))
 
     params = {
-        "collection_prefix": collection_prefix,
+        "division_urn_prefix": DIVISION_URN_PREFIX,
         "cover_min_zoom": cover_min_zoom,
         "cover_max_zoom": cover_max_zoom,
         "cover_min_leaf_zoom": cover_min_leaf_zoom,
@@ -585,7 +585,7 @@ def compute_containment(
 
                                 sql = template_sql
                                 sql = sql.replace("${arms}", arms)
-                                sql = sql.replace("${collection_prefix}", collection_prefix)
+                                sql = sql.replace("${division_urn_prefix}", DIVISION_URN_PREFIX)
 
                                 con.execute(
                                     f"COPY ({sql}) TO '{out_path_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)"
@@ -628,8 +628,7 @@ def compute_containment(
 
 def stage_division_containment(
     division_parquet, places_parquet, tile_assignments_parquet, containment_dir,
-    *, collection_prefix="org.atgeo.places.overture.division",
-    memory_limit="48GB", temp_directory=None,
+    *, memory_limit="48GB", temp_directory=None,
     max_temp_directory_size="250GB", force=False,
 ) -> None:
     """Write <src>/containment/ from Overture hierarchies, in place of
@@ -645,7 +644,6 @@ def stage_division_containment(
         places_parquet: Path to places.parquet artifact.
         tile_assignments_parquet: Path to tile_assignments_combined.parquet.
         containment_dir: Directory to write containment parquet files and _meta.json.
-        collection_prefix: NSID prefix for rkey values.
         memory_limit: DuckDB memory_limit string.
         temp_directory: DuckDB temp_directory for spill (optional).
         max_temp_directory_size: DuckDB max_temp_directory_size string,
@@ -656,7 +654,7 @@ def stage_division_containment(
     inputs = [places_parquet, tile_assignments_parquet] + _resolve_glob_paths(
         division_parquet, required=True
     )
-    params = {"collection_prefix": collection_prefix}
+    params = {"division_urn_prefix": DIVISION_URN_PREFIX}
 
     meta_path = os.path.join(containment_dir, "_meta.json")
     if not force:
@@ -687,7 +685,7 @@ def stage_division_containment(
     sql = sql.replace("${division_parquet}", division_sql)
     sql = sql.replace("${places_parquet}", pq_sql)
     sql = sql.replace("${tile_assignments_parquet}", ta_sql)
-    sql = sql.replace("${collection_prefix}", collection_prefix)
+    sql = sql.replace("${division_urn_prefix}", DIVISION_URN_PREFIX)
 
     empty = True
     con = duckdb.connect(":memory:")
@@ -740,8 +738,7 @@ def stage_division_containment(
 
 
 def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: str,
-                      *, generated_at: str = None,
-                      temp_directory: str | None = None,
+                      *, temp_directory: str | None = None,
                       max_temp_directory_size: str | None = "250GB") -> None:
     """Write manifest.duckdb from a tile_assignments parquet file.
 
@@ -756,9 +753,6 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         tile_assignments_parquet: Path to tile_assignments.parquet artifact.
         output_dir: Directory where manifest.duckdb will be written.
         source: Source key (overture_place, osm, overture_division).
-        generated_at: RFC 3339 Z run-scoped timestamp shared with the tiles and
-            manifest.json. Defaults to the current time if omitted
-            (test callers that don't thread a run timestamp).
         temp_directory: DuckDB temp_directory for spill (optional). Callers
             reached via stage_export should pass its own temp_directory so
             the manifest step spills where the export did.
@@ -766,9 +760,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
             bounding spill (default "250GB"), independently of whether
             temp_directory is also supplied.
     """
-    if generated_at is None:
-        generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    source_cls = _SOURCES[source]
+    key_sql = _SOURCES[source].manifest_key_sql("place_id")
     manifest_path = os.path.join(output_dir, "manifest.duckdb")
     tmp_path = manifest_path + ".tmp"
     if os.path.exists(tmp_path):
@@ -781,29 +773,12 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(f"ATTACH '{tmp_path}' AS manifest")
-        if source == "osm":
-            con.execute(f"""
-                CREATE TABLE manifest.record_tiles AS
-                SELECT CASE left(place_id, 1)
-                           WHEN 'n' THEN 'node:' || substr(place_id, 2)
-                           WHEN 'w' THEN 'way:' || substr(place_id, 2)
-                           WHEN 'r' THEN 'relation:' || substr(place_id, 2)
-                           ELSE place_id
-                       END AS rkey, tile_qk
-                FROM read_parquet('{tile_assignments_parquet}')
-                ORDER BY rkey
-            """)
-        else:
-            con.execute(f"""
-                CREATE TABLE manifest.record_tiles AS
-                SELECT place_id AS rkey, tile_qk
-                FROM read_parquet('{tile_assignments_parquet}')
-                ORDER BY place_id
-            """)
-        con.execute("""
-            CREATE TABLE manifest.metadata AS
-            SELECT ? AS source, ? AS collection, ? AS generated_at
-        """, [source, source_cls.collection, generated_at])
+        con.execute(f"""
+            CREATE TABLE manifest.record_tiles AS
+            SELECT {key_sql} AS key, tile_qk
+            FROM read_parquet('{tile_assignments_parquet}')
+            ORDER BY key
+        """)
         con.execute("DETACH manifest")
     finally:
         con.close()
@@ -814,7 +789,7 @@ def write_manifest(output_dir, *, generated_at):
     """Write manifest.json as the run's completeness marker.
 
     generated_at is required-keyword: callers must supply the single
-    run-scoped timestamp shared with every tile and manifest.duckdb.
+    run-scoped timestamp shared with every tile.
     """
     data = {"generated_at": generated_at}
     manifest_path = os.path.join(output_dir, "manifest.json")
@@ -824,121 +799,127 @@ def write_manifest(output_dir, *, generated_at):
     os.replace(tmp_path, manifest_path)
 
 
-def write_collection_json(run_dir, source, source_cls, *, generated_at, manifest,
-                          places_pq, containment_expr, idf_parquet, attribute_fields):
-    """Assemble and write collection.json (the org.atgeo.collection record
-    value), sibling to manifest.json. Must run after write_manifest_db (needs
+def write_tileset_json(run_dir, source, source_cls, *, published_at, manifest,
+                       places_pq, containment_expr, idf_parquet, attribute_fields,
+                       carried, referenced):
+    """Assemble and write tileset.json (the org.atgeo.defs#tileset descriptor),
+    sibling to manifest.json. Must run after write_manifest_db (needs
     manifest.duckdb) and before write_manifest, which stays the sole
     completeness marker.
 
+    carried and referenced are the attribution dicts (dataset, collection,
+    release, terms) of the collections the tileset carries and references.
     places_pq and containment_expr are the same SQL-ready strings stage_export
     already built for the tile export query -- reused here rather than
     re-escaped or re-derived. attribute_fields is the tile_export attributes
     struct field set captured earlier on the export connection (overture_place,
     overture_division) or None (osm, computed here from places.parquet's tags).
     """
-    if not manifest:
-        # Zero tiles means zero records: extent is a required field with no
-        # honest value to give it, so omit collection.json rather than
-        # fabricate one.
-        return
+    pk = source_cls.source_pk
+    place_collection = f"split_part({source_cls.manifest_key_sql(pk)}, ':', 2)"
+    container_collection = f"split_part({source_cls.manifest_key_sql('place_id')}, ':', 2)"
 
     con = duckdb.connect(os.path.join(run_dir, "manifest.duckdb"), read_only=True)
     try:
-        record_count = con.execute("SELECT COUNT(DISTINCT rkey) FROM record_tiles").fetchone()[0]
+        record_counts = {
+            c["collection"]: con.execute(
+                "SELECT COUNT(DISTINCT key) FROM record_tiles WHERE starts_with(key, ?)",
+                [f"{c['dataset']}:{c['collection']}:"],
+            ).fetchone()[0]
+            for c in carried
+        }
 
+        if source == "overture_place":
+            location_formats = ["community.lexicon.location.geo"]
+            has_address = con.execute(
+                f"SELECT count(*) FROM read_parquet('{places_pq}') WHERE "
+                f"len(list_filter(coalesce(addresses, []), addr -> addr.country IS NOT NULL)) > 0"
+            ).fetchone()[0] > 0
+            if has_address:
+                location_formats.append("community.lexicon.location.address")
+        elif source == "overture_division":
+            location_formats = ["community.lexicon.location.bbox"]
+        else:
+            location_formats = ["community.lexicon.location.geo"]
+
+        containment_types = {}
+        for collection, type_ in con.execute(
+            f"SELECT DISTINCT {container_collection}, "
+            f"UNNEST(json_extract_string(relations_json, '$.within[*].type')::VARCHAR[]) "
+            f"FROM {containment_expr}"
+        ).fetchall():
+            containment_types.setdefault(collection, []).append(type_)
+
+        categories = {}
+        if source == "overture_place":
+            if idf_parquet:
+                idf_pq = idf_parquet.replace("'", "''")
+                categories[carried[0]["collection"]] = con.execute(
+                    f"SELECT category, n_places FROM read_parquet('{idf_pq}') "
+                    f"ORDER BY n_places DESC, category"
+                ).fetchall()
+        else:
+            category_column = "subtype" if source == "overture_division" else "primary_category"
+            for collection, value, n in con.execute(
+                f"SELECT {place_collection}, {category_column}, count(*) AS n "
+                f"FROM read_parquet('{places_pq}') WHERE {category_column} IS NOT NULL "
+                f"GROUP BY ALL ORDER BY n DESC, 2"
+            ).fetchall():
+                categories.setdefault(collection, []).append((value, n))
+
+        if source == "osm":
+            attributes = {}
+            for collection, key in con.execute(
+                f"SELECT DISTINCT {place_collection}, "
+                f"UNNEST(map_keys(coalesce(tags, MAP([], [])))) "
+                f"FROM read_parquet('{places_pq}')"
+            ).fetchall():
+                attributes.setdefault(collection, set()).add(key)
+            # osm_import.sql strips each record's primary-category key out of
+            # tags (it's already carried in primary_category); export re-adds
+            # it via map_concat (osm_export_tiles.sql), so the categories'
+            # keys close the gap.
+            for collection, rows in categories.items():
+                attributes.setdefault(collection, set()).update(v.split("=", 1)[0] for v, _ in rows)
+        else:
+            attributes = {carried[0]["collection"]: attribute_fields}
+    finally:
+        con.close()
+
+    collections = []
+    for c in carried:
+        name = c["collection"]
+        info = {**c, "recordCount": record_counts[name], "locationFormats": location_formats}
+        if containment_types.get(name):
+            info["containmentTypes"] = sorted(containment_types[name], key=LEVEL_VOCAB.__getitem__)
+        if categories.get(name):
+            info["categories"] = [{"value": v, "count": n} for v, n in categories[name]]
+        if attributes.get(name):
+            info["attributes"] = sorted(attributes[name])
+        collections.append(info)
+
+    tileset = {"slug": source_cls.slug, "publishedAt": published_at}
+    if manifest:
         # A run with no regular-band tile (every place landed in the z1-z5
         # summary band) leaves this empty; fall back to the full histogram,
         # the tightest bbox available.
         regular_bboxes = [quadkey_to_bbox(qk) for qk in manifest if len(qk) >= 6]
         if not regular_bboxes:
             regular_bboxes = [quadkey_to_bbox(qk) for qk in manifest]
-        extent = {
+        tileset["extent"] = {
             "north": f"{max(b[3] for b in regular_bboxes):.6f}",
             "south": f"{min(b[1] for b in regular_bboxes):.6f}",
             "east": f"{max(b[2] for b in regular_bboxes):.6f}",
             "west": f"{min(b[0] for b in regular_bboxes):.6f}",
         }
+    tileset["collections"] = collections
+    tileset["references"] = referenced
 
-        if source == "overture_place":
-            location_types = ["community.lexicon.location.geo"]
-            has_address = con.execute(
-                f"SELECT count(*) FROM read_parquet('{places_pq}') WHERE "
-                f"len(list_filter(coalesce(addresses, []), addr -> addr.country IS NOT NULL)) > 0"
-            ).fetchone()[0] > 0
-            if has_address:
-                location_types.append("community.lexicon.location.address")
-        elif source == "overture_division":
-            location_types = ["community.lexicon.location.bbox"]
-        else:
-            location_types = ["community.lexicon.location.geo"]
-
-        # relations_json carries within[].level as integers (division_containment.sql,
-        # compute_containment.sql); map back to LEVEL_VOCAB subtype names, skipping
-        # unmapped levels (continent, level 0, has no LEVEL_VOCAB entry).
-        level_names = {v: k for k, v in LEVEL_VOCAB.items()}
-        level_rows = con.execute(
-            f"SELECT DISTINCT UNNEST(json_extract(relations_json, '$.within[*].level')::INTEGER[]) "
-            f"AS level FROM {containment_expr}"
-        ).fetchall()
-        containment_levels = sorted(
-            {level_names[lvl] for (lvl,) in level_rows if lvl in level_names},
-            key=lambda name: LEVEL_VOCAB[name],
-        )
-
-        categories = None
-        if source in ("overture_place", "osm") and idf_parquet:
-            idf_pq = idf_parquet.replace("'", "''")
-            rows = con.execute(
-                f"SELECT category, n_places FROM read_parquet('{idf_pq}') ORDER BY n_places DESC"
-            ).fetchall()
-            categories = [{"value": cat, "count": n} for cat, n in rows]
-        elif source == "overture_division":
-            rows = con.execute(
-                f"SELECT subtype, count(*) AS n FROM read_parquet('{places_pq}') "
-                f"GROUP BY subtype ORDER BY n DESC"
-            ).fetchall()
-            categories = [{"value": subtype, "count": n} for subtype, n in rows]
-
-        if source == "osm":
-            rows = con.execute(
-                f"SELECT DISTINCT UNNEST(map_keys(coalesce(tags, MAP([], [])))) AS k "
-                f"FROM read_parquet('{places_pq}')"
-            ).fetchall()
-            attribute_fields = {r[0] for r in rows}
-            # osm_import.sql strips each record's primary-category key out of
-            # tags (it's already carried in primary_category); export re-adds
-            # it via map_concat (osm_export_tiles.sql). categories, from the
-            # same idf_parquet read above, already has every distinct
-            # primary_category value, so its keys close the gap for free.
-            if categories:
-                attribute_fields |= {c["value"].split("=", 1)[0] for c in categories}
-    finally:
-        con.close()
-
-    collection = {
-        "collection": source_cls.collection,
-        "source": source_cls.source_url,
-        "license": source_cls.license_url,
-        "generatedAt": generated_at,
-        "recordCount": record_count,
-        "extent": extent,
-        "locationTypes": location_types,
-    }
-    if source_cls.attribution:
-        collection["attribution"] = source_cls.attribution
-    if containment_levels:
-        collection["containmentLevels"] = containment_levels
-    if categories:
-        collection["categories"] = categories
-    if attribute_fields:
-        collection["attributes"] = sorted(attribute_fields)
-
-    collection_path = os.path.join(run_dir, "collection.json")
-    tmp_path = collection_path + ".tmp"
+    tileset_path = os.path.join(run_dir, "tileset.json")
+    tmp_path = tileset_path + ".tmp"
     with open(tmp_path, "w") as f:
-        json.dump(collection, f, indent=2)
-    os.replace(tmp_path, collection_path)
+        json.dump(tileset, f, indent=2)
+    os.replace(tmp_path, tileset_path)
 
 
 def quadkey_to_bbox(quadkey: str) -> tuple[float, float, float, float]:
@@ -2071,12 +2052,13 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                  max_temp_directory_size: str | None = "250GB",
                  force: bool = False,
                  now: datetime | None = None,
-                 idf_parquet: str | None = None) -> str:
+                 idf_parquet: str | None = None,
+                 releases: dict[str, str] | None = None) -> str:
     """Export tiles from parquet artifacts.
 
     Reads places and tile_assignments from parquet artifacts. Builds a
     timestamped run dir under tiles_root with per-tile .json.gz files,
-    manifest.duckdb, and manifest.json. Updates tiles_root/current symlink.
+    manifest.duckdb, tileset.json, and manifest.json. Updates tiles_root/current symlink.
 
     Args:
         source: Source key (overture_place, osm, overture_division).
@@ -2113,13 +2095,15 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         force: If True, bypass freshness gate. Default False.
         now: Optional aware UTC datetime for deterministic-timestamp injection.
             When provided, it names the run dir AND derives the
-            shared generated_at RFC 3339 Z string stamped into every tile,
-            manifest.json, and manifest.duckdb metadata. Defaults to
+            shared published_at RFC 3339 Z string stamped into every tile,
+            tileset.json and manifest.json. Defaults to
             datetime.now(timezone.utc) when omitted.
-        idf_parquet: Path to idf.parquet (overture_place, osm only). Feeds
-            collection.json's `categories`; also joins the freshness inputs
-            below so a category-vocabulary refresh re-exports. Divisions have
-            no IDF artifact and pass None.
+        idf_parquet: Path to idf.parquet. Joins the freshness inputs so a
+            category-vocabulary refresh re-exports; for overture_place it
+            also feeds tileset.json's `categories`.
+        releases: {dataset: release}. Every carried or referenced
+            collection's dataset needs an entry; KeyError names the first
+            that has none.
 
     Returns:
         str: Path to the run directory created (or existing if fresh and not forced).
@@ -2157,16 +2141,6 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                     shutil.rmtree(entry_path, ignore_errors=True)
                     log.info("[%s] export: removed incomplete run dir %s", source, entry)
 
-    # Step 3: Create new timestamped run dir
-    # One timestamp, threaded to both the run-dir name and generated_at,
-    # so the run dir and manifest generated_at can never straddle a clock tick.
-    os.makedirs(tiles_root, exist_ok=True)
-    run_now = now if now is not None else datetime.now(timezone.utc)
-    timestamp = run_now.strftime("%Y%m%dT%H%M%S")
-    generated_at = run_now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    run_dir = os.path.join(tiles_root, timestamp)
-    os.makedirs(run_dir, exist_ok=True)
-
     # Build containment expression for SQL substitution
     # NEVER use a glob for containment — read_parquet on empty glob errors on DuckDB 1.4.4.
     containment_files = sorted(glob_module.glob(os.path.join(containment_dir, "*.parquet")))
@@ -2184,19 +2158,52 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
             "NULL::VARCHAR AS tile_qk WHERE 1=0)"
         )
 
-    # Step 4: SQL substitution — replace bare table names with parquet read expressions
+    # Step 3: The collections the tileset carries and references, with their
+    # releases and terms. A tileset references divisions when its records
+    # include division data (containment rows) and it does not carry them.
+    source_cls = _SOURCES[source]
+    releases = releases or {}
+    carried_pairs = [(source_cls.dataset, c) for c in source_cls.collections]
+    has_containment = duckdb.sql(
+        f"SELECT count(*) > 0 FROM {containment_expr}"
+    ).fetchone()[0]
+    division_pair = ("overturemaps.org", "division")
+    referenced_pairs = [division_pair] if has_containment and division_pair not in carried_pairs else []
+
+    def attribution_of(pairs):
+        return [
+            {"dataset": d, "collection": c, "release": releases[d], **COLLECTION_TERMS[(d, c)]}
+            for d, c in pairs
+        ]
+
+    carried = attribution_of(carried_pairs)
+    referenced = attribution_of(referenced_pairs)
+    attribution = carried + referenced
+
+    # Step 4: Create new timestamped run dir
+    # One timestamp, threaded to both the run-dir name and published_at,
+    # so the run dir and tileset published_at can never straddle a clock tick.
+    os.makedirs(tiles_root, exist_ok=True)
+    run_now = now if now is not None else datetime.now(timezone.utc)
+    timestamp = run_now.strftime("%Y%m%dT%H%M%S")
+    published_at = run_now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    run_dir = os.path.join(tiles_root, timestamp)
+    os.makedirs(run_dir, exist_ok=True)
+
+    # Step 5: SQL substitution — replace bare table names with parquet read expressions
     places_pq = places_parquet.replace("'", "''")
     ta_pq = tile_assignments_parquet.replace("'", "''")
 
     raw = (_SQL_DIR / f"{source}_export_tiles.sql").read_text()
-    # Apply ${repo} substitution first (safe_substitute leaves unknown ${...} intact)
-    sql = string.Template(raw).safe_substitute(repo=REPO)
+    sql = string.Template(raw).safe_substitute(
+        manifest_key=source_cls.manifest_key_sql(f"p.{source_cls.source_pk}"),
+    )
     # Replace bare table references with read_parquet expressions
     sql = sql.replace("FROM places p", f"FROM read_parquet('{places_pq}') p")
     sql = sql.replace("JOIN tile_assignments ta", f"JOIN read_parquet('{ta_pq}') ta")
     sql = sql.replace("LEFT JOIN place_containment pc", f"LEFT JOIN {containment_expr} pc")
 
-    # Step 5: Open ephemeral in-memory connection and execute the substituted SQL
+    # Step 6: Open ephemeral in-memory connection and execute the substituted SQL
     if temp_directory is None:
         spill_dir = run_dir + ".spill"
         staging_dir = run_dir + ".staging"
@@ -2226,7 +2233,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         con.execute(sql)
         con.execute("SET enable_progress_bar = false")
 
-        # collection.json's `attributes` field: the tile_export view's
+        # tileset.json's `attributes` field: the tile_export view's
         # attributes struct field names, captured now because the view only
         # lives on this connection. Both overture_place and
         # overture_division wrap attributes in strip_json_nulls, which
@@ -2234,7 +2241,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         # over every row recovers the full set.
         if source in ("overture_place", "overture_division"):
             rows = con.execute(
-                "SELECT DISTINCT UNNEST(json_keys(record_json, '$.attributes')) AS k FROM tile_export"
+                "SELECT DISTINCT UNNEST(json_keys(record_json, '$.value.attributes')) AS k FROM tile_export"
             ).fetchall()
             attribute_fields = {r[0] for r in rows}
         else:
@@ -2246,12 +2253,12 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
         ).fetchone()[0]
         log.info("[%s] export: %d tiles to write", source, tile_count)
 
-        # Step 6: Pass 1 -- materialise tile_export unsorted, partitioned by
+        # Step 7: Pass 1 -- materialise tile_export unsorted, partitioned by
         # tile_qk prefix. No ORDER BY: the join streams straight to each
         # partition's writer, so peak spill is bounded by one partition, not
         # the whole dataset.
         con.execute(
-            f"COPY (SELECT tile_qk, place_id, rkey, record_json, "
+            f"COPY (SELECT tile_qk, place_id, record_json, "
             f"left(tile_qk, {export_partition_zoom}) AS pfx FROM tile_export) "
             f"TO '{staging_dir}' (FORMAT PARQUET, COMPRESSION ZSTD, PARTITION_BY (pfx))"
         )
@@ -2265,26 +2272,13 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
             if entry.startswith("pfx=")
         )
 
-        source_cls = _SOURCES[source]
-
         def flush_tile(qk, records):
             """Compress and write one tile's records to disk.
 
-            records are (rkey, record_json) pairs; record_json is a DuckDB
-            to_json()::VARCHAR string. wrap_record composes the {uri, cid,
-            value} envelope via string concatenation — no per-record
-            json.loads/json.dumps round trip.
+            records are record_json strings, DuckDB to_json()::VARCHAR output
+            spliced into the envelope verbatim.
             """
-            wrapped = [
-                envelope.wrap_record(
-                    envelope.record_uri(f"https://{REPO}", source_cls.collection, rkey), record_json
-                )
-                for rkey, record_json in records
-            ]
-            payload = envelope.build_tile_payload(
-                source_cls.collection, source_cls.source_url, source_cls.license_url,
-                generated_at, wrapped
-            )
+            payload = envelope.build_tile_payload(published_at, attribution, records)
             subdir = os.path.join(run_dir, qk[:6])
             os.makedirs(subdir, exist_ok=True)
             compressed = gzip.compress(payload, mtime=0)
@@ -2305,7 +2299,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
             # Pass 2: sort and flush one partition at a time.
             for p in partition_prefixes:
                 cursor = con.execute(
-                    f"SELECT tile_qk, place_id, rkey, record_json "
+                    f"SELECT tile_qk, place_id, record_json "
                     f"FROM read_parquet('{staging_dir}/pfx={p}/*.parquet') "
                     f"ORDER BY tile_qk, place_id"
                 )
@@ -2316,7 +2310,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                     batch = cursor.fetchmany(1000)
                     if not batch:
                         break
-                    for tile_qk, place_id, rkey, record_json in batch:
+                    for tile_qk, place_id, record_json in batch:
                         if tile_qk != current_qk:
                             if current_qk is not None:
                                 if len(futures) >= max_inflight:
@@ -2324,7 +2318,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                                 futures.append(executor.submit(flush_tile, current_qk, accumulated))
                             current_qk = tile_qk
                             accumulated = []
-                        accumulated.append((rkey, record_json))
+                        accumulated.append(record_json)
 
                 if current_qk is not None:
                     futures.append(executor.submit(flush_tile, current_qk, accumulated))
@@ -2342,17 +2336,18 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     log.info("[%s] export: wrote %d tiles total (%.1fs)", source, len(manifest),
              time.monotonic() - t0)
 
-    # Step 7: Manifests in completion order — manifest.json lands LAST as completeness marker
-    write_manifest_db(tile_assignments_parquet, run_dir, source, generated_at=generated_at,
+    # Step 8: Manifests in completion order — manifest.json lands LAST as completeness marker
+    write_manifest_db(tile_assignments_parquet, run_dir, source,
                       temp_directory=temp_directory,
                       max_temp_directory_size=max_temp_directory_size)
-    write_collection_json(run_dir, source, source_cls, generated_at=generated_at,
-                          manifest=manifest, places_pq=places_pq,
-                          containment_expr=containment_expr, idf_parquet=idf_parquet,
-                          attribute_fields=attribute_fields)
-    write_manifest(run_dir, generated_at=generated_at)
+    write_tileset_json(run_dir, source, source_cls, published_at=published_at,
+                       manifest=manifest, places_pq=places_pq,
+                       containment_expr=containment_expr, idf_parquet=idf_parquet,
+                       attribute_fields=attribute_fields,
+                       carried=carried, referenced=referenced)
+    write_manifest(run_dir, generated_at=published_at)
 
-    # Step 8: Symlink swap — atomic on POSIX via tmp-symlink + rename
+    # Step 9: Symlink swap — atomic on POSIX via tmp-symlink + rename
     link_path = os.path.join(tiles_root, "current")
     tmp_link = link_path + ".tmp"
     try:
@@ -2362,7 +2357,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     os.symlink(timestamp, tmp_link)
     os.rename(tmp_link, link_path)
 
-    # Step 9: Keep-2 sweep — retain only the 2 newest COMPLETE run dirs
+    # Step 10: Keep-2 sweep — retain only the 2 newest COMPLETE run dirs
     complete_dirs = sorted(
         d for d in os.listdir(tiles_root)
         if _TIMESTAMP_RE.match(d)

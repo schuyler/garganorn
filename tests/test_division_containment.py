@@ -1,8 +1,8 @@
 """garganorn.stages.stage_division_containment.
 
 places_parquet is built via the real stage_import("overture_division", ...)
-path (not a hand-rolled fixture), so level and names."primary" come from
-the actual import CTAS -- the same guarantee R5 pins. division_parquet is
+path (not a hand-rolled fixture), so subtype, level and names."primary" come
+from the actual import CTAS -- the same guarantee R5 pins. division_parquet is
 tests/conftest.py's session-scoped fixture, extended with a hierarchies
 column; its div_locality_sf chain carries
 div_missing_county (absent from the imported set, for R2) and a
@@ -15,9 +15,10 @@ import time
 import duckdb
 
 from garganorn import stages as _stages
+from garganorn.database import DIVISION_URN_PREFIX
+from garganorn.levels import LEVEL_VOCAB
 from garganorn.stages import stage_division_containment
 
-_COLLECTION_PREFIX = "org.atgeo.places.overture.division"
 _BBOX = (-122.55, 37.60, -122.30, 37.85)
 
 
@@ -82,9 +83,9 @@ class TestWithinNamesAncestors:
 
         rows = _rows(containment_dir)
         sf_row = next(r for r in rows if r[1] == "div_locality_sf")
-        rkeys = {e["rkey"] for e in json.loads(sf_row[2])["within"]}
-        assert f"{_COLLECTION_PREFIX}:div_region_ca" in rkeys
-        assert f"{_COLLECTION_PREFIX}:div_country_us" in rkeys
+        uris = {e["uri"] for e in json.loads(sf_row[2])["within"]}
+        assert DIVISION_URN_PREFIX + "div_region_ca" in uris
+        assert DIVISION_URN_PREFIX + "div_country_us" in uris
 
         assert not any(r[1] == "div_country_us" for r in rows), (
             "div_country_us's chain holds only itself; with no ancestors "
@@ -110,11 +111,11 @@ class TestMissingAncestorDropped:
         )
 
         within = json.loads(_rows(containment_dir)[0][2])["within"]
-        rkeys = {e["rkey"] for e in within}
-        assert f"{_COLLECTION_PREFIX}:div_missing_county" not in rkeys
-        assert rkeys == {
-            f"{_COLLECTION_PREFIX}:div_country_us",
-            f"{_COLLECTION_PREFIX}:div_region_ca",
+        uris = {e["uri"] for e in within}
+        assert DIVISION_URN_PREFIX + "div_missing_county" not in uris
+        assert uris == {
+            DIVISION_URN_PREFIX + "div_country_us",
+            DIVISION_URN_PREFIX + "div_region_ca",
         }
 
 
@@ -138,9 +139,9 @@ class TestNoSelfReference:
         rows = _rows(containment_dir)
         assert rows, "fixture assumption violated: no containment rows produced"
         for tile_qk, place_id, relations_json in rows:
-            own_rkey = f"{_COLLECTION_PREFIX}:{place_id}"
-            rkeys = {e["rkey"] for e in json.loads(relations_json)["within"]}
-            assert own_rkey not in rkeys, f"{place_id} lists itself in its own within"
+            own_uri = DIVISION_URN_PREFIX + place_id
+            uris = {e["uri"] for e in json.loads(relations_json)["within"]}
+            assert own_uri not in uris, f"{place_id} lists itself in its own within"
 
 
 # ---------------------------------------------------------------------------
@@ -175,13 +176,13 @@ class TestMultiTileByteIdentical:
 
 
 # ---------------------------------------------------------------------------
-# R5 -- within entry shape, ordering, rkey construction, and name sourced
+# R5 -- within entry shape, ordering, URN construction, and name sourced
 # from the ancestor's own imported record rather than the hierarchies
 # struct.
 # ---------------------------------------------------------------------------
 
 class TestWithinEntryShape:
-    def test_key_set_ordering_rkey_and_name_from_imported_record(
+    def test_key_set_ordering_uri_and_name_from_imported_record(
         self, division_parquet, tmp_path
     ):
         places_parquet = _make_places_parquet(division_parquet, tmp_path)
@@ -194,16 +195,16 @@ class TestWithinEntryShape:
 
         within = json.loads(_rows(containment_dir)[0][2])["within"]
         for entry in within:
-            assert set(entry.keys()) == {"rkey", "name", "level"}
+            assert set(entry.keys()) == {"uri", "name", "type"}
 
-        levels = [e["level"] for e in within]
-        assert levels == sorted(levels), f"within not ordered by level ASC: {within}"
+        levels = [LEVEL_VOCAB[e["type"]] for e in within]
+        assert levels == sorted(levels), f"within not ordered broadest first: {within}"
 
-        by_rkey = {e["rkey"]: e for e in within}
-        country = by_rkey[f"{_COLLECTION_PREFIX}:div_country_us"]
-        region = by_rkey[f"{_COLLECTION_PREFIX}:div_region_ca"]
-        assert country["level"] == 10
-        assert region["level"] == 25
+        by_uri = {e["uri"]: e for e in within}
+        country = by_uri[DIVISION_URN_PREFIX + "div_country_us"]
+        region = by_uri[DIVISION_URN_PREFIX + "div_region_ca"]
+        assert country["type"] == "country"
+        assert region["type"] == "region"
         # The hierarchies struct names div_region_ca "Not California" in
         # div_locality_sf's chain (tests/conftest.py); the record's own
         # names.primary from places_parquet must win.
@@ -272,13 +273,13 @@ class TestSameLevelAncestorTiebreak:
         )
 
         within = json.loads(_rows(containment_dir)[0][2])["within"]
-        counties = [e for e in within if e["level"] == 35]
+        counties = [e for e in within if e["type"] == "county"]
         assert len(counties) == 2, (
             f"fixture assumption violated: expected 2 same-level ancestors, got {counties}"
         )
-        assert [e["rkey"] for e in counties] == [
-            f"{_COLLECTION_PREFIX}:div_county_alpha",
-            f"{_COLLECTION_PREFIX}:div_county_zulu",
+        assert [e["uri"] for e in counties] == [
+            DIVISION_URN_PREFIX + "div_county_alpha",
+            DIVISION_URN_PREFIX + "div_county_zulu",
         ], f"same-level ancestors not ordered by ancestor_id ASC: {counties}"
 
 
@@ -358,7 +359,7 @@ class TestOutputContract:
         con.close()
 
         meta = json.loads(open(os.path.join(containment_dir, "_meta.json")).read())
-        assert meta["params"] == {"collection_prefix": _COLLECTION_PREFIX}
+        assert meta["params"] == {"division_urn_prefix": DIVISION_URN_PREFIX}
         assert places_parquet in meta["inputs"]
         assert ta_path in meta["inputs"]
         assert any(p.endswith("division.parquet") for p in meta["inputs"]), (

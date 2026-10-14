@@ -13,6 +13,26 @@ from tests.quadtree_helpers import (
     run_overture_import, run_tile_assignments, run_osm_import,
 )
 from tests.duckdb_spy import spy_on_duckdb_connect
+from garganorn.quadtree import SOURCES
+from garganorn.database import DIVISION_URN_PREFIX
+
+RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
+
+
+def _subs(source):
+    """The ${manifest_key} substitution stage_export applies to an export SQL file."""
+    pk = "p.rkey" if source == "osm" else "p.id"
+    return {"manifest_key": SOURCES[source].manifest_key_sql(pk)}
+
+
+def _value(record_json):
+    """The place value of a tile record_json."""
+    return json.loads(record_json)["value"]
+
+
+def _id_of(value):
+    """The id of a place value: everything after its origin's fourth colon."""
+    return value["origin"].split(":", 4)[4]
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +142,7 @@ class TestOvertureExportTiles:
       compute_tile_assignments → overture_export_tiles
     """
 
-    _SUBS = {"repo": "places.atgeo.org"}
+    _SUBS = _subs("overture_place")
 
     def _run_full_pipeline(self, conn, parquet_glob, density_parquet):
         """Run all Overture pipeline SQL stages on conn."""
@@ -149,13 +169,13 @@ class TestOvertureExportTiles:
         """Return parsed JSON record dict for a given place_id, or None if not found.
 
         Fetches all rows from tile_export, parses each record_json, and returns
-        the first record whose rkey matches place_id.
+        the value of the first record whose origin id matches place_id.
         """
         rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            if parsed.get("rkey") == place_id:
-                return parsed
+            value = _value(record_json)
+            if _id_of(value) == place_id:
+                return value
         return None
 
     def test_overture_export_addresses_inline(self, overture_parquet, density_parquet, tmp_path):
@@ -230,12 +250,12 @@ class TestOvertureExportTiles:
         conn.close()
         assert rows, "No rows returned from tile_export"
         for (record_json,) in rows:
-            parsed = json.loads(record_json)
+            parsed = _value(record_json)
             locations = parsed["locations"]
             for loc in locations:
                 null_keys = [k for k, v in loc.items() if v is None]
                 assert not null_keys, (
-                    f"Location {loc.get('$type')!r} in record {parsed.get('rkey')!r} "
+                    f"Location {loc.get('$type')!r} in record {parsed.get('origin')!r} "
                     f"has null values for keys: {null_keys}. "
                     "Locations must contain only fields belonging to their type."
                 )
@@ -375,10 +395,10 @@ class TestVariantAndAttributeNullVsAbsent:
                 place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
             )
         """)
-        raw_sql = _load_sql("overture_place_export_tiles.sql", {"repo": "https://example.com"})
+        raw_sql = _load_sql("overture_place_export_tiles.sql", _subs("overture_place"))
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
         (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
-        return json.loads(record_json)
+        return _value(record_json)
 
     def test_overture_place_variant_without_language_omits_key(self):
         """A variant whose source language is NULL must have no 'language'
@@ -462,11 +482,11 @@ class TestVariantAndAttributeNullVsAbsent:
                 place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
             )
         """)
-        raw_sql = _load_sql("overture_division_export_tiles.sql", {"repo": "https://example.com"})
+        raw_sql = _load_sql("overture_division_export_tiles.sql", _subs("overture_division"))
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
         (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
         conn.close()
-        variant = json.loads(record_json)["variants"][0]
+        variant = _value(record_json)["variants"][0]
         assert "language" not in variant, (
             f"overture_division variant.language must be omitted when "
             f"NULL, not emitted as JSON null; got {variant}"
@@ -505,11 +525,11 @@ class TestVariantAndAttributeNullVsAbsent:
                 place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
             )
         """)
-        raw_sql = _load_sql("osm_export_tiles.sql", {})
+        raw_sql = _load_sql("osm_export_tiles.sql", _subs("osm"))
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
         (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
         conn.close()
-        variant = json.loads(record_json)["variants"][0]
+        variant = _value(record_json)["variants"][0]
         assert "language" not in variant, (
             f"osm variant.language must be omitted when NULL, not emitted "
             f"as JSON null; got {variant}"
@@ -520,15 +540,14 @@ class TestVariantAndAttributeNullVsAbsent:
 # Division containment relations JSON for test fixtures
 # ---------------------------------------------------------------------------
 
-# The four division boundaries that contain SF places (lat ~37.77, lon ~-122.42),
-# ordered by level ascending (continent first — matches ORDER BY level ASC
-# over garganorn.levels.LEVEL_VOCAB).
+# The three division boundaries that contain SF places (lat ~37.77, lon ~-122.42),
+# ordered broadest first (matches ORDER BY level ASC over
+# garganorn.levels.LEVEL_VOCAB).
 _SF_WITHIN_JSON = json.dumps({
     "within": [
-        {"rkey": "org.atgeo.places.overture.division:div_continent_na"},
-        {"rkey": "org.atgeo.places.overture.division:div_country_us"},
-        {"rkey": "org.atgeo.places.overture.division:div_region_ca"},
-        {"rkey": "org.atgeo.places.overture.division:div_locality_sf"},
+        {"uri": DIVISION_URN_PREFIX + "div_country_us", "name": "United States", "type": "country"},
+        {"uri": DIVISION_URN_PREFIX + "div_region_ca", "name": "California", "type": "region"},
+        {"uri": DIVISION_URN_PREFIX + "div_locality_sf", "name": "San Francisco", "type": "locality"},
     ]
 })
 
@@ -564,8 +583,8 @@ class TestContainmentInExport:
     through the pipeline.
     """
 
-    _OV_SUBS = {"repo": "places.atgeo.org"}
-    _OSM_SUBS = {"repo": "places.atgeo.org"}
+    _OV_SUBS = _subs("overture_place")
+    _OSM_SUBS = _subs("osm")
 
     # ------------------------------------------------------------------
     # Overture export includes relations.within when containment present
@@ -597,8 +616,8 @@ class TestContainmentInExport:
 
         record = None
         for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            if parsed.get("rkey") == "ov001":
+            parsed = _value(record_json)
+            if _id_of(parsed) == "ov001":
                 record = parsed
                 break
 
@@ -610,15 +629,13 @@ class TestContainmentInExport:
         )
         within = relations["within"]
         assert isinstance(within, list), f"relations.within must be a list; got {type(within)}"
-        assert len(within) == 4, (
-            f"relations.within must have 4 entries; got {len(within)}: {within}"
+        assert len(within) == 3, (
+            f"relations.within must have 3 entries; got {len(within)}: {within}"
         )
         for entry in within:
-            assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey must have division prefix; got {entry['rkey']!r}"
-            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+            assert set(entry) == {"uri", "name", "type"}, f"within entry keys: {entry}"
+            assert entry["uri"].startswith(DIVISION_URN_PREFIX), \
+                f"uri must have the division URN prefix; got {entry['uri']!r}"
 
     # ------------------------------------------------------------------
     # OSM export includes relations.within when containment present
@@ -634,7 +651,7 @@ class TestContainmentInExport:
         run_osm_import(conn, osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
         run_tile_assignments(conn, pk_expr="rkey", min_zoom=6, max_zoom=17, max_per_tile=5000)
 
-        # Get a valid rkey from the imported places to use for containment
+        # Get a valid place rkey from the imported places to use for containment
         rkeys = conn.execute("SELECT rkey FROM places ORDER BY rkey LIMIT 1").fetchall()
         assert rkeys, "OSM import must produce at least one place"
         target_rkey = rkeys[0][0]
@@ -651,25 +668,18 @@ class TestContainmentInExport:
         rows = conn.execute("SELECT record_json FROM tile_export").fetchall()
         conn.close()
 
+        # OSM place rkeys n/w/r<id> become node/way/relation origins.
+        collection = {"n": "node", "w": "way", "r": "relation"}[target_rkey[0]]
+        expected_origin = f"urn:atgeo:openstreetmap.org:{collection}:{target_rkey[1:]}"
         record = None
         for (record_json,) in rows:
-            parsed = json.loads(record_json)
-            # OSM rkeys are rewritten in the SQL (e.g. 'n1001' → 'node:1001')
-            # Check original rkey match by looking at the rkey field
-            rkey = parsed.get("rkey", "")
-            expected_rkey = (
-                target_rkey.replace("n", "node:", 1)
-                if target_rkey.startswith("n")
-                else target_rkey.replace("w", "way:", 1)
-                if target_rkey.startswith("w")
-                else target_rkey
-            )
-            if rkey == expected_rkey:
+            parsed = _value(record_json)
+            if parsed["origin"] == expected_origin:
                 record = parsed
                 break
 
         assert record is not None, (
-            f"place with rkey={target_rkey!r} must appear in tile_export"
+            f"place with origin={expected_origin!r} must appear in tile_export"
         )
         relations = record.get("relations", {})
         assert "within" in relations, (
@@ -678,15 +688,13 @@ class TestContainmentInExport:
         )
         within = relations["within"]
         assert isinstance(within, list), f"relations.within must be a list; got {type(within)}"
-        assert len(within) == 4, (
-            f"relations.within must have 4 entries; got {len(within)}: {within}"
+        assert len(within) == 3, (
+            f"relations.within must have 3 entries; got {len(within)}: {within}"
         )
         for entry in within:
-            assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-            assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                f"rkey must have division prefix; got {entry['rkey']!r}"
-            assert "name" not in entry, f"'name' key must not appear in rkey-only output: {entry}"
-            assert "level" not in entry, f"'level' key must not appear in rkey-only output: {entry}"
+            assert set(entry) == {"uri", "name", "type"}, f"within entry keys: {entry}"
+            assert entry["uri"].startswith(DIVISION_URN_PREFIX), \
+                f"uri must have the division URN prefix; got {entry['uri']!r}"
 
     # ------------------------------------------------------------------
     # compute_containment import
@@ -798,11 +806,9 @@ class TestContainmentInExport:
             assert isinstance(within, list), f"within must be a list for {place_id}; got {type(within)}"
             assert len(within) >= 1, f"SF coordinates should be contained by at least 1 boundary"
             for entry in within:
-                assert "rkey" in entry, f"within entry missing 'rkey': {entry}"
-                assert entry["rkey"].startswith("org.atgeo.places.overture.division:"), \
-                    f"rkey must be collection-qualified; got {entry['rkey']!r}"
-                assert "name" in entry, f"'name' key missing from within entry: {entry}"
-                assert "level" in entry, f"'level' key missing from within entry: {entry}"
+                assert set(entry) == {"uri", "name", "type"}, f"within entry keys: {entry}"
+                assert entry["uri"].startswith(DIVISION_URN_PREFIX), \
+                    f"uri must be a division URN; got {entry['uri']!r}"
 
     # ------------------------------------------------------------------
     # compute_containment matches every containing boundary
@@ -811,16 +817,15 @@ class TestContainmentInExport:
     def test_compute_containment_matches_all_containing_boundaries(self, tmp_path, division_db_path):
         """compute_containment must match ALL boundaries that contain a place, not just some.
 
-        The SF test point (37.7749, -122.4194) falls inside all four division boundaries
+        The SF test point (37.7749, -122.4194) falls inside all three division boundaries
         defined in conftest.py::DIVISION_BOUNDARIES that cover North America:
-          - div_continent_na (level 0): bbox [20,-130] to [55,-60]
           - div_country_us   (level 10): bbox [24,-125] to [50,-66]
           - div_region_ca    (level 25): bbox [34,-125] to [42,-118]
           - div_locality_sf  (level 50): bbox [37.6,-122.55] to [37.85,-122.3]
 
         div_borough_manhattan (level 50) does NOT contain the SF point,
-        so exactly 4 entries are expected and no more. Any narrowing that drops a
-        boundary whose extent does reach the point yields fewer than 4 and fails
+        so exactly 3 entries are expected and no more. Any narrowing that drops a
+        boundary whose extent does reach the point yields fewer than 3 and fails
         here.
         """
         try:
@@ -893,20 +898,19 @@ class TestContainmentInExport:
         parsed = json.loads(rows[0][1])
         within = parsed["within"]
 
-        # The SF point falls inside exactly 4 of the 5 division test boundaries.
-        # If a bbox pre-filter incorrectly excludes any of these 4 boundaries,
+        # The SF point falls inside exactly 3 of the 4 division test boundaries.
+        # If a bbox pre-filter incorrectly excludes any of these 3 boundaries,
         # this assertion will catch it.
-        expected_rkeys = {
-            "org.atgeo.places.overture.division:div_continent_na",
-            "org.atgeo.places.overture.division:div_country_us",
-            "org.atgeo.places.overture.division:div_region_ca",
-            "org.atgeo.places.overture.division:div_locality_sf",
+        expected_uris = {
+            DIVISION_URN_PREFIX + "div_country_us",
+            DIVISION_URN_PREFIX + "div_region_ca",
+            DIVISION_URN_PREFIX + "div_locality_sf",
         }
-        actual_rkeys = {entry["rkey"] for entry in within}
-        assert actual_rkeys == expected_rkeys, (
+        actual_uris = {entry["uri"] for entry in within}
+        assert actual_uris == expected_uris, (
             f"compute_containment produced wrong set of containing boundaries.\n"
-            f"  Expected: {sorted(expected_rkeys)}\n"
-            f"  Got:      {sorted(actual_rkeys)}\n"
+            f"  Expected: {sorted(expected_uris)}\n"
+            f"  Got:      {sorted(actual_uris)}\n"
             f"A missing boundary indicates the bbox pre-filter incorrectly excluded it "
             f"(false negative). An extra boundary indicates incorrect inclusion."
         )
@@ -1192,25 +1196,24 @@ class TestContainmentInExport:
         assert parquet_files, "compute_containment must produce parquet files for edge test"
 
         check_con = duckdb.connect()
-        # edge_in: should be in NA, US, CA, SF (4 boundaries)
+        # edge_in: should be in US, CA, SF (3 boundaries)
         in_rows = check_con.execute(
             f"SELECT relations_json FROM read_parquet({parquet_files!r}) "
             f"WHERE place_id = 'edge_in'"
         ).fetchall()
         assert len(in_rows) == 1, f"Expected 1 row for edge_in; got {len(in_rows)}"
         in_within = json.loads(in_rows[0][0])["within"]
-        in_rkeys = {e["rkey"] for e in in_within}
-        expected_in_rkeys = {
-            "org.atgeo.places.overture.division:div_continent_na",
-            "org.atgeo.places.overture.division:div_country_us",
-            "org.atgeo.places.overture.division:div_region_ca",
-            "org.atgeo.places.overture.division:div_locality_sf",
+        in_uris = {e["uri"] for e in in_within}
+        expected_in_uris = {
+            DIVISION_URN_PREFIX + "div_country_us",
+            DIVISION_URN_PREFIX + "div_region_ca",
+            DIVISION_URN_PREFIX + "div_locality_sf",
         }
-        assert in_rkeys == expected_in_rkeys, (
-            f"edge_in should be in 4 boundaries; got {sorted(in_rkeys)}"
+        assert in_uris == expected_in_uris, (
+            f"edge_in should be in 3 boundaries; got {sorted(in_uris)}"
         )
 
-        # edge_out: should be in NA, US, CA only (3 boundaries, not SF)
+        # edge_out: should be in US, CA only (2 boundaries, not SF)
         out_rows = check_con.execute(
             f"SELECT relations_json FROM read_parquet({parquet_files!r}) "
             f"WHERE place_id = 'edge_out'"
@@ -1218,14 +1221,13 @@ class TestContainmentInExport:
         check_con.close()
         assert len(out_rows) == 1, f"Expected 1 row for edge_out; got {len(out_rows)}"
         out_within = json.loads(out_rows[0][0])["within"]
-        out_rkeys = {e["rkey"] for e in out_within}
-        expected_out_rkeys = {
-            "org.atgeo.places.overture.division:div_continent_na",
-            "org.atgeo.places.overture.division:div_country_us",
-            "org.atgeo.places.overture.division:div_region_ca",
+        out_uris = {e["uri"] for e in out_within}
+        expected_out_uris = {
+            DIVISION_URN_PREFIX + "div_country_us",
+            DIVISION_URN_PREFIX + "div_region_ca",
         }
-        assert out_rkeys == expected_out_rkeys, (
-            f"edge_out should be in 3 boundaries (not SF); got {sorted(out_rkeys)}"
+        assert out_uris == expected_out_uris, (
+            f"edge_out should be in 2 boundaries (not SF); got {sorted(out_uris)}"
         )
 
 
@@ -1263,8 +1265,8 @@ class TestExportRecordParityPhase2:
 
         Two details make this assertion mean what it says:
 
-        The clock is pinned. stage_export stamps a wall-clock generated_at at
-        second granularity into every tile envelope (stages.py:1469-1471), so
+        The clock is pinned. stage_export stamps a wall-clock publishedAt at
+        second granularity into every tile envelope, so
         two runs straddling a clock tick differ by one digit inside the
         timestamp -- a difference that has nothing to do with export
         determinism. Unpinned, this test passes only when both pipeline runs
@@ -1296,7 +1298,7 @@ class TestExportRecordParityPhase2:
                 "overture_place", overture_parquet,
                 (-122.55, 37.60, -122.30, 37.85),
                 str(root), memory_limit="4GB", max_per_tile=100,
-                density_parquet=density_parquet, force=True,
+                density_parquet=density_parquet, force=True, releases=RELEASES,
             )
             tiles_current = root / "overture_place" / "tiles" / "current"
             assert tiles_current.exists(), (
@@ -1335,9 +1337,7 @@ class TestSummaryByteIdenticalCopies:
         self, overture_parquet, density_parquet, tmp_path, monkeypatch
     ):
         """Run the full overture_place pipeline; at N=10,000 every fixture
-        place lands in both the regular and summary band. Currently no
-        summary band is produced at all, so this fails on the "no
-        summary-band tile" assertion below -- the missing-feature failure.
+        place lands in both the regular and summary band.
         """
         import gzip as _gzip
         from datetime import datetime as _datetime, timezone as _timezone
@@ -1359,7 +1359,7 @@ class TestSummaryByteIdenticalCopies:
             "overture_place", overture_parquet,
             (-122.55, 37.60, -122.30, 37.85),
             str(root), memory_limit="4GB", max_per_tile=100,
-            density_parquet=density_parquet, force=True,
+            density_parquet=density_parquet, force=True, releases=RELEASES,
         )
         tiles_current = root / "overture_place" / "tiles" / "current"
         assert tiles_current.exists(), f"tiles must be at {tiles_current}"
@@ -1371,9 +1371,9 @@ class TestSummaryByteIdenticalCopies:
             with _gzip.open(gz_path) as f:
                 tile = json.loads(f.read())
             for rec in tile["records"]:
-                rkey = rec["value"]["rkey"]
+                origin = rec["value"]["origin"]
                 target = summary_records if len(band_dir) < 6 else regular_records
-                target.setdefault(rkey, []).append(rec)
+                target.setdefault(origin, []).append(rec)
 
         assert summary_records, (
             "no summary-band (<6-char directory) tile was produced -- the "
@@ -1385,15 +1385,15 @@ class TestSummaryByteIdenticalCopies:
             "no record appears in both the regular and summary band; "
             "at N=10,000 every fixture place should land in both"
         )
-        rkey = sorted(shared)[0]
-        reg_recs = regular_records[rkey]
-        sum_recs = summary_records[rkey]
+        origin = sorted(shared)[0]
+        reg_recs = regular_records[origin]
+        sum_recs = summary_records[origin]
         assert len(reg_recs) == 1 and len(sum_recs) == 1, (
-            f"{rkey!r} must appear exactly once per band; "
+            f"{origin!r} must appear exactly once per band; "
             f"got regular={len(reg_recs)}, summary={len(sum_recs)}"
         )
         assert reg_recs[0] == sum_recs[0], (
-            f"regular and summary copies of {rkey!r} must be byte-identical; "
+            f"regular and summary copies of {origin!r} must be byte-identical; "
             f"regular={reg_recs[0]!r}\nsummary={sum_recs[0]!r}"
         )
 
@@ -1404,8 +1404,8 @@ class TestSummaryByteIdenticalCopies:
 
 class TestWriteManifestDbPhase2:
     """write_manifest_db reads tile_assignments from parquet, producing the
-    same rkey/tile_qk rows and preserving the OSM rkey transform
-    (n12345 → node:12345).
+    same key/tile_qk rows and deriving the OSM key from the place_id
+    (n12345 → openstreetmap.org:node:12345).
     """
 
     def test_write_manifest_db_accepts_parquet_path(self):
@@ -1422,9 +1422,10 @@ class TestWriteManifestDbPhase2:
             f"write_manifest_db must accept parquet path; got params: {params}"
         )
 
-    def test_osm_rkey_transform_preserved_in_parquet_path(self, tmp_path):
-        """OSM rkey transform (n12345→node:12345, w12345→way:12345) must be preserved
-        when write_manifest_db reads from tile_assignments.parquet.
+    def test_osm_key_derivation_in_parquet_path(self, tmp_path):
+        """OSM place_ids (n123456, w789) become openstreetmap.org:node:123456 and
+        openstreetmap.org:way:789 keys when write_manifest_db reads
+        tile_assignments.parquet.
         """
         from garganorn.stages import write_manifest_db
 
@@ -1456,15 +1457,13 @@ class TestWriteManifestDbPhase2:
         rows = {
             (r[0], r[1])
             for r in check.execute(
-                "SELECT rkey, tile_qk FROM m.record_tiles ORDER BY rkey"
+                "SELECT key, tile_qk FROM m.record_tiles ORDER BY key"
             ).fetchall()
         }
-        assert ("node:123456", "023130") in rows, (
-            f"OSM rkey 'n123456' must transform to 'node:123456'; got rows: {rows}"
-        )
-        assert ("way:789", "023131") in rows, (
-            f"OSM rkey 'w789' must transform to 'way:789'; got rows: {rows}"
-        )
+        assert rows == {
+            ("openstreetmap.org:node:123456", "023130"),
+            ("openstreetmap.org:way:789", "023131"),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -1510,8 +1509,8 @@ class TestStageExportPhase2Body:
             (SELECT NULL::VARCHAR AS place_id, NULL::VARCHAR AS relations_json WHERE 1=0)
         NOT a read_parquet glob, which errors on DuckDB 1.2.1 when the glob matches nothing.
 
-        Records are {uri, cid, value}-wrapped; relations lives on value, not
-        on the wrapper.
+        Records are {value, importance}; relations lives on value, not on the
+        record.
         """
         import os, time
         from pathlib import Path
@@ -1524,7 +1523,8 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
+                     releases=RELEASES)
 
         # Every record's value must have relations == {}
         gz_files = list(Path(tiles_root).rglob("*.json.gz"))
@@ -1533,13 +1533,13 @@ class TestStageExportPhase2Body:
             with gzip.open(gz_file) as f:
                 tile = json.loads(f.read())
             for rec in tile["records"]:
-                assert set(rec.keys()) == {"uri", "cid", "value"}, (
-                    f"record must be {{uri, cid, value}}-wrapped; got {list(rec)}"
+                assert set(rec.keys()) == {"value", "importance"}, (
+                    f"record must be {{value, importance}}; got {list(rec)}"
                 )
                 value = rec["value"]
                 assert value.get("relations") == {}, (
                     f"Empty containment must produce relations=={{}}; "
-                    f"got {value.get('relations')!r} for rkey {value.get('rkey')!r}"
+                    f"got {value.get('relations')!r} for origin {value.get('origin')!r}"
                 )
 
     # ------------------------------------------------------------------
@@ -1562,7 +1562,7 @@ class TestStageExportPhase2Body:
 
         gzip mtime=0 is already set by `stage_export`.
 
-        Tiles carry a run-scoped `generated_at`; without injecting the same
+        Tiles carry a run-scoped `publishedAt`; without injecting the same
         `now` into both calls, two exports run at different wall-clock
         seconds would legitimately differ in that one field, which would
         make this test fail for a reason unrelated to the ordering/
@@ -1601,11 +1601,11 @@ class TestStageExportPhase2Body:
         sql_log = spy_on_duckdb_connect(monkeypatch, stages_module)
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
-                     now=fixed_now, export_partition_zoom=6)
+                     releases=RELEASES, now=fixed_now, export_partition_zoom=6)
         first_run_sql = list(sql_log)
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_b, t0,
-                     now=fixed_now, export_partition_zoom=6)
+                     releases=RELEASES, now=fixed_now, export_partition_zoom=6)
         second_run_sql = sql_log[len(first_run_sql):]
 
         _assert_two_pass_query_shape(first_run_sql, expected_partitions=3)
@@ -1670,7 +1670,8 @@ class TestStageExportPhase2Body:
 
         t0 = time.monotonic()
 
-        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
+                     releases=RELEASES)
 
         # The incomplete leftover run dir must be deleted
         leftover_run_dir = os.path.join(tiles_root, leftover_ts)
@@ -1694,7 +1695,8 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
+                     releases=RELEASES)
 
         # Find run dir via tiles/current symlink
         current = os.path.join(tiles_root, "current")
@@ -1724,7 +1726,8 @@ class TestStageExportPhase2Body:
         os.makedirs(tiles_root)
         t0 = time.monotonic()
 
-        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
+                     releases=RELEASES)
 
         current = os.path.join(tiles_root, "current")
         assert os.path.islink(current), "tiles/current must be a symlink after stage_export"
@@ -1765,7 +1768,8 @@ class TestStageExportPhase2Body:
 
         t0 = time.monotonic()
 
-        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0)
+        stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
+                     releases=RELEASES)
 
         # At most 2 complete run dirs survive (keep-2)
         complete_dirs = sorted([
@@ -1823,9 +1827,8 @@ def _build_osm_tiles_fixture(tmp_path, assignments, name):
     """places.parquet + tile_assignments.parquet for the osm source, matching
     the columns osm_export_tiles.sql selects off `places`.
 
-    assignments: list of (rkey, tile_qk) pairs. rkeys must not start with
-    n/w/r -- those prefixes trigger the node/way/relation rkey rewrite,
-    which isn't what this fixture is testing.
+    assignments: list of (rkey, tile_qk) pairs. rkeys must be n/w/r followed
+    by digits -- the export derives the manifest key from that shape.
     """
     conn = duckdb.connect()
     conn.execute("""
@@ -1905,12 +1908,12 @@ def _read_tile(run_dir, qk):
         return json.loads(f.read())
 
 
-def _tile_rkeys(run_dir, qk):
-    """Set of rkeys in one tile's output file. Asserts the tile exists --
+def _tile_ids(run_dir, qk):
+    """Set of origin ids in one tile's output file. Asserts the tile exists --
     callers that need to assert absence should use _read_tile directly."""
     tile = _read_tile(run_dir, qk)
     assert tile is not None, f"tile {qk} was not written to {run_dir}"
-    return {rec["value"]["rkey"] for rec in tile["records"]}
+    return {_id_of(rec["value"]) for rec in tile["records"]}
 
 
 _PARTITION_BY_MARKER = "PARTITION_BY"
@@ -2007,14 +2010,14 @@ class TestBatchedExportPartitioning:
 
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
-            time.monotonic(), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, export_partition_zoom=6,
         )
 
-        assert _tile_rkeys(run_dir, "0123") == {f"short{i}" for i in range(5)}, (
+        assert _tile_ids(run_dir, "0123") == {f"short{i}" for i in range(5)}, (
             "the short (4-char) tile must contain exactly its 5 records"
         )
-        assert _tile_rkeys(run_dir, "0123440000") == {f"long{i}" for i in range(3)}
-        assert _tile_rkeys(run_dir, "0198765432") == {f"other{i}" for i in range(2)}
+        assert _tile_ids(run_dir, "0123440000") == {f"long{i}" for i in range(3)}
+        assert _tile_ids(run_dir, "0198765432") == {f"other{i}" for i in range(2)}
 
         # partitions at depth 6: '0123' (short tile is its own whole prefix),
         # '012344', '019876'
@@ -2059,12 +2062,12 @@ class TestBatchedExportPartitioning:
 
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
-            time.monotonic(), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, export_partition_zoom=6,
         )
 
-        assert _tile_rkeys(run_dir, tile_a1) == {"a1_0", "a1_1"}
-        assert _tile_rkeys(run_dir, tile_a2) == {"a2_0"}
-        assert _tile_rkeys(run_dir, tile_b1) == {"b1_0", "b1_1", "b1_2"}
+        assert _tile_ids(run_dir, tile_a1) == {"a1_0", "a1_1"}
+        assert _tile_ids(run_dir, tile_a2) == {"a2_0"}
+        assert _tile_ids(run_dir, tile_b1) == {"b1_0", "b1_1", "b1_2"}
 
         gz_files = list(Path(run_dir).rglob("*.json.gz"))
         assert len(gz_files) == 3, (
@@ -2096,15 +2099,15 @@ class TestBatchedExportPartitioning:
 
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
-            time.monotonic(), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, export_partition_zoom=6,
         )
 
-        rkeys = _tile_rkeys(run_dir, tile_qk)
-        assert len(rkeys) == n, (
+        ids = _tile_ids(run_dir, tile_qk)
+        assert len(ids) == n, (
             f"tile must have all {n} records spanning more than one "
-            f"fetchmany(1000) batch; got {len(rkeys)}"
+            f"fetchmany(1000) batch; got {len(ids)}"
         )
-        assert rkeys == {f"p{i:05d}" for i in range(n)}
+        assert ids == {f"p{i:05d}" for i in range(n)}
 
     @pytest.mark.parametrize("source, builder", [
         ("overture_place", _build_overture_tiles_fixture),
@@ -2116,7 +2119,7 @@ class TestBatchedExportPartitioning:
     ):
         """Every source takes the same two-pass partitioned export path --
         identical mechanism, no per-source branching. Checked against the
-        query shape, not just output rkeys: an implementation that
+        query shape, not just output ids: an implementation that
         partitions overture_place but special-cases osm/overture_division
         would pass an output-only check.
         """
@@ -2124,8 +2127,12 @@ class TestBatchedExportPartitioning:
         from garganorn.stages import stage_export
         import garganorn.stages as stages_module
 
-        assignments = [(f"{source}_{i}", "0123") for i in range(3)] + [
-            (f"{source}_x", "0201")
+        # OSM place rkeys must be n/w/r + digits; the origin id drops the letter.
+        rkey_prefix, id_prefix, extra = (
+            ("n", "", "9") if source == "osm" else (f"{source}_", f"{source}_", "x")
+        )
+        assignments = [(f"{rkey_prefix}{i}", "0123") for i in range(3)] + [
+            (f"{rkey_prefix}{extra}", "0201")
         ]
         places_pq, ta_pq = builder(tmp_path, assignments, source)
         containment_dir = _build_containment_dir(tmp_path, f"cd_{source}")
@@ -2136,11 +2143,11 @@ class TestBatchedExportPartitioning:
 
         run_dir = stage_export(
             source, places_pq, ta_pq, containment_dir, tiles_root,
-            time.monotonic(), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, export_partition_zoom=6,
         )
 
-        assert _tile_rkeys(run_dir, "0123") == {f"{source}_{i}" for i in range(3)}
-        assert _tile_rkeys(run_dir, "0201") == {f"{source}_x"}
+        assert _tile_ids(run_dir, "0123") == {f"{id_prefix}{i}" for i in range(3)}
+        assert _tile_ids(run_dir, "0201") == {f"{id_prefix}{extra}"}
         # partitions at depth 6: '0123', '0201'
         _assert_two_pass_query_shape(sql_log, expected_partitions=2)
 
@@ -2173,7 +2180,8 @@ class TestBatchedExportPartitioning:
 
         stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
-            time.monotonic(), temp_directory=str(temp_dir), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, temp_directory=str(temp_dir),
+            export_partition_zoom=6,
         )
 
         assert spy["snapshot"] is not None, "expected at least one tile flush"
@@ -2230,9 +2238,10 @@ class TestBatchedExportPartitioning:
 
         run_dir_a = stage_export(
             "overture_place", places_a, ta_a, containment_a, tiles_root_a,
-            time.monotonic(), temp_directory=str(temp_dir), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, temp_directory=str(temp_dir),
+            export_partition_zoom=6,
         )
-        assert _tile_rkeys(run_dir_a, "0000") == {"a0", "a1"}
+        assert _tile_ids(run_dir_a, "0000") == {"a0", "a1"}
         # >= 2, not just non-empty: DuckDB's own SET temp_directory spill dir
         # alone would already make temp_dir non-empty regardless of whether
         # pass 1's staging_dir exists.
@@ -2249,10 +2258,11 @@ class TestBatchedExportPartitioning:
         os.makedirs(tiles_root_b)
         run_dir_b = stage_export(
             "overture_place", places_b, ta_b, containment_b, tiles_root_b,
-            time.monotonic(), temp_directory=str(temp_dir), export_partition_zoom=6,
+            time.monotonic(), releases=RELEASES, temp_directory=str(temp_dir),
+            export_partition_zoom=6,
         )
 
-        assert _tile_rkeys(run_dir_b, "3333") == {"b0", "b1"}, (
+        assert _tile_ids(run_dir_b, "3333") == {"b0", "b1"}, (
             "run 2 must contain only its own records"
         )
         assert _read_tile(run_dir_b, "0000") is None, (
@@ -2285,11 +2295,11 @@ class TestExportPlanShape:
         PIECEWISE_MERGE_JOIN operator -- ordering is pass 2's job."""
         conn = duckdb.connect()
         _make_overture_export_db(conn)
-        raw_sql = _load_sql("overture_place_export_tiles.sql", {"repo": "places.atgeo.org"})
+        raw_sql = _load_sql("overture_place_export_tiles.sql", _subs("overture_place"))
         conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
 
         plan = conn.execute(
-            "EXPLAIN SELECT tile_qk, place_id, rkey, record_json FROM tile_export"
+            "EXPLAIN SELECT tile_qk, place_id, record_json FROM tile_export"
         ).fetchall()[0][1]
         conn.close()
 

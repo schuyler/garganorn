@@ -11,6 +11,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
+
 
 class TestCollectionClassAttributes:
     """Test that collection classes have source_key and source_pk attributes."""
@@ -237,6 +239,7 @@ class TestQuadtreeSourceKeys:
             str(output_dir),
             memory_limit="4GB",
             max_per_tile=100,
+            releases=RELEASES,
         )
 
         current_dir = output_dir / "overture_division" / "tiles" / "current"
