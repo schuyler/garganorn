@@ -76,7 +76,7 @@ assignment or containment-name derivation (see `design-constraints.md`'s
 
 Status: proposed, not started. No design has been reviewed.
 
-`scripts/extract-osm-parquet.sh` filters `planet.osm.pbf` with `osmium
+`scripts/extract-osm-parquet.sh` filters an OSM PBF with `osmium
 tags-filter` and converts the result to parquet, but it lives entirely
 outside `garganorn.quadtree`: nothing in the pipeline invokes it, checks its
 freshness, or warns when it's stale. Its own cache check (PBF mtime plus a

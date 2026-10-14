@@ -121,8 +121,9 @@ tags['building'] NOT IN (...)` in the way and relation arms of
 arm. Stage 0's building chain (`w/building` → `w/name` in
 `extract-osm-parquet.sh`) selects ways; the relation selector list
 includes `r/building` directly. `filtered.osm.pbf`'s building-derived
-nodes are untagged way members plus, via `osmium getid --add-referenced`,
-the member nodes and ways of every named qualifying relation.
+objects are untagged way-member nodes plus, via `osmium getid --add-referenced`,
+the member nodes and ways, where the input PBF has them, of every named
+qualifying relation.
 
 **Applies to**: `garganorn/sql/osm_import.sql`, `scripts/extract-osm-parquet.sh`
 
@@ -160,16 +161,16 @@ same way.
 
 `extract-osm-parquet.sh` resolves relation member closure (`osmium getid
 --add-referenced`) as its own chain rather than folding `r/` selectors
-into the main tag-filter pass. Folding it in would resolve closure for
-every key-matched relation (6.1M), not just the ~1.4M named ones, carrying
-millions of unnamed water bodies and building multipolygons into every
-downstream scan for no time saving.
+into the main tag-filter pass. On the planet, folding it in would resolve
+closure for every key-matched relation (6.1M), not just the ~1.4M named
+ones, carrying millions of unnamed water bodies and building
+multipolygons into every downstream scan for no time saving.
 
 **Applies to**: `scripts/extract-osm-parquet.sh`
 
 ### Stage 0's cache key includes the selector list, not just the PBF's mtime
 
-Editing `extract-osm-parquet.sh`'s selector list doesn't touch the planet
+Editing `extract-osm-parquet.sh`'s selector list doesn't touch the input
 PBF's mtime, so a plain freshness check would silently reuse a
 `filtered.osm.pbf` built under the old selectors. Stage 0 writes the
 concatenation of its node/way and relation selector arrays to

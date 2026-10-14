@@ -386,6 +386,20 @@ relation chain)
 is not available, and the intermediate has to be budgeted for rather than
 designed away.
 
+### `osmium getid` exits 1 for missing IDs as well as for errors
+
+`osmium getid` exits 1 both when processing fails and when some requested
+IDs aren't in the input, and in the second case it still writes everything
+it found. Without `-v` it prints nothing that tells the two apart; with
+`-v`, stderr carries `Did not find N object(s).` A regional extract always
+lacks some relation members (NH, 2026-04-06: 8289 objects).
+
+**Applies to**: `scripts/extract-osm-parquet.sh` (the relation chain's getid
+call)
+
+**Why it matters**: treating exit 1 as failure kills every regional run
+before the parquet stage; treating it as success hides real errors.
+
 ---
 
 ## pytest

@@ -140,7 +140,7 @@ selectors_file="${cache_dir}/filter-selectors.txt"
 
 # The selector list, written to selectors_file on success. Compared against
 # that sidecar below so an edit here invalidates the cache even though it
-# doesn't touch the planet PBF's mtime.
+# doesn't touch the input PBF's mtime.
 selectors=(
     n/amenity n/shop n/tourism n/leisure n/office n/craft n/healthcare
     n/historic n/natural n/man_made n/aeroway n/railway n/public_transport n/place
@@ -213,11 +213,11 @@ else
 
     # Relations are closed in three passes: tags-filter's -R keeps matched
     # relations without expanding to their members, a second -R pass narrows
-    # to named relations, then osmium getid re-reads the planet to add member
-    # nodes, member ways, and those ways' nodes for named relations only. A
-    # second full planet read is forced because the named-relation extract
-    # itself holds relation objects only, not their referenced members'
-    # data -- getid can only resolve those against the source planet PBF.
+    # to named relations, then osmium getid re-reads the input PBF to add
+    # member nodes, member ways, and those ways' nodes for named relations
+    # only. A second full input read is forced because the named-relation
+    # extract itself holds relation objects only, not their referenced
+    # members' data -- getid can only resolve those against the source PBF.
     echo "Filtering relations with osmium tags-filter..."
     if ! osmium tags-filter "$pbf_path" "${relation_selectors[@]}" \
         -R \
@@ -235,12 +235,19 @@ else
     fi
     safe_rm_rf "$relations_matched_tmp"
 
+    # getid exits 1 both on error and when members are missing from the input,
+    # which a regional extract always has. Only -v prints the count that tells
+    # the two apart.
     echo "Computing relation member closure with osmium getid..."
-    if ! osmium getid "$pbf_path" \
+    getid_status=0
+    getid_err="$(osmium getid "$pbf_path" \
         --id-osm-file "$relations_named_tmp" \
         --add-referenced \
+        -v \
         --overwrite \
-        -o "$relations_closure_pbf"; then
+        -o "$relations_closure_pbf" 2>&1)" || getid_status=$?
+    echo "$getid_err"
+    if [ "$getid_status" -ne 0 ] && ! grep -q 'Did not find [0-9]* object(s)\.' <<< "$getid_err"; then
         echo "osmium getid failed."
         exit 1
     fi

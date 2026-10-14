@@ -194,6 +194,40 @@ MOCK
     chmod +x "${bin_dir}/osmium"
 }
 
+# write_mock_osmium_getid_exit1 <bin_dir> <call_log>
+#   As write_mock_osmium, except that `getid` creates its -o file, prints
+#   <bin_dir>/getid_stderr to stderr when -v is among its arguments, and exits
+#   1 — real osmium prints its missing-IDs count only under -v.
+write_mock_osmium_getid_exit1() {
+    local bin_dir="$1"
+    local call_log="$2"
+    cat > "${bin_dir}/osmium" <<MOCK
+#!/bin/bash
+if [ "\$1" = "fileinfo" ]; then
+    echo "2026-01-01T00:00:00Z"
+    exit 0
+fi
+echo "osmium \$*" >> "${call_log}"
+output_path=""
+verbose=""
+args=("\$@")
+for (( i=0; i<\${#args[@]}; i++ )); do
+    [ "\${args[i]}" = "-o" ] && output_path="\${args[i+1]}"
+    [ "\${args[i]}" = "-v" ] && verbose=1
+done
+if [ -n "\$output_path" ]; then
+    mkdir -p "\$(dirname "\$output_path")"
+    touch "\$output_path"
+fi
+if [ "\$1" = "getid" ]; then
+    [ -n "\$verbose" ] && cat "${bin_dir}/getid_stderr" >&2
+    exit 1
+fi
+exit 0
+MOCK
+    chmod +x "${bin_dir}/osmium"
+}
+
 # ─── Tests ───────────────────────────────────────────────────────────────────
 
 # Test 1: Missing required arg (no pbf_path) → exits non-zero with usage message
@@ -1102,6 +1136,70 @@ test_empty_release_fails() {
     teardown_tmpdir
 }
 
+# Test 29: getid's exit 1 for relation members missing from the input — every
+# regional extract has them — still produces a cache, and the count is logged.
+test_getid_missing_members_tolerated() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium_getid_exit1 "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+    echo "[ 0:00] Did not find 8289 object(s)." > "${bin_dir}/getid_stderr"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    if [ "$RUN_EXIT" -eq 0 ]; then
+        pass "getid-missing: exits zero"
+    else
+        fail "getid-missing: expected exit 0, got $RUN_EXIT (output: $RUN_OUTPUT)"
+    fi
+    assert_file_exists "getid-missing: parquet/.complete exists" "${cache_dir}/parquet/.complete"
+    assert_file_exists "getid-missing: parquet/release exists" "${cache_dir}/parquet/release"
+    assert_output_contains "getid-missing: count reaches the output" "Did not find 8289 object(s)." "$RUN_OUTPUT"
+
+    teardown_tmpdir
+}
+
+# Test 30: getid's exit 1 for any other error still fails stage 0.
+test_getid_error_fails() {
+    setup_tmpdir
+    local bin_dir="${TMPROOT}/bin"
+    local call_log="${TMPROOT}/calls.log"
+    local cache_dir="${TMPROOT}/cache"
+    mkdir -p "$bin_dir"
+    write_mock_osmium_getid_exit1 "$bin_dir" "$call_log"
+    write_mock_osm_pbf_parquet "$bin_dir" "$call_log"
+    echo "Could not detect file format for filename 'x'." > "${bin_dir}/getid_stderr"
+
+    local fake_pbf="${TMPROOT}/input.osm.pbf"
+    touch "$fake_pbf"
+
+    run_script "$bin_dir" "$fake_pbf" --cache-dir "$cache_dir"
+
+    if [ "$RUN_EXIT" -ne 0 ]; then
+        pass "getid-error: exits non-zero"
+    else
+        fail "getid-error: expected non-zero exit, got 0 (output: $RUN_OUTPUT)"
+    fi
+    if [ -e "${cache_dir}/parquet/.complete" ]; then
+        fail "getid-error: parquet/.complete should not exist"
+    else
+        pass "getid-error: no parquet/.complete"
+    fi
+    if grep -q "^osm-pbf-parquet " "$call_log" 2>/dev/null; then
+        fail "getid-error: osm-pbf-parquet should not run"
+    else
+        pass "getid-error: osm-pbf-parquet not invoked"
+    fi
+
+    teardown_tmpdir
+}
+
 # ─── Run all tests ────────────────────────────────────────────────────────────
 
 echo "Running tests for scripts/extract-osm-parquet.sh"
@@ -1136,6 +1234,8 @@ test_relation_selector_addition_invalidates_old_cache
 test_release_file_written
 test_release_file_written_on_cached_run
 test_empty_release_fails
+test_getid_missing_members_tolerated
+test_getid_error_fails
 
 echo
 echo "Results: ${PASS} passed, ${FAIL} failed"
