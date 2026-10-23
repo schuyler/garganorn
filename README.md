@@ -161,25 +161,30 @@ There's no search — you ask for tile coverage over a bounding box, then fetch 
 
 ### Errors
 
-Errors come back as JSON, `{"error": "<Name>", "message": "<text>"}`, and carry a CORS `Access-Control-Allow-Origin: *` header like everything else.
+Every error is JSON, `{"error": "<Name>", "message": "<text>"}`, and every response (errors included) carries `Access-Control-Allow-Origin: *`.
 
-**XRPC methods answer every error with HTTP 400.** That's the atproto XRPC convention (and what the SDKs expect), so `PlaceNotFound` is a 400 here, not a 404. Branch on the `error` name, not on the status. (A 5xx still means the server broke, not that it refused you.)
+**XRPC methods answer errors with HTTP 400.** That's the atproto XRPC convention (and what the SDKs expect), so `PlaceNotFound` is a 400 here, not a 404. Branch on the `error` name, not on the status. These are the errors each method raises:
 
-| Method | Errors (all HTTP 400) |
+| Method | Errors (HTTP 400) |
 |---|---|
 | `getTiles` | `InvalidBbox`, `BboxTooPrecise`, `DatasetNotFound`, `CollectionNotFound`, `BboxTooLarge` |
 | `getPlace` | `PlaceNotFound` |
 | `describeTileset` | `TilesetNotFound` |
 | `describeService` | none |
 
-**The plain-HTTP routes answer a miss with HTTP 404** and the same JSON body shape, never an HTML page:
+lexrpc, the XRPC layer, adds two of its own that no lexicon lists: `InvalidRequest` (HTTP 400) for a missing or malformed parameter or a bad NSID, and `MethodNotImplemented` (HTTP 501) for a method the service doesn't have. A 5xx otherwise means the server broke, not that it refused you.
 
-| Route | Miss | Body |
+**The plain-HTTP routes answer a miss with HTTP 404**, in the same JSON shape, never an HTML page:
+
+| Route | Miss | `error` |
 |---|---|---|
-| `GET /{dataset}/{collection}/{id}` | place not served (including a malformed path, like a dataset with no `.` in it) | `PlaceNotFound` |
+| `GET /{dataset}/{collection}/{id}` | place not served, including a malformed path like a dataset with no `.` in it | `PlaceNotFound` |
 | `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
-| `GET /tiles/{slug}/...` | unknown slug / no such tile | `TilesetNotFound` / `TileNotFound` |
+| `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json.gz` or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
 | `GET /{nsid}` | unknown lexicon | `LexiconNotFound` |
+
+Anything else outside XRPC is JSON too: a path that matches no route is a 404 `NotFound`, a wrong method on a route is a 405 `MethodNotAllowed` (with an `Allow` header), and an unexpected crash is a 500 `InternalServerError` with a generic message. Note the alias and XRPC differ on a malformed URN: `/{dataset}/{collection}/{id}` gives a 404 `PlaceNotFound`, while `getPlace?uri=` gives a 400 `InvalidRequest` for a string that isn't a URI at all (and a 400 `PlaceNotFound` for a URI that isn't a served place).
 
 ### getTiles
 

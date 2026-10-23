@@ -218,6 +218,8 @@ def test_tile_path_traversal_rejected(tmp_path):
             assert resp.status_code == 404, (
                 f"Expected 404 for sibling traversal {path!r}, got {resp.status_code}"
             )
+            assert resp.mimetype == "application/json"
+            assert resp.get_json()["error"] in {"TileNotFound", "NotFound", "LexiconNotFound"}
 
         # Cross-source escape to a .json.gz file -- this is the case that
         # actually proves safe_join blocks containment escapes.
@@ -230,6 +232,8 @@ def test_tile_path_traversal_rejected(tmp_path):
             assert resp.status_code == 404, (
                 f"Expected 404 for cross-source traversal {path!r}, got {resp.status_code}"
             )
+            assert resp.mimetype == "application/json"
+            assert resp.get_json()["error"] in {"TileNotFound", "NotFound", "LexiconNotFound"}
 
 
 # ---------------------------------------------------------------------------
@@ -509,3 +513,86 @@ def test_describe_service_allows_cross_origin_reads(client):
 def test_tile_response_has_exactly_one_cors_header(tile_client):
     resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
     assert resp.headers.getlist("Access-Control-Allow-Origin") == ["*"]
+
+
+# ---------------------------------------------------------------------------
+# JSON errors for everything outside the XRPC views
+# ---------------------------------------------------------------------------
+
+def _assert_json_error(resp, status, error):
+    assert resp.status_code == status
+    assert resp.mimetype == "application/json"
+    body = resp.get_json()
+    assert body["error"] == error
+    assert isinstance(body["message"], str) and body["message"]
+    assert set(body) == {"error", "message"}
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.parametrize("path", [
+    "/", "/a/b", "/a/b/c/d", "/tiles/overture-place/", "/tiles/overture-place",
+    "/tiles/", "/xrpc/", "/.well-known/nope",
+])
+def test_unmatched_routes_are_json_not_found(client, path):
+    _assert_json_error(client.get(path), 404, "NotFound")
+
+
+@pytest.mark.parametrize("path,allowed", [
+    ("/health", {"GET", "HEAD", "OPTIONS"}),
+    ("/tilesets/x", {"GET", "HEAD", "OPTIONS"}),
+    ("/tiles/overture-place/x.json.gz", {"GET", "HEAD", "OPTIONS"}),
+])
+def test_wrong_method_is_json_405_with_allow(client, path, allowed):
+    resp = client.post(path)
+    _assert_json_error(resp, 405, "MethodNotAllowed")
+    assert {m.strip() for m in resp.headers["Allow"].split(",")} == allowed
+
+
+def test_tile_with_wrong_suffix_is_tile_not_found(client):
+    resp = client.get("/tiles/overture-place/foo.txt")
+    _assert_json_error(resp, 404, "TileNotFound")
+    assert resp.get_json()["message"] == "No such tile: overture-place/foo.txt"
+
+
+def test_tile_traversal_miss_is_json_tile_not_found(client):
+    resp = client.get(f"/tiles/overture-place/{STAMP}/..%2f..%2f..%2fetc%2fpasswd.json.gz")
+    _assert_json_error(resp, 404, "TileNotFound")
+
+
+def test_nosniff_on_success_responses(client):
+    assert client.get("/health").headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_xrpc_unknown_method_keeps_lexrpc_501_body(client):
+    resp = client.get("/xrpc/org.atgeo.nope")
+    assert resp.status_code == 501
+    body = resp.get_json()
+    assert body["error"] == "MethodNotImplemented"
+    assert "org.atgeo.nope" in body["message"]
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_xrpc_missing_param_keeps_lexrpc_400_body(client):
+    resp = client.get("/xrpc/org.atgeo.getPlace")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "InvalidRequest"
+    resp = client.get("/xrpc/not_an_nsid")
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "InvalidRequest", "message": "not_an_nsid is not a valid NSID"}
+
+
+def test_unhandled_exception_is_json_500_without_details(client, caplog):
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    app.testing = False
+
+    @app.route("/boom")
+    def boom():
+        raise RuntimeError("secret internal detail")
+
+    with caplog.at_level("ERROR"):
+        resp = client.get("/boom")
+    _assert_json_error(resp, 500, "InternalServerError")
+    assert "secret internal detail" not in resp.get_data(as_text=True)
+    assert "secret internal detail" in caplog.text  # traceback still logged

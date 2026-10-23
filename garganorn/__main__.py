@@ -1,5 +1,6 @@
 import gzip, json, os, logging
 from flask import Flask, jsonify, request, Response
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
@@ -63,6 +64,26 @@ def create_app():
         response.status_code = 404
         return response
 
+    @app.errorhandler(HTTPException)
+    def http_error_as_json(e):
+        """Every HTTP error raised outside lexrpc's views (unmatched routes,
+        wrong methods, 500s) gets the same {error, message} JSON body, not
+        Werkzeug's HTML page. lexrpc's XRPC views return their own error
+        responses rather than raising, so they never reach this handler."""
+        if e.code is None or e.code < 400:
+            return e  # redirects (e.g. a missing trailing slash) pass through
+        if e.code >= 500:
+            # Flask has already logged the traceback; don't leak details.
+            message = "The server hit an unexpected error."
+        else:
+            message = e.description
+        response = jsonify({"error": e.name.replace(" ", ""), "message": message})
+        response.status_code = e.code
+        for name, value in e.get_headers():  # keeps Allow on a 405
+            if name.lower() != "content-type":
+                response.headers[name] = value
+        return response
+
     @app.route('/<nsid>')
     def get_lexicon(nsid):
         lexicon = lexicon_map.get(nsid)
@@ -112,12 +133,9 @@ def create_app():
         tiles_dir = tile_dirs.get(slug)
         if tiles_dir is None:
             return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
-        missing = not_found("TileNotFound", f"No such tile: {slug}/{tile_path}")
-        if not tile_path.endswith(".json.gz"):
-            return missing
-        full_path = safe_join(tiles_dir, tile_path)
+        full_path = safe_join(tiles_dir, tile_path) if tile_path.endswith(".json.gz") else None
         if full_path is None or not os.path.isfile(full_path):
-            return missing
+            return not_found("TileNotFound", f"No such tile: {slug}/{tile_path}")
         with gzip.open(full_path, "rb") as f:
             data = f.read()
         response = Response(data, mimetype="application/json")
@@ -130,6 +148,8 @@ def create_app():
     def allow_cross_origin_reads(response):
         # Assignment, not add: lexrpc's XRPC views already set this header.
         response.headers["Access-Control-Allow-Origin"] = "*"
+        # Error messages reflect request paths; never let a browser sniff them as HTML.
+        response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
     @app.after_request
