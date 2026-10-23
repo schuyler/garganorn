@@ -6,7 +6,10 @@ and let a tileset carry many collections. A **collection** is a
 `(dataset, collection)`, e.g. `(openstreetmap.org, way)`.
 
 **Status:** decisions taken. Tranches 0 and 1 are implemented and their
-lexicons frozen in `garganorn/lexicon/`; tranches 2 and 3 are not done.
+lexicons frozen in `garganorn/lexicon/`. The SDK speaks the tranche 1
+contract (tranche 2). Tranche 3 is partly done: garganorn's `atgeo-spec.md`
+and `atgeo-client-sdk.md` describe the shipped contract; the atgeo-web docs
+are not rewritten.
 Baseline: garganorn `1e84549`, atgeo-sdk-js `b1cf173` (local only, no remote), atgeo-web
 untouched. Every question the proposal left open is resolved below, with the
 reasoning; "Resolved questions" indexes them.
@@ -480,6 +483,7 @@ handler removes all three.
 ### Tranche 3: client-facing docs (provisional)
 
 - **T3-R1 (I)** The client-facing docs describe the shipped contract and nothing else: garganorn `atgeo-spec.md`, `atgeo-client-sdk.md`, `explored-and-discarded.md` (kept; sole record of client-side ranking), atgeo-web `place.md`, `api.md`, `usage.md`, `faq.md`. AC: every example request and response validates against the shipped lexicons; every NSID and route named exists on the server; `getRecord`, `org.atgeo.collection` and `record-key` appear nowhere in them.
+  **Status:** garganorn's `atgeo-spec.md` and `atgeo-client-sdk.md` are rewritten to the shipped contract and name none of `getRecord`, `org.atgeo.collection` or `record-key`. `explored-and-discarded.md` is kept as is; it records the removed `getRecord` approach by name on purpose, so the "appear nowhere" half of the AC does not apply to it. The atgeo-web docs (`place.md`, `api.md`, `usage.md`, `faq.md`) are not done.
 - **T3-R2 (I)** The two product claims the redesign was built to make true are true as written: output incorporable without modification, and every place traceable to its origin dataset by a globally unique key. AC: each claim cites the mechanism that delivers it.
 - **T3-R3 (O)** What becomes of this document once implemented. Memory says a planning doc is deleted once implemented and its facts and choices salvaged into living docs. The owner asked for a full record of the decisions and their rationale. Options: salvage the rationale into `design-constraints.md` and `explored-and-discarded.md`, then delete; or keep it as an architecture decision record, which the global rules allow when the record stops a process repeating a mistake. Decided at this tranche's requirements gate.
 - **Out of scope:** the Kotlin and Swift port text in the spec beyond what the TypeScript SDK's behaviour dictates.
