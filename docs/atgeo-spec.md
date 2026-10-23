@@ -81,7 +81,7 @@ A tile is a set of place records associated with one quadkey cell.
 
 A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the 10,000 records of the tileset with the highest `importance`, ties broken by id. For the division tileset it also holds every division whose `subtype` is `country`, `region` or `dependency`, on top of those 10,000, because an importance cut alone crowds every non-locality out. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
 
-`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (50 by default, set by `max_tiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. The band is bounded by construction, since no more than 1,364 tiles exist at zooms 1 through 5, so the answer can't blow the budget. The result is deliberately a sample of the region, not everything in it.
+`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (50 by default, set by `max_tiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a build with 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
 
 The response says which kind of answer it is. An overview answer carries `"overview": true` alongside `tiles`; a regular answer omits the key, so absent means regular. A client that needs to know reads the flag. It does not look at the length of the quadkey in a tile URL.
 
@@ -161,7 +161,7 @@ The normative schema is the `org.atgeo.place` lexicon; this section is the narra
 
 Coordinate values inside `locations` are decimal strings with six decimal places, not JSON numbers (the AT Protocol data model has no floats). Parse them. The same goes for any other fractional value in `attributes`: garganorn emits no JSON floats.
 
-`locations` is declared as a four-member union: `community.lexicon.location.geo`, `.hthree`, `.address`, and `.bbox`. What the producer currently emits: OSM nodes, ways and relations and Overture places carry a `geo` point (a way or relation is a point too, not a geometry); Overture place records may add `address` entries; division records carry a `bbox` of their extent instead. `hthree` is declared but not yet produced. Handle the union, not the current subset. A `bbox` whose `west` is greater than its `east` crosses the antimeridian.
+`locations` is declared as a four-member union: `community.lexicon.location.geo`, `.hthree`, `.address`, and `.bbox`. What the producer currently emits: OSM nodes, ways and relations and Overture places carry a `geo` point (a way or relation is a point too, not a geometry); Overture place records may add `address` entries; division records carry a `bbox` of their extent instead. `hthree` is declared but not yet produced, and its lexicon is not among those the server serves at `GET /{nsid}`. Handle the union, not the current subset. A `bbox` whose `west` is greater than its `east` crosses the antimeridian.
 
 `variants` holds alternate names. For Overture places and divisions they come from the upstream's multilingual and rule-based names; for OSM, from the name tags (`name:{lang}`, `alt_name`, `official_name`, and related). `type` is a hint, with known values `official`, `alternate`, `short`, `colloquial` and `historical`; `language` is present when the upstream's language tag is valid.
 
@@ -377,7 +377,7 @@ Refusal doesn't protect the coordinates in the refused request: the server has t
 
 | route | returns |
 |---|---|
-| `GET /tiles/{slug}/...` | a tile, as plain JSON. The URLs `getTiles` returns |
+| `GET /tiles/{slug}/...` | a tile, as plain JSON. The URLs `getTiles` returns point here only when the tileset's configured `base_url` does; this route is what serves the files |
 | `GET /tilesets/{slug}` | the same document as `describeTileset` |
 | `GET /{dataset}/{collection}/{id}` | the same document as `getPlace` for `urn:atgeo:{dataset}:{collection}:{id}`. This is what `getPlace`'s `uri` points at. The first segment must contain a dot, since a dataset is a domain |
 | `GET /{nsid}` | the lexicon document for that NSID |
@@ -397,7 +397,7 @@ The DID document's `id` is the same `did:web` as `describeService`'s `did`. It a
 
 It doesn't advertise a personal data server, because there isn't one.
 
-**A miss on a plain-HTTP route is HTTP 404 with a JSON body** of the same `{"error", "message"}` shape XRPC uses, never an HTML page:
+**Errors on a plain-HTTP route are JSON, never an HTML page.** A miss is HTTP 404 with the same `{"error", "message"}` shape XRPC uses:
 
 | route | error |
 |---|---|
@@ -405,6 +405,9 @@ It doesn't advertise a personal data server, because there isn't one.
 | `GET /tilesets/{slug}` | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | `TilesetNotFound` for an unknown slug, `TileNotFound` for no such tile |
 | `GET /{nsid}` | `LexiconNotFound` |
+| a path matching no route | `NotFound` |
+
+A known path with the wrong method is HTTP 405 with `MethodNotAllowed`. Both carry the CORS header like any other response.
 
 The status differs from XRPC on purpose: XRPC follows the AT Protocol convention of 400 for every error; a plain GET at an address that holds nothing is the ordinary web 404.
 
@@ -415,7 +418,9 @@ The status differs from XRPC on purpose: XRPC follows the AT Protocol convention
 | a tile (`/tiles/{slug}/...`) | `public, max-age=604800, immutable` |
 | `getTiles`, 200 only | `public, max-age=3600` |
 | `describeService`, 200 only | `public, max-age=3600` |
-| anything else | none set |
+| anything else | none set<sup>1</sup> |
+
+<sup>1</sup> Except a CORS preflight: an `OPTIONS` request to `getTiles` or `describeService` is a 200 and carries `public, max-age=3600` too.
 
 Tile URLs are immutable, so tiles are cached for a week and never revalidated. `getTiles` and `describeService` change when the gazetteer publishes a new build, so they carry an hour; a client learns of a new build within an hour of asking. The deployment's build cadence has to respect the week: a retired build whose URLs clients still hold as fresh is a 404.
 
@@ -431,4 +436,4 @@ Each collection's licences and attribution page are in its `attribution` entry, 
 | `(overturemaps.org, place)` | [CDLA Permissive 2.0](https://cdla.dev/permissive-2-0/), [Apache 2.0](https://www.apache.org/licenses/LICENSE-2.0), [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/legalcode) | [Overture attribution](https://docs.overturemaps.org/attribution/) |
 | `(overturemaps.org, division)` | [ODbL 1.0](https://opendatacommons.org/licenses/odbl/1-0/), [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode) | [Overture attribution](https://docs.overturemaps.org/attribution/) |
 
-The tile header is where the notices live, and a licence's duties attach to conveying the dataset, not to a lone record. A place copied out of a tile keeps its `origin`, whose dataset segment names the source, and carries no licence link; the person who copies it is the one conveying it. That is a design position, not legal advice. The reasoning is in [place-identity-redesign.md](place-identity-redesign.md#attribution-and-licensing-in-tiles).
+The tile payload's `attribution` array is where the notices live, and a licence's duties attach to conveying the dataset, not to a lone record. A place copied out of a tile keeps its `origin`, whose dataset segment names the source, and carries no licence link; the person who copies it is the one conveying it. That is a design position, not legal advice. The reasoning is in [place-identity-redesign.md](place-identity-redesign.md#attribution-and-licensing-in-tiles).
