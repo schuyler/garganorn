@@ -1,8 +1,9 @@
 import gzip, json, os, logging
-from flask import Flask, abort, request, Response
+from flask import Flask, abort, jsonify, request, Response
+from werkzeug.exceptions import HTTPException
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
-from lexrpc.base import XrpcError
+from lexrpc.base import NSID_RE, XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
@@ -56,11 +57,47 @@ def create_app():
 
     lexicon_map = gazetteer.lexicon_map
 
+    def not_found(error, message):
+        """A 404 with the same {error, message} JSON body shape XRPC errors use.
+        The plain-HTTP routes answer with this, never Flask's HTML page."""
+        response = jsonify({"error": error, "message": message})
+        response.status_code = 404
+        return response
+
+    @app.errorhandler(HTTPException)
+    def http_error_as_json(e):
+        """Every HTTP error Flask or Werkzeug raises -- unmatched routes,
+        wrong methods, 500s, and the ones lexrpc's XRPC view lets through
+        (415 for a body that isn't JSON, 400 for malformed JSON, 405 for a
+        method the route doesn't take) -- gets the {error, message} JSON
+        body instead of Werkzeug's HTML page. Errors lexrpc returns itself
+        (InvalidRequest, MethodNotImplemented, the lexicon errors) never
+        reach this handler. Redirects are handled by Flask before it."""
+        name = e.name.replace(" ", "")
+        if e.code >= 500:
+            # Flask logged an uncaught exception's traceback already; an
+            # explicit abort(5xx) has none, so log it. The body stays generic.
+            if getattr(e, "original_exception", None) is None:
+                app.logger.error("HTTP %s %s: %s", e.code, e.name, e.description)
+            message = "The server hit an unexpected error."
+        else:
+            message = e.description
+            if e.code == 400 and request.endpoint == "xrpc-endpoint":
+                name = "InvalidRequest"  # atproto's name for a malformed request
+        response = jsonify({"error": name, "message": message})
+        response.status_code = e.code
+        for header, value in e.get_headers():  # keeps Allow on a 405
+            if header.lower() != "content-type":
+                response.headers[header] = value
+        return response
+
     @app.route('/<nsid>')
     def get_lexicon(nsid):
+        if not NSID_RE.fullmatch(nsid):
+            abort(404)  # /favicon.ico, /xrpc, /tiles...: not a lexicon request
         lexicon = lexicon_map.get(nsid)
         if lexicon is None:
-            abort(404)
+            return not_found("LexiconNotFound", f"Unknown lexicon: {nsid}")
         return lexicon
 
     @app.route('/.well-known/did.json')
@@ -80,17 +117,18 @@ def create_app():
     def tileset_descriptor(slug):
         tileset = gazetteer.tilesets.get(slug)
         if tileset is None:
-            abort(404)
+            return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
         return tileset.descriptor
 
     @app.route("/<dataset>/<collection>/<id>")
     def place(dataset, collection, id):
+        urn = f"urn:atgeo:{dataset}:{collection}:{id}"
         if "." not in dataset:
-            abort(404)
+            return not_found("PlaceNotFound", f"No such place: {urn}")
         try:
-            return gazetteer.get_place(None, f"urn:atgeo:{dataset}:{collection}:{id}")
-        except XrpcError:
-            abort(404)
+            return gazetteer.get_place(None, urn)
+        except XrpcError as e:
+            return not_found(e.name, e.message)
 
     @app.route('/health')
     def health_check():
@@ -101,14 +139,12 @@ def create_app():
         """Serve a tile as plain JSON, decompressed from its on-disk gzip
         file -- storage format and wire format are separate decisions;
         Caddy owns wire compression negotiation via Accept-Encoding."""
-        if not tile_path.endswith(".json.gz"):
-            return ("Not found", 404)
         tiles_dir = tile_dirs.get(slug)
         if tiles_dir is None:
-            return ("Not found", 404)
-        full_path = safe_join(tiles_dir, tile_path)
+            return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
+        full_path = safe_join(tiles_dir, tile_path) if tile_path.endswith(".json.gz") else None
         if full_path is None or not os.path.isfile(full_path):
-            return ("Not found", 404)
+            return not_found("TileNotFound", f"No such tile: {slug}/{tile_path}")
         with gzip.open(full_path, "rb") as f:
             data = f.read()
         response = Response(data, mimetype="application/json")
@@ -121,6 +157,8 @@ def create_app():
     def allow_cross_origin_reads(response):
         # Assignment, not add: lexrpc's XRPC views already set this header.
         response.headers["Access-Control-Allow-Origin"] = "*"
+        # Error messages reflect request paths; never let a browser sniff them as HTML.
+        response.headers["X-Content-Type-Options"] = "nosniff"
         return response
 
     @app.after_request

@@ -100,12 +100,27 @@ def test_place_path_returns_the_getplace_body(client, dataset, collection, id, i
     assert alias.get_json() == xrpc.get_json()
 
 
+def _assert_json_404(resp, error, message):
+    """A plain-HTTP miss: 404, JSON {error, message}, CORS header present."""
+    assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {"error": error, "message": message}
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+
+
 def test_place_path_with_dotless_first_segment_is_404(client):
-    assert client.get("/osm/node/5").status_code == 404
+    _assert_json_404(client.get("/osm/node/5"), "PlaceNotFound",
+                     "No such place: urn:atgeo:osm:node:5")
 
 
 def test_place_path_for_unserved_place_is_404(client):
-    assert client.get(f"/{OSM}/node/999").status_code == 404
+    _assert_json_404(client.get(f"/{OSM}/node/999"), "PlaceNotFound",
+                     f"No such place: urn:atgeo:{OSM}:node:999")
+
+
+def test_place_path_for_unserved_collection_is_404(client):
+    _assert_json_404(client.get("/example.org/thing/1"), "PlaceNotFound",
+                     "No such place: urn:atgeo:example.org:thing:1")
 
 
 def test_get_place_reads_the_run_resolved_at_startup(tmp_path):
@@ -146,7 +161,7 @@ def test_unknown_slug_is_tileset_not_found(client):
     resp = client.get("/xrpc/org.atgeo.describeTileset", query_string={"slug": "nope"})
     assert resp.status_code == 400
     assert resp.get_json()["error"] == "TilesetNotFound"
-    assert client.get("/tilesets/nope").status_code == 404
+    _assert_json_404(client.get("/tilesets/nope"), "TilesetNotFound", "Unknown tileset: nope")
 
 
 def test_tileset_is_served_at_its_descriptor_slug(tmp_path):
@@ -156,7 +171,8 @@ def test_tileset_is_served_at_its_descriptor_slug(tmp_path):
     with build_app(tileset).test_client() as client:
         assert client.get(f"/tiles/my-tiles/{STAMP}/023010/023010.json.gz").status_code == 200
         assert client.get("/tilesets/my-tiles").get_json()["slug"] == "my-tiles"
-        assert client.get("/tilesets/somewhere-else").status_code == 404
+        _assert_json_404(client.get("/tilesets/somewhere-else"), "TilesetNotFound",
+                         "Unknown tileset: somewhere-else")
 
 
 def test_two_tilesets_with_one_slug_fail_startup(tmp_path):

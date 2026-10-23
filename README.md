@@ -159,6 +159,33 @@ There's no search — you ask for tile coverage over a bounding box, then fetch 
 | `GET /tiles/{slug}/...` | Tile files |
 | `GET /.well-known/did.json` | The `did:web` document, advertising the tile service as `#atgeo_tiles` (`AtgeoTileService`) at `public_base` |
 
+### Errors
+
+Every error is JSON, `{"error": "<Name>", "message": "<text>"}`, and every response (errors included) carries `Access-Control-Allow-Origin: *`.
+
+**XRPC methods answer errors with HTTP 400.** That's the atproto XRPC convention (and what the SDKs expect), so `PlaceNotFound` is a 400 here, not a 404. Branch on the `error` name, not on the status. These are the errors each method raises:
+
+| Method | Errors (HTTP 400) |
+|---|---|
+| `getTiles` | `InvalidBbox`, `BboxTooPrecise`, `DatasetNotFound`, `CollectionNotFound`, `BboxTooLarge` |
+| `getPlace` | `PlaceNotFound` |
+| `describeTileset` | `TilesetNotFound` |
+| `describeService` | none |
+
+The XRPC layer (lexrpc, and Flask beneath it) adds errors no lexicon lists: `InvalidRequest` (HTTP 400) for a missing or malformed parameter, a bad NSID, or a request body that isn't valid JSON; `UnsupportedMediaType` (HTTP 415) for a body with a non-JSON `Content-Type`; `MethodNotAllowed` (HTTP 405, with an `Allow` header) for an HTTP method the route doesn't take; and `MethodNotImplemented` (HTTP 501) for an XRPC method the service doesn't have. A 5xx otherwise means the server broke, not that it refused you.
+
+**The plain-HTTP routes answer a miss with HTTP 404**, in the same JSON shape, never an HTML page:
+
+| Route | Miss | `error` |
+|---|---|---|
+| `GET /{dataset}/{collection}/{id}` | place not served, including a malformed path like a dataset with no `.` in it | `PlaceNotFound` |
+| `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
+| `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json.gz` or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
+| `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
+
+Everything else is JSON too, on `/xrpc/` as well as the plain routes: a path that matches no route (including a single segment that isn't an NSID, like `/favicon.ico`) is a 404 `NotFound`, a wrong method on a route is a 405 `MethodNotAllowed` (with an `Allow` header), and a crash or other 5xx is `InternalServerError` (or `ServiceUnavailable` etc.) with a generic message; details go to the server log, not the response. Note the alias and XRPC differ on a malformed URN: `/{dataset}/{collection}/{id}` gives a 404 `PlaceNotFound`, while `getPlace?uri=` gives a 400 `InvalidRequest` for a string that isn't a URI at all (and a 400 `PlaceNotFound` for a URI that isn't a served place).
+
 ### getTiles
 
 ```
@@ -218,7 +245,7 @@ $ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetma
 {"uri":"https://places.atgeo.org/openstreetmap.org/node/10080395917","importance":0,"record":{...}}
 ```
 
-An unknown or unserved URN is a `PlaceNotFound` error.
+An unknown or unserved URN is a `PlaceNotFound` error (HTTP 400 over XRPC; 404 at the `/{dataset}/{collection}/{id}` alias).
 
 ## Lexicon schemas
 
