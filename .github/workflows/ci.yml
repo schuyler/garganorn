@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel superseded PR runs, but let every commit on main finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # tests/test_lexicons.py and tests/lexicon_helpers.py shell out to goat. Bump this
+  # deliberately: a new goat lint rule should arrive as a version bump, not a surprise.
+  GOAT_VERSION: v0.2.7
+
+jobs:
+  test:
+    name: test (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest and newest Pythons that requires-python in pyproject.toml supports.
+        python: ["3.10", "3.14"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          # There is no go.sum to key the module cache on.
+          cache: false
+      - name: Install goat
+        run: |
+          go install "github.com/bluesky-social/goat@${GOAT_VERSION}"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - run: goat --version
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: uv run --locked --extra dev pytest -q
