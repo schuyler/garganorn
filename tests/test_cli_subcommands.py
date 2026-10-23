@@ -104,7 +104,7 @@ class TestSubcommandParsing:
     def test_all_subcommand_recognized(self, tmp_path, monkeypatch):
         """'all' subcommand must be accepted by the CLI."""
         config = tmp_path / "config.yaml"
-        config.write_text("pipeline:\n  output: /tmp/tiles\n  sources: {}\n")
+        config.write_text(f"pipeline:\n  output: {tmp_path}/tiles\n  sources: {{}}\n")
         monkeypatch.setattr(sys, "argv", [
             "qt", "all",
             "--config", str(config),
