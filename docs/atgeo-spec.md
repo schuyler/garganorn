@@ -356,14 +356,16 @@ See [above](#tilesets-on-the-wire-describeservice-and-describetileset). `describ
 
 ### Errors over XRPC
 
-Every XRPC error returns **HTTP 400** with a body of `{"error": name, "message": text}`, per the AT Protocol convention. A client branches on the `error` name, not on the status: `PlaceNotFound` is a 400 here, not a 404. Besides the method-specific names above:
+Every error the methods raise returns **HTTP 400** with a body of `{"error": name, "message": text}`, per the AT Protocol convention. A client branches on the `error` name, not on the status: `PlaceNotFound` is a 400 here, not a 404. The XRPC layer adds a few errors no lexicon lists:
 
-| error | when |
-|---|---|
-| `InvalidRequest` | a required parameter is missing, or a parameter doesn't fit its lexicon (HTTP 400) |
-| `MethodNotImplemented` | the NSID isn't one the server serves, including every `com.atproto.*` method (HTTP 501) |
+| error | status | when |
+|---|---|---|
+| `InvalidRequest` | 400 | a required parameter is missing, a parameter doesn't fit its lexicon, the NSID is malformed, or a request body isn't valid JSON |
+| `UnsupportedMediaType` | 415 | a request body with a non-JSON `Content-Type` |
+| `MethodNotAllowed` | 405 | an HTTP method the route doesn't take, with an `Allow` header |
+| `MethodNotImplemented` | 501 | the NSID isn't one the server serves, including every `com.atproto.*` method |
 
-A 5xx that isn't a 501 means the server broke, not that it refused you.
+A 5xx means the server broke, not that it refused you; see [Errors on plain-HTTP routes](#plain-http).
 
 ### The precision floor
 
@@ -397,19 +399,20 @@ The DID document's `id` is the same `did:web` as `describeService`'s `did`. It a
 
 It doesn't advertise a personal data server, because there isn't one.
 
-**Errors on a plain-HTTP route are JSON, never an HTML page.** A miss is HTTP 404 with the same `{"error", "message"}` shape XRPC uses:
+**Every error body is JSON, `{"error", "message"}`, on every route, never an HTML page.** That includes XRPC and the plain routes alike. A miss on a plain-HTTP route is HTTP 404:
 
-| route | error |
-|---|---|
-| `GET /{dataset}/{collection}/{id}` | `PlaceNotFound` (also for a first segment with no dot) |
-| `GET /tilesets/{slug}` | `TilesetNotFound` |
-| `GET /tiles/{slug}/...` | `TilesetNotFound` for an unknown slug, `TileNotFound` for no such tile |
-| `GET /{nsid}` | `LexiconNotFound` |
-| a path matching no route | `NotFound` |
+| route | miss | error |
+|---|---|---|
+| `GET /{dataset}/{collection}/{id}` | place not served, or a first segment with no dot | `PlaceNotFound` |
+| `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
+| `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json.gz`, or one that tries to leave the tiles directory, counts as no such tile | `TileNotFound` |
+| `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
+| any other path | no route matches, including a single segment that isn't an NSID (`/favicon.ico`, `/xrpc`, `/tiles`) | `NotFound` |
 
-A known path with the wrong method is HTTP 405 with `MethodNotAllowed`. Both carry the CORS header like any other response.
+Everything else follows the same shape. A wrong method on any route, XRPC included, is 405 `MethodNotAllowed` with an `Allow` header. Any other 4xx carries the name of the HTTP status without spaces (`BadRequest`, outside `/xrpc/`). Any 5xx is `InternalServerError`, `ServiceUnavailable` or the like, with the generic message "The server hit an unexpected error."; the details go to the server's log, not the response. A redirect (`/tilesets//x` gets a 308, say) is not turned into an error.
 
-The status differs from XRPC on purpose: XRPC follows the AT Protocol convention of 400 for every error; a plain GET at an address that holds nothing is the ordinary web 404.
+The status differs from XRPC on purpose: XRPC follows the AT Protocol convention of 400 for every error; a plain GET at an address that holds nothing is the ordinary web 404. The two also differ on a malformed identity: the alias `/{dataset}/{collection}/{id}` answers a malformed URN with 404 `PlaceNotFound`, while `getPlace` answers a `uri` that isn't a URI at all with 400 `InvalidRequest`, and a URI that isn't a served place with 400 `PlaceNotFound`.
 
 ## Headers
 
@@ -425,6 +428,8 @@ The status differs from XRPC on purpose: XRPC follows the AT Protocol convention
 Tile URLs are immutable, so tiles are cached for a week and never revalidated. `getTiles` and `describeService` change when the gazetteer publishes a new build, so they carry an hour; a client learns of a new build within an hour of asking. The deployment's build cadence has to respect the week: a retired build whose URLs clients still hold as fresh is a 404.
 
 **CORS.** Every response from the server, including errors and tiles, carries `Access-Control-Allow-Origin: *`, so browser clients on any origin can read it. A server MUST send it. The header appears exactly once.
+
+**Content sniffing.** Every response also carries `X-Content-Type-Options: nosniff`. Error messages can echo the request path, so a browser must not be allowed to guess that one is HTML.
 
 ## Licensing
 
