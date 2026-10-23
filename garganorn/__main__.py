@@ -1,9 +1,9 @@
 import gzip, json, os, logging
-from flask import Flask, jsonify, request, Response
+from flask import Flask, abort, jsonify, request, Response
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
-from lexrpc.base import XrpcError
+from lexrpc.base import NSID_RE, XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
@@ -66,26 +66,35 @@ def create_app():
 
     @app.errorhandler(HTTPException)
     def http_error_as_json(e):
-        """Every HTTP error raised outside lexrpc's views (unmatched routes,
-        wrong methods, 500s) gets the same {error, message} JSON body, not
-        Werkzeug's HTML page. lexrpc's XRPC views return their own error
-        responses rather than raising, so they never reach this handler."""
-        if e.code is None or e.code < 400:
-            return e  # redirects (e.g. a missing trailing slash) pass through
+        """Every HTTP error Flask or Werkzeug raises -- unmatched routes,
+        wrong methods, 500s, and the ones lexrpc's XRPC view lets through
+        (415 for a body that isn't JSON, 400 for malformed JSON, 405 for a
+        method the route doesn't take) -- gets the {error, message} JSON
+        body instead of Werkzeug's HTML page. Errors lexrpc returns itself
+        (InvalidRequest, MethodNotImplemented, the lexicon errors) never
+        reach this handler. Redirects are handled by Flask before it."""
+        name = e.name.replace(" ", "")
         if e.code >= 500:
-            # Flask has already logged the traceback; don't leak details.
+            # Flask logged an uncaught exception's traceback already; an
+            # explicit abort(5xx) has none, so log it. The body stays generic.
+            if getattr(e, "original_exception", None) is None:
+                app.logger.error("HTTP %s %s: %s", e.code, e.name, e.description)
             message = "The server hit an unexpected error."
         else:
             message = e.description
-        response = jsonify({"error": e.name.replace(" ", ""), "message": message})
+            if e.code == 400 and request.path.startswith("/xrpc/"):
+                name = "InvalidRequest"  # atproto's name for a malformed request
+        response = jsonify({"error": name, "message": message})
         response.status_code = e.code
-        for name, value in e.get_headers():  # keeps Allow on a 405
-            if name.lower() != "content-type":
-                response.headers[name] = value
+        for header, value in e.get_headers():  # keeps Allow on a 405
+            if header.lower() != "content-type":
+                response.headers[header] = value
         return response
 
     @app.route('/<nsid>')
     def get_lexicon(nsid):
+        if not NSID_RE.fullmatch(nsid):
+            abort(404)  # /favicon.ico, /xrpc, /tiles...: not a lexicon request
         lexicon = lexicon_map.get(nsid)
         if lexicon is None:
             return not_found("LexiconNotFound", f"Unknown lexicon: {nsid}")

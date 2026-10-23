@@ -57,11 +57,11 @@ def test_lexicon_known_nsid(client):
 
 def test_lexicon_unknown_nsid(client):
     """GET /<nsid> returns 404 for an unknown NSID."""
-    resp = client.get("/nonexistent.lexicon")
+    resp = client.get("/org.atgeo.nonexistent")
     assert resp.status_code == 404
     assert resp.mimetype == "application/json"
     assert resp.get_json() == {
-        "error": "LexiconNotFound", "message": "Unknown lexicon: nonexistent.lexicon",
+        "error": "LexiconNotFound", "message": "Unknown lexicon: org.atgeo.nonexistent",
     }
     assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
@@ -219,7 +219,7 @@ def test_tile_path_traversal_rejected(tmp_path):
                 f"Expected 404 for sibling traversal {path!r}, got {resp.status_code}"
             )
             assert resp.mimetype == "application/json"
-            assert resp.get_json()["error"] in {"TileNotFound", "NotFound", "LexiconNotFound"}
+            assert resp.get_json()["error"] == "TileNotFound"
 
         # Cross-source escape to a .json.gz file -- this is the case that
         # actually proves safe_join blocks containment escapes.
@@ -233,7 +233,7 @@ def test_tile_path_traversal_rejected(tmp_path):
                 f"Expected 404 for cross-source traversal {path!r}, got {resp.status_code}"
             )
             assert resp.mimetype == "application/json"
-            assert resp.get_json()["error"] in {"TileNotFound", "NotFound", "LexiconNotFound"}
+            assert resp.get_json()["error"] == "TileNotFound"
 
 
 # ---------------------------------------------------------------------------
@@ -596,3 +596,85 @@ def test_unhandled_exception_is_json_500_without_details(client, caplog):
     _assert_json_error(resp, 500, "InternalServerError")
     assert "secret internal detail" not in resp.get_data(as_text=True)
     assert "secret internal detail" in caplog.text  # traceback still logged
+
+
+# ---------------------------------------------------------------------------
+# Errors lexrpc lets through on /xrpc/, NSID gating, redirects, 5xx, CORS
+# ---------------------------------------------------------------------------
+
+def test_xrpc_non_json_body_is_415(client):
+    resp = client.post("/xrpc/org.atgeo.getPlace", data="x", content_type="text/plain")
+    _assert_json_error(resp, 415, "UnsupportedMediaType")
+
+
+def test_xrpc_malformed_json_body_is_invalid_request_400(client):
+    resp = client.post("/xrpc/org.atgeo.getPlace", data="{nope",
+                       content_type="application/json")
+    _assert_json_error(resp, 400, "InvalidRequest")
+
+
+def test_xrpc_wrong_method_is_405_with_allow(client):
+    resp = client.put("/xrpc/org.atgeo.getPlace")
+    _assert_json_error(resp, 405, "MethodNotAllowed")
+    assert "GET" in resp.headers["Allow"]
+
+
+def test_non_xrpc_400_keeps_its_own_name(client):
+    app = client.application
+    from werkzeug.exceptions import BadRequest
+
+    @app.route("/bad")
+    def bad():
+        raise BadRequest()
+
+    _assert_json_error(client.get("/bad"), 400, "BadRequest")
+
+
+@pytest.mark.parametrize("path", [
+    "/favicon.ico", "/robots.txt", "/xrpc", "/tiles", "/tilesets", "/health/",
+])
+def test_non_nsid_single_segments_are_plain_not_found(client, path):
+    _assert_json_error(client.get(path), 404, "NotFound")
+
+
+def test_nsid_shaped_unknown_is_lexicon_not_found(client):
+    _assert_json_error(client.get("/org.atgeo.nope"), 404, "LexiconNotFound")
+
+
+def test_redirects_still_redirect(client):
+    resp = client.get("/tilesets//x")
+    assert resp.status_code == 308
+    assert resp.headers["Location"].endswith("/tilesets/x")
+
+
+def test_explicit_5xx_abort_is_generic_json_and_logged(client, caplog):
+    from flask import abort
+
+    @client.application.route("/unavailable")
+    def unavailable():
+        abort(503, description="database exploded at /var/secret")
+
+    with caplog.at_level("ERROR"):
+        resp = client.get("/unavailable")
+    _assert_json_error(resp, 503, "ServiceUnavailable")
+    assert "secret" not in resp.get_data(as_text=True)
+    assert "database exploded at /var/secret" in caplog.text
+
+
+@pytest.mark.parametrize("path", [
+    "/xrpc/org.atgeo.getPlace", f"/{OVERTURE}/place/ov001", "/tilesets/overture-place",
+])
+def test_options_preflight_has_cors(client, path):
+    resp = client.options(path, headers={
+        "Origin": "https://example.com", "Access-Control-Request-Method": "GET",
+    })
+    assert resp.status_code < 400
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_head_on_404_is_json_with_empty_body(client):
+    resp = client.head("/tilesets/nope")
+    assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_data() == b""
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"

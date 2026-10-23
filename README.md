@@ -172,7 +172,7 @@ Every error is JSON, `{"error": "<Name>", "message": "<text>"}`, and every respo
 | `describeTileset` | `TilesetNotFound` |
 | `describeService` | none |
 
-lexrpc, the XRPC layer, adds two of its own that no lexicon lists: `InvalidRequest` (HTTP 400) for a missing or malformed parameter or a bad NSID, and `MethodNotImplemented` (HTTP 501) for a method the service doesn't have. A 5xx otherwise means the server broke, not that it refused you.
+lexrpc, the XRPC layer, adds errors no lexicon lists: `InvalidRequest` (HTTP 400) for a missing or malformed parameter, a bad NSID, or a request body that isn't valid JSON; `UnsupportedMediaType` (HTTP 415) for a body with a non-JSON `Content-Type`; `MethodNotAllowed` (HTTP 405, with an `Allow` header) for an HTTP method the route doesn't take; and `MethodNotImplemented` (HTTP 501) for an XRPC method the service doesn't have. A 5xx otherwise means the server broke, not that it refused you.
 
 **The plain-HTTP routes answer a miss with HTTP 404**, in the same JSON shape, never an HTML page:
 
@@ -182,9 +182,9 @@ lexrpc, the XRPC layer, adds two of its own that no lexicon lists: `InvalidReque
 | `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json.gz` or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
-| `GET /{nsid}` | unknown lexicon | `LexiconNotFound` |
+| `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
 
-Anything else outside XRPC is JSON too: a path that matches no route is a 404 `NotFound`, a wrong method on a route is a 405 `MethodNotAllowed` (with an `Allow` header), and an unexpected crash is a 500 `InternalServerError` with a generic message. Note the alias and XRPC differ on a malformed URN: `/{dataset}/{collection}/{id}` gives a 404 `PlaceNotFound`, while `getPlace?uri=` gives a 400 `InvalidRequest` for a string that isn't a URI at all (and a 400 `PlaceNotFound` for a URI that isn't a served place).
+Everything else is JSON too, on `/xrpc/` as well as the plain routes: a path that matches no route (including a single segment that isn't an NSID, like `/favicon.ico`) is a 404 `NotFound`, a wrong method on a route is a 405 `MethodNotAllowed` (with an `Allow` header), and a crash or other 5xx is `InternalServerError` (or `ServiceUnavailable` etc.) with a generic message; details go to the server log, not the response. Note the alias and XRPC differ on a malformed URN: `/{dataset}/{collection}/{id}` gives a 404 `PlaceNotFound`, while `getPlace?uri=` gives a 400 `InvalidRequest` for a string that isn't a URI at all (and a 400 `PlaceNotFound` for a URI that isn't a served place).
 
 ### getTiles
 
