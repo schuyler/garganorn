@@ -1,13 +1,14 @@
 name: CI
 
-# Prose-only changes don't run the suite; nothing under docs/ is read by the code or tests.
+# Changes only to docs/ or LICENSE don't run the suite: no code or test reads them. README.md
+# is not ignored, because pyproject.toml names it as the package readme.
 on:
   pull_request:
     branches: [main]
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+    paths-ignore: ["docs/**", "LICENSE"]
   push:
     branches: [main]
-    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+    paths-ignore: ["docs/**", "LICENSE"]
 
 permissions:
   contents: read
