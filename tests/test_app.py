@@ -1,6 +1,7 @@
 """Tests for Flask app routes in garganorn.__main__."""
 import gzip
 import json
+from pathlib import Path
 import pytest
 
 from tests.served_runs import (
@@ -57,8 +58,13 @@ def test_lexicon_known_nsid(client):
 
 def test_lexicon_unknown_nsid(client):
     """GET /<nsid> returns 404 for an unknown NSID."""
-    resp = client.get("/nonexistent.lexicon")
+    resp = client.get("/org.atgeo.nonexistent")
     assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {
+        "error": "LexiconNotFound", "message": "Unknown lexicon: org.atgeo.nonexistent",
+    }
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_xrpc_get_record_not_implemented(client):
@@ -138,12 +144,23 @@ def test_tile_missing_returns_404(tile_client_empty):
     """GET /tiles/<slug>/... for a nonexistent tile returns 404."""
     resp = tile_client_empty.get("/tiles/overture-place/000000/nonexistent.json.gz")
     assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {
+        "error": "TileNotFound",
+        "message": "No such tile: overture-place/000000/nonexistent.json.gz",
+    }
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_tile_unknown_slug_returns_404(tile_client_empty):
     """GET /tiles/<unknown-slug>/... returns 404 when slug is not registered."""
     resp = tile_client_empty.get("/tiles/unknown-source/012301/012301.json.gz")
     assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {
+        "error": "TilesetNotFound", "message": "Unknown tileset: unknown-source",
+    }
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_tile_cache_control_is_constant_immutable(tile_client):
@@ -202,6 +219,8 @@ def test_tile_path_traversal_rejected(tmp_path):
             assert resp.status_code == 404, (
                 f"Expected 404 for sibling traversal {path!r}, got {resp.status_code}"
             )
+            assert resp.mimetype == "application/json"
+            assert resp.get_json()["error"] == "TileNotFound"
 
         # Cross-source escape to a .json.gz file -- this is the case that
         # actually proves safe_join blocks containment escapes.
@@ -214,6 +233,8 @@ def test_tile_path_traversal_rejected(tmp_path):
             assert resp.status_code == 404, (
                 f"Expected 404 for cross-source traversal {path!r}, got {resp.status_code}"
             )
+            assert resp.mimetype == "application/json"
+            assert resp.get_json()["error"] == "TileNotFound"
 
 
 # ---------------------------------------------------------------------------
@@ -453,10 +474,15 @@ def test_describe_service_lexicon_route_lacks_cache_control(client):
     assert resp.headers.get("Cache-Control") != "public, max-age=3600"
 
 
-@pytest.mark.parametrize("nsid", [
-    "org.atgeo.describeService", "org.atgeo.describeTileset",
-    "org.atgeo.getPlace", "org.atgeo.getTiles", "org.atgeo.defs",
-])
+# Every lexicon file the server ships, so the NSID gate on /<nsid> can't
+# quietly stop serving one.
+SHIPPED_NSIDS = sorted(
+    json.loads(path.read_text())["id"]
+    for path in (Path(__file__).parent.parent / "garganorn" / "lexicon").glob("*.json")
+)
+
+
+@pytest.mark.parametrize("nsid", SHIPPED_NSIDS)
 def test_lexicons_served_at_nsid_route(client, nsid):
     """Each lexicon document is served at GET /<nsid>, like every other
     lexicon (see test_lexicon_known_nsid)."""
@@ -493,3 +519,168 @@ def test_describe_service_allows_cross_origin_reads(client):
 def test_tile_response_has_exactly_one_cors_header(tile_client):
     resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
     assert resp.headers.getlist("Access-Control-Allow-Origin") == ["*"]
+
+
+# ---------------------------------------------------------------------------
+# JSON errors for everything outside the XRPC views
+# ---------------------------------------------------------------------------
+
+def _assert_json_error(resp, status, error):
+    assert resp.status_code == status
+    assert resp.mimetype == "application/json"
+    body = resp.get_json()
+    assert body["error"] == error
+    assert isinstance(body["message"], str) and body["message"]
+    assert set(body) == {"error", "message"}
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+    assert resp.headers["X-Content-Type-Options"] == "nosniff"
+
+
+@pytest.mark.parametrize("path", [
+    "/", "/a/b", "/a/b/c/d", "/tiles/overture-place/", "/tiles/overture-place",
+    "/tiles/", "/xrpc/", "/.well-known/nope",
+])
+def test_unmatched_routes_are_json_not_found(client, path):
+    _assert_json_error(client.get(path), 404, "NotFound")
+
+
+@pytest.mark.parametrize("path,allowed", [
+    ("/health", {"GET", "HEAD", "OPTIONS"}),
+    ("/tilesets/x", {"GET", "HEAD", "OPTIONS"}),
+    ("/tiles/overture-place/x.json.gz", {"GET", "HEAD", "OPTIONS"}),
+])
+def test_wrong_method_is_json_405_with_allow(client, path, allowed):
+    resp = client.post(path)
+    _assert_json_error(resp, 405, "MethodNotAllowed")
+    assert {m.strip() for m in resp.headers["Allow"].split(",")} == allowed
+
+
+def test_tile_with_wrong_suffix_is_tile_not_found(client):
+    resp = client.get("/tiles/overture-place/foo.txt")
+    _assert_json_error(resp, 404, "TileNotFound")
+    assert resp.get_json()["message"] == "No such tile: overture-place/foo.txt"
+
+
+def test_tile_traversal_miss_is_json_tile_not_found(client):
+    resp = client.get(f"/tiles/overture-place/{STAMP}/..%2f..%2f..%2fetc%2fpasswd.json.gz")
+    _assert_json_error(resp, 404, "TileNotFound")
+
+
+def test_nosniff_on_success_responses(client):
+    assert client.get("/health").headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_xrpc_unknown_method_keeps_lexrpc_501_body(client):
+    resp = client.get("/xrpc/org.atgeo.nope")
+    assert resp.status_code == 501
+    body = resp.get_json()
+    assert body["error"] == "MethodNotImplemented"
+    assert "org.atgeo.nope" in body["message"]
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_xrpc_missing_param_keeps_lexrpc_400_body(client):
+    resp = client.get("/xrpc/org.atgeo.getPlace")
+    assert resp.status_code == 400
+    assert resp.get_json()["error"] == "InvalidRequest"
+    resp = client.get("/xrpc/not_an_nsid")
+    assert resp.status_code == 400
+    assert resp.get_json() == {"error": "InvalidRequest", "message": "not_an_nsid is not a valid NSID"}
+
+
+def test_unhandled_exception_is_json_500_without_details(client, caplog):
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    app.testing = False
+
+    @app.route("/boom")
+    def boom():
+        raise RuntimeError("secret internal detail")
+
+    with caplog.at_level("ERROR"):
+        resp = client.get("/boom")
+    _assert_json_error(resp, 500, "InternalServerError")
+    assert "secret internal detail" not in resp.get_data(as_text=True)
+    assert "secret internal detail" in caplog.text  # traceback still logged
+
+
+# ---------------------------------------------------------------------------
+# Errors lexrpc lets through on /xrpc/, NSID gating, redirects, 5xx, CORS
+# ---------------------------------------------------------------------------
+
+def test_xrpc_non_json_body_is_415(client):
+    resp = client.post("/xrpc/org.atgeo.getPlace", data="x", content_type="text/plain")
+    _assert_json_error(resp, 415, "UnsupportedMediaType")
+
+
+def test_xrpc_malformed_json_body_is_invalid_request_400(client):
+    resp = client.post("/xrpc/org.atgeo.getPlace", data="{nope",
+                       content_type="application/json")
+    _assert_json_error(resp, 400, "InvalidRequest")
+
+
+def test_xrpc_wrong_method_is_405_with_allow(client):
+    resp = client.put("/xrpc/org.atgeo.getPlace")
+    _assert_json_error(resp, 405, "MethodNotAllowed")
+    assert "GET" in resp.headers["Allow"]
+
+
+def test_non_xrpc_400_keeps_its_own_name(client):
+    app = client.application
+    from werkzeug.exceptions import BadRequest
+
+    @app.route("/bad")
+    def bad():
+        raise BadRequest()
+
+    _assert_json_error(client.get("/bad"), 400, "BadRequest")
+
+
+@pytest.mark.parametrize("path", [
+    "/favicon.ico", "/robots.txt", "/xrpc", "/tiles", "/tilesets", "/health/",
+])
+def test_non_nsid_single_segments_are_plain_not_found(client, path):
+    _assert_json_error(client.get(path), 404, "NotFound")
+
+
+def test_nsid_shaped_unknown_is_lexicon_not_found(client):
+    _assert_json_error(client.get("/org.atgeo.nope"), 404, "LexiconNotFound")
+
+
+def test_redirects_still_redirect(client):
+    resp = client.get("/tilesets//x")
+    assert resp.status_code == 308
+    assert resp.headers["Location"].endswith("/tilesets/x")
+
+
+def test_explicit_5xx_abort_is_generic_json_and_logged(client, caplog):
+    from flask import abort
+
+    @client.application.route("/unavailable")
+    def unavailable():
+        abort(503, description="database exploded at /var/secret")
+
+    with caplog.at_level("ERROR"):
+        resp = client.get("/unavailable")
+    _assert_json_error(resp, 503, "ServiceUnavailable")
+    assert "secret" not in resp.get_data(as_text=True)
+    assert "database exploded at /var/secret" in caplog.text
+
+
+@pytest.mark.parametrize("path", [
+    "/xrpc/org.atgeo.getPlace", f"/{OVERTURE}/place/ov001", "/tilesets/overture-place",
+])
+def test_options_preflight_has_cors(client, path):
+    resp = client.options(path, headers={
+        "Origin": "https://example.com", "Access-Control-Request-Method": "GET",
+    })
+    assert resp.status_code < 400
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
+
+
+def test_head_on_404_is_json_with_empty_body(client):
+    resp = client.head("/tilesets/nope")
+    assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_data() == b""
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
