@@ -82,7 +82,7 @@ def create_app():
             message = "The server hit an unexpected error."
         else:
             message = e.description
-            if e.code == 400 and request.path.startswith("/xrpc/"):
+            if e.code == 400 and request.endpoint == "xrpc-endpoint":
                 name = "InvalidRequest"  # atproto's name for a malformed request
         response = jsonify({"error": name, "message": message})
         response.status_code = e.code

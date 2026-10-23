@@ -172,7 +172,7 @@ Every error is JSON, `{"error": "<Name>", "message": "<text>"}`, and every respo
 | `describeTileset` | `TilesetNotFound` |
 | `describeService` | none |
 
-lexrpc, the XRPC layer, adds errors no lexicon lists: `InvalidRequest` (HTTP 400) for a missing or malformed parameter, a bad NSID, or a request body that isn't valid JSON; `UnsupportedMediaType` (HTTP 415) for a body with a non-JSON `Content-Type`; `MethodNotAllowed` (HTTP 405, with an `Allow` header) for an HTTP method the route doesn't take; and `MethodNotImplemented` (HTTP 501) for an XRPC method the service doesn't have. A 5xx otherwise means the server broke, not that it refused you.
+The XRPC layer (lexrpc, and Flask beneath it) adds errors no lexicon lists: `InvalidRequest` (HTTP 400) for a missing or malformed parameter, a bad NSID, or a request body that isn't valid JSON; `UnsupportedMediaType` (HTTP 415) for a body with a non-JSON `Content-Type`; `MethodNotAllowed` (HTTP 405, with an `Allow` header) for an HTTP method the route doesn't take; and `MethodNotImplemented` (HTTP 501) for an XRPC method the service doesn't have. A 5xx otherwise means the server broke, not that it refused you.
 
 **The plain-HTTP routes answer a miss with HTTP 404**, in the same JSON shape, never an HTML page:
 

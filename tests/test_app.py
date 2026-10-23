@@ -1,6 +1,7 @@
 """Tests for Flask app routes in garganorn.__main__."""
 import gzip
 import json
+from pathlib import Path
 import pytest
 
 from tests.served_runs import (
@@ -473,10 +474,15 @@ def test_describe_service_lexicon_route_lacks_cache_control(client):
     assert resp.headers.get("Cache-Control") != "public, max-age=3600"
 
 
-@pytest.mark.parametrize("nsid", [
-    "org.atgeo.describeService", "org.atgeo.describeTileset",
-    "org.atgeo.getPlace", "org.atgeo.getTiles", "org.atgeo.defs",
-])
+# Every lexicon file the server ships, so the NSID gate on /<nsid> can't
+# quietly stop serving one.
+SHIPPED_NSIDS = sorted(
+    json.loads(path.read_text())["id"]
+    for path in (Path(__file__).parent.parent / "garganorn" / "lexicon").glob("*.json")
+)
+
+
+@pytest.mark.parametrize("nsid", SHIPPED_NSIDS)
 def test_lexicons_served_at_nsid_route(client, nsid):
     """Each lexicon document is served at GET /<nsid>, like every other
     lexicon (see test_lexicon_known_nsid)."""
