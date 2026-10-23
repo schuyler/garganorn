@@ -159,6 +159,28 @@ There's no search — you ask for tile coverage over a bounding box, then fetch 
 | `GET /tiles/{slug}/...` | Tile files |
 | `GET /.well-known/did.json` | The `did:web` document, advertising the tile service as `#atgeo_tiles` (`AtgeoTileService`) at `public_base` |
 
+### Errors
+
+Errors come back as JSON, `{"error": "<Name>", "message": "<text>"}`, and carry a CORS `Access-Control-Allow-Origin: *` header like everything else.
+
+**XRPC methods answer every error with HTTP 400.** That's the atproto XRPC convention (and what the SDKs expect), so `PlaceNotFound` is a 400 here, not a 404. Branch on the `error` name, not on the status. (A 5xx still means the server broke, not that it refused you.)
+
+| Method | Errors (all HTTP 400) |
+|---|---|
+| `getTiles` | `InvalidBbox`, `BboxTooPrecise`, `DatasetNotFound`, `CollectionNotFound`, `BboxTooLarge` |
+| `getPlace` | `PlaceNotFound` |
+| `describeTileset` | `TilesetNotFound` |
+| `describeService` | none |
+
+**The plain-HTTP routes answer a miss with HTTP 404** and the same JSON body shape, never an HTML page:
+
+| Route | Miss | Body |
+|---|---|---|
+| `GET /{dataset}/{collection}/{id}` | place not served (including a malformed path, like a dataset with no `.` in it) | `PlaceNotFound` |
+| `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
+| `GET /tiles/{slug}/...` | unknown slug / no such tile | `TilesetNotFound` / `TileNotFound` |
+| `GET /{nsid}` | unknown lexicon | `LexiconNotFound` |
+
 ### getTiles
 
 ```
@@ -218,7 +240,7 @@ $ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetma
 {"uri":"https://places.atgeo.org/openstreetmap.org/node/10080395917","importance":0,"record":{...}}
 ```
 
-An unknown or unserved URN is a `PlaceNotFound` error.
+An unknown or unserved URN is a `PlaceNotFound` error (HTTP 400 over XRPC; 404 at the `/{dataset}/{collection}/{id}` alias).
 
 ## Lexicon schemas
 

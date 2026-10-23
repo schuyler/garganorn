@@ -1,5 +1,5 @@
 import gzip, json, os, logging
-from flask import Flask, abort, request, Response
+from flask import Flask, jsonify, request, Response
 from werkzeug.utils import safe_join
 from lexrpc.flask_server import init_flask
 from lexrpc.base import XrpcError
@@ -56,11 +56,18 @@ def create_app():
 
     lexicon_map = gazetteer.lexicon_map
 
+    def not_found(error, message):
+        """A 404 with the same {error, message} JSON body shape XRPC errors use.
+        The plain-HTTP routes answer with this, never Flask's HTML page."""
+        response = jsonify({"error": error, "message": message})
+        response.status_code = 404
+        return response
+
     @app.route('/<nsid>')
     def get_lexicon(nsid):
         lexicon = lexicon_map.get(nsid)
         if lexicon is None:
-            abort(404)
+            return not_found("LexiconNotFound", f"Unknown lexicon: {nsid}")
         return lexicon
 
     @app.route('/.well-known/did.json')
@@ -80,17 +87,18 @@ def create_app():
     def tileset_descriptor(slug):
         tileset = gazetteer.tilesets.get(slug)
         if tileset is None:
-            abort(404)
+            return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
         return tileset.descriptor
 
     @app.route("/<dataset>/<collection>/<id>")
     def place(dataset, collection, id):
+        urn = f"urn:atgeo:{dataset}:{collection}:{id}"
         if "." not in dataset:
-            abort(404)
+            return not_found("PlaceNotFound", f"No such place: {urn}")
         try:
-            return gazetteer.get_place(None, f"urn:atgeo:{dataset}:{collection}:{id}")
-        except XrpcError:
-            abort(404)
+            return gazetteer.get_place(None, urn)
+        except XrpcError as e:
+            return not_found(e.name, e.message)
 
     @app.route('/health')
     def health_check():
@@ -101,14 +109,15 @@ def create_app():
         """Serve a tile as plain JSON, decompressed from its on-disk gzip
         file -- storage format and wire format are separate decisions;
         Caddy owns wire compression negotiation via Accept-Encoding."""
-        if not tile_path.endswith(".json.gz"):
-            return ("Not found", 404)
         tiles_dir = tile_dirs.get(slug)
         if tiles_dir is None:
-            return ("Not found", 404)
+            return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
+        missing = not_found("TileNotFound", f"No such tile: {slug}/{tile_path}")
+        if not tile_path.endswith(".json.gz"):
+            return missing
         full_path = safe_join(tiles_dir, tile_path)
         if full_path is None or not os.path.isfile(full_path):
-            return ("Not found", 404)
+            return missing
         with gzip.open(full_path, "rb") as f:
             data = f.read()
         response = Response(data, mimetype="application/json")

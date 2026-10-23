@@ -59,6 +59,11 @@ def test_lexicon_unknown_nsid(client):
     """GET /<nsid> returns 404 for an unknown NSID."""
     resp = client.get("/nonexistent.lexicon")
     assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {
+        "error": "LexiconNotFound", "message": "Unknown lexicon: nonexistent.lexicon",
+    }
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_xrpc_get_record_not_implemented(client):
@@ -138,12 +143,23 @@ def test_tile_missing_returns_404(tile_client_empty):
     """GET /tiles/<slug>/... for a nonexistent tile returns 404."""
     resp = tile_client_empty.get("/tiles/overture-place/000000/nonexistent.json.gz")
     assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {
+        "error": "TileNotFound",
+        "message": "No such tile: overture-place/000000/nonexistent.json.gz",
+    }
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_tile_unknown_slug_returns_404(tile_client_empty):
     """GET /tiles/<unknown-slug>/... returns 404 when slug is not registered."""
     resp = tile_client_empty.get("/tiles/unknown-source/012301/012301.json.gz")
     assert resp.status_code == 404
+    assert resp.mimetype == "application/json"
+    assert resp.get_json() == {
+        "error": "TilesetNotFound", "message": "Unknown tileset: unknown-source",
+    }
+    assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_tile_cache_control_is_constant_immutable(tile_client):
