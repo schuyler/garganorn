@@ -143,7 +143,8 @@ The server's error codes pass through as the `code` of the SDK's `AtgeoError`, w
 | `PlaceNotFound` | `getPlace` | The server serves no place with that origin. |
 | `TilesetNotFound` | `describeTileset` | The server serves no tileset with that slug. |
 | `InvalidRequest` | any | A malformed parameter, such as a `getPlace` argument that isn't a URI. |
-| `HttpError` | any | Non-2xx without a parseable error body. |
+| `InternalServerError`, `ServiceUnavailable`, … | any | The server failed (5xx); garganorn answers these as JSON too, with a generic message. |
+| `HttpError` | any | Non-2xx without a parseable error body, which from garganorn means something in between, such as a proxy or CDN. |
 
 `InvalidBbox` and `BboxTooPrecise` are unreachable by construction: the SDK validates the region and snaps it before sending. If either shows up in the wild, the SDK has a bug. An invalid region (non-finite or out-of-range coordinates, `minLat > maxLat`, negative radius) and `similarity` sort without text throw a synchronous `TypeError` before any request. A failed `getTiles` request rejects the search; a failed tile is skipped with `complete: false`.
 
@@ -166,6 +167,7 @@ The SDK's `fixtures/` directory holds language-neutral reference behavior for po
 - `normalize.json`: input/output pairs for `N(s)`, which a port must match exactly.
 - `jaro-winkler.json`: input/output pairs for the similarity function, to within the rounding of the fixture.
 - `ranking-scenarios.json`: regions, text, and records, asserting which places land in the top K. It checks membership rather than exact order, because the weights are expected to change.
+- `lenient-readers.json`: a response body for each of the five wire readers (`getTiles`, a tile payload, `getPlace`, `describeService`, `describeTileset`) and what a port's reader keeps of it, or that it rejects the body as unusable.
 
 The SDK's `test/lexicon/` directory holds copies of this repo's lexicons, taken from a recorded garganorn commit, which its fake server validates every request and response against, so a test can't pass on a response the real server would never send.
 
@@ -176,4 +178,4 @@ The fixtures show what the reference implementation does and a port should aim t
 - **`region` stays required.** Whether the SDK should offer an explicit world-scale mode on top of the overview band, rather than leaving callers to pass a huge region, is undecided. The `overview` flag in the `getTiles` response tells such a mode when it got a sample.
 - **Usable search radius in dense cities.** Unmeasured. The 50-tile budget is reached in Manhattan-density areas; no one has measured what radius that leaves, or what a maximal query costs in bytes on a phone.
 - **Default host.** `https://places.atgeo.org` is the constructor default. The zero-configuration constructor is most of the adoption argument, and it needs a deployment behind it with someone paying for the bandwidth. This is a governance question wearing a technical hat.
-- **Pre-release ports.** TypeScript is the first implementation. Swift, Kotlin, Python and Rust ports are built ([atgeo-sdk-swift](https://github.com/schuyler/atgeo-sdk-swift), [-kotlin](https://github.com/schuyler/atgeo-sdk-kotlin), [-python](https://github.com/schuyler/atgeo-sdk-python), [-rs](https://github.com/schuyler/atgeo-sdk-rs)), all pre-release and installed from GitHub. Each shares the fixtures and the port contract, and has a `CONFORMANCE.md` listing where it differs at the margins. Keeping their vendored copies of the fixtures and lexicons in step with the reference is checked by a pin-check script, `scripts/check-fixtures.sh` in atgeo-sdk-js, which every port's CI runs.
+- **Pre-release ports.** TypeScript is the first implementation. Swift, Kotlin, Python and Rust ports are built ([atgeo-sdk-swift](https://github.com/schuyler/atgeo-sdk-swift), [-kotlin](https://github.com/schuyler/atgeo-sdk-kotlin), [-python](https://github.com/schuyler/atgeo-sdk-python), [-rs](https://github.com/schuyler/atgeo-sdk-rs)), all pre-release and installed from GitHub. Each shares the fixtures and the port contract, and has a `CONFORMANCE.md` listing where it differs at the margins. Each vendors the fixtures and lexicons at a pinned commit, and every port's CI runs a pin check, `scripts/check-fixtures.sh` in atgeo-sdk-js: it fails if a vendored file differs from its pinned commit's, and warns when the pin is behind the reference.
