@@ -356,7 +356,7 @@ See [above](#tilesets-on-the-wire-describeservice-and-describetileset). `describ
 
 ### Errors over XRPC
 
-Every error the methods raise returns **HTTP 400** with a body of `{"error": name, "message": text}`, per the AT Protocol convention. A client branches on the `error` name, not on the status: `PlaceNotFound` is a 400 here, not a 404. The XRPC layer adds a few errors no lexicon lists:
+Every error the methods raise returns **HTTP 400** with a body of `{"error": name, "message": text}`, per the AT Protocol convention. A client branches on the `error` name, not on the status: `PlaceNotFound` is a 400 here, not a 404. The XRPC layer (lexrpc, and Flask beneath it) adds a few errors no lexicon lists:
 
 | error | status | when |
 |---|---|---|
@@ -410,7 +410,7 @@ It doesn't advertise a personal data server, because there isn't one.
 | `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
 | any other path | no route matches, including a single segment that isn't an NSID (`/favicon.ico`, `/xrpc`, `/tiles`) | `NotFound` |
 
-Everything else follows the same shape. A wrong method on any route, XRPC included, is 405 `MethodNotAllowed` with an `Allow` header. Any other 4xx carries the name of the HTTP status without spaces (`BadRequest`, outside `/xrpc/`). Any 5xx is `InternalServerError`, `ServiceUnavailable` or the like, with the generic message "The server hit an unexpected error."; the details go to the server's log, not the response. A redirect (`/tilesets//x` gets a 308, say) is not turned into an error.
+Everything else follows the same shape. A wrong method on any route, XRPC included, is 405 `MethodNotAllowed` with an `Allow` header. Any other 4xx carries the name of the HTTP status without spaces (`BadRequest`, anywhere but the XRPC endpoint, where a 400 is always `InvalidRequest`). Any 5xx is `InternalServerError`, `ServiceUnavailable` or the like, with the generic message "The server hit an unexpected error."; the details go to the server's log, not the response. A redirect (`/tilesets//x` gets a 308, say) is not turned into an error.
 
 The status differs from XRPC on purpose: XRPC follows the AT Protocol convention of 400 for every error; a plain GET at an address that holds nothing is the ordinary web 404. The two also differ on a malformed identity: the alias `/{dataset}/{collection}/{id}` answers a malformed URN with 404 `PlaceNotFound`, while `getPlace` answers a `uri` that isn't a URI at all with 400 `InvalidRequest`, and a URI that isn't a served place with 400 `PlaceNotFound`.
 
