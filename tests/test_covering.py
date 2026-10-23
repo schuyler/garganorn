@@ -124,17 +124,25 @@ class TestQkEnvMacro:
         _load_qk_env_macro(con)
 
         rng = random.Random(42)
-        mismatches = []
-        for _ in range(10_000):
-            length = rng.randint(1, 17)
-            qk = "".join(rng.choice("0123") for _ in range(length))
-            py_xmin, py_ymin, py_xmax, py_ymax = quadkey_to_bbox(qk)
+        quadkeys = [
+            "".join(rng.choice("0123") for _ in range(rng.randint(1, 17)))
+            for _ in range(10_000)
+        ]
+        # One query for all of them: preparing a query that expands the macro
+        # costs ~28 ms, so a query per quadkey took most of the suite's time.
+        # (executemany inserts are slow too; pass the list as one parameter.)
+        rows = con.execute(
+            """SELECT ST_XMin(e), ST_YMin(e), ST_XMax(e), ST_YMax(e)
+               FROM (SELECT i, qk_env(qks[i]) AS e
+                     FROM (SELECT ?::VARCHAR[] AS qks), range(1, ? + 1) r(i))
+               ORDER BY i""",
+            [quadkeys, len(quadkeys)],
+        ).fetchall()
+        assert len(rows) == len(quadkeys)
 
-            row = con.execute(
-                """SELECT ST_XMin(qk_env(?)), ST_YMin(qk_env(?)),
-                          ST_XMax(qk_env(?)), ST_YMax(qk_env(?))""",
-                [qk, qk, qk, qk],
-            ).fetchone()
+        mismatches = []
+        for qk, row in zip(quadkeys, rows):
+            py_xmin, py_ymin, py_xmax, py_ymax = quadkey_to_bbox(qk)
             sql_xmin, sql_ymin, sql_xmax, sql_ymax = row
 
             coords = [

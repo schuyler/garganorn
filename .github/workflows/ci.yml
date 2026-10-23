@@ -1,10 +1,13 @@
 name: CI
 
+# Prose-only changes don't run the suite; nothing under docs/ is read by the code or tests.
 on:
   pull_request:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
 
 permissions:
   contents: read
