@@ -23,6 +23,8 @@ jobs:
   test:
     name: test (python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    # The suite takes about ten minutes; a hung test shouldn't hold a runner for six hours.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
