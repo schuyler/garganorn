@@ -72,10 +72,10 @@ announcement records live in a real, account-sized repo on a real PDS and
 therefore legitimately carry `at://` URIs. Identity anchors the service; bulk
 data stays out of the `at://` namespace.
 
-The draft lexicon is `org.atgeo.tiles.service.json`, in this directory. This
-overlaps with the collection-and-service-metadata proposal in
-`planned-features.md`; whichever is designed first should absorb the other
-rather than both shipping.
+The draft lexicon, `org.atgeo.tiles.service`, predates the place-identity
+redesign and was discarded; `explored-and-discarded.md` records it and why.
+Getting from a DID to a gazetteer is still open, under the
+collection-and-service-metadata proposal in `planned-features.md`.
 
 ## Upstream and filtering
 
