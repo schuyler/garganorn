@@ -73,9 +73,7 @@ A tile is a set of place records associated with one quadkey cell.
 
 **Deduplicate by `origin`.** A client concatenating `records` arrays from more than one tile MUST deduplicate them by `value.origin`, falling back to the record's `uri` for a record with no origin. This holds for every collection, unconditionally. Today a point record is in exactly one regular tile, plus possibly one overview tile, and a single `getTiles` answer never mixes the two bands, so duplicates are rare in practice; but a division is referenced from every tile it overlaps, so there they are the norm. A client can't tell from the wire which collections avoid duplicates, and a server-side change shouldn't require a client change to stay correct. Every copy of a record is byte-identical, so it doesn't matter which one you keep.
 
-**Transport.** Tiles are stored gzip-compressed, as `{quadkey}.json.gz` on disk, and served as plain JSON with `Content-Type: application/json` at `{quadkey}.json`. The server maps the one to the other. Wire compression is negotiated by the ordinary `Accept-Encoding` exchange; rely on your HTTP library rather than assuming an encoding.
-
-Tile URLs used to end in `.json.gz`, which said gzip and delivered plain JSON. Those older URLs still resolve, to the same bytes with the same headers, until the last run a pre-`.json` server advertised is retired: two builds under the retention policy, plus the week a tile may sit in a cache. After that they're ordinary 404s, the same as any other URL from a retired build.
+**Transport.** Tiles are stored gzip-compressed, as `{quadkey}.json.gz` on disk, and served as plain JSON with `Content-Type: application/json` at `{quadkey}.json`. The server maps the one to the other. Wire compression is negotiated by the ordinary `Accept-Encoding` exchange; rely on your HTTP library rather than assuming an encoding. A request for the on-disk `.json.gz` name is a 404.
 
 **Caching.** Because tile URLs are immutable, tiles are served with `Cache-Control: public, max-age=604800, immutable`: cache them for a week and never revalidate. See [Headers](#headers) for the rest.
 
@@ -475,7 +473,7 @@ It doesn't advertise a personal data server, because there isn't one.
 | `GET /{dataset}/{collection}/{id}` | place not served, or a first segment with no dot | `PlaceNotFound` |
 | `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
-| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json` (or the older `.json.gz`), or one that tries to leave the tiles directory, counts as no such tile. A `.json` path is always looked up as its `.json.gz` tile, so the run's own `manifest.json` and `tileset.json` aren't reachable here | `TileNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json` (including the on-disk `.json.gz` name), or one that tries to leave the tiles directory, counts as no such tile. A `.json` path is always looked up as its `.json.gz` tile, so the run's own `manifest.json` and `tileset.json` aren't reachable here | `TileNotFound` |
 | `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
 | any other path | no route matches, including a single segment that isn't an NSID (`/favicon.ico`, `/xrpc`, `/tiles`) | `NotFound` |
 

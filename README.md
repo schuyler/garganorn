@@ -181,7 +181,7 @@ The XRPC layer (lexrpc, and Flask beneath it) adds errors no lexicon lists: `Inv
 | `GET /{dataset}/{collection}/{id}` | place not served, including a malformed path like a dataset with no `.` in it | `PlaceNotFound` |
 | `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
-| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json` (or the older `.json.gz`) or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json` (including the on-disk `.json.gz` name) or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
 | `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
 
 Everything else is JSON too, on `/xrpc/` as well as the plain routes: a path that matches no route (including a single segment that isn't an NSID, like `/favicon.ico`) is a 404 `NotFound`, a wrong method on a route is a 405 `MethodNotAllowed` (with an `Allow` header), and a crash or other 5xx is `InternalServerError` (or `ServiceUnavailable` etc.) with a generic message; details go to the server log, not the response. Note the alias and XRPC differ on a malformed URN: `/{dataset}/{collection}/{id}` gives a 404 `PlaceNotFound`, while `getPlace?uri=` gives a 400 `InvalidRequest` for a string that isn't a URI at all (and a 400 `PlaceNotFound` for a URI that isn't a served place).

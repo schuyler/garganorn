@@ -126,13 +126,13 @@ def tile_client_empty(tmp_path):
 
 
 def test_tile_served_successfully(tile_client):
-    """GET /tiles/<slug>/<stamp>/<qk6>/<qk>.json.gz returns 200 with plain
+    """GET /tiles/<slug>/<stamp>/<qk6>/<qk>.json returns 200 with plain
     JSON and no Content-Encoding -- the on-disk file is gzip, but the
     response body is decompressed before serving, so the client's
     Accept-Encoding governs the wire format instead of a forced header.
     The run is stamped 20260101T000000 (the served root is the run's parent,
     so the stamp is part of the path)."""
-    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
     assert resp.status_code == 200
     assert resp.headers.get("Content-Encoding") is None
     assert "application/json" in resp.content_type
@@ -142,19 +142,19 @@ def test_tile_served_successfully(tile_client):
 
 def test_tile_missing_returns_404(tile_client_empty):
     """GET /tiles/<slug>/... for a nonexistent tile returns 404."""
-    resp = tile_client_empty.get("/tiles/overture-place/000000/nonexistent.json.gz")
+    resp = tile_client_empty.get("/tiles/overture-place/000000/nonexistent.json")
     assert resp.status_code == 404
     assert resp.mimetype == "application/json"
     assert resp.get_json() == {
         "error": "TileNotFound",
-        "message": "No such tile: overture-place/000000/nonexistent.json.gz",
+        "message": "No such tile: overture-place/000000/nonexistent.json",
     }
     assert resp.headers["Access-Control-Allow-Origin"] == "*"
 
 
 def test_tile_unknown_slug_returns_404(tile_client_empty):
     """GET /tiles/<unknown-slug>/... returns 404 when slug is not registered."""
-    resp = tile_client_empty.get("/tiles/unknown-source/012301/012301.json.gz")
+    resp = tile_client_empty.get("/tiles/unknown-source/012301/012301.json")
     assert resp.status_code == 404
     assert resp.mimetype == "application/json"
     assert resp.get_json() == {
@@ -165,14 +165,14 @@ def test_tile_unknown_slug_returns_404(tile_client_empty):
 
 def test_tile_cache_control_is_constant_immutable(tile_client):
     """Tiles serve exactly this Cache-Control header, unconditionally."""
-    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=604800, immutable"
 
 
 def test_tile_allows_cross_origin_reads(tile_client):
     """Tiles are fetched by browser pages on other origins."""
-    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
     assert resp.status_code == 200
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
 
@@ -198,21 +198,17 @@ def test_tile_served_at_json_suffix(tmp_path):
     assert resp.data == _tile_file_bytes(tmp_path)
 
 
-def test_json_and_json_gz_serve_same_bytes_and_headers(tmp_path):
-    """#18: the new .json route and the retained .json.gz route answer with
-    the same body and the same Content-Type, Content-Encoding, Cache-Control,
-    Access-Control-Allow-Origin and X-Content-Type-Options."""
+def test_json_gz_url_is_not_served(tmp_path):
+    """#27: the pre-#18 .json.gz URL form is retired. A request for the
+    on-disk name is a 404 TileNotFound, even though the file exists."""
     app = build_app(serve_run(tmp_path, tiles={QK: [place(OVERTURE, "place", "ov1")]}))
     with app.test_client() as client:
-        new = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
-        old = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
-    assert new.status_code == old.status_code == 200
-    assert new.data == old.data
-    for header in ("Content-Type", "Content-Encoding", "Cache-Control",
-                   "Access-Control-Allow-Origin", "X-Content-Type-Options"):
-        assert new.headers.get(header) == old.headers.get(header), header
-    assert new.headers.get("Content-Encoding") is None
-    assert new.headers.get("Access-Control-Allow-Origin") == "*"
+        resp = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    assert resp.status_code == 404
+    assert resp.get_json() == {
+        "error": "TileNotFound",
+        "message": f"No such tile: overture-place/{STAMP}/{QK}/{QK}.json.gz",
+    }
 
 
 def test_json_tile_missing_returns_404_naming_the_json_path(tile_client_empty):
@@ -263,13 +259,13 @@ def test_tile_path_traversal_rejected(tmp_path):
     cross-source takes two.
 
     Two escapes, deliberately targeting different file types, because the
-    suffix guard (tile_path must end in .json.gz) runs in the same handler
+    suffix guard (tile_path must end in .json) runs in the same handler
     and would 404 a places.parquet request on its own, before safe_join is
     ever consulted:
-      - places.parquet doesn't end in .json.gz, so this case proves the
+      - places.parquet doesn't end in .json, so this case proves the
         suffix guard, not containment.
-      - the cross-source target DOES end in .json.gz, so it's the one that
-        actually proves safe_join blocks the escape.
+      - the cross-source target DOES exist as a .json.gz tile, so it's the
+        one that actually proves safe_join blocks the escape.
     """
     source_dir = tmp_path / "overture-place"
     tileset = serve_run(tmp_path, tiles={QK: []})
@@ -300,11 +296,11 @@ def test_tile_path_traversal_rejected(tmp_path):
             assert resp.mimetype == "application/json"
             assert resp.get_json()["error"] == "TileNotFound"
 
-        # Cross-source escape to a .json.gz file -- this is the case that
+        # Cross-source escape to a real tile file -- this is the case that
         # actually proves safe_join blocks containment escapes.
         cross_paths = [
-            f"/tiles/overture-place/../../osm/tiles/{STAMP}/012301.json.gz",
-            f"/tiles/overture-place/%2e%2e/%2e%2e/osm/tiles/{STAMP}/012301.json.gz",
+            f"/tiles/overture-place/../../osm/tiles/{STAMP}/012301.json",
+            f"/tiles/overture-place/%2e%2e/%2e%2e/osm/tiles/{STAMP}/012301.json",
         ]
         for path in cross_paths:
             resp = client.get(path)
@@ -349,12 +345,10 @@ def test_consecutive_runs_produce_disjoint_tile_urls(tmp_path):
     )
 
 
-@pytest.mark.parametrize("suffix", [".json", ".json.gz"])
-def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path, suffix):
+def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
     """A URL getTiles advertised for a run that has since been superseded
     must still resolve to that run's own bytes, as long as the run is still
-    on disk (keep-two retention). Both the advertised .json URL and the
-    pre-#18 .json.gz form of it resolve (#18)."""
+    on disk (keep-two retention)."""
     tiles_root = tmp_path / "overture-place" / "tiles"
     collections = [(OVERTURE, "place")]
     run1 = make_run(tiles_root, "20260101T000000", "overture-place", collections,
@@ -367,7 +361,6 @@ def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path, suffix):
         prior_paths = _tiles_url_paths(client1)
     assert prior_paths, "expected at least one tile URL from the prior run"
     assert all(p.endswith(".json") for p in prior_paths), prior_paths
-    prior_paths = [p.removesuffix(".json") + suffix for p in prior_paths]
 
     # New build completes and repoints 'current'; server restarts pinned to run2.
     point_current(tiles_root, run2)
@@ -394,13 +387,13 @@ def test_tile_route_roots_at_tiles_not_run_dir(tile_client):
     """The served root is {source}/tiles/, one level above the run directory,
     so a tile request must include the run's stamp segment to resolve; a path
     without that segment does not resolve."""
-    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
     assert resp.status_code == 200, (
         f"expected the served root to be tiles/, making {STAMP}/... "
         f"resolve; got {resp.status_code}"
     )
 
-    resp = tile_client.get(f"/tiles/overture-place/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{QK}/{QK}.json")
     assert resp.status_code == 404, (
         "the un-stamped path must not resolve, since the served root is "
         f"tiles/, one level above the run dir; got {resp.status_code}"
@@ -471,7 +464,7 @@ def test_incomplete_run_not_served(tmp_path, missing):
         # Stamped path -- an unstamped path would 404 on path resolution
         # alone (the served root is tiles/), masking whether the
         # completeness gate itself withholds the tileset.
-        resp = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+        resp = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
         assert resp.status_code == 404, (
             f"run without {missing} must not be served; got {resp.status_code}"
         )
@@ -495,7 +488,7 @@ def test_complete_run_served(tile_client):
     test_incomplete_run_not_served guards. Requests the stamped path: the
     served root is tiles/, so the un-stamped path does not resolve.
     """
-    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
     assert resp.status_code == 200, (
         "complete run (manifest.duckdb + manifest.json + tileset.json) must be "
         f"served; got {resp.status_code}"
@@ -637,7 +630,7 @@ def test_describe_service_allows_cross_origin_reads(client):
 
 
 def test_tile_response_has_exactly_one_cors_header(tile_client):
-    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    resp = tile_client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
     assert resp.headers.getlist("Access-Control-Allow-Origin") == ["*"]
 
 
@@ -667,7 +660,7 @@ def test_unmatched_routes_are_json_not_found(client, path):
 @pytest.mark.parametrize("path,allowed", [
     ("/health", {"GET", "HEAD", "OPTIONS"}),
     ("/tilesets/x", {"GET", "HEAD", "OPTIONS"}),
-    ("/tiles/overture-place/x.json.gz", {"GET", "HEAD", "OPTIONS"}),
+    ("/tiles/overture-place/x.json", {"GET", "HEAD", "OPTIONS"}),
 ])
 def test_wrong_method_is_json_405_with_allow(client, path, allowed):
     resp = client.post(path)
@@ -682,7 +675,7 @@ def test_tile_with_wrong_suffix_is_tile_not_found(client):
 
 
 def test_tile_traversal_miss_is_json_tile_not_found(client):
-    resp = client.get(f"/tiles/overture-place/{STAMP}/..%2f..%2f..%2fetc%2fpasswd.json.gz")
+    resp = client.get(f"/tiles/overture-place/{STAMP}/..%2f..%2f..%2fetc%2fpasswd.json")
     _assert_json_error(resp, 404, "TileNotFound")
 
 
