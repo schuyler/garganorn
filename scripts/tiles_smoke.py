@@ -42,9 +42,8 @@ def fetch_json(url):
 
 
 def quadkey_from_tile_url(url):
-    """Extract the quadkey from a .../{qk[:6]}/{qk}.json tile URL (or the
-    older .../{qk}.json.gz)."""
-    return url.rsplit("/", 1)[-1].removesuffix(".json.gz").removesuffix(".json")
+    """Extract the quadkey from a .../{qk[:6]}/{qk}.json tile URL."""
+    return url.rsplit("/", 1)[-1].removesuffix(".json")
 
 
 def main(argv=None):

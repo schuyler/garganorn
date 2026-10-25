@@ -144,11 +144,6 @@ def create_app():
             return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
         if tile_path.endswith(".json"):
             disk_path = tile_path + ".gz"  # served suffix -> storage suffix
-        elif tile_path.endswith(".json.gz"):
-            # URLs advertised before tiles were served at .json. Retire this
-            # branch once no run a pre-.json server advertised is still on disk
-            # (two builds under keep-2 retention, plus the one-week tile cache).
-            disk_path = tile_path
         else:
             disk_path = None
         # A .json request never serves a plain .json file: manifest.json and

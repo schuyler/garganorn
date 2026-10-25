@@ -324,8 +324,8 @@ tile), plus `manifest.duckdb`, `tileset.json` and `manifest.json` in the run dir
 swaps the `<tiles_root>/current` symlink to point at it. `qk[:6]` returns
 the whole key for the summary band's sub-6-char quadkeys, so those tiles
 land at `<qk>/<qk>.json.gz` in the same layout. The server serves each tile
-at `<qk>.json`, mapping the request to the `.json.gz` file; the older
-`.json.gz` URLs still resolve until the runs that advertised them retire.
+at `<qk>.json`, mapping the request to the `.json.gz` file; the `.json.gz`
+name itself isn't served.
 
 **Schema** (tile payload, per `envelope.py`): `{publishedAt, attribution:
 [collectionAttribution], records: [{value, importance}]}`. `attribution` is

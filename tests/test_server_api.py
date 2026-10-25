@@ -224,7 +224,7 @@ def test_tileset_is_served_at_its_descriptor_slug(tmp_path):
     tileset = serve_run(tmp_path, "my-tiles", [(OVERTURE, "place")],
                         {"023010": []}, subdir="somewhere-else")
     with build_app(tileset).test_client() as client:
-        assert client.get(f"/tiles/my-tiles/{STAMP}/023010/023010.json.gz").status_code == 200
+        assert client.get(f"/tiles/my-tiles/{STAMP}/023010/023010.json").status_code == 200
         assert client.get("/tilesets/my-tiles").get_json()["slug"] == "my-tiles"
         _assert_json_404(client.get("/tilesets/somewhere-else"), "TilesetNotFound",
                          "Unknown tileset: somewhere-else")
