@@ -21,9 +21,6 @@ served; the latter returns each run's `tileset.json` (see
   displayable one — a client can render `categories`/`attributes` today but
   can't act on them (e.g. filter a query by category) without additional
   per-collection structure.
-- Whether summary-band facts (band existence, its top-N cap, its record
-  count) belong in `org.atgeo.defs#tileset` — deliberately excluded from the
-  descriptor for lack of an approved requirement.
 
 ## Two introductory tutorials, in both directions
 
@@ -51,7 +48,7 @@ zooms; why longitude comes before latitude; that Web Mercator's projection
 breaks down at the poles, and why garganorn's quadkeys reach them anyway;
 that the antimeridian is a real place where naive coordinate comparisons
 break; what `importance` means and why it isn't comparable across
-collections; and the difference between "near me" and "inside this thing,"
+producers; and the difference between "near me" and "inside this thing,"
 which is distance versus containment and wants different data.
 
 Open questions: whether these are documents in this repo, posts on

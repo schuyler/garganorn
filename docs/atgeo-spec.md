@@ -24,7 +24,7 @@ That merged set is the query result. The server never sees what you were looking
 
 For a region too large to cover with the regular tiles, the answer is a sample: see [The overview band](#the-overview-band).
 
-To fetch a single place whose identity you already hold, call `org.atgeo.getPlace` with its `origin`. Prefer tiles you already have: `getPlace` tells the server exactly which place you are looking at, which is a sharper signal than the box `getTiles` sees. It exists for resolving a link someone shared, where you have an identity and no region.
+To fetch a single place whose identity you already hold, call `org.atgeo.getPlace` with its record key (its `origin`). Prefer tiles you already have: `getPlace` tells the server exactly which place you are looking at, which is a sharper signal than the box `getTiles` sees. It exists for resolving a link someone shared, where you have an identity and no region.
 
 ## Identity
 
@@ -65,7 +65,7 @@ Because a tile can hold records of a collection you didn't ask for (all three OS
 
 A tile is a set of place records associated with one quadkey cell.
 
-**Quadkey scheme.** Web-Mercator (Bing) quadkeys over WGS84 longitude and latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing southward. The outermost row at every zoom reaches the pole (±90°), so every latitude is covered. Zoom is the length of the quadkey string. A tile URL ends in `{quadkey}.json.gz`, but this document does not define the URL as part of the interface; see below.
+**Quadkey scheme.** Web-Mercator (Bing) quadkeys over WGS84 longitude and latitude. Digits encode `0=NW, 1=NE, 2=SW, 3=SE`, with y increasing southward. The outermost row at every zoom reaches the pole (±90°), so every latitude is covered. Zoom is the length of the quadkey string. A tile URL garganorn hands out ends in `{quadkey}.json`, but this document does not define the URL as part of the interface; see below.
 
 **Tile URLs are opaque.** A client never constructs one; it receives whole URLs from `getTiles` and fetches them as given. A tile URL is immutable: it never serves two different byte streams. When the gazetteer publishes a new build, the URLs change completely, which costs a client nothing, because it always asks `getTiles` again rather than remembering URLs. Old builds are eventually retired, so a hoarded URL will in time return 404; that is the penalty for remembering. The tiles themselves contain no gazetteer host, so a tileset can be served from any host under its slug.
 
@@ -73,19 +73,21 @@ A tile is a set of place records associated with one quadkey cell.
 
 **Deduplicate by `origin`.** A client concatenating `records` arrays from more than one tile MUST deduplicate them by `value.origin`, falling back to the record's `uri` for a record with no origin. This holds for every collection, unconditionally. Today a point record is in exactly one regular tile, plus possibly one overview tile, and a single `getTiles` answer never mixes the two bands, so duplicates are rare in practice; but a division is referenced from every tile it overlaps, so there they are the norm. A client can't tell from the wire which collections avoid duplicates, and a server-side change shouldn't require a client change to stay correct. Every copy of a record is byte-identical, so it doesn't matter which one you keep.
 
-**Transport.** Tiles are stored gzip-compressed and served as plain JSON: `Content-Type: application/json`, whatever the `.json.gz` in the URL suggests. Wire compression is negotiated by the ordinary `Accept-Encoding` exchange; rely on your HTTP library rather than assuming an encoding.
+**Transport.** Tiles are stored gzip-compressed, as `{quadkey}.json.gz` on disk, and served as plain JSON with `Content-Type: application/json` at `{quadkey}.json`. The server maps the one to the other. Wire compression is negotiated by the ordinary `Accept-Encoding` exchange; rely on your HTTP library rather than assuming an encoding.
+
+Tile URLs used to end in `.json.gz`, which said gzip and delivered plain JSON. Those older URLs still resolve, to the same bytes with the same headers, until the last run a pre-`.json` server advertised is retired: two builds under the retention policy, plus the week a tile may sit in a cache. After that they're ordinary 404s, the same as any other URL from a retired build.
 
 **Caching.** Because tile URLs are immutable, tiles are served with `Cache-Control: public, max-age=604800, immutable`: cache them for a week and never revalidate. See [Headers](#headers) for the rest.
 
 ### The overview band
 
-A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the 10,000 records of the tileset with the highest `importance`, ties broken by id. For the division tileset it also holds every division whose `subtype` is `country`, `region` or `dependency`, on top of those 10,000, because an importance cut alone crowds every non-locality out. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
+A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the N records of the tileset with the highest `importance`, ties broken by id; garganorn builds with N = 10,000, which is a producer parameter, not protocol. It's one cut, the same for every tileset: the division formula's [administrative floors](#importance) are what keep countries, dependencies and regions in it. A tileset with a band says so in its descriptor's `overview`, whose `records` is how many records the band actually holds, which can be fewer than N. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
 
-`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (50 by default, set by `max_tiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a build with 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
+`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (garganorn's `max_tiles`, 50 by default, advertised as `describeService`'s `maxTiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a band of 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
 
 The response says which kind of answer it is. An overview answer carries `"overview": true` alongside `tiles`; a regular answer omits the key, so absent means regular. A client that needs to know reads the flag. It does not look at the length of the quadkey in a tile URL.
 
-The budget counts tiles across every tileset the request selects. A request for `dataset=overturemaps.org` with no collection selects both `overture-place` and `overture-division`, and the combined count is what's compared with the budget. If any selected tileset has no overview band, the answer is `BboxTooLarge` instead.
+The budget counts tiles across every tileset the request selects. A request for `dataset=overturemaps.org` with no collection selects both `overture-place` and `overture-division`, and the combined count is what's compared with the budget. If any selected tileset has no overview band (its descriptor has no `overview`), the answer is `BboxTooLarge` instead.
 
 ## The tile payload
 
@@ -105,7 +107,7 @@ A tile record has up to three keys:
 
 - **`value`** — the place, an `org.atgeo.place` value, exactly as described [below](#place-records).
 - **`importance`** — an integer 0 to 100; see [Importance](#importance). It sits beside the place, not in it: it is the producer's build parameter, not a property of the place, so a place copied out of a tile doesn't carry it.
-- **`uri`** — present only for a record that has no `origin`, such as a copy of a repo record. The records garganorn serves all have an origin and omit it.
+- **`uri`** — present only for a record that has no `origin`, such as a copy of a repo record. It is the record's own identity, never the gazetteer's URL for the record. The records garganorn serves all have an origin and omit it.
 
 There is no version field. Lexicon schemas evolve upgrade-only, so the rule that governs the records inside a tile governs the tile too. The general form of that rule, which applies to every response shape in this document: **ignore keys you don't recognize.** New keys may appear anywhere; existing keys keep their meaning.
 
@@ -173,7 +175,9 @@ Two declared fields are not yet produced: `updatedAt` and `relations.sameAs`. A 
 
 ## Importance
 
-`importance` is an integer from 0 to 100 expressing how much a place matters relative to other places in the same tileset. It blends two signals: how busy the place's surroundings are, and how distinctive its category is. It is comparable within a tileset and meaningless across tilesets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
+`importance` is an integer from 0 to 100 expressing how much a place matters relative to other places. It blends two signals: how busy the place's surroundings are, and how distinctive its category is (for a division, how many people live in it).
+
+Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together. Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
 
 The reference producer computes it as follows. For place records (Overture places, and OSM nodes, ways and relations):
 
@@ -181,17 +185,31 @@ The reference producer computes it as follows. For place records (Overture place
 
 where `density` is ln(1 + n) for n the count of Overture places in the enclosing zoom-15 cell (Overture-derived even when scoring OSM records, so both share one notion of "busy"), and `idf` is ln(N / n) over the source's own corpus of named places, n being the places in the record's primary category: rare categories score high, ubiquitous ones low.
 
-For division records:
+For division records, the administrative level sets a floor and a ceiling, and a 0-to-1 signal places the division between them:
 
-    importance = round(40 · min(ln(1 + population) / 20, 1))
+    importance = round(floor + (ceiling − floor) · s)
 
-except localities, which add the density term the way places do:
+    s = min(ln(1 + population) / 20, 1)                                       every subtype but locality
+    s = 0.6 · min(density / 10, 1) + 0.4 · min(ln(1 + population) / 20, 1)   locality
 
-    importance = round(60 · min(density / 10, 1) + 40 · min(ln(1 + population) / 20, 1))
+with `density` averaged over the zoom-15 cells intersecting the locality's bounding box. A division with no recorded population (and, for a locality, no density) sits at its floor.
 
-with `density` averaged over the zoom-15 cells intersecting the locality's bounding box. A consequence worth knowing: divisions other than localities top out at 40.
+| subtype | floor | ceiling |
+|---|--:|--:|
+| `country` | 90 | 100 |
+| `dependency` | 85 | 100 |
+| `region` | 80 | 100 |
+| `county` | 40 | 79 |
+| `localadmin` | 35 | 79 |
+| `locality` | 30 | 79 |
+| `borough` | 20 | 79 |
+| `macrohood` | 15 | 79 |
+| `neighborhood` | 10 | 79 |
+| `microhood` | 5 | 79 |
 
-The normalization constants (10, 18, 20) are producer parameters, not protocol. Another producer could choose differently and still be an ATGeo gazetteer.
+The floors fall in [containment](#containment-levels) order, country highest. Countries, dependencies and regions share the 80-to-100 range and everything below them tops out at 79, so the weakest region still outranks the densest city. That's what lets the [overview band](#the-overview-band) be a plain importance cut. Within the upper range the bands overlap on purpose: a floor is a minimum, so a populous dependency can outrank a tiny country.
+
+The normalization constants (10, 18, 20) and the floors and ceilings are producer parameters, not protocol. Another producer could choose differently and still be an ATGeo gazetteer.
 
 ## Containment levels
 
@@ -218,13 +236,14 @@ A subtype outside this table fails the producer's build before any artifact is w
 
 ### describeService
 
-`GET /xrpc/org.atgeo.describeService` takes no parameters, and ignores any query parameters it is sent (a cache-buster, say). It returns `{did, tilesets}`. `did` is the `did:web` the deployment identifies as, the same identifier `/.well-known/did.json` carries. Each element of `tilesets` is `{slug, collections}`, with `collections` a list of `{dataset, collection}`.
+`GET /xrpc/org.atgeo.describeService` takes no parameters, and ignores any query parameters it is sent (a cache-buster, say). It returns `{did, maxTiles, tilesets}`. `did` is the `did:web` the deployment identifies as, the same identifier `/.well-known/did.json` carries. It's informational: no discovery path resolves a DID to a gazetteer yet, so a client that has this answer already knew the server's URL. `maxTiles` is the tile budget: the most regular tiles a `getTiles` answer may list before it falls back to [the overview band](#the-overview-band) or `BboxTooLarge`. It's informational too, good for a README or a log line. A client can't use it to plan requests, because tile zooms are adaptive and it does no quadkey math, so it can't predict how many tiles a box will need. `maxTiles` is optional in the lexicon, so another producer may leave it out; garganorn always sends it. Each element of `tilesets` is `{slug, collections}`, with `collections` a list of `{dataset, collection}`.
 
 The list is authoritative. A dataset absent from it returns `DatasetNotFound` from `getTiles`.
 
 ```json
 {
   "did": "did:web:places.atgeo.org",
+  "maxTiles": 50,
   "tilesets": [
     {"slug": "osm", "collections": [
       {"dataset": "openstreetmap.org", "collection": "node"},
@@ -244,6 +263,7 @@ The list is authoritative. A dataset absent from it returns `DatasetNotFound` fr
 
 - `slug`, and `publishedAt`, which equals `publishedAt` in every tile.
 - `extent`: a `community.lexicon.location.bbox` bounding the regular tiles.
+- `overview`: present when the tileset has an [overview band](#the-overview-band), as `{records}`, the number of records actually in the band. Absent means no band, so a box over the tile budget is `BboxTooLarge`. It says nothing about the band's zooms; tile URLs are opaque.
 - `collections`: one `collectionInfo` for each collection the tileset carries. It has the collection's attribution fields (as in the [tile payload](#the-tile-payload)) plus `recordCount`, `locationFormats` (the `$type`s of the locations its records carry), `containmentTypes`, `categories` (values of the records' primary category, with counts, descending) and `attributes` (the keys its records may carry). The vocabularies are observed, not closed.
 - `references`: the collections the tileset includes data from without carrying them, as `collectionAttribution`s.
 
@@ -252,6 +272,7 @@ The list is authoritative. A dataset absent from it returns `DatasetNotFound` fr
   "slug": "osm",
   "publishedAt": "2026-08-08T06:16:21Z",
   "extent": {"north": "45.089036", "south": "40.979898", "east": "-66.513260", "west": "-73.125000"},
+  "overview": {"records": 10000},
   "collections": [
     {
       "dataset": "openstreetmap.org",
@@ -293,28 +314,30 @@ Four queries, all `GET /xrpc/{nsid}`, all described by lexicons. Responses may i
 
 Which tiles cover a bounding box.
 
-Parameters: `dataset` (required, a domain like `openstreetmap.org`), `collection` (optional, like `way`), `bbox` (required, comma-separated `minLon,minLat,maxLon,maxLat` in WGS84 decimal degrees).
+Parameters: `dataset` (required, a domain like `openstreetmap.org`), `collection` (optional, like `way`), `bbox` (required, comma-separated `west,south,east,north` in WGS84 decimal degrees).
+
+The four values use the same words and mean the same things as a tileset's `extent` and `community.lexicon.location.bbox`. `bbox` is positional where those have named keys because it's a query parameter: one string, four numbers, in that order.
 
 Without `collection`, the answer covers every tileset carrying the dataset. With one, it covers every tileset carrying that collection. Either way the tiles may hold records of other collections: a caller that asked for a collection keeps the records whose `origin` starts with `urn:atgeo:{dataset}:{collection}:`, and a record with no `origin` matches no collection.
 
 Returns `{"tiles": [...]}`: fully-formed, opaque tile URLs, in ascending string order. Fetch them all and merge; filtering and ordering are yours, applied after the merge. When the answer is the [overview band](#the-overview-band) rather than the regular tiles, the response also carries `"overview": true`.
 
-A bbox may cross the antimeridian: `minLon > 0 > maxLon` means the box wraps across ±180°. Tiles that merely touch the box at an edge or corner count as covering it.
+A bbox may cross the antimeridian: `west > 0 > east` means the box wraps across ±180°. Tiles that merely touch the box at an edge or corner count as covering it.
 
 ```
 GET /xrpc/org.atgeo.getTiles?dataset=openstreetmap.org&collection=way&bbox=-71.55,43.20,-71.50,43.25
 ```
 ```json
 {"tiles": [
-  "https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz",
-  "https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json.gz"
+  "https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json",
+  "https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json"
 ]}
 ```
 
 Errors, in evaluation order:
 
 - `BboxTooPrecise` — any coordinate carrying more than two decimal places. See [The precision floor](#the-precision-floor).
-- `InvalidBbox` — not four comma-separated finite numbers, a longitude outside [-180, 180] or a latitude outside [-90, 90] (both inclusive), `minLat ≥ maxLat`, or `minLon ≥ maxLon` without the antimeridian signature above.
+- `InvalidBbox` — not four comma-separated finite numbers, a longitude outside [-180, 180] or a latitude outside [-90, 90] (both inclusive), `south ≥ north`, or `west ≥ east` without the antimeridian signature above.
 - `DatasetNotFound` — no tileset carries the dataset.
 - `CollectionNotFound` — the dataset is served but no tileset carries the collection.
 - `BboxTooLarge` — the box covers more tiles than the deployment's budget, and a selected tileset has no [overview band](#the-overview-band). Ask for a smaller region. A tileset with an overview band never raises this; it answers with the overview tiles, and the response says so with `"overview": true`.
@@ -323,18 +346,27 @@ Errors, in evaluation order:
 
 One place by identity.
 
-Parameter: `uri` (required), the place's `origin`, such as `urn:atgeo:openstreetmap.org:way:123456`. Pass it whole; the server takes it apart.
+Parameter: `uri` (required), the record's key: its `origin`, or its own `uri` when it has none. For every place garganorn serves that's the origin, such as `urn:atgeo:openstreetmap.org:way:123456`. Pass it whole; the server takes it apart.
 
-Returns `{uri, importance?, record}`. `record` is the place's `value`, unmodified, exactly what the tile holds. `importance` is beside it, as in a tile. `uri` is the plain-HTTP address of the same view, `{public_base}/{dataset}/{collection}/{id}`, which returns this same document; `public_base` is the deployment's configured public URL, not the host the request arrived on. If more than one tileset carries the collection, the first (in the deployment's configuration order) that holds the place answers.
+Returns `{uri, url, importance?, value, attribution}`, the same `{uri, value}` shape as AT Protocol's `getRecord`:
+
+- `uri` echoes the record key you asked for.
+- `url` is the plain-HTTP address of this same view, `{public_base}/{dataset}/{collection}/{id}`, which returns this same document; `public_base` is the deployment's configured public URL, not the host the request arrived on.
+- `importance` sits beside the place, as in a tile, and is absent when the tile record has none.
+- `value` is the place's `org.atgeo.place` value, unmodified, exactly what the tile holds.
+- `attribution` is the place's tileset's `collectionAttribution` entries, carried and referenced: the same build-scoped array every tile of that tileset carries. A place fetched by link has nothing else to credit from.
+
+If more than one tileset carries the collection, the first (in the deployment's configuration order) that holds the place answers.
 
 ```
 GET /xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetmap.org:node:10080395917
 ```
 ```json
 {
-  "uri": "https://places.atgeo.org/openstreetmap.org/node/10080395917",
+  "uri": "urn:atgeo:openstreetmap.org:node:10080395917",
+  "url": "https://places.atgeo.org/openstreetmap.org/node/10080395917",
   "importance": 0,
-  "record": {
+  "value": {
     "$type": "org.atgeo.place",
     "origin": "urn:atgeo:openstreetmap.org:node:10080395917",
     "name": "HomeGoods",
@@ -344,7 +376,44 @@ GET /xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetmap.org:node:10080395917
     "variants": [],
     "attributes": {"addr:city": "Concord", "shop": "houseware"},
     "relations": {}
-  }
+  },
+  "attribution": [
+    {
+      "dataset": "openstreetmap.org",
+      "collection": "node",
+      "release": "2026-08-07T20:21:15Z",
+      "source": "https://www.openstreetmap.org/",
+      "licenses": ["https://opendatacommons.org/licenses/odbl/1-0/"],
+      "attribution": "https://www.openstreetmap.org/copyright"
+    },
+    {
+      "dataset": "openstreetmap.org",
+      "collection": "way",
+      "release": "2026-08-07T20:21:15Z",
+      "source": "https://www.openstreetmap.org/",
+      "licenses": ["https://opendatacommons.org/licenses/odbl/1-0/"],
+      "attribution": "https://www.openstreetmap.org/copyright"
+    },
+    {
+      "dataset": "openstreetmap.org",
+      "collection": "relation",
+      "release": "2026-08-07T20:21:15Z",
+      "source": "https://www.openstreetmap.org/",
+      "licenses": ["https://opendatacommons.org/licenses/odbl/1-0/"],
+      "attribution": "https://www.openstreetmap.org/copyright"
+    },
+    {
+      "dataset": "overturemaps.org",
+      "collection": "division",
+      "release": "2026-09-17.0",
+      "source": "https://overturemaps.org/",
+      "licenses": [
+        "https://opendatacommons.org/licenses/odbl/1-0/",
+        "https://creativecommons.org/licenses/by/4.0/legalcode"
+      ],
+      "attribution": "https://docs.overturemaps.org/attribution/"
+    }
+  ]
 }
 ```
 
@@ -381,7 +450,7 @@ Refusal doesn't protect the coordinates in the refused request: the server has t
 |---|---|
 | `GET /tiles/{slug}/...` | a tile, as plain JSON. The URLs `getTiles` returns point here only when the tileset's configured `base_url` does; this route is what serves the files |
 | `GET /tilesets/{slug}` | the same document as `describeTileset` |
-| `GET /{dataset}/{collection}/{id}` | the same document as `getPlace` for `urn:atgeo:{dataset}:{collection}:{id}`. This is what `getPlace`'s `uri` points at. The first segment must contain a dot, since a dataset is a domain |
+| `GET /{dataset}/{collection}/{id}` | the same document as `getPlace` for `urn:atgeo:{dataset}:{collection}:{id}`. This is what `getPlace`'s `url` points at. The first segment must contain a dot, since a dataset is a domain |
 | `GET /{nsid}` | the lexicon document for that NSID |
 | `GET /.well-known/did.json` | the server's DID document |
 | `GET /health` | `{"status": "ok", "service": "garganorn"}` |
@@ -406,7 +475,7 @@ It doesn't advertise a personal data server, because there isn't one.
 | `GET /{dataset}/{collection}/{id}` | place not served, or a first segment with no dot | `PlaceNotFound` |
 | `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
-| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json.gz`, or one that tries to leave the tiles directory, counts as no such tile | `TileNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json` (or the older `.json.gz`), or one that tries to leave the tiles directory, counts as no such tile. A `.json` path is always looked up as its `.json.gz` tile, so the run's own `manifest.json` and `tileset.json` aren't reachable here | `TileNotFound` |
 | `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
 | any other path | no route matches, including a single segment that isn't an NSID (`/favicon.ico`, `/xrpc`, `/tiles`) | `NotFound` |
 

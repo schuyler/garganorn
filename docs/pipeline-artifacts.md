@@ -286,10 +286,11 @@ with the summary band's own tile references) in place of
 **Summary-band extension**: `stage_summary_tile_assignment`
 (`garganorn/stages.py`) writes `<source>/summary_tile_assignments.parquet`,
 same schema, restricted to the top-N places by `importance DESC, place_id
-ASC` (default N=10000) — for `overture_division`, every `country`/`region`/
-`dependency` subtype is additionally included, additive on top of N
-(`docs/design-constraints.md`, "The summary band is a coarse tile tier for
-region-less resolution"). It reuses this stage's coarsest-fit algorithm
+ASC` (default N=10000), a plain cut for every source. For
+`overture_division` the administrative floors in importance
+(`levels.IMPORTANCE_BAND`) keep every `country`, `dependency` and `region`
+inside it (`docs/design-constraints.md`, "The summary band is a coarse tile
+tier for region-less resolution"). It reuses this stage's coarsest-fit algorithm
 over that subset, but in a z1-z5 band instead of z6-z17; z5 is a hard
 floor, so a z5 tile may exceed `max_per_tile`.
 
@@ -322,7 +323,9 @@ coarser tile.
 tile), plus `manifest.duckdb`, `tileset.json` and `manifest.json` in the run dir, then
 swaps the `<tiles_root>/current` symlink to point at it. `qk[:6]` returns
 the whole key for the summary band's sub-6-char quadkeys, so those tiles
-land at `<qk>/<qk>.json.gz` in the same layout.
+land at `<qk>/<qk>.json.gz` in the same layout. The server serves each tile
+at `<qk>.json`, mapping the request to the `.json.gz` file; the older
+`.json.gz` URLs still resolve until the runs that advertised them retire.
 
 **Schema** (tile payload, per `envelope.py`): `{publishedAt, attribution:
 [collectionAttribution], records: [{value, importance}]}`. `attribution` is
@@ -395,11 +398,15 @@ joins `stage_export`'s freshness inputs for `overture_place` and `osm`
 (divisions have no IDF artifact), so a category-vocabulary refresh forces a
 re-export.
 
-The descriptor is `{slug, publishedAt, extent, collections, references}`.
+The descriptor is `{slug, publishedAt, extent, overview?, collections, references}`.
 `slug` is the source class's slug (`osm`, `overture-place`,
 `overture-division`), fixed here so that every server serves the tileset
 under it. `extent` is the regular-band quadkey histogram's bounding box, or
 the full histogram's when the run has no regular-band tile.
+`overview` is `{records}`, present only when the run has summary-band rows:
+`records` is `COUNT(DISTINCT key)` over `record_tiles` rows whose `tile_qk`
+is shorter than six characters, so a division referenced from several band
+tiles counts once.
 `collections` has one entry per collection the tileset carries
 (OSM: `node`, `way`, `relation`); `references` lists the collections whose
 data the records include without carrying them — `(overturemaps.org,
