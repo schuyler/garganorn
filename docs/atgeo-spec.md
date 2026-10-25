@@ -218,7 +218,7 @@ A subtype outside this table fails the producer's build before any artifact is w
 
 ### describeService
 
-`GET /xrpc/org.atgeo.describeService` takes no parameters and returns `{did, tilesets}`. `did` is the `did:web` the deployment identifies as, the same identifier `/.well-known/did.json` carries. Each element of `tilesets` is `{slug, collections}`, with `collections` a list of `{dataset, collection}`.
+`GET /xrpc/org.atgeo.describeService` takes no parameters, and ignores any query parameters it is sent (a cache-buster, say). It returns `{did, tilesets}`. `did` is the `did:web` the deployment identifies as, the same identifier `/.well-known/did.json` carries. Each element of `tilesets` is `{slug, collections}`, with `collections` a list of `{dataset, collection}`.
 
 The list is authoritative. A dataset absent from it returns `DatasetNotFound` from `getTiles`.
 
@@ -314,7 +314,7 @@ GET /xrpc/org.atgeo.getTiles?dataset=openstreetmap.org&collection=way&bbox=-71.5
 Errors, in evaluation order:
 
 - `BboxTooPrecise` — any coordinate carrying more than two decimal places. See [The precision floor](#the-precision-floor).
-- `InvalidBbox` — not four comma-separated finite numbers, `minLat ≥ maxLat`, or `minLon ≥ maxLon` without the antimeridian signature above.
+- `InvalidBbox` — not four comma-separated finite numbers, a longitude outside [-180, 180] or a latitude outside [-90, 90] (both inclusive), `minLat ≥ maxLat`, or `minLon ≥ maxLon` without the antimeridian signature above.
 - `DatasetNotFound` — no tileset carries the dataset.
 - `CollectionNotFound` — the dataset is served but no tileset carries the collection.
 - `BboxTooLarge` — the box covers more tiles than the deployment's budget, and a selected tileset has no [overview band](#the-overview-band). Ask for a smaller region. A tileset with an overview band never raises this; it answers with the overview tiles, and the response says so with `"overview": true`.

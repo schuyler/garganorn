@@ -463,6 +463,36 @@ def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     }
 
 
+@pytest.mark.parametrize("query", [
+    "x=1",
+    "_=123",
+    "utm_source=a&utm_medium=b",
+    "input=1",
+    "nsid=1",
+    "slug=x",
+])
+def test_describe_service_ignores_query_parameters(client, query):
+    """describeService declares no parameters, so it ignores any it is sent
+    (#25): a cache-buster or tracking parameter gets the ordinary answer.
+    `_`, `input` and `nsid` collide with argument names on the way through
+    lexrpc's dispatch, so they are dropped before it, not by the handler."""
+    expected = client.get("/xrpc/org.atgeo.describeService").get_json()
+    resp = client.get(f"/xrpc/org.atgeo.describeService?{query}")
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+    assert resp.get_json() == expected
+
+
+def test_describe_service_cache_buster_is_not_a_500(client):
+    """With the app-wide 500 handler answering, a cache-buster is still a 200."""
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    app.testing = False
+    resp = client.get("/xrpc/org.atgeo.describeService?_=123")
+    assert resp.status_code == 200
+    assert "tilesets" in resp.get_json()
+
+
 def test_describe_service_lexicon_route_lacks_cache_control(client):
     """GET /<nsid> (the lexicon route) for org.atgeo.describeService must
     not carry the XRPC cache header -- same guard as
