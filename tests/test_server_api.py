@@ -1,6 +1,7 @@
 """Server API through the Flask client: getPlace, describeTileset,
 describeService and the plain routes. lexrpc validates every output."""
 import ast
+import gzip
 import json
 import pathlib
 from urllib.parse import urlsplit
@@ -53,24 +54,66 @@ def _get_place(client, uri):
 # T1-R4: getPlace
 # ---------------------------------------------------------------------------
 
+def _tile_of(tmp_path, slug, qk):
+    """The parsed tile make_run wrote for slug at quadkey qk."""
+    path = tmp_path / slug / "tiles" / "current" / qk[:6] / f"{qk}.json.gz"
+    with gzip.open(path, "rt") as f:
+        return json.load(f)
+
+
 @pytest.mark.parametrize("dataset,collection,id,importance", PLACES)
-def test_get_place_round_trip(client, dataset, collection, id, importance):
-    resp = _get_place(client, f"urn:atgeo:{dataset}:{collection}:{id}")
+def test_get_place_round_trip(tmp_path, client, dataset, collection, id, importance):
+    """#15: getPlace answers exactly {uri, url, importance, value, attribution}:
+    uri echoes the record key, url is the HTTPS view address, value is the
+    tile record's value unmodified, attribution is the tile's own array."""
+    urn = f"urn:atgeo:{dataset}:{collection}:{id}"
+    slug, qk = ("osm", "023010") if dataset == OSM else ("overture-place", "023011")
+    tile = _tile_of(tmp_path, slug, qk)
+    expected_value = next(r["value"] for r in tile["records"]
+                          if r["value"]["origin"] == urn)
+    resp = _get_place(client, urn)
     assert resp.status_code == 200
     body = resp.get_json()
-    assert body["uri"] == f"{PUBLIC_BASE}/{dataset}/{collection}/{id}"
-    assert body["importance"] == importance
-    assert body["record"]["origin"] == f"urn:atgeo:{dataset}:{collection}:{id}"
-    assert body["record"]["name"] == f"{dataset} {collection} {id}"
-    assert "importance" not in body["record"]
-    goat_validate(body["record"])
+    assert body == {
+        "uri": urn,
+        "url": f"{PUBLIC_BASE}/{dataset}/{collection}/{id}",
+        "importance": importance,
+        "value": expected_value,
+        "attribution": tile["attribution"],
+    }
+    assert "importance" not in body["value"]
+    goat_validate(body["value"])
 
 
 def test_get_place_distinguishes_node_and_way_with_one_id(client):
     node = _get_place(client, f"urn:atgeo:{OSM}:node:5").get_json()
     way = _get_place(client, f"urn:atgeo:{OSM}:way:5").get_json()
-    assert node["record"]["origin"] != way["record"]["origin"]
+    assert node["value"]["origin"] != way["value"]["origin"]
     assert node["importance"] != way["importance"]
+
+
+def test_get_place_attribution_is_per_tileset(client):
+    """#15: attribution is the place's own tileset's collectionAttribution
+    entries: an OSM place lists the osm collections, an Overture place lists
+    overture's."""
+    osm = _get_place(client, f"urn:atgeo:{OSM}:node:5").get_json()
+    ov = _get_place(client, f"urn:atgeo:{OVERTURE}:place:ov-1").get_json()
+    assert osm["attribution"] == [{"dataset": d, "collection": c}
+                                  for d, c in OSM_COLLECTIONS]
+    assert ov["attribution"] == [{"dataset": OVERTURE, "collection": "place"}]
+
+
+def test_get_place_without_importance_omits_it(tmp_path):
+    """#15 (R12): importance is optional in a tile record, so a place without
+    one is a 200 whose body has no importance key (not a 500 KeyError)."""
+    tileset = serve_run(tmp_path, "osm", OSM_COLLECTIONS,
+                        {"023010": [place(OSM, "node", "7", importance=None)]})
+    with build_app(tileset).test_client() as c:
+        resp = _get_place(c, f"urn:atgeo:{OSM}:node:7")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert "importance" not in body
+    assert body["uri"] == f"urn:atgeo:{OSM}:node:7"
 
 
 @pytest.mark.parametrize("uri", [
@@ -137,7 +180,7 @@ def test_get_place_reads_the_run_resolved_at_startup(tmp_path):
 
     with app.test_client() as client:
         body = _get_place(client, f"urn:atgeo:{OSM}:node:5").get_json()
-    assert body["record"]["name"] == "Old"
+    assert body["value"]["name"] == "Old"
 
 
 # ---------------------------------------------------------------------------
@@ -155,6 +198,18 @@ def test_describe_tileset_equals_alias_equals_stored_descriptor(tmp_path, client
     assert by_xrpc.get_json() == stored
     assert by_alias.status_code == 200
     assert by_alias.get_json() == stored
+
+
+def test_describe_tileset_carries_overview(tmp_path):
+    """#19: a tileset with an overview band carries overview.records in its
+    descriptor, by XRPC and by /tilesets/<slug>."""
+    tileset = serve_run(tmp_path, "osm", OSM_COLLECTIONS,
+                        {"023010": _records(*PLACES[:2]), "0": []})
+    with build_app(tileset).test_client() as c:
+        by_xrpc = c.get("/xrpc/org.atgeo.describeTileset", query_string={"slug": "osm"})
+        by_alias = c.get("/tilesets/osm")
+    assert by_xrpc.get_json()["overview"] == {"records": 1}
+    assert by_alias.get_json()["overview"] == {"records": 1}
 
 
 def test_unknown_slug_is_tileset_not_found(client):
@@ -226,8 +281,17 @@ def test_describe_service_lists_every_tileset_in_config_order(tmp_osm, tmp_overt
         }
         assert body == {
             "did": "did:web:places.atgeo.org",
+            "maxTiles": 50,
             "tilesets": [by_slug[t["base_url"].rsplit("/", 1)[1]] for t in configured],
         }
+
+
+def test_describe_service_max_tiles_follows_config(tmp_osm):
+    """#19: maxTiles is 50 by default and the configured max_tiles otherwise."""
+    with build_app(tmp_osm).test_client() as c:
+        assert c.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 50
+    with build_app(tmp_osm, max_tiles=7).test_client() as c:
+        assert c.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 7
 
 
 def test_describe_service_contains_no_url(client):
@@ -248,10 +312,14 @@ def test_get_tiles_urls_start_with_the_configured_base_url(tmp_osm):
     assert all(url.startswith(f"{TILE_BASE}/osm/") for url in tiles)
 
 
-def test_get_place_uri_starts_with_public_base_and_dereferences(client):
-    body = _get_place(client, f"urn:atgeo:{OSM}:way:5").get_json()
-    assert body["uri"].startswith(PUBLIC_BASE + "/")
-    resp = client.get(body["uri"][len(PUBLIC_BASE):])
+def test_get_place_url_dereferences_to_the_same_document(client):
+    """#15: url starts with the public base and GETting it returns the same
+    document; uri is the key that was requested."""
+    urn = f"urn:atgeo:{OSM}:way:5"
+    body = _get_place(client, urn).get_json()
+    assert body["uri"] == urn
+    assert body["url"].startswith(PUBLIC_BASE + "/")
+    resp = client.get(body["url"][len(PUBLIC_BASE):])
     assert resp.status_code == 200
     assert resp.get_json() == body
 
@@ -263,9 +331,16 @@ def test_get_place_uri_starts_with_public_base_and_dereferences(client):
 HANDLERS = {"get_tiles", "get_place", "describe_tileset", "describe_service"}
 
 
+# TileBackedCollection.get_place(key) is a reader method, not the Server
+# handler of the same name; these files test the reader itself.
+READER_TESTS = {"test_tile_reader.py", "test_audit_export.py"}
+
+
 def test_no_test_calls_a_handler_directly():
     offenders = []
     for path in sorted(pathlib.Path(__file__).parent.glob("*.py")):
+        if path.name in READER_TESTS:
+            continue
         for node in ast.walk(ast.parse(path.read_text())):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                     and node.func.attr in HANDLERS):

@@ -135,12 +135,12 @@ class TestNegativePopulationClamping:
         assert test_div_2[2] >= 0, f"test_div_2 (population={test_div_2[1]}) has negative importance: {test_div_2[2]}"
         assert test_div_3[2] >= 0, f"test_div_3 (population={test_div_3[1]}) has negative importance: {test_div_3[2]}"
 
-        # Negative population (-1000) clamps to 0, giving
-        # importance = round(40 * least(ln(1 + 0) / 20.0, 1.0)) = 0
-        assert test_div_1[2] == 0, f"test_div_1 (population=-1000) should have importance=0, got {test_div_1[2]}"
+        # Negative population (-1000) clamps to 0, so the score s is 0 and the
+        # locality sits at its floor (#14): importance = 30
+        assert test_div_1[2] == 30, f"test_div_1 (population=-1000) should have importance=30 (locality floor), got {test_div_1[2]}"
 
-        # test_div_2 has population=0, should also get importance=0
-        assert test_div_2[2] == 0, f"test_div_2 (population=0) should have importance=0, got {test_div_2[2]}"
+        # test_div_2 has population=0, should also sit at the floor
+        assert test_div_2[2] == 30, f"test_div_2 (population=0) should have importance=30 (locality floor), got {test_div_2[2]}"
 
         # test_div_3 has positive population (50000), should have positive importance
         # ln(1 + 50000) ≈ 10.82, so importance ≈ round(40 * 10.82/20.0) ≈ round(21.64) = 22

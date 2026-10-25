@@ -353,8 +353,7 @@ def _summary_place_ids(output_path):
 
 
 class TestSummarySetSelection:
-    """Top-N by importance DESC, ties by id ASC; additive unconditional
-    subtypes for overture_division."""
+    """Top-N by importance DESC, ties by id ASC, for every source."""
 
     def test_topn_with_tie_broken_by_id_ascending(self, tmp_path):
         """n=2 over 4 places: the #1 importance plus the id-ASC winner of an
@@ -375,15 +374,13 @@ class TestSummarySetSelection:
             f"top-2 by importance DESC/id ASC must be {{'p1_top', 'aaa_tie'}}; got {ids}"
         )
 
-    def test_division_unconditional_subtypes_additive_and_dont_shrink_topn(self, tmp_path):
-        """n=1: only the highest-importance place makes the top-N cut, but
-        every country/region/dependency record is included additively
-        regardless of its own importance. A non-unconditional low-importance
-        subtype (county) must stay excluded. Growing the unconditional set
-        must not shrink the top-N (non-unconditional) portion of the
-        result."""
+    def test_division_selection_is_a_plain_top_n(self, tmp_path):
+        """#14: overture_division gets the same plain top-N cut as every
+        other source: with n=1 only the highest-importance record is kept.
+        Country/region/dependency are no longer added on top; the admin
+        importance floors are what keeps them in the band."""
         from garganorn.stages import stage_summary_tile_assignment
-        base_places = [
+        places = [
             ("loc_hi", 37.7749, -122.4194, 95, "locality"),
             ("loc_lo", 40.0, -74.0, 5, "locality"),
             ("country_a", 10.0, 10.0, 1, "country"),
@@ -391,32 +388,11 @@ class TestSummarySetSelection:
             ("dependency_c", 30.0, 30.0, 1, "dependency"),
             ("county_d", 5.0, 5.0, 1, "county"),
         ]
-        places_parquet = _make_division_places_parquet(tmp_path, base_places)
+        places_parquet = _make_division_places_parquet(tmp_path, places)
         output = str(tmp_path / "summary_div_ta.parquet")
         stage_summary_tile_assignment(places_parquet, output, "overture_division", n=1)
         ids = _summary_place_ids(output)
-        assert ids == {"loc_hi", "country_a", "region_b", "dependency_c"}, (
-            f"n=1 additive selection must be top-1 + unconditional subtypes; got {ids}"
-        )
-
-        # Grow the unconditional set; the non-unconditional (top-N) portion
-        # must stay exactly n=1 -- it must not be crowded out.
-        grown_places = base_places + [("dependency_e", 35.0, 35.0, 1, "dependency")]
-        places_parquet_2 = _make_division_places_parquet(
-            tmp_path, grown_places, filename="places_division_grown.parquet"
-        )
-        output_2 = str(tmp_path / "summary_div_ta_grown.parquet")
-        stage_summary_tile_assignment(places_parquet_2, output_2, "overture_division", n=1)
-        ids_2 = _summary_place_ids(output_2)
-        unconditional = {"country_a", "region_b", "dependency_c", "dependency_e"}
-        non_unconditional = ids_2 - unconditional
-        assert non_unconditional == {"loc_hi"}, (
-            f"top-N portion must stay exactly n=1 ({{'loc_hi'}}) as the unconditional "
-            f"set grows from 3 to 4; got non-unconditional={non_unconditional}"
-        )
-        assert unconditional <= ids_2, (
-            f"grown unconditional set must all be present; missing {unconditional - ids_2}"
-        )
+        assert ids == {"loc_hi"}, f"n=1 must keep exactly the top record; got {ids}"
 
 
 class TestSummaryAssignmentBand:

@@ -70,3 +70,93 @@ def test_minimal_tileset_descriptor_validates():
         "slug": "x",
         "collections": [{"dataset": "example.org", "collection": "spots"}],
     })
+
+
+# ---------------------------------------------------------------------------
+# The lexicon break (#14 #15 #16 #18 #19)
+# ---------------------------------------------------------------------------
+
+def _lexicon(name):
+    return json.loads((LEXICON_DIR / f"{name}.json").read_text())["defs"]
+
+
+PLACE_VIEW = {
+    "uri": "urn:atgeo:openstreetmap.org:way:5",
+    "url": "https://places.example.org/openstreetmap.org/way/5",
+    "importance": 62,
+    "value": {"$type": "org.atgeo.place", "name": "x"},
+    "attribution": [{"dataset": "openstreetmap.org", "collection": "way"}],
+}
+
+
+def test_place_view_new_shape_validates():
+    """#15: getPlace#placeView is {uri, url, importance?, value, attribution}."""
+    validate_def("org.atgeo.getPlace#placeView", PLACE_VIEW)
+
+
+def test_place_view_old_shape_is_rejected():
+    """#15: a view with `record` and no url/value/attribution no longer validates."""
+    old = {"uri": PLACE_VIEW["uri"], "importance": 62, "record": PLACE_VIEW["value"]}
+    with pytest.raises(Exception):
+        validate_def("org.atgeo.getPlace#placeView", old)
+
+
+def test_place_view_required_and_properties():
+    """#15: required is exactly uri, url, value, attribution; `record` is gone."""
+    view = _lexicon("getPlace")["placeView"]
+    assert set(view["required"]) == {"uri", "url", "value", "attribution"}
+    assert set(view["properties"]) == {"uri", "url", "importance", "value", "attribution"}
+    assert view["properties"]["attribution"]["items"]["ref"] == "org.atgeo.defs#collectionAttribution"
+
+
+TILESET = {
+    "slug": "x",
+    "collections": [{"dataset": "example.org", "collection": "spots"}],
+}
+
+
+def test_tileset_overview_records_validates():
+    """#19: defs#tileset takes an optional overview {records: integer}."""
+    validate_def("org.atgeo.defs#tileset", {**TILESET, "overview": {"records": 10}})
+
+
+@pytest.mark.parametrize("overview", [{}, {"records": "x"}])
+def test_tileset_overview_must_carry_integer_records(overview):
+    """#19: overview without records, or with a non-integer count, is invalid."""
+    with pytest.raises(Exception):
+        validate_def("org.atgeo.defs#tileset", {**TILESET, "overview": overview})
+
+
+def test_describe_service_has_max_tiles_and_informational_did():
+    """#19: describeService.maxTiles is an optional integer (other producers
+    need not send it); did is described as informational."""
+    out = _lexicon("describeService")["main"]["output"]["schema"]
+    assert out["properties"]["maxTiles"]["type"] == "integer"
+    assert "maxTiles" not in out["required"]
+    assert "Informational" in out["properties"]["did"]["description"]
+
+
+def test_get_tiles_bbox_is_documented_west_south_east_north():
+    """#16: getTiles.bbox is described as west,south,east,north."""
+    desc = _lexicon("getTiles")["main"]["parameters"]["properties"]["bbox"]["description"]
+    assert "west,south,east,north" in desc
+
+
+def test_get_tiles_overview_points_at_the_descriptor_count():
+    """#19: getTiles.overview refers to the descriptor's overview.records."""
+    out = _lexicon("getTiles")["main"]["output"]["schema"]
+    assert "overview.records" in out["properties"]["overview"]["description"]
+
+
+def test_tile_record_uri_is_never_the_gazetteer_url():
+    """#15: tileRecord.uri says it is never the gazetteer's URL for the record."""
+    assert "never" in _lexicon("tilePayload")["tileRecord"]["properties"]["uri"]["description"]
+
+
+def test_importance_text_scopes_comparability_to_one_producer():
+    """#14: both importance descriptions say scores are comparable only across
+    what one producer builds from one dataset."""
+    tile = _lexicon("tilePayload")["tileRecord"]["properties"]["importance"]
+    view = _lexicon("getPlace")["placeView"]["properties"]["importance"]
+    assert "one producer" in tile["description"]
+    assert "one producer" in view["description"]

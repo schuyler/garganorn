@@ -177,6 +177,84 @@ def test_tile_allows_cross_origin_reads(tile_client):
     assert resp.headers.get("Access-Control-Allow-Origin") == "*"
 
 
+def _tile_file_bytes(tmp_path):
+    """The gunzipped bytes of the fixture tile on disk."""
+    path = tmp_path / "overture-place" / "tiles" / "current" / QK / f"{QK}.json.gz"
+    with gzip.open(path, "rb") as f:
+        return f.read()
+
+
+def test_tile_served_at_json_suffix(tmp_path):
+    """#18: a tile is served at {quadkey}.json (storage stays .json.gz): 200,
+    application/json, no Content-Encoding, the immutable Cache-Control, and a
+    body equal to the gunzipped file."""
+    app = build_app(serve_run(tmp_path, tiles={QK: [place(OVERTURE, "place", "ov1")]}))
+    with app.test_client() as client:
+        resp = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
+    assert resp.status_code == 200
+    assert resp.mimetype == "application/json"
+    assert resp.headers.get("Content-Encoding") is None
+    assert resp.headers.get("Cache-Control") == "public, max-age=604800, immutable"
+    assert resp.data == _tile_file_bytes(tmp_path)
+
+
+def test_json_and_json_gz_serve_same_bytes_and_headers(tmp_path):
+    """#18: the new .json route and the retained .json.gz route answer with
+    the same body and the same Content-Type, Content-Encoding, Cache-Control,
+    Access-Control-Allow-Origin and X-Content-Type-Options."""
+    app = build_app(serve_run(tmp_path, tiles={QK: [place(OVERTURE, "place", "ov1")]}))
+    with app.test_client() as client:
+        new = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json")
+        old = client.get(f"/tiles/overture-place/{STAMP}/{QK}/{QK}.json.gz")
+    assert new.status_code == old.status_code == 200
+    assert new.data == old.data
+    for header in ("Content-Type", "Content-Encoding", "Cache-Control",
+                   "Access-Control-Allow-Origin", "X-Content-Type-Options"):
+        assert new.headers.get(header) == old.headers.get(header), header
+    assert new.headers.get("Content-Encoding") is None
+    assert new.headers.get("Access-Control-Allow-Origin") == "*"
+
+
+def test_json_tile_missing_returns_404_naming_the_json_path(tile_client_empty):
+    """#18 guard: a missing .json tile is a 404 TileNotFound whose message
+    echoes the requested .json path."""
+    resp = tile_client_empty.get("/tiles/overture-place/000000/nonexistent.json")
+    assert resp.status_code == 404
+    assert resp.get_json() == {
+        "error": "TileNotFound",
+        "message": "No such tile: overture-place/000000/nonexistent.json",
+    }
+
+
+def test_json_tile_path_traversal_rejected(tmp_path):
+    """#18 guard: a .json request that escapes the tiles root to another
+    source's tile is a 404 (safe_join still guards the mapped .gz path)."""
+    tileset = serve_run(tmp_path, tiles={QK: []})
+    osm_dir = tmp_path / "osm" / "tiles" / STAMP
+    osm_dir.mkdir(parents=True)
+    with gzip.open(osm_dir / "012301.json.gz", "wb") as f:
+        f.write(b'{"records": []}')
+    with build_app(tileset).test_client() as client:
+        for path in (f"/tiles/overture-place/../../osm/tiles/{STAMP}/012301.json",
+                     f"/tiles/overture-place/%2e%2e/%2e%2e/osm/tiles/{STAMP}/012301.json"):
+            resp = client.get(path)
+            assert resp.status_code == 404, path
+            assert resp.get_json()["error"] == "TileNotFound"
+
+
+@pytest.mark.parametrize("name", ["manifest.json", "tileset.json"])
+def test_plain_json_run_files_not_served_at_the_json_suffix(tmp_path, name):
+    """#18 guard (R3): the .json route maps to .json.gz on disk and never
+    serves a plain .json file, so a run's manifest.json / tileset.json stay
+    unreachable."""
+    tileset = serve_run(tmp_path, tiles={QK: []})
+    assert (tmp_path / "overture-place" / "tiles" / "current" / name).is_file()
+    with build_app(tileset).test_client() as client:
+        resp = client.get(f"/tiles/overture-place/{STAMP}/{name}")
+    assert resp.status_code == 404
+    assert resp.get_json()["error"] == "TileNotFound"
+
+
 def test_tile_path_traversal_rejected(tmp_path):
     """safe_join blocks paths that escape the served tiles root.
 
@@ -271,10 +349,12 @@ def test_consecutive_runs_produce_disjoint_tile_urls(tmp_path):
     )
 
 
-def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
+@pytest.mark.parametrize("suffix", [".json", ".json.gz"])
+def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path, suffix):
     """A URL getTiles advertised for a run that has since been superseded
     must still resolve to that run's own bytes, as long as the run is still
-    on disk (keep-two retention)."""
+    on disk (keep-two retention). Both the advertised .json URL and the
+    pre-#18 .json.gz form of it resolve (#18)."""
     tiles_root = tmp_path / "overture-place" / "tiles"
     collections = [(OVERTURE, "place")]
     run1 = make_run(tiles_root, "20260101T000000", "overture-place", collections,
@@ -286,6 +366,8 @@ def test_prior_run_tile_urls_still_resolve_after_new_build(tmp_path):
     with build_app(tileset).test_client() as client1:
         prior_paths = _tiles_url_paths(client1)
     assert prior_paths, "expected at least one tile URL from the prior run"
+    assert all(p.endswith(".json") for p in prior_paths), prior_paths
+    prior_paths = [p.removesuffix(".json") + suffix for p in prior_paths]
 
     # New build completes and repoints 'current'; server restarts pinned to run2.
     point_current(tiles_root, run2)
@@ -456,11 +538,19 @@ def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
     assert resp.get_json() == {
         "did": "did:web:places.atgeo.org",
+        "maxTiles": 50,
         "tilesets": [{
             "slug": "overture-place",
             "collections": [{"dataset": OVERTURE, "collection": "place"}],
         }],
     }
+
+
+def test_describe_service_max_tiles_defaults_to_50(tmp_path):
+    """#19: describeService.maxTiles is the configured getTiles budget; the
+    default is 50."""
+    with build_app(serve_run(tmp_path)).test_client() as client:
+        assert client.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 50
 
 
 @pytest.mark.parametrize("query", [

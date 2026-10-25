@@ -120,9 +120,14 @@ class TestDivisionDensityJoin:
         feeds into), not a query-side reimplementation of the join — the fixture's
         single locality has population=1000, density_norm=10.0, pop_norm=20.0, and
         the density tile's density_score=5.0, so importance must reflect the
-        density contribution: round(60*min(5/10,1) + 40*min(ln(1001)/20,1)) == 44.
-        Without the bbox-overlap join (avg_density=0), importance would be 14.
+        density contribution. A locality's score is s = 0.6*min(5/10,1) +
+        0.4*min(ln(1001)/20,1) = 0.4382, and importance = round(30 + 49*s) == 51
+        (#14: locality band is 30..79). Without the bbox-overlap join
+        (avg_density=0), importance would be 37.
         """
+        # #14: the importance CASE needs the floor/ceiling placeholders.
+        from garganorn.levels import importance_ceiling_case_sql, importance_floor_case_sql
+
         # Import divisions with small density parquet
         work_db = tmp_path / "test_work.duckdb"
         con = duckdb.connect(str(work_db))
@@ -144,6 +149,8 @@ class TestDivisionDensityJoin:
             "density_norm": 10.0,
             "pop_norm": 20.0,
             "level_case": level_case_sql(),
+            "importance_floor": importance_floor_case_sql(),
+            "importance_ceiling": importance_ceiling_case_sql(),
         }
 
         for k, v in substitutions.items():
@@ -164,9 +171,9 @@ class TestDivisionDensityJoin:
         ).fetchone()[0]
         con.close()
 
-        assert importance == 44, (
-            f"expected importance=44 (density-driven component included) for "
-            f"div1, got {importance}; a bbox-overlap join failure would yield 14"
+        assert importance == 51, (
+            f"expected importance=51 (density-driven component included) for "
+            f"div1, got {importance}; a bbox-overlap join failure would yield 37"
         )
 
     def test_division_import_no_centroid_references(self):

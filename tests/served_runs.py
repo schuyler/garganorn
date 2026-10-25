@@ -23,7 +23,8 @@ EXTENT = {"north": "37.80", "west": "-122.42", "south": "37.77", "east": "-122.4
 
 
 def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42):
-    """A tile record {value, importance} for one place."""
+    """A tile record {value, importance} for one place; importance=None omits
+    the key (the tilePayload lexicon makes it optional)."""
     value = {
         "$type": "org.atgeo.place",
         "origin": f"urn:atgeo:{dataset}:{collection}:{id}",
@@ -34,7 +35,10 @@ def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42):
         }],
     }
     goat_validate(value)
-    return {"value": value, "importance": importance}
+    record = {"value": value}
+    if importance is not None:
+        record["importance"] = importance
+    return record
 
 
 def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
@@ -85,6 +89,11 @@ def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
         }
         if entries:
             tileset["extent"] = EXTENT
+        # Mirror the producer: the descriptor counts distinct manifest keys in
+        # the overview band (tiles shorter than 6), fillers included.
+        band_keys = {key for key, qk in entries if len(qk) < 6}
+        if band_keys:
+            tileset["overview"] = {"records": len(band_keys)}
         validate_def("org.atgeo.defs#tileset", tileset)
         (run_dir / "tileset.json").write_text(json.dumps(tileset))
     if complete:
@@ -116,7 +125,7 @@ def serve_run(tmp_path, slug="overture-place", collections=((OVERTURE, "place"),
 
 
 def tile_url(slug, qk):
-    return f"{TILE_BASE}/{slug}/{STAMP}/{qk[:6]}/{qk}.json.gz"
+    return f"{TILE_BASE}/{slug}/{STAMP}/{qk[:6]}/{qk}.json"
 
 
 def build_app(*tilesets, max_tiles=None):
