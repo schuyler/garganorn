@@ -39,6 +39,29 @@ class ServedTileset(NamedTuple):
 URN_PREFIX = "urn:atgeo:"
 
 
+class _XrpcServer(lexrpc.Server):
+    """Drops the query parameters sent to a method whose lexicon declares none.
+
+    lexrpc skips validating them, by design (a cache-buster, a utm_* tag), but
+    still passes them on as keyword arguments, where `_`, `input` and `nsid`
+    collide with its own and the handler's argument names. Dropped here, before
+    the dispatch, no name can collide.
+    """
+
+    def __init__(self, lexicons):
+        super().__init__(lexicons=lexicons)
+        self._parameterless = {
+            lex["id"] for lex in lexicons
+            if lex["defs"].get("main", {}).get("type") in ("query", "procedure")
+            and "parameters" not in lex["defs"]["main"]
+        }
+
+    def decode_params(self, method_nsid, params):
+        if method_nsid in self._parameterless:
+            return {}
+        return super().decode_params(method_nsid, params)
+
+
 class Server:
     def __init__(self, repo, tilesets, max_tiles, public_base):
         """tilesets: dict[slug, ServedTileset] in config order."""
@@ -48,7 +71,7 @@ class Server:
         self.max_tiles = max_tiles
         self.lexicons = load_lexicons()
         self.lexicon_map = {lex["id"]: lex for lex in self.lexicons}
-        self.server = lexrpc.Server(lexicons=self.lexicons)
+        self.server = _XrpcServer(self.lexicons)
         self.server.register("org.atgeo.getTiles", self.get_tiles)
         self.server.register("org.atgeo.getPlace", self.get_place)
         self.server.register("org.atgeo.describeTileset", self.describe_tileset)
@@ -96,7 +119,7 @@ class Server:
         raise XrpcError(f"No such place: {uri}", "PlaceNotFound")
 
     def _parse_bbox(self, bbox_str):
-        """Parse and validate bbox string 'xmin,ymin,xmax,ymax'. Returns tuple or raises XrpcError."""
+        """Parse and validate bbox string 'xmin,ymin,xmax,ymax', on Earth (inclusive). Returns tuple or raises XrpcError."""
         parts = bbox_str.split(",")
         if len(parts) != 4:
             raise XrpcError("bbox must be four comma-separated numbers: xmin,ymin,xmax,ymax", "InvalidBbox")
@@ -106,6 +129,9 @@ class Server:
             raise XrpcError("bbox values must be valid numbers", "InvalidBbox")
         if any(math.isnan(v) or math.isinf(v) for v in (xmin, ymin, xmax, ymax)):
             raise XrpcError("bbox values must be finite numbers", "InvalidBbox")
+        if not (-180 <= xmin <= 180 and -180 <= xmax <= 180
+                and -90 <= ymin <= 90 and -90 <= ymax <= 90):
+            raise XrpcError("bbox longitudes must be within [-180, 180] and latitudes within [-90, 90]", "InvalidBbox")
         if ymin >= ymax:
             raise XrpcError("bbox requires ymin < ymax", "InvalidBbox")
         # Allow antimeridian crossing (xmin > xmax) only when xmin is positive/eastern
