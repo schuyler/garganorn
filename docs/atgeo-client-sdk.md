@@ -25,26 +25,26 @@ The two describe calls are plain pass-throughs for callers who want to know what
 
 Internally: snap the region outward, ask `getTiles`, fetch the tiles it names, parse, dedupe, filter to the collection, filter to the region, match, rank, and hand back places. One `getTiles` round trip per bounding box (two across the antimeridian), then tile fetches, eight at a time.
 
-`region` is a circle (centre and radius in meters) or a bounding box in WGS84 degrees. A box with `minLon > maxLon` crosses the antimeridian. `text` is optional; without it you get everything in the region, which is the "what's around me" case.
+`region` is a circle (centre and radius in meters) or a bounding box in WGS84 degrees. A box with `west > east` crosses the antimeridian. `text` is optional; without it you get everything in the region, which is the "what's around me" case.
 
 ### One dataset per call
 
-A search covers one dataset, optionally narrowed to one of its collections:
+A search covers one dataset, optionally narrowed to one of its collections. `dataset` is required:
 
 | `dataset` | `collection` | searched |
 |---|---|---|
-| absent | absent | `overturemaps.org` / `place` |
-| absent | given | `overturemaps.org` / that collection |
 | given | absent | the whole dataset |
 | given | given | that collection |
 
-So the default is Overture places, and `dataset: "openstreetmap.org"` alone searches nodes, ways and relations together, which is usually what you want from OSM, since the element type is an accident of how the mapper drew it. The `collection` parameter is sent to the server only when the search has one.
+A search without a dataset is an argument error, raised before any request is made. The port-contract revision ([atgeo-sdk-js#43](https://github.com/schuyler/atgeo-sdk-js/issues/43)) brings the SDKs to this; until a port has shipped it, that port still defaults to `overturemaps.org` / `place`. Each port uses its own idiom for that: a required parameter, a non-optional type, or a thrown error. There's no default because any default would be a guess. Categories and attributes aren't normalised across datasets, so an app is always written for the dataset it uses, and a default would only hide that choice. A client library has no business hard-coding a publisher's name, either.
+
+`dataset: "openstreetmap.org"` alone searches nodes, ways and relations together, which is usually what you want from OSM, since the element type is an accident of how the mapper drew it. The `collection` parameter is sent to the server only when the search has one.
 
 Tiles can hold records of collections you didn't ask for. All three OSM element types share the OSM tiles, for one. When the search has a collection, the SDK keeps the records whose `origin` starts with `urn:atgeo:{dataset}:{collection}:`, colon included, so `way` doesn't match `wayside`. A record with no `origin` matches no collection. Without a collection, nothing is filtered.
 
-A dataset-wide search of `overturemaps.org` would mix places and divisions, built as separate tilesets whose `importance` isn't comparable (see below), which is one reason the default is `place` and divisions are on request.
+A dataset-wide search of `overturemaps.org` mixes places and divisions, built as separate tilesets. That ranks soundly: `importance` is comparable across the tilesets one producer builds from one dataset ([Importance](atgeo-spec.md#importance)). It does reach the tile budget sooner, since the budget counts tiles across both tilesets.
 
-There is no merged ranking across datasets, because there is no defined way to do one. `importance` is comparable within a tileset and meaningless across tilesets: an Overture place scoring 62 and an OSM place scoring 62 are not equivalently important, they are scored against different corpora with different category vocabularies. An SDK that merged them would be inventing a comparison the data does not support. Applications that want Overture places and OSM places make two calls and decide for themselves how to interleave the results.
+There is no merged ranking across datasets, because there is no defined way to do one. The comparability promise stops at the dataset, and `importance` is meaningless across producers: an Overture place scoring 62 and an OSM place scoring 62 are not equivalently important, they are scored against different corpora with different category vocabularies. An SDK that merged them would be inventing a comparison the data does not support. Applications that want Overture places and OSM places make two calls and decide for themselves how to interleave the results.
 
 The same gap decides it at the application layer regardless of what the SDK allows. `attributes` is the source's own vocabulary passed through rather than homogenized, so an OSM record's category lives in a tag map and an Overture record's lives in Overture's category tree, and nothing translates between them. An app that renders a category icon, filters to restaurants, or does anything at all with attributes has to write against one shape.
 
@@ -88,13 +88,21 @@ Unbounded by design, bounded in practice.
 
 The protocol places no limit on how much a client fetches and filters. There is no pagination, no server-side ranking, no partial-result protocol to cut the set down. That is the whole point of client-side search, and building a limit into the SDK would reintroduce the thing the architecture removed.
 
-In practice the ceiling is `getTiles`'s tile budget, 50 by default (a deployment sets it with `max_tiles`). The budget bites soonest where the SDK is most useful: in Manhattan or Shibuya, tiles subdivide to keep up with density, so a region that costs eight tiles in Lisbon costs fifty in midtown.
+In practice the ceiling is `getTiles`'s tile budget, 50 by default on garganorn (a deployment sets it with `max_tiles`, and advertises it as `maxTiles` in its `describeService` answer). That number is for humans: tile zooms are adaptive and the client does no quadkey math, so it can't tell in advance whether a region will exceed it. The budget bites soonest where the SDK is most useful: in Manhattan or Shibuya, tiles subdivide to keep up with density, so a region that costs eight tiles in Lisbon costs fifty in midtown.
 
-When the regular answer would exceed the budget, a server whose tilesets all have an overview band does not fail. It answers with the coarse zoom 1 to 5 overview tiles that intersect the region, which hold only the top 10,000 records by `importance` per tileset (see [the overview band](atgeo-spec.md#the-overview-band), and for the design reasoning [design-constraints.md](design-constraints.md#the-summary-band-is-a-coarse-tile-tier-for-region-less-resolution)). The server marks such an answer with `overview: true` in the `getTiles` response, and the SDK exposes it as `SearchResult.overview`, always present and `false` for a regular answer. The SDK follows tile URLs without interpreting them, so it never infers the flag from their shape. It fetches the tiles, filters them to the region, and ranks them like any others. The result is a deliberately incomplete sample of the region, and `overview` is how a caller tells "everything here" from "the important things here".
+When the regular answer would exceed the budget, a server whose tilesets all have an overview band does not fail. It answers with the coarse zoom 1 to 5 overview tiles that intersect the region, which hold only each tileset's most important records, as many as its descriptor's `overview.records` (see [the overview band](atgeo-spec.md#the-overview-band), and for the design reasoning [design-constraints.md](design-constraints.md#the-summary-band-is-a-coarse-tile-tier-for-region-less-resolution)). The server marks such an answer with `overview: true` in the `getTiles` response, and the SDK exposes it as `SearchResult.overview`, always present and `false` for a regular answer. The SDK follows tile URLs without interpreting them, so it never infers the flag from their shape. It fetches the tiles, filters them to the region, and ranks them like any others. The result is a deliberately incomplete sample of the region, and `overview` is how a caller tells "everything here" from "the important things here".
 
 `overview` is independent of `complete`, which means only that no tile fetch failed. An overview answer with every tile loaded is `overview: true, complete: true`. If either bbox of an antimeridian-split search comes back as an overview, the result is `overview: true`.
 
 `BboxTooLarge` reaches the caller only when a selected tileset has no overview band. The SDK does not subdivide an over-large region into several `getTiles` calls; the budget exists to protect the origin, and quietly issuing four requests where the server asked for one defeats it.
+
+### Attribution on results
+
+A search result carries the notices for what it shows. `SearchResult.attribution` is the union of the `attribution` entries of every tile the search loaded, deduplicated by `(dataset, collection)` and sorted by `(dataset, collection)` in ordinal string order, not tile order, so every SDK agrees. It includes referenced collections, not just the ones that produced a hit: an OSM hit's `relations.within` carries Overture division names, so showing it conveys Overture data, and the tile's reference entry is how the server says so.
+
+Each hit also gets `SearchHit.collection`, a `{dataset, collection}` pair or null. It is one field rather than two because the pair is the unit of licensing and the halves are never useful apart. The SDK fills it by matching the hit's `origin` against `urn:atgeo:{dataset}:{collection}:` for each entry in its tile's `attribution`, the same prefix test as the collection filter, rather than parsing the URN. A record whose origin matches no entry gets null.
+
+The tile cache keeps each tile's `attribution` beside its records, so a warm search has it too. These fields come with the port-contract revision ([atgeo-sdk-js#43](https://github.com/schuyler/atgeo-sdk-js/issues/43)); ports pick them up from there.
 
 ### Matching and ranking
 
@@ -119,7 +127,9 @@ A missing `importance` counts as 0, and a place with no `origin` sorts after tho
 
 ## getPlace
 
-Cache first, network second. If the place's tile is already in the cache (the common case, because the user just tapped a search result) it comes from memory, which is both faster and tells the server nothing. Otherwise the SDK asks the server with `org.atgeo.getPlace`, passing the `origin` as `uri`. No discovery call comes first: the server takes a URN whole, so the client needs nothing but the identity it already holds. `importance` arrives beside the place rather than inside it, and the SDK returns it beside the place too.
+Cache first, network second. If the place's tile is already in the cache (the common case, because the user just tapped a search result) it comes from memory, which is both faster and tells the server nothing. Otherwise the SDK asks the server with `org.atgeo.getPlace`, passing the `origin` as `uri`. No discovery call comes first: the server takes a URN whole, so the client needs nothing but the identity it already holds.
+
+The wire answer is `{uri, url, importance?, value, attribution}`. Its `uri` is the record key the SDK sent, which the SDK calls `origin`; `value` is what the SDK calls `place`. The public API keeps those names, and only a port's transport layer knows the wire's. `importance` arrives beside the place rather than inside it, and the SDK returns it beside the place too. `url` is the server's plain-HTTP address for the same document. `attribution` is the place's tileset's attribution entries, the same list its tiles carry, and the SDK exposes it as `PlaceRecord.attribution`, so a place resolved from a shared link has something to credit. Reading this shape, and `PlaceRecord.attribution`, also arrive with the port-contract revision ([atgeo-sdk-js#43](https://github.com/schuyler/atgeo-sdk-js/issues/43)); an SDK released before it reads the earlier `{uri, importance?, record}` answer.
 
 The fallback is worth being clear-eyed about: a `getPlace` call tells the server exactly which place a user is looking at, which is a sharper signal than the kilometre-square box `getTiles` sees. That is an acceptable cost for its real use, resolving a link someone shared where the client has an identity and no region, and a bad one for hydrating search results, which is why the cache is checked first.
 
@@ -140,13 +150,13 @@ The server's error codes pass through as the `code` of the SDK's `AtgeoError`, w
 | `BboxTooLarge` | `getTiles` | Budget exceeded and a selected tileset has no overview band. Ask for less. |
 | `DatasetNotFound` | `getTiles` | The server serves no tileset carrying that dataset. |
 | `CollectionNotFound` | `getTiles` | The server serves the dataset, but no tileset carrying that collection. |
-| `PlaceNotFound` | `getPlace` | The server serves no place with that origin. |
+| `PlaceNotFound` | `getPlace` | The server serves no place with that key (its origin). |
 | `TilesetNotFound` | `describeTileset` | The server serves no tileset with that slug. |
 | `InvalidRequest` | any | A malformed parameter, such as a `getPlace` argument that isn't a URI. |
 | `InternalServerError`, `ServiceUnavailable`, … | any | The server failed (5xx); garganorn answers these as JSON too, with a generic message. |
 | `HttpError` | any | Non-2xx without a parseable error body, which from garganorn means something in between, such as a proxy or CDN. |
 
-`InvalidBbox` and `BboxTooPrecise` are unreachable by construction: the SDK validates the region and snaps it before sending. If either shows up in the wild, the SDK has a bug. An invalid region (non-finite or out-of-range coordinates, `minLat > maxLat`, negative radius) and `similarity` sort without text throw a synchronous `TypeError` before any request. A failed `getTiles` request rejects the search; a failed tile is skipped with `complete: false`.
+`InvalidBbox` and `BboxTooPrecise` are unreachable by construction: the SDK validates the region and snaps it before sending. If either shows up in the wild, the SDK has a bug. An invalid region (non-finite or out-of-range coordinates, `south > north`, negative radius) and `similarity` sort without text throw a synchronous `TypeError` before any request. A failed `getTiles` request rejects the search; a failed tile is skipped with `complete: false`.
 
 ## What is deliberately absent
 
@@ -154,7 +164,7 @@ The server's error codes pass through as the `code` of the SDK's `AtgeoError`, w
 
 **The write path.** `composeLocation`, `checkin`, and anything else that writes to a repo. Blocked on a check-in lexicon that nobody has drafted, and out of scope for the gazetteer besides. When there is a lexicon there can be a separate package; the read SDK should not carry a write path shaped around a guess.
 
-**Discovery by DID or handle.** The served `did.json` advertises the tile service (`#atgeo_tiles`, type `AtgeoTileService`, at the deployment's public URL), but the SDK does not resolve DIDs. The constructor takes a server URL, default `https://places.atgeo.org`. The `org.atgeo.tiles.service` announcement records described under Discovery in [atgeo-appview-design.md](atgeo-appview-design.md) don't exist yet either. `describeService` and `describeTileset` do cover asking a known server what it serves.
+**Discovery by DID or handle.** The SDK does not resolve DIDs, and nothing on the network would make it worth doing yet. The served `did.json` advertises the tile service (`#atgeo_tiles`, type `AtgeoTileService`, at the deployment's public URL), and `describeService` returns the same `did`, but the spec describes that `did` as informational: no discovery path resolves a DID to a gazetteer. It's kept because a `did:web` identity costs nothing and is the hook any future discovery design would hang from. The constructor takes a server URL. An earlier draft of an `org.atgeo.tiles.service` announcement record, which predated the place-identity redesign, was discarded ([explored-and-discarded.md](explored-and-discarded.md)); discovery itself stays open in [planned-features.md](planned-features.md#collection-and-service-metadata). `describeService` and `describeTileset` do cover asking a known server what it serves.
 
 **Version negotiation.** There is no version field in the tile envelope and no version to reject. Ignore keys you don't recognise; that is the whole forward-compatibility story.
 
@@ -176,6 +186,6 @@ The fixtures show what the reference implementation does and a port should aim t
 ## Open questions
 
 - **`region` stays required.** Whether the SDK should offer an explicit world-scale mode on top of the overview band, rather than leaving callers to pass a huge region, is undecided. The `overview` flag in the `getTiles` response tells such a mode when it got a sample.
-- **Usable search radius in dense cities.** Unmeasured. The 50-tile budget is reached in Manhattan-density areas; no one has measured what radius that leaves, or what a maximal query costs in bytes on a phone.
-- **Default host.** `https://places.atgeo.org` is the constructor default. The zero-configuration constructor is most of the adoption argument, and it needs a deployment behind it with someone paying for the bandwidth. This is a governance question wearing a technical hat.
+- **Usable search radius in dense cities.** Unmeasured. The tile budget (`maxTiles`, 50 by default) is reached in Manhattan-density areas; no one has measured what radius that leaves, or what a maximal query costs in bytes on a phone.
+- **Default host.** `https://places.atgeo.org` is the constructor default. Once `dataset` is required (the port-contract revision, [atgeo-sdk-js#43](https://github.com/schuyler/atgeo-sdk-js/issues/43)), that default no longer implies a publisher's data: the host is a default, and which dataset to search is always the app's call. The server still has to serve the dataset asked for, and `DatasetNotFound` says when it doesn't. The zero-configuration constructor is most of the adoption argument, and it needs a deployment behind it with someone paying for the bandwidth. This is a governance question wearing a technical hat.
 - **Pre-release ports.** TypeScript is the first implementation. Swift, Kotlin, Python and Rust ports are built ([atgeo-sdk-swift](https://github.com/schuyler/atgeo-sdk-swift), [-kotlin](https://github.com/schuyler/atgeo-sdk-kotlin), [-python](https://github.com/schuyler/atgeo-sdk-python), [-rs](https://github.com/schuyler/atgeo-sdk-rs)), all pre-release and installed from GitHub. Each shares the fixtures and the port contract, and has a `CONFORMANCE.md` listing where it differs at the margins. Each vendors the fixtures and lexicons at a pinned commit, and every port's CI runs a pin check, `scripts/check-fixtures.sh` in atgeo-sdk-js: it fails if a vendored file differs from its pinned commit's, and warns when the pin is behind the reference.

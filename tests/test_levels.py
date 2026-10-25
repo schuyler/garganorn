@@ -454,3 +454,49 @@ class TestCountyCollapse:
         assert rows == [("county_al2", 35), ("county_al3", 35)], (
             f"both counties must collapse to level=35 regardless of source admin_level; got {rows}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Importance bands (#14)
+# ---------------------------------------------------------------------------
+
+class TestImportanceBand:
+    """#14: IMPORTANCE_BAND gives each division subtype a (floor, ceiling).
+    The imports are inside the tests so a missing name fails these tests only."""
+
+    UPPER = ("country", "dependency", "region")
+
+    def test_keys_match_level_vocab(self):
+        """Every LEVEL_VOCAB subtype has a band and nothing else does."""
+        from garganorn.levels import IMPORTANCE_BAND
+        assert IMPORTANCE_BAND.keys() == LEVEL_VOCAB.keys()
+
+    def test_floors_strictly_decrease_down_the_hierarchy(self):
+        """Country highest, then dependency, region, ... down the containment
+        levels: floors strictly decrease in LEVEL_VOCAB-value order."""
+        from garganorn.levels import IMPORTANCE_BAND
+        by_level = sorted(LEVEL_VOCAB, key=LEVEL_VOCAB.get)
+        floors = [IMPORTANCE_BAND[s][0] for s in by_level]
+        assert all(a > b for a, b in zip(floors, floors[1:])), dict(zip(by_level, floors))
+
+    def test_bands_stay_within_0_to_100(self):
+        """importance remains an integer 0..100: 0 <= floor <= ceiling <= 100."""
+        from garganorn.levels import IMPORTANCE_BAND
+        for subtype, (floor, ceiling) in IMPORTANCE_BAND.items():
+            assert 0 <= floor <= ceiling <= 100, subtype
+
+    def test_country_dependency_region_floors_beat_every_other_ceiling(self):
+        """The weakest country/dependency/region outranks the strongest of
+        any lower-level division, so a plain top-N cut keeps them first."""
+        from garganorn.levels import IMPORTANCE_BAND
+        rest = [s for s in LEVEL_VOCAB if s not in self.UPPER]
+        assert min(IMPORTANCE_BAND[s][0] for s in self.UPPER) > max(
+            IMPORTANCE_BAND[s][1] for s in rest)
+
+    def test_level_case_sql_is_unchanged_by_the_refactor(self):
+        """R13 guard: level_case_sql still renders one WHEN per LEVEL_VOCAB
+        entry mapping the subtype to its level."""
+        from garganorn.levels import level_case_sql
+        sql = level_case_sql("x.subtype")
+        for subtype, level in LEVEL_VOCAB.items():
+            assert f"WHEN x.subtype = '{subtype}' THEN {level}" in sql

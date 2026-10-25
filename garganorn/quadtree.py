@@ -237,7 +237,7 @@ class TileManifest:
 
     def _urls(self, quadkeys, bbox):
         return [
-            f"{self.base_url}/{qk[:6]}/{qk}.json.gz"
+            f"{self.base_url}/{qk[:6]}/{qk}.json"
             for qk in quadkeys
             if bboxes_intersect(quadkey_to_bbox(qk), bbox)
         ]

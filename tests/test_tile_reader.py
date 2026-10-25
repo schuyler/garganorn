@@ -1,8 +1,9 @@
 """Tests for garganorn.tile_reader.TileBackedCollection.
 
-Tiles hold {value, importance} records. get_record() matches on
+Tiles hold {value, importance} records. get_place() matches on
 `record["value"]["origin"] == "urn:atgeo:" + key` and returns
-`copy.copy(record)` -- the tile record, with its importance.
+`(copy.copy(record), attribution)` -- the tile record, with its importance, and
+the tile's attribution array.
 """
 import gzip
 import json
@@ -53,17 +54,17 @@ def _collection(tmp_path, manifest_db):
 
 
 class TestTileBackedCollection:
-    """get_record() against {value, importance} tile records."""
+    """get_place() against {value, importance} tile records."""
 
     def setup_method(self):
         TileBackedCollection._cached_read_tile.cache_clear()
 
-    def test_get_record_returns_the_tile_record(self, tmp_path):
-        """get_record returns {value, importance}, importance outside the value."""
+    def test_get_place_returns_the_tile_record(self, tmp_path):
+        """get_place returns {value, importance}, importance outside the value."""
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         _write_tile(tmp_path, "023010", [_record("place001")])
 
-        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001")
+        result = _collection(tmp_path, manifest_db).get_place(f"{PREFIX}place001")[0]
 
         assert set(result) == {"value", "importance"}
         assert result["importance"] == 75
@@ -71,7 +72,7 @@ class TestTileBackedCollection:
         assert result["value"]["name"] == "Test Place"
         assert "importance" not in result["value"]
 
-    def test_get_record_returns_record_unmodified(self, tmp_path):
+    def test_get_place_returns_record_unmodified(self, tmp_path):
         """locations, variants, attributes and precomputed relations pass through unchanged."""
         record = _record(
             "place001",
@@ -85,27 +86,27 @@ class TestTileBackedCollection:
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         _write_tile(tmp_path, "023010", [record])
 
-        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001")
+        result = _collection(tmp_path, manifest_db).get_place(f"{PREFIX}place001")[0]
 
         assert result == record
 
-    def test_get_record_without_relations_has_no_relations_key(self, tmp_path):
-        """get_record does not invent a relations key when the value has none."""
+    def test_get_place_without_relations_has_no_relations_key(self, tmp_path):
+        """get_place does not invent a relations key when the value has none."""
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         _write_tile(tmp_path, "023010", [_record("place001")])
 
-        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001")
+        result = _collection(tmp_path, manifest_db).get_place(f"{PREFIX}place001")[0]
 
         assert "relations" not in result["value"]
 
-    def test_get_record_missing_key_returns_none(self, tmp_path):
+    def test_get_place_missing_key_returns_none(self, tmp_path):
         """key not in manifest -> None."""
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         _write_tile(tmp_path, "023010", [_record("place001")])
 
-        assert _collection(tmp_path, manifest_db).get_record(f"{PREFIX}nonexistent") is None
+        assert _collection(tmp_path, manifest_db).get_place(f"{PREFIX}nonexistent") is None
 
-    def test_get_record_finds_correct_record_among_several(self, tmp_path):
+    def test_get_place_finds_correct_record_among_several(self, tmp_path):
         """Multiple records in one tile -> the one whose value.origin matches the key."""
         manifest_db = _make_manifest_db(tmp_path, [
             (f"{PREFIX}place001", "023010"),
@@ -116,47 +117,82 @@ class TestTileBackedCollection:
             _record("place002", name="Second Place", importance=20),
         ])
 
-        result = _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place002")
+        result = _collection(tmp_path, manifest_db).get_place(f"{PREFIX}place002")[0]
 
         assert result["value"]["name"] == "Second Place"
         assert result["importance"] == 20
 
-    def test_get_record_mutation_does_not_corrupt_cache(self, tmp_path):
+    def test_get_place_mutation_does_not_corrupt_cache(self, tmp_path):
         """Popping a key from the returned record must not corrupt the
         lru_cache-held tile dict -- the shallow-copy contract."""
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         _write_tile(tmp_path, "023010", [_record("place001")])
         col = _collection(tmp_path, manifest_db)
 
-        first = col.get_record(f"{PREFIX}place001")
+        first = col.get_place(f"{PREFIX}place001")[0]
         first.pop("importance")
 
-        second = col.get_record(f"{PREFIX}place001")
+        second = col.get_place(f"{PREFIX}place001")[0]
         assert "importance" in second, (
-            "mutating one get_record() result must not affect a subsequent call "
+            "mutating one get_place() result must not affect a subsequent call "
             "(cache corruption via shared reference)"
         )
 
-    def test_get_record_missing_tile_file_returns_none(self, tmp_path):
+    def test_get_place_missing_tile_file_returns_none(self, tmp_path):
         """key is in the manifest but the tile file itself is missing on disk
         (e.g. deleted after manifest generation) -> None instead of raising."""
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         # Deliberately do not write the tile file.
 
-        assert _collection(tmp_path, manifest_db).get_record(f"{PREFIX}place001") is None
+        assert _collection(tmp_path, manifest_db).get_place(f"{PREFIX}place001") is None
 
     def test_tile_caching(self, tmp_path):
-        """Two get_record() calls against the same tile only read the tile
+        """Two get_place() calls against the same tile only read the tile
         file from disk once (_cached_read_tile is lru_cache-backed)."""
         manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
         _write_tile(tmp_path, "023010", [_record("place001")])
         col = _collection(tmp_path, manifest_db)
 
         with patch("garganorn.tile_reader.gzip.open", wraps=gzip.open) as mock_open:
-            col.get_record(f"{PREFIX}place001")
-            col.get_record(f"{PREFIX}place001")
+            col.get_place(f"{PREFIX}place001")[0]
+            col.get_place(f"{PREFIX}place001")[0]
 
         assert mock_open.call_count == 1, (
-            "second get_record() for the same tile should hit the cache, "
+            "second get_place() for the same tile should hit the cache, "
             "not reopen the tile file"
         )
+
+    def test_get_place_returns_record_and_attribution(self, tmp_path):
+        """#15: get_place(key) -> (tile record, the tile's attribution array);
+        the attribution is what the tile header carries, byte for byte."""
+        attribution = [{"dataset": "overturemaps.org", "collection": "place",
+                        "release": "2026-09-17.0"}]
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        path = _write_tile(tmp_path, "023010", [_record("place001")])
+        with gzip.open(path, "wt") as f:
+            json.dump({"publishedAt": "2026-07-09T18:00:00Z",
+                       "attribution": attribution, "records": [_record("place001")]}, f)
+
+        record, got = _collection(tmp_path, manifest_db).get_place(f"{PREFIX}place001")
+
+        assert record == _record("place001")
+        assert got == attribution
+
+    def test_get_place_attribution_mutation_does_not_corrupt_cache(self, tmp_path):
+        """#15 (R5): mutating the returned record or attribution must not
+        change what a later call returns from the lru-cached tile."""
+        manifest_db = _make_manifest_db(tmp_path, [(f"{PREFIX}place001", "023010")])
+        path = _write_tile(tmp_path, "023010", [_record("place001")])
+        with gzip.open(path, "wt") as f:
+            json.dump({"publishedAt": "2026-07-09T18:00:00Z",
+                       "attribution": [{"dataset": "d", "collection": "c"}],
+                       "records": [_record("place001")]}, f)
+        col = _collection(tmp_path, manifest_db)
+
+        record, attribution = col.get_place(f"{PREFIX}place001")
+        record.pop("importance")
+        attribution.append({"dataset": "x", "collection": "y"})
+
+        record2, attribution2 = col.get_place(f"{PREFIX}place001")
+        assert "importance" in record2
+        assert attribution2 == [{"dataset": "d", "collection": "c"}]

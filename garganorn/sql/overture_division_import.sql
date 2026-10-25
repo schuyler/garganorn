@@ -20,8 +20,12 @@
 -- The bbox filter applies to division_area (which has bbox columns), not division.
 -- Divisions with no matching land area after filtering are dropped via INNER JOIN.
 --
--- Importance and variants are computed inline during import. Divisions use a
--- hybrid formula: density avg for localities, population log for all divisions.
+-- Importance and variants are computed inline during import. A division's
+-- score is its subtype's floor plus the floor-to-ceiling range scaled by a
+-- 0-1 signal: density avg and population log for localities, population log
+-- for every other subtype. The floors and ceilings come from
+-- garganorn.levels.IMPORTANCE_BAND, rendered into two substituted CASE
+-- expressions (see the level note above for why they are not named here).
 
 DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
@@ -32,7 +36,7 @@ CREATE OR REPLACE MACRO atgeo_valid_language(lang) AS (
 );
 
 -- Load density parquet file as temp table (no IDF for divisions)
--- When parquet path is None, create empty temp table (LEFT JOINs produce NULL, importance defaults to 0)
+-- When parquet path is None, create empty temp table (LEFT JOINs produce NULL; density then counts as 0, so a division scores from its subtype floor and population alone)
 ${density_cte}
 
 CREATE TEMP TABLE division_base AS
@@ -113,13 +117,11 @@ WITH division_density AS (
 )
 SELECT
     db.*,
-    CASE
-        WHEN db.subtype = 'locality' THEN
-            round(60 * least(coalesce(dd.avg_density, 0) / ${density_norm}, 1.0)
-                + 40 * least(ln(1 + db.population) / ${pop_norm}, 1.0))::INTEGER
-        ELSE
-            round(40 * least(ln(1 + db.population) / ${pop_norm}, 1.0))::INTEGER
-    END AS importance,
+    round(${importance_floor} + (${importance_ceiling} - ${importance_floor}) *
+          CASE WHEN db.subtype = 'locality'
+               THEN 0.6 * least(coalesce(dd.avg_density, 0) / ${density_norm}, 1.0)
+                  + 0.4 * least(ln(1 + db.population) / ${pop_norm}, 1.0)
+               ELSE least(ln(1 + db.population) / ${pop_norm}, 1.0) END)::INTEGER AS importance,
     -- Compute variants from names.common and names.rules per-row, same
     -- expression and semantics as overture_place_import.sql (no dedup).
     list_sort(list_filter(

@@ -22,8 +22,10 @@ class TileBackedCollection:
             self._local.con = duckdb.connect(self._db_path, read_only=True)
         return self._local.con
 
-    def get_record(self, key: str):
-        """Look up which tile contains this key, read the tile, find the record.
+    def get_place(self, key: str):
+        """Look up which tile contains this key, read the tile, and return
+        (record, attribution): the record and the tile's attribution array.
+        Returns None when the key is not found.
 
         fetchone() picks one row arbitrarily when a division key has N
         record_tiles rows (one per overlapping tile) -- correct only because
@@ -41,9 +43,9 @@ class TileBackedCollection:
         origin = "urn:atgeo:" + key
         for record in tile_data["records"]:
             if record["value"]["origin"] == origin:
-                # Shallow copy: a caller may replace top-level keys, but
-                # `value` is the lru_cache-held dict.
-                return copy.copy(record)
+                # Copies: a caller may replace top-level keys of the record or
+                # edit the list, but `value` and the tile are lru_cache-held.
+                return copy.copy(record), list(tile_data.get("attribution", []))
         return None
 
     def _read_tile(self, tile_qk: str) -> dict:

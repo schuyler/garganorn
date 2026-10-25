@@ -27,11 +27,11 @@ tiles:
   max_tiles: 50
 ```
 
-`repo` is the server's hostname; it determines the `did:web` identity. `run_dir` is a tile run directory (or the `current` symlink to one); the server reads `manifest.duckdb`, `manifest.json` and `tileset.json` from it and resolves the symlink once, at startup. `max_tiles` caps the tiles in a `getTiles` answer before it falls back to overview tiles.
+`repo` is the server's hostname; it determines the `did:web` identity. `run_dir` is a tile run directory (or the `current` symlink to one); the server reads `manifest.duckdb`, `manifest.json` and `tileset.json` from it and resolves the symlink once, at startup. `max_tiles` caps the tiles in a `getTiles` answer before it falls back to overview tiles; `describeService` advertises it as `maxTiles`.
 
 A tileset's slug is fixed when it is built, stored in its `tileset.json`, and the tileset is served under it: tiles at `/tiles/{slug}/...`, the descriptor at `/tilesets/{slug}`. `base_url` must end in `/{slug}`, or the tile URLs `getTiles` emits would not resolve. Two tilesets with the same slug fail startup.
 
-The optional top-level `public_base` is the server's public base URL, defaulting to `https://{repo}`. It is the `serviceEndpoint` in `did.json` and the prefix of `getPlace`'s `uri`, where a place's URN dereferences. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
+The optional top-level `public_base` is the server's public base URL, defaulting to `https://{repo}`. It is the `serviceEndpoint` in `did.json` and the prefix of `getPlace`'s `url`, where a place's URN dereferences. A non-https base is accepted only for development hosts (`localhost`, `*.localhost`, or a loopback, private, or link-local IP address); any other `http` base, and any other scheme, fails at startup. To run a local server:
 
 ```yaml
 repo: places.atgeo.org
@@ -150,13 +150,13 @@ There's no search — you ask for tile coverage over a bounding box, then fetch 
 
 | Endpoint | Returns |
 |---|---|
-| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox; `collection` is optional |
-| `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance |
+| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional |
+| `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance and its tileset's attribution |
 | `GET /xrpc/org.atgeo.describeTileset?slug=` | A tileset's descriptor: slug, extent, carried and referenced collections with release, licences and attribution |
-| `GET /xrpc/org.atgeo.describeService` | The service's DID and the slug and collections of each tileset |
+| `GET /xrpc/org.atgeo.describeService` | The service's DID, its tile budget (`maxTiles`), and the slug and collections of each tileset |
 | `GET /tilesets/{slug}` | The same document as `describeTileset` |
-| `GET /{dataset}/{collection}/{id}` | The same place as `getPlace` for `urn:atgeo:{dataset}:{collection}:{id}`; this is what `getPlace.uri` points at |
-| `GET /tiles/{slug}/...` | Tile files |
+| `GET /{dataset}/{collection}/{id}` | The same place as `getPlace` for `urn:atgeo:{dataset}:{collection}:{id}`; this is what `getPlace`'s `url` points at |
+| `GET /tiles/{slug}/.../{quadkey}.json` | Tile files, as plain JSON |
 | `GET /.well-known/did.json` | The `did:web` document, advertising the tile service as `#atgeo_tiles` (`AtgeoTileService`) at `public_base` |
 
 ### Errors
@@ -181,7 +181,7 @@ The XRPC layer (lexrpc, and Flask beneath it) adds errors no lexicon lists: `Inv
 | `GET /{dataset}/{collection}/{id}` | place not served, including a malformed path like a dataset with no `.` in it | `PlaceNotFound` |
 | `GET /tilesets/{slug}` | unknown slug | `TilesetNotFound` |
 | `GET /tiles/{slug}/...` | unknown slug | `TilesetNotFound` |
-| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json.gz` or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
+| `GET /tiles/{slug}/...` | no such tile; a path not ending in `.json` (or the older `.json.gz`) or one that tries to escape the tiles directory counts as no such tile | `TileNotFound` |
 | `GET /{nsid}` | an NSID-shaped name that isn't a served lexicon | `LexiconNotFound` |
 
 Everything else is JSON too, on `/xrpc/` as well as the plain routes: a path that matches no route (including a single segment that isn't an NSID, like `/favicon.ico`) is a 404 `NotFound`, a wrong method on a route is a 405 `MethodNotAllowed` (with an `Allow` header), and a crash or other 5xx is `InternalServerError` (or `ServiceUnavailable` etc.) with a generic message; details go to the server log, not the response. Note the alias and XRPC differ on a malformed URN: `/{dataset}/{collection}/{id}` gives a 404 `PlaceNotFound`, while `getPlace?uri=` gives a 400 `InvalidRequest` for a string that isn't a URI at all (and a 400 `PlaceNotFound` for a URI that isn't a served place).
@@ -190,15 +190,15 @@ Everything else is JSON too, on `/xrpc/` as well as the plain routes: a path tha
 
 ```
 $ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getTiles?dataset=openstreetmap.org&collection=way&bbox=-71.55,43.20,-71.50,43.25'
-{"tiles":["https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz","https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json.gz"]}
+{"tiles":["https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json","https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303221.json"]}
 ```
 
 A bbox covering more than `max_tiles` tiles is answered with coarse overview tiles holding only the most important places, and `"overview": true`; if a selected tileset has no overview tiles, the answer is `BboxTooLarge`.
 
-Fetch one of those URLs directly — despite the `.json.gz` name, the server always decompresses it and returns plain JSON (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client). The header carries the attribution of every collection the tileset carries or references, so you don't need a separate lookup. A place's `origin` is its URN; for OSM the collection is `node`, `way` or `relation`, naming the source element type. `importance` sits beside the place, not in it:
+Fetch one of those URLs directly. Tiles are stored gzipped as `.json.gz`, but the server decompresses them and returns plain JSON at `.json` (wire compression, if any, is negotiated separately via `Accept-Encoding` and handled transparently by your HTTP client). The header carries the attribution of every collection the tileset carries or references, so you don't need a separate lookup. A place's `origin` is its URN; for OSM the collection is `node`, `way` or `relation`, naming the source element type. `importance` sits beside the place, not in it:
 
 ```
-$ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json.gz'
+$ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220.json'
 {
   "publishedAt": "2026-08-08T06:16:21Z",
   "attribution": [
@@ -238,11 +238,11 @@ $ curl -s 'https://places.atgeo.org/tiles/osm/20260808T061621/030233/03023303220
 
 ### getPlace
 
-`getPlace` takes the URN from a record's `origin`; no discovery call is needed. The record is the tile's `value`, and `importance` is beside it:
+`getPlace` takes the URN from a record's `origin`; no discovery call is needed. The answer echoes it as `uri`, gives the place's own address on this server as `url`, and carries the tile's `value` with `importance` beside it, plus the tileset's `attribution`, the same list its tiles carry:
 
 ```
 $ curl 'http://127.0.0.1:8000/xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetmap.org:node:10080395917'
-{"uri":"https://places.atgeo.org/openstreetmap.org/node/10080395917","importance":0,"record":{...}}
+{"uri":"urn:atgeo:openstreetmap.org:node:10080395917","url":"https://places.atgeo.org/openstreetmap.org/node/10080395917","importance":0,"value":{...},"attribution":[...]}
 ```
 
 An unknown or unserved URN is a `PlaceNotFound` error (HTTP 400 over XRPC; 404 at the `/{dataset}/{collection}/{id}` alias).

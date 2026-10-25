@@ -80,6 +80,7 @@ class Server:
     def describe_service(self, _):
         return {
             "did": f"did:web:{self.repo}",
+            "maxTiles": self.max_tiles,
             "tilesets": [
                 {
                     "slug": slug,
@@ -109,13 +110,18 @@ class Server:
             if not any(c["dataset"] == dataset and c["collection"] == collection
                        for c in ts.descriptor["collections"]):
                 continue
-            record = ts.reader.get_record(key)
-            if record is not None:
-                return {
-                    "uri": f"{self.public_base}/{dataset}/{collection}/{id}",
-                    "importance": record["importance"],
-                    "record": record["value"],
+            found = ts.reader.get_place(key)
+            if found is not None:
+                record, attribution = found
+                view = {
+                    "uri": uri,
+                    "url": f"{self.public_base}/{dataset}/{collection}/{id}",
                 }
+                if "importance" in record:
+                    view["importance"] = record["importance"]
+                view["value"] = record["value"]
+                view["attribution"] = attribution
+                return view
         raise XrpcError(f"No such place: {uri}", "PlaceNotFound")
 
     def _parse_bbox(self, bbox_str):

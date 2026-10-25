@@ -156,17 +156,17 @@ class TestTileManifest:
     .overview_tiles(bbox)."""
 
     def test_url_format(self, tmp_path):
-        """URLs follow {base_url}/{qk[:6]}/{qk}.json.gz format."""
+        """URLs follow {base_url}/{qk[:6]}/{qk}.json format."""
         path = _make_manifest_db(tmp_path, quadkeys=["023010"])
         tm = TileManifest(str(path), _BASE_URL)
-        assert tm.regular_tiles(WORLD) == [f"{_BASE_URL}/023010/023010.json.gz"]
+        assert tm.regular_tiles(WORLD) == [f"{_BASE_URL}/023010/023010.json"]
 
     def test_returns_all_intersecting_urls(self, tmp_path):
         """All intersecting tiles are returned (caller is responsible for sorting)."""
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.regular_tiles(WORLD)
-        assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in _MANIFEST_QUADKEYS}
+        assert set(urls) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json" for qk in _MANIFEST_QUADKEYS}
 
     def test_non_intersecting_excluded(self, tmp_path):
         """Tiles outside the query bbox are excluded."""
@@ -178,9 +178,9 @@ class TestTileManifest:
         path = _make_manifest_db(tmp_path)
         tm = TileManifest(str(path), _BASE_URL)
         urls = tm.regular_tiles(tiny)
-        assert f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" in urls
+        assert f"{_BASE_URL}/{qk[:6]}/{qk}.json" in urls
         for other in _MANIFEST_QUADKEYS[1:]:
-            assert f"{_BASE_URL}/{other[:6]}/{other}.json.gz" not in urls
+            assert f"{_BASE_URL}/{other[:6]}/{other}.json" not in urls
 
     def test_regular_tiles_are_not_capped(self, tmp_path):
         """The cap belongs to the server, which sums across tilesets."""
@@ -210,21 +210,21 @@ class TestOverviewTiles:
         path = _make_manifest_db(tmp_path, quadkeys=list(_MANIFEST_QUADKEYS) + overview)
         tm = TileManifest(str(path), _BASE_URL)
 
-        assert set(tm.overview_tiles(WORLD)) == {f"{_BASE_URL}/{qk}/{qk}.json.gz" for qk in overview}
+        assert set(tm.overview_tiles(WORLD)) == {f"{_BASE_URL}/{qk}/{qk}.json" for qk in overview}
 
     def test_overview_tiles_exclude_non_intersecting(self, tmp_path):
         path = _make_manifest_db(tmp_path, quadkeys=["0", "3"])
         tm = TileManifest(str(path), _BASE_URL)
         northwest = (-170.0, 10.0, -100.0, 60.0)
 
-        assert tm.overview_tiles(northwest) == [f"{_BASE_URL}/0/0.json.gz"]
+        assert tm.overview_tiles(northwest) == [f"{_BASE_URL}/0/0.json"]
 
     def test_no_overview_leak_into_regular_tiles(self, tmp_path):
         regular = _MANIFEST_QUADKEYS[:2]
         path = _make_manifest_db(tmp_path, quadkeys=regular + ["0"])
         tm = TileManifest(str(path), _BASE_URL)
 
-        assert set(tm.regular_tiles(WORLD)) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json.gz" for qk in regular}
+        assert set(tm.regular_tiles(WORLD)) == {f"{_BASE_URL}/{qk[:6]}/{qk}.json" for qk in regular}
 
     def test_no_overview_tiles_is_none(self, tmp_path):
         """None, not an empty list: the server tells 'no overview tier' from

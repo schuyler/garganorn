@@ -37,11 +37,18 @@ pipeline SQL.
   - OSM's IDF term reads node, way, and relation parquet in both the
     numerator and the denominator (`osm_idf.sql`), so every OSM
     importance value shifts whenever the relation arm's counts change.
-- **Localities (Overture divisions, subtype=locality)**: `60% density + 40% population`
-  - Formula: `round(60 * least(avg_density/density_norm, 1.0) + 40 * least(ln(1+population)/pop_norm, 1.0))`
+- **Divisions (Overture)**: a per-subtype floor and ceiling, with a 0-1
+  signal `s` placing the division between them
+  - Formula: `round(floor + (ceiling - floor) * s)`, with `floor` and
+    `ceiling` from `IMPORTANCE_BAND` in `levels.py`
+  - Localities: `s = 0.6 * least(avg_density/density_norm, 1.0) + 0.4 * least(ln(1+population)/pop_norm, 1.0)`
+  - Every other subtype: `s = least(ln(1+population)/pop_norm, 1.0)`
   - Defaults: `density_norm=10.0`, `pop_norm=20.0`
-- **Non-locality divisions**: `40% population` only
-  - Formula: `round(40 * least(ln(1+population)/pop_norm, 1.0))`
+  - Floors fall strictly in `LEVEL_VOCAB` order. Country, dependency and
+    region span 80-100 and every lower subtype tops out at 79, so the
+    weakest region outranks every lower-level division and the summary
+    band's plain top-N cut keeps the upper tier. Before this, non-locality
+    divisions capped at 40 and a dense locality beat every country.
 
 The norm divisors (`density_norm=10.0`, `idf_norm=18.0`, `pop_norm=20.0`)
 are not arbitrary: each comes from a statistical analysis of that
@@ -49,7 +56,10 @@ variable's distribution, chosen so the term scales to roughly `[0, 1)`
 before weighting. The 60/40 split rests on no such analysis — it was
 chosen by eyeballing search results across categories and picking
 coefficients that made the ranking look subjectively reasonable. Don't
-conflate the two when tuning or explaining this formula.
+conflate the two when tuning or explaining this formula. The division
+floors and ceilings rest on no analysis either: only their order and the
+80/79 gap between the upper tier and the rest are load-bearing, and
+`tests/test_levels.py` pins both.
 
 **Applies to**: `overture_place_import.sql`,
 `osm_import.sql`, `overture_division_import.sql`
@@ -282,10 +292,11 @@ this reason.
 Each source's tileset carries a z1-z5 band alongside the regular z6-z17 grid,
 holding only the top-N=10,000 records by `importance` DESC (ties by
 `<pk>` ASC), so a client with no region can resolve a name without
-prefetching the whole tileset. Divisions additionally include `subtype IN
-('country', 'region', 'dependency')` unconditionally, additive on top of
-the top-N cut and deduplicated against it — a pure importance cut crowds
-every non-locality subtype out below N≈50,000.
+prefetching the whole tileset. The cut is a plain top-N for every source,
+divisions included: the administrative floors in division importance (see
+"Importance scoring varies by entity type") keep countries, dependencies
+and regions in it. The tileset descriptor records the band's actual size as
+`overview.records`.
 
 z0 is excluded because its quadkey is the empty string, which degenerates
 the `qk[:6]` partition and URL slice; z6 is excluded because it would
@@ -413,6 +424,7 @@ derivation is unnecessary.
 | `density_norm` | 10.0 | Importance density component (all place sources) |
 | `idf_norm` | 18.0 | Importance IDF component (Overture, OSM) |
 | `pop_norm` | 20.0 | Importance population component (Overture divisions) |
+| `IMPORTANCE_BAND` | country 90-100 … microhood 5-79 (`levels.py`) | Per-subtype floor and ceiling of division importance |
 | `COVER_MIN_ZOOM` | 4 | Covering descent start level |
 | `COVER_MIN_LEAF_ZOOM` | 12 | Shallowest level an edge leaf may be emitted at; bounds edge-join fan-out |
 | `COVER_MAX_ZOOM` | 16 | Covering descent end level; a fragment still over capacity here is emitted anyway |

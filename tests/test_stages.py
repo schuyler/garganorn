@@ -2066,6 +2066,55 @@ class TestTilesetJson:
             f"when no regular-band tile exists; expected {expected}, got {actual}"
         )
 
+    def test_regular_only_export_has_no_overview(self, overture_parquet, tmp_path):
+        """#19 guard: a run with no overview-band tile (every tile_qk is 6+
+        characters) writes no `overview` key -- absent means no band."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, "ov0"
+        )
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, ta_parquet, containment_dir,
+            str(tmp_path / "tiles_ov0"), time.monotonic(), memory_limit="4GB",
+            force=True, releases=RELEASES,
+        ))
+        tileset = json.loads((run_dir / "tileset.json").read_text())
+
+        assert "overview" not in tileset
+
+    def test_overview_records_counts_the_places_in_the_band(
+        self, overture_parquet, tmp_path
+    ):
+        """#19: with K places also assigned to a short (overview-band) tile,
+        tileset.overview == {"records": K}, and the descriptor validates."""
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, tmp_path, "ov1"
+        )
+        k = 2
+        banded_ta = str(tmp_path / "ov1" / "ta_banded.parquet")
+        con = duckdb.connect()
+        con.execute(f"""
+            COPY (
+                SELECT place_id, tile_qk FROM read_parquet('{ta_parquet}')
+                UNION ALL
+                SELECT place_id, left(tile_qk, 3) AS tile_qk
+                FROM read_parquet('{ta_parquet}')
+                WHERE place_id IN (
+                    SELECT DISTINCT place_id FROM read_parquet('{ta_parquet}')
+                    ORDER BY place_id LIMIT {k})
+            ) TO '{banded_ta}' (FORMAT PARQUET)
+        """)
+        con.close()
+
+        run_dir = Path(stage_export(
+            "overture_place", places_parquet, banded_ta, containment_dir,
+            str(tmp_path / "tiles_ov1"), time.monotonic(), memory_limit="4GB",
+            force=True, releases=RELEASES,
+        ))
+        tileset = json.loads((run_dir / "tileset.json").read_text())
+
+        assert tileset["overview"] == {"records": k}
+        validate_def("org.atgeo.defs#tileset", tileset)
+
     def test_zero_tile_run_omits_extent_but_keeps_manifest(
         self, overture_parquet, tmp_path
     ):

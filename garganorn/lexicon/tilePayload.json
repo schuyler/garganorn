@@ -16,11 +16,11 @@
                 "uri": {
                     "type": "string",
                     "format": "uri",
-                    "description": "The record's own URI, for a record with no origin, such as an at:// URI for a repo record. Records with an origin omit it."
+                    "description": "The record's own URI, for a record with no origin, such as an at:// URI for a repo record. Records with an origin omit it. It is never the gazetteer's URL for the record."
                 },
                 "importance": {
                     "type": "integer",
-                    "description": "The producer's importance score for this place among the tileset's records; larger values sort first. Not part of the place."
+                    "description": "The producer's importance score for this place among the tileset's records; larger values sort first. Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. Not part of the place."
                 }
             }
         },

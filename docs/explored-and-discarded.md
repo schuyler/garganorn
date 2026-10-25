@@ -72,6 +72,63 @@ Brief summaries of approaches that were investigated and not adopted for the Gar
 
 **Status**: Partially adopted, not the full mechanism. The DID document route (`/.well-known/did.json`) is served — ambient AT Protocol identity plumbing needed regardless of discovery. The DNS TXT record and `goat`-based verification were not adopted. Garganorn serves no `com.atproto.*` method, so neither `getRecord` nor `listRecords` serves the lexicon-schema collection; both were implemented once and removed (`listRecords` for reasons unrelated to discovery — see the searchRecords/listRecords removal). Garganorn's actual lexicon-serving interface is `/<nsid>` paths. Standard discovery via DNS/goat tooling is not widely used and hasn't been revisited.
 
+## `org.atgeo.tiles.service` Announcement Records
+
+**Summary**: A record type an operator would publish in its own repo, one per served collection, so a client holding only the operator's DID could enumerate its tile services with `com.atproto.repo.listRecords`. Each record named the collection by NSID (`org.atgeo.places.overture.place`), a `baseUrl`, a `manifestPath` for the coverage manifest, a `kind` of `gazetteer` or `live`, and a display attribution string. The DID document's `#atgeo_tiles` service entry said where the service was; these records said what it served. Drafted for the AppView design (`atgeo-appview-design.md`, "Discovery") and never served or published.
+
+**Why discarded**: The place-identity redesign removed every premise the schema rests on. Collections are `(dataset, collection)` pairs carried by tilesets, not record NSIDs. Clients ask `getTiles` for tile URLs and never read a manifest. Places are named by `urn:atgeo:` origins, so the `kind` field's distinction between `https` URIs with a null `cid` and `at://` URIs with CIDs no longer describes anything on the wire. Attribution lives in every tile and in the tileset descriptor. And `describeService` already answers "what does this server serve" for a client that knows the server.
+
+**Successor**: `org.atgeo.describeService` and `org.atgeo.describeTileset` for what a known server serves; the DID document's `#atgeo_tiles` service entry for where it is. Getting a client from a DID or handle to a gazetteer in the first place is still open: see `planned-features.md`, "Collection and service metadata". The draft schema, as it stood:
+
+```json
+{
+    "lexicon": 1,
+    "id": "org.atgeo.tiles.service",
+    "defs": {
+        "main": {
+            "type": "record",
+            "description": "Announces an atgeo tile service for a single collection. Published in the operator's repository, one record per served collection, keyed by the collection NSID. Clients discover an operator's tile services by enumerating this collection via com.atproto.repo.listRecords. See the atgeo protocol design, section 1.4.",
+            "key": "nsid",
+            "record": {
+                "type": "object",
+                "required": ["collection", "baseUrl", "kind"],
+                "properties": {
+                    "collection": {
+                        "type": "string",
+                        "format": "nsid",
+                        "description": "The record collection served by this tile set, e.g. 'org.atgeo.places.overture.place'. Must equal the record key."
+                    },
+                    "baseUrl": {
+                        "type": "string",
+                        "format": "uri",
+                        "description": "HTTPS base URL of the tile service. Tile and manifest paths are resolved relative to this."
+                    },
+                    "manifestPath": {
+                        "type": "string",
+                        "description": "Path to the coverage manifest, relative to baseUrl. Defaults to 'current/manifest.json' if omitted."
+                    },
+                    "kind": {
+                        "type": "string",
+                        "knownValues": ["gazetteer", "live"],
+                        "description": "'gazetteer' for batch-built reference datasets (records carry https URIs, cid null); 'live' for firehose-derived AppView tiles (records carry at:// URIs and CIDs)."
+                    },
+                    "attribution": {
+                        "type": "string",
+                        "description": "Human-readable data attribution, for display in discovery UIs. The tile envelope itself carries source/license URLs, not this field.",
+                        "maxGraphemes": 500
+                    },
+                    "createdAt": {
+                        "type": "string",
+                        "format": "datetime",
+                        "description": "When this announcement was created or last materially updated."
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
 ## Structured Place Name Model
 
 **Summary**: Replacing flat `#name` array with Overture-style structured naming: `primary` string, `common` multilingual map, `rules` variant array. Distinguishes official, alternate, short, colloquial variants with explicit type field.

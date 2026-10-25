@@ -386,3 +386,38 @@ class TestStageImportFreshnessMetaNoDensityIdf:
         assert "idf_parquet" not in params, (
             f"params must not contain an 'idf_parquet' path key: {params!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# 3. Division import records the importance bands (#14)
+# ---------------------------------------------------------------------------
+
+class TestDivisionImportanceBandsMeta:
+    """stage_division_import's places.parquet meta carries the importance
+    bands, so changing a floor or ceiling invalidates the artifact."""
+
+    def test_meta_params_include_importance_bands(self, division_parquet, tmp_path):
+        """#14: meta['params']['importance_bands'] is IMPORTANCE_BAND with
+        JSON lists, one [floor, ceiling] per subtype."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, _BBOX, output)
+
+        params = json.loads(pathlib.Path(output + ".meta.json").read_text())["params"]
+
+        assert "importance_bands" in params, (
+            f"division meta params must record importance_bands; got {sorted(params)}"
+        )
+        from garganorn.levels import IMPORTANCE_BAND
+        assert params["importance_bands"] == {k: list(v) for k, v in IMPORTANCE_BAND.items()}
+
+    def test_second_run_with_the_bands_recorded_is_fresh(self, division_parquet, tmp_path):
+        """#14 (R1): the recorded bands compare equal to the JSON-loaded meta
+        (lists, not tuples), so an unchanged second run skips the rebuild.
+        Guard: it passes before the change too, and must keep passing."""
+        output = str(tmp_path / "places.parquet")
+        _stages.stage_import("overture_division", division_parquet, _BBOX, output)
+        first = os.stat(output).st_mtime_ns
+
+        _stages.stage_import("overture_division", division_parquet, _BBOX, output)
+
+        assert os.stat(output).st_mtime_ns == first, "second run rebuilt places.parquet"

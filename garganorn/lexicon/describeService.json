@@ -17,7 +17,12 @@
                         "did": {
                             "type": "string",
                             "format": "did",
-                            "description": "The DID this service identifies as."
+                            "description": "The DID this service identifies as. Informational: no discovery path resolves it to this service yet."
+                        },
+                        "maxTiles": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "The most regular tiles a getTiles answer may list before it falls back to overview tiles or BboxTooLarge. Informational: tile zooms are adaptive, so a client cannot predict a box's tile count."
                         },
                         "tilesets": {
                             "type": "array",

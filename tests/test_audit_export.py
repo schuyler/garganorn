@@ -19,7 +19,7 @@ from garganorn.stages import write_manifest_db
 
 class TestOSMManifestKeyFormat:
     """manifest.record_tiles.key is {dataset}:{collection}:{id}, the origin URN
-    without its urn:atgeo: prefix, so get_record lookups by the exported
+    without its urn:atgeo: prefix, so get_place lookups by the exported
     origin succeed.
     """
 
@@ -117,24 +117,24 @@ class TestOSMManifestKeyFormat:
 
         return manifest_db_path, tiles_dir
 
-    def test_get_record_with_node_key(self, osm_manifest_db):
-        """get_record finds a place by its key "openstreetmap.org:node:12345"."""
+    def test_get_place_with_node_key(self, osm_manifest_db):
+        """get_place finds a place by its key "openstreetmap.org:node:12345"."""
         manifest_db_path, tiles_dir = osm_manifest_db
 
-        # Create TileBackedCollection to test get_record
+        # Create TileBackedCollection to test get_place
         tbc = TileBackedCollection(
             manifest_db_path=str(manifest_db_path),
             tiles_dir=str(tiles_dir),
         )
 
         # Look up by the manifest key
-        result = tbc.get_record("openstreetmap.org:node:12345")
+        result = tbc.get_place("openstreetmap.org:node:12345")[0]
 
-        assert result is not None, "get_record should find record with key 'openstreetmap.org:node:12345'"
+        assert result is not None, "get_place should find record with key 'openstreetmap.org:node:12345'"
         assert result["value"]["name"] == "Node Place"
 
-    def test_get_record_with_way_key(self, osm_manifest_db):
-        """get_record finds a place by its key "openstreetmap.org:way:67890"."""
+    def test_get_place_with_way_key(self, osm_manifest_db):
+        """get_place finds a place by its key "openstreetmap.org:way:67890"."""
         manifest_db_path, tiles_dir = osm_manifest_db
 
         tbc = TileBackedCollection(
@@ -142,13 +142,13 @@ class TestOSMManifestKeyFormat:
             tiles_dir=str(tiles_dir),
         )
 
-        result = tbc.get_record("openstreetmap.org:way:67890")
+        result = tbc.get_place("openstreetmap.org:way:67890")[0]
 
-        assert result is not None, "get_record should find record with key 'openstreetmap.org:way:67890'"
+        assert result is not None, "get_place should find record with key 'openstreetmap.org:way:67890'"
         assert result["value"]["name"] == "Way Place"
 
-    def test_get_record_with_relation_key(self, osm_manifest_db):
-        """get_record finds a place by its key "openstreetmap.org:relation:11111"."""
+    def test_get_place_with_relation_key(self, osm_manifest_db):
+        """get_place finds a place by its key "openstreetmap.org:relation:11111"."""
         manifest_db_path, tiles_dir = osm_manifest_db
 
         tbc = TileBackedCollection(
@@ -156,9 +156,9 @@ class TestOSMManifestKeyFormat:
             tiles_dir=str(tiles_dir),
         )
 
-        result = tbc.get_record("openstreetmap.org:relation:11111")
+        result = tbc.get_place("openstreetmap.org:relation:11111")[0]
 
-        assert result is not None, "get_record should find record with key 'openstreetmap.org:relation:11111'"
+        assert result is not None, "get_place should find record with key 'openstreetmap.org:relation:11111'"
         assert result["value"]["name"] == "Relation Place"
 
     def test_manifest_key_format_matches_export(self, osm_manifest_db):

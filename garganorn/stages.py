@@ -27,7 +27,10 @@ from garganorn import envelope
 from garganorn.database import (
     COLLECTION_TERMS, DIVISION_URN_PREFIX, OverturePlaces, OpenStreetMap, OvertureDivisions,
 )
-from garganorn.levels import LEVEL_VOCAB, level_case_sql
+from garganorn.levels import (
+    IMPORTANCE_BAND, LEVEL_VOCAB, importance_ceiling_case_sql,
+    importance_floor_case_sql, level_case_sql,
+)
 
 log = logging.getLogger(__name__)
 
@@ -828,6 +831,11 @@ def write_tileset_json(run_dir, source, source_cls, *, published_at, manifest,
             ).fetchone()[0]
             for c in carried
         }
+        # Distinct keys, so a division referenced from several band tiles counts
+        # once. Length < 6 is the overview band's marker (TileManifest).
+        overview_records = con.execute(
+            "SELECT COUNT(DISTINCT key) FROM record_tiles WHERE length(tile_qk) < 6"
+        ).fetchone()[0]
 
         if source == "overture_place":
             location_formats = ["community.lexicon.location.geo"]
@@ -912,6 +920,8 @@ def write_tileset_json(run_dir, source, source_cls, *, published_at, manifest,
             "east": f"{max(b[2] for b in regular_bboxes):.6f}",
             "west": f"{min(b[0] for b in regular_bboxes):.6f}",
         }
+    if overview_records:
+        tileset["overview"] = {"records": overview_records}
     tileset["collections"] = collections
     tileset["references"] = referenced
 
@@ -1050,6 +1060,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         "bbox": [xmin, ymin, xmax, ymax],
         "density_norm": density_norm,
         "pop_norm": pop_norm,
+        # Lists, not tuples: artifact_fresh compares against JSON-loaded meta.
+        "importance_bands": {k: list(v) for k, v in IMPORTANCE_BAND.items()},
     }
 
     # boundaries.duckdb lives alongside places.parquet
@@ -1098,6 +1110,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     sql = sql.replace("${density_norm}", str(density_norm))
     sql = sql.replace("${pop_norm}", str(pop_norm))
     sql = sql.replace("${level_case}", level_case)
+    sql = sql.replace("${importance_floor}", importance_floor_case_sql())
+    sql = sql.replace("${importance_ceiling}", importance_ceiling_case_sql())
     sql = sql.replace("DROP TABLE IF EXISTS places;\n", "")
     sql = sql.replace("CREATE TABLE places AS\n", "CREATE TEMP TABLE division_all AS\n")
 
@@ -1744,10 +1758,10 @@ def stage_summary_tile_assignment(places_parquet, output_path, source, *,
     """Assign the summary set to a z1-z5 tile band and write summary
     tile_assignments.parquet.
 
-    The summary set is the top-n places by importance DESC, place_id ASC;
-    for overture_division, every subtype IN ('country', 'region',
-    'dependency') is additionally included, additive on top of n
-    (docs/design-constraints.md). Assignment then reuses
+    The summary set is the top-n places by importance DESC, place_id ASC.
+    For overture_division the administrative floors in importance
+    (levels.IMPORTANCE_BAND) keep countries, dependencies and regions inside
+    that cut. Assignment then reuses
     stage_tile_assignment's coarsest-fit algorithm over that subset, in the
     z1-z5 band -- z5 is a hard floor, so a z5 tile may exceed
     max_per_tile; that already falls out of stage_tile_assignment's
@@ -1785,11 +1799,6 @@ def stage_summary_tile_assignment(places_parquet, output_path, source, *,
     if os.path.exists(summary_places_path):
         os.remove(summary_places_path)
 
-    unconditional_clause = (
-        " OR p.subtype IN ('country', 'region', 'dependency')"
-        if source == "overture_division" else ""
-    )
-
     con = duckdb.connect()
     try:
         if temp_directory:
@@ -1806,7 +1815,7 @@ def stage_summary_tile_assignment(places_parquet, output_path, source, *,
                     SELECT {pk_col} FROM read_parquet('{pq_sql}')
                     ORDER BY importance DESC, {pk_col} ASC
                     LIMIT {n}
-                ){unconditional_clause}
+                )
             ) TO '{summary_places_path}' (FORMAT PARQUET, COMPRESSION ZSTD)
         """)
     finally:

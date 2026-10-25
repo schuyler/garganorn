@@ -4,14 +4,14 @@
     "defs": {
         "main": {
             "type": "query",
-            "description": "Fetch one place by the URI in its origin.",
+            "description": "Fetch one place by its record key.",
             "parameters": {
                 "type": "params",
                 "properties": {
                     "uri": {
                         "type": "string",
                         "format": "uri",
-                        "description": "The place's origin, e.g. urn:atgeo:openstreetmap.org:way:123456"
+                        "description": "The record's key: its origin, or its own uri when it has none, e.g. urn:atgeo:openstreetmap.org:way:123456"
                     }
                 },
                 "required": [
@@ -28,7 +28,7 @@
             "errors": [
                 {
                     "name": "PlaceNotFound",
-                    "description": "This server serves no place with that origin"
+                    "description": "This server serves no place with that key"
                 }
             ]
         },
@@ -36,21 +36,36 @@
             "type": "object",
             "required": [
                 "uri",
-                "record"
+                "url",
+                "value",
+                "attribution"
             ],
             "properties": {
                 "uri": {
                     "type": "string",
                     "format": "uri",
-                    "description": "A URL on this server that returns this view."
+                    "description": "The record key this view is for, as requested: the place's origin."
+                },
+                "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "The address of this view on this server; it returns this same document."
                 },
                 "importance": {
                     "type": "integer",
-                    "description": "The producer's importance score for this place among its tileset's records; larger values sort first. Not part of the place."
+                    "description": "The producer's importance score for this place among its tileset's records; larger values sort first. Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. Not part of the place."
                 },
-                "record": {
+                "value": {
                     "type": "unknown",
                     "description": "The org.atgeo.place record value, unmodified."
+                },
+                "attribution": {
+                    "type": "array",
+                    "description": "One entry for every collection the place's tileset carries or references: the same list every tile of that tileset carries.",
+                    "items": {
+                        "type": "ref",
+                        "ref": "org.atgeo.defs#collectionAttribution"
+                    }
                 }
             }
         }

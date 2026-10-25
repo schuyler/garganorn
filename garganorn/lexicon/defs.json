@@ -163,6 +163,20 @@
                 }
             }
         },
+        "overviewBand": {
+            "type": "object",
+            "description": "The tileset's overview band: coarse tiles holding only its most important records.",
+            "required": [
+                "records"
+            ],
+            "properties": {
+                "records": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "How many records the band holds."
+                }
+            }
+        },
         "tileset": {
             "type": "object",
             "description": "A tileset descriptor. A gazetteer serves a tileset under its slug. A collection appears in collections or references, never both. Values describe one build, not a promise about future builds.",
@@ -185,6 +199,11 @@
                     "type": "ref",
                     "ref": "community.lexicon.location.bbox",
                     "description": "Bounding box of the tileset's records."
+                },
+                "overview": {
+                    "type": "ref",
+                    "ref": "#overviewBand",
+                    "description": "Present when the tileset has an overview band; absent means it has none, so a box over the tile budget is BboxTooLarge."
                 },
                 "collections": {
                     "type": "array",

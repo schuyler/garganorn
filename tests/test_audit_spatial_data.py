@@ -203,6 +203,8 @@ class TestBboxOverlapFilter:
 
     def test_overture_division_partial_overlap(self):
         """Division partially overlapping bbox should be included."""
+        # #14: the importance CASE needs the floor/ceiling placeholders.
+        from garganorn.levels import importance_ceiling_case_sql, importance_floor_case_sql
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = pathlib.Path(tmpdir) / "test.duckdb"
             con = duckdb.connect(str(db_path))
@@ -247,6 +249,8 @@ class TestBboxOverlapFilter:
                 "density_norm": 10.0,
                 "pop_norm": 15.0,
                 "level_case": level_case_sql(),
+                "importance_floor": importance_floor_case_sql(),
+                "importance_ceiling": importance_ceiling_case_sql(),
             }
             raw_sql = _load_sql("overture_division_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))

@@ -566,6 +566,52 @@ def test_get_place_serves_the_exported_record(built, client, source, collection)
 
     assert resp.status_code == 200, resp.get_data(as_text=True)
     body = resp.get_json()
-    assert body["record"] == rec["value"]
+    # #15: {uri: record key, url, importance, value, attribution}; the
+    # attribution is the header of the tile the record was read from, which
+    # also proves lexrpc accepts a real build's release/licenses entries.
+    qk = next(qk for qk, r in _records(run) if r is rec)
+    assert body["value"] == rec["value"]
     assert body["importance"] == rec["importance"]
-    assert body["uri"].startswith(PUBLIC_BASE + "/")
+    assert body["uri"] == rec["value"]["origin"]
+    assert body["url"].startswith(PUBLIC_BASE + "/")
+    assert body["attribution"] == run["tiles"][qk]["attribution"]
+
+
+# ---------------------------------------------------------------------------
+# #18 / #19: tile URLs and the overview count, end to end
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("source", SLUGS)
+def test_get_tiles_urls_end_in_json_and_serve_the_on_disk_bytes(built, client, source):
+    """#18: every URL getTiles returns for a built run ends in .json and
+    fetches 200 through the client with the same bytes as the on-disk gunzip."""
+    run = built[source]
+    resp = client.get("/xrpc/org.atgeo.getTiles", query_string={
+        "dataset": run["dataset"], "bbox": "-180,-85,180,85"})
+    assert resp.status_code == 200, resp.get_data(as_text=True)
+    urls = [u for u in resp.get_json()["tiles"]
+            if u.startswith(f"{PUBLIC_BASE}/tiles/{SLUGS[source]}/")]
+    assert urls
+    for url in urls:
+        assert url.endswith(".json"), url
+        got = client.get(url[len(PUBLIC_BASE):])
+        assert got.status_code == 200, url
+        assert got.data == run["raw"][url.rsplit("/", 1)[1][: -len(".json")]], url
+
+
+@pytest.mark.parametrize("source", SLUGS)
+def test_tileset_overview_records_counts_the_band(built, source):
+    """#19: tileset.overview.records is the number of distinct manifest keys
+    in tiles shorter than 6 (the overview band), absent when there is none."""
+    run = built[source]
+    con = duckdb.connect(os.path.join(run["run_dir"], "manifest.duckdb"), read_only=True)
+    try:
+        band = con.execute(
+            "SELECT COUNT(DISTINCT key) FROM record_tiles WHERE length(tile_qk) < 6"
+        ).fetchone()[0]
+    finally:
+        con.close()
+    if band:
+        assert run["tileset"]["overview"] == {"records": band}
+    else:
+        assert "overview" not in run["tileset"]
