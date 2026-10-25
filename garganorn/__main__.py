@@ -142,7 +142,18 @@ def create_app():
         tiles_dir = tile_dirs.get(slug)
         if tiles_dir is None:
             return not_found("TilesetNotFound", f"Unknown tileset: {slug}")
-        full_path = safe_join(tiles_dir, tile_path) if tile_path.endswith(".json.gz") else None
+        if tile_path.endswith(".json"):
+            disk_path = tile_path + ".gz"  # served suffix -> storage suffix
+        elif tile_path.endswith(".json.gz"):
+            # URLs advertised before tiles were served at .json. Retire this
+            # branch once no run a pre-.json server advertised is still on disk
+            # (two builds under keep-2 retention, plus the one-week tile cache).
+            disk_path = tile_path
+        else:
+            disk_path = None
+        # A .json request never serves a plain .json file: manifest.json and
+        # tileset.json live beside the tiles.
+        full_path = safe_join(tiles_dir, disk_path) if disk_path else None
         if full_path is None or not os.path.isfile(full_path):
             return not_found("TileNotFound", f"No such tile: {slug}/{tile_path}")
         with gzip.open(full_path, "rb") as f:

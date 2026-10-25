@@ -21,7 +21,7 @@
                     "bbox": {
                         "type": "string",
                         "maxLength": 128,
-                        "description": "Bounding box as xmin,ymin,xmax,ymax in WGS84 decimal degrees"
+                        "description": "Bounding box as west,south,east,north in WGS84 decimal degrees: the same order and meaning as community.lexicon.location.bbox and a tileset's extent. Positional because it is a query parameter. west > east crosses the antimeridian."
                     }
                 },
                 "required": [
@@ -47,7 +47,7 @@
                         },
                         "overview": {
                             "type": "boolean",
-                            "description": "True when the area was too large for full-detail tiles and the server answered with coarse overview tiles holding only the most important places; absent means full detail"
+                            "description": "True when the area was too large for full-detail tiles and the server answered from the selected tilesets' overview bands instead; each band holds only its tileset's most important records, as many as the descriptor's overview.records (org.atgeo.defs#tileset). Absent means full detail."
                         }
                     }
                 }
@@ -55,7 +55,7 @@
             "errors": [
                 {
                     "name": "BboxTooLarge",
-                    "description": "The bounding box covers too many tiles"
+                    "description": "The bounding box covers too many tiles and a selected tileset has no overview band (its descriptor has no overview)"
                 },
                 {
                     "name": "BboxTooPrecise",
@@ -71,7 +71,7 @@
                 },
                 {
                     "name": "InvalidBbox",
-                    "description": "The bbox parameter must be four comma-separated numbers with ymin < ymax and xmin < xmax, except that a box crossing the antimeridian has xmin > 0 > xmax"
+                    "description": "The bbox parameter must be four comma-separated numbers with south < north and west < east, except that a box crossing the antimeridian has west > 0 > east"
                 }
             ]
         }

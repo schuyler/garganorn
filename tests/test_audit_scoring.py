@@ -143,7 +143,8 @@ class TestNegativePopulationClamping:
         assert test_div_2[2] == 30, f"test_div_2 (population=0) should have importance=30 (locality floor), got {test_div_2[2]}"
 
         # test_div_3 has positive population (50000), should have positive importance
-        # ln(1 + 50000) ≈ 10.82, so importance ≈ round(40 * 10.82/20.0) ≈ round(21.64) = 22
+        # ln(1 + 50000) ≈ 10.82, so s = 0.4 * 10.82/20.0 ≈ 0.216 (no density) and
+        # importance = round(30 + 49 * s) = round(40.6) = 41
         assert test_div_3[2] > 0, f"test_div_3 (population=50000) should have positive importance, got {test_div_3[2]}"
 
     def test_negative_population_not_nan(self):
