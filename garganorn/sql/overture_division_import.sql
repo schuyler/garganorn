@@ -36,7 +36,7 @@ CREATE OR REPLACE MACRO atgeo_valid_language(lang) AS (
 );
 
 -- Load density parquet file as temp table (no IDF for divisions)
--- When parquet path is None, create empty temp table (LEFT JOINs produce NULL, importance defaults to 0)
+-- When parquet path is None, create empty temp table (LEFT JOINs produce NULL; density then counts as 0, so a division scores from its subtype floor and population alone)
 ${density_cte}
 
 CREATE TEMP TABLE division_base AS
