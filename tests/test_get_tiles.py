@@ -63,6 +63,35 @@ class TestGetTiles:
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "InvalidBbox"
 
+    @pytest.mark.parametrize("bbox", [
+        "-300,-100,300,100",
+        "200,10,201,11",
+        "10,95,11,96",
+        "-181,10,-179,11",
+        "179,10,181,11",
+        "10,-91,11,-89",
+        "10,89,11,91",
+    ])
+    def test_out_of_range_coordinates_raise_invalid_bbox(self, tmp_path, bbox):
+        """A longitude outside [-180, 180] or a latitude outside [-90, 90] is
+        InvalidBbox (#26), not a quiet answer."""
+        with build_app(_overture(tmp_path)).test_client() as client:
+            resp = _get_tiles(client, bbox=bbox)
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "InvalidBbox"
+
+    @pytest.mark.parametrize("bbox", [
+        "-180,-90,180,90",
+        "-180,10,-179,11",
+        "179,89,180,90",
+        "179,10,-179,11",
+    ])
+    def test_range_bounds_are_inclusive(self, tmp_path, bbox):
+        """±180 and ±90 are on Earth; antimeridian boxes still cross."""
+        with build_app(_overture(tmp_path)).test_client() as client:
+            resp = _get_tiles(client, bbox=bbox)
+        assert resp.status_code == 200
+
     def test_unknown_dataset_raises_dataset_not_found(self, tmp_path):
         with build_app(_overture(tmp_path)).test_client() as client:
             resp = _get_tiles(client, dataset="example.org")
