@@ -225,7 +225,8 @@ class TestOsmImport:
         )
 
     def test_import_preserves_variant_tags(self, osm_parquet, tmp_path):
-        """n1005 has alt_name and name:fr; both must survive in places.tags after import."""
+        """n1005 has alt_name and name:fr; alt_name survives in places.tags
+        after import. name:fr does not (#34): `variants` carries it."""
         db_path = tmp_path / "test_osm_variant_tags.duckdb"
         conn = duckdb.connect(str(db_path))
         conn.execute("INSTALL spatial; LOAD spatial;")
@@ -237,7 +238,51 @@ class TestOsmImport:
         assert row is not None, "n1005 not found in places"
         tags = dict(row[0])
         assert 'alt_name' in tags, f"alt_name missing from tags: {tags}"
-        assert 'name:fr' in tags, f"name:fr missing from tags: {tags}"
+        assert 'name:fr' not in tags, f"name:fr kept in tags: {tags}"
+
+    def test_name_language_tags_become_variants_not_attributes(self, tmp_path):
+        """A name:* tag (name:fr, name:etymology, ...) is never copied into
+        places.tags, the source of a record's `attributes` and the tileset
+        descriptor's attribute list (#34), on the node, way and relation arms
+        alike. A language one still becomes a variant."""
+        base = tmp_path / "osm"
+        base.mkdir()
+        conn = duckdb.connect()
+        conn.execute("CREATE TABLE n (id BIGINT, tags MAP(VARCHAR, VARCHAR), lat DOUBLE, lon DOUBLE)")
+        conn.execute("""INSERT INTO n VALUES
+            (1, map(['name','amenity','name:fr','name:etymology:wikidata','cuisine'],
+                    ['Node Cafe','cafe','Café Nœud','Q1','coffee_shop']), 37.7612, -122.4195),
+            (9001, map([]::VARCHAR[], []::VARCHAR[]), 37.8199, -122.4786),
+            (9002, map([]::VARCHAR[], []::VARCHAR[]), 37.8197, -122.4788)""")
+        conn.execute("CREATE TABLE w (id BIGINT, tags MAP(VARCHAR, VARCHAR), nds STRUCT(ref BIGINT)[])")
+        conn.execute("""INSERT INTO w VALUES
+            (2, map(['name','tourism','name:fr'], ['Way Bridge','attraction','Pont Chemin']),
+             [{'ref': 9001}, {'ref': 9002}]::STRUCT(ref BIGINT)[])""")
+        conn.execute("CREATE TABLE r (id BIGINT, tags MAP(VARCHAR, VARCHAR), "
+                     "members STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[])")
+        conn.execute("""INSERT INTO r VALUES
+            (3, map(['name','tourism','name:fr'], ['Relation Place','attraction','Lieu Relation']),
+             [{'type': 'node', 'ref': 9001, 'role': ''},
+              {'type': 'node', 'ref': 9002, 'role': ''}]::STRUCT(type VARCHAR, ref BIGINT, role VARCHAR)[])""")
+        for table, name in (("n", "node"), ("w", "way"), ("r", "relation")):
+            conn.execute(f"COPY {table} TO '{base / name}.parquet' (FORMAT PARQUET)")
+        conn.close()
+
+        conn = duckdb.connect(str(tmp_path / "import.duckdb"))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        run_osm_import(conn, str(base / "node.parquet"), str(base / "way.parquet"),
+                       str(base / "relation.parquet"))
+        rows = {rkey: (dict(tags), [v["name"] for v in variants])
+                for rkey, tags, variants in conn.execute(
+                    "SELECT rkey, tags, variants FROM places").fetchall()}
+        conn.close()
+
+        assert set(rows) == {"n1", "w2", "r3"}, rows
+        for rkey, french in (("n1", "Café Nœud"), ("w2", "Pont Chemin"), ("r3", "Lieu Relation")):
+            tags, variant_names = rows[rkey]
+            assert not [k for k in tags if k.startswith("name:")], f"{rkey}: {tags}"
+            assert french in variant_names, f"{rkey}: {variant_names}"
+        assert rows["n1"][0] == {"cuisine": "coffee_shop"}
 
 
 # ---------------------------------------------------------------------------
