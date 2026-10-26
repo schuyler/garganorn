@@ -150,7 +150,7 @@ There's no search — you ask for tile coverage over a bounding box, then fetch 
 
 | Endpoint | Returns |
 |---|---|
-| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional and picks tilesets, not records (an OSM `way` search still downloads the area's nodes and relations; see the spec) |
+| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional and picks tilesets, not records (an OSM `way` search still downloads the area's nodes and relations; see [the spec](docs/atgeo-spec.md#orgatgeogettiles)) |
 | `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance and its tileset's attribution |
 | `GET /xrpc/org.atgeo.describeTileset?slug=` | A tileset's descriptor: slug, extent, carried and referenced collections with release, licences and attribution |
 | `GET /xrpc/org.atgeo.describeService` | The service's DID, its tile budget (`maxTiles`), and the slug and collections of each tileset |
