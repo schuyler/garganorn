@@ -768,7 +768,7 @@ class TestOvertureIdfJoinNoFanOut:
     multiply a place's row in the final output.
 
     Symmetric to TestOvertureDensityJoinNoFanOut above, for the idf side:
-    ov_idf joins idf_scores to ov_base on `i.category = b.categories.primary`
+    ov_idf joins idf_scores to ov_base on `i.category = b.taxonomy.primary`
     with no guarantee that category is unique in idf_scores. A duplicate
     category key would fan the matching place's row out through
     `LEFT JOIN ov_idf oi USING (id)` in the final SELECT.

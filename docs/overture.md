@@ -16,9 +16,12 @@ Overture Maps provides free and open geospatial map data normalized to a common 
 | `names.primary` | String | | The primary name of the place |
 | `names.common` | Object | | Common names in different languages using ISO 639-1 codes as keys (e.g., `{"es": "Spanish name"}`) |
 | `names.rules` | Array[Object] | | Rule-based name variants with `variant` type and `value` (e.g., `[{"variant": "short", "value": "NYC"}]`) |
-| `categories` | Object | ✓ | The categories of the place using Overture's hierarchical taxonomy |
-| `categories.primary` | String | ✓ | The primary or main category using dot notation (e.g., `eat_and_drink.restaurant.italian_restaurant`) |
-| `categories.alternate` | Array[String] | | Alternate categories when a place fits multiple categories (e.g., bookstore and coffee shop) |
+| `taxonomy` | Object | | The place's position in Overture's category hierarchy; null when the place has no leaf category |
+| `taxonomy.primary` | String | | The most specific category, the leaf (e.g., `vietnamese_restaurant`) |
+| `taxonomy.hierarchy` | Array[String] | | The path from the top-level group down to the leaf (e.g., `["food_and_drink", "restaurant", "asian_restaurant", "southeast_asian_restaurant", "vietnamese_restaurant"]`) |
+| `taxonomy.alternates` | Array[String] | | Other categories the place fits |
+| `basic_category` | String | | A broader label for the place, often the leaf itself (e.g., `restaurant` for a `vietnamese_restaurant`, but `farm` for a `farm`); may be present when `taxonomy` is null |
+| `operating_status` | String | | Whether the place is operating (e.g., `open`, `permanently_closed`, `temporarily_closed`); null when unknown |
 | `confidence` | Number | | Confidence of the place's existence as a number between 0 and 1 (0 = doesn't exist, 1 = definitely exists) |
 | `websites` | Array[String] | | Website URLs of the place (format: URI) |
 | `socials` | Array[String] | | Social media URLs of the place (format: URI) |
@@ -51,7 +54,7 @@ All Overture features, including Places, include these standard properties:
 
 ## Categories
 
-Overture Places includes 2000+ possible category values with hierarchical structure. Categories follow a dot-notation hierarchy (e.g., `eat_and_drink.restaurant.italian_restaurant`). The complete category list is available at the [Overture Categories CSV](https://github.com/OvertureMaps/schema/blob/main/docs/schema/concepts/by-theme/places/overture_categories.csv).
+Categories form a tree. In the 2026-10-21.0 release's places around New Hampshire, `taxonomy.primary` was the last element of `taxonomy.hierarchy` in every record, and wherever a place had a `taxonomy`, its `basic_category` was one of the hierarchy's elements.
 
 ## License
 
@@ -61,7 +64,6 @@ Data is available under CDLA Permissive 2.0 license.
 
 - [Official Overture Maps Places Documentation](https://docs.overturemaps.org/schema/reference/places/place/)
 - [Places Data Guide](https://docs.overturemaps.org/guides/places/)
-- [Complete Category List](https://github.com/OvertureMaps/schema/blob/main/docs/schema/concepts/by-theme/places/overture_categories.csv)
 - [Schema Concepts](https://docs.overturemaps.org/schema/concepts/by-theme/places/)
 - [Overture Maps Foundation](https://overturemaps.org/)
 
