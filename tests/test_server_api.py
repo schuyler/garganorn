@@ -281,15 +281,15 @@ def test_describe_service_lists_every_tileset_in_config_order(tmp_osm, tmp_overt
         }
         assert body == {
             "did": "did:web:places.atgeo.org",
-            "maxTiles": 50,
+            "maxTiles": 75,
             "tilesets": [by_slug[t["base_url"].rsplit("/", 1)[1]] for t in configured],
         }
 
 
 def test_describe_service_max_tiles_follows_config(tmp_osm):
-    """#19: maxTiles is 50 by default and the configured max_tiles otherwise."""
+    """#19: maxTiles is 75 by default and the configured max_tiles otherwise."""
     with build_app(tmp_osm).test_client() as c:
-        assert c.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 50
+        assert c.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 75
     with build_app(tmp_osm, max_tiles=7).test_client() as c:
         assert c.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 7
 

@@ -8,6 +8,7 @@ from garganorn import Server
 from garganorn.config import load_config
 
 DEFAULT_CONFIG = "config.yaml"
+DEFAULT_MAX_TILES = 75
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
@@ -17,7 +18,7 @@ def create_app():
     app.logger.setLevel(logging.INFO)
     tilesets = {}  # slug -> ServedTileset, in config order
     tile_dirs = {}  # slug -> directory holding the run directories
-    max_tiles = 50
+    max_tiles = DEFAULT_MAX_TILES
     if tiles_config:
         from garganorn.quadtree import TileManifest
         from garganorn.server import ServedTileset
@@ -51,7 +52,7 @@ def create_app():
                 TileBackedCollection(manifest_path, run_dir),
             )
             tile_dirs[slug] = os.path.dirname(run_dir)
-        max_tiles = tiles_config.get("max_tiles", 50)
+        max_tiles = tiles_config.get("max_tiles", DEFAULT_MAX_TILES)
     gazetteer = Server(repo, tilesets, max_tiles, public_base)
     init_flask(gazetteer.server, app)
 

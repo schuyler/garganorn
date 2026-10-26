@@ -24,7 +24,7 @@ tiles:
   tilesets:
     - run_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
-  max_tiles: 50
+  max_tiles: 75
 ```
 
 `repo` is the server's hostname; it determines the `did:web` identity. `run_dir` is a tile run directory (or the `current` symlink to one); the server reads `manifest.duckdb`, `manifest.json` and `tileset.json` from it and resolves the symlink once, at startup. `max_tiles` caps the tiles in a `getTiles` answer before it falls back to overview tiles; `describeService` advertises it as `maxTiles`.

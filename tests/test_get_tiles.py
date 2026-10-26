@@ -121,14 +121,12 @@ class TestGetTiles:
         assert resp.status_code == 200
         assert len(resp.get_json()["tiles"]) == 4
 
-    def test_default_max_tiles_is_50(self, tmp_path):
-        qks = [f"0230{a}{b}" for a in "0123" for b in "0123"] + \
-              [f"1203{a}{b}" for a in "0123" for b in "0123"] + \
-              [f"2000{a}{b}" for a in "0123" for b in "0123"] + \
-              [f"3000{a}{b}" for a in "0123" for b in "0123"]
-        with build_app(_overture(tmp_path, qks[:50])).test_client() as client:
-            assert len(_get_tiles(client).get_json()["tiles"]) == 50
-        with build_app(_overture(tmp_path, qks[:51], subdir="over")).test_client() as client:
+    def test_default_max_tiles_is_75(self, tmp_path):
+        qks = [f"{p}{a}{b}" for p in ("0230", "1203", "2000", "3000", "0320")
+               for a in "0123" for b in "0123"]
+        with build_app(_overture(tmp_path, qks[:75])).test_client() as client:
+            assert len(_get_tiles(client).get_json()["tiles"]) == 75
+        with build_app(_overture(tmp_path, qks[:76], subdir="over")).test_client() as client:
             assert _get_tiles(client).get_json()["error"] == "BboxTooLarge"
 
     def test_overview_tiles_replace_regular_tiles_over_max_tiles(self, tmp_path):
