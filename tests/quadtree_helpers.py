@@ -247,7 +247,9 @@ def write_minimal_overture_parquet(path, place_rows):
                             common MAP(VARCHAR, VARCHAR),
                             rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                         ),
-            categories  STRUCT("primary" VARCHAR),
+            taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+            basic_category VARCHAR,
+            operating_status VARCHAR,
             addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
             websites    VARCHAR[],
             socials     VARCHAR[],
@@ -260,6 +262,10 @@ def write_minimal_overture_parquet(path, place_rows):
         )
     """)
     for place_id, lon, lat, category in place_rows:
+        taxonomy = (
+            None if category is None
+            else {"primary": category, "hierarchy": ["services", category], "alternates": []}
+        )
         conn.execute(
             """
             INSERT INTO tmp_ov VALUES (
@@ -269,7 +275,8 @@ def write_minimal_overture_parquet(path, place_rows):
                 {'primary': ?,
                  'common': NULL::MAP(VARCHAR, VARCHAR),
                  'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-                {'primary': ?},
+                ?::STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+                ?, NULL,
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
             )
             """,
@@ -278,7 +285,8 @@ def write_minimal_overture_parquet(path, place_rows):
                 lon - 0.001, lat - 0.001, lon + 0.001, lat + 0.001,
                 f"POINT({lon} {lat})",
                 f"Place {place_id}",
-                category,
+                taxonomy,
+                None if category is None else "services",
             ],
         )
     conn.execute(f"COPY tmp_ov TO '{path}' (FORMAT PARQUET)")

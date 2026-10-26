@@ -1014,7 +1014,9 @@ class TestRunPipelineMtime:
                                 common MAP(VARCHAR, VARCHAR),
                                 rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                             ),
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+                basic_category VARCHAR,
+                operating_status VARCHAR,
                 addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
                 websites    VARCHAR[],
                 socials     VARCHAR[],
@@ -1036,7 +1038,7 @@ class TestRunPipelineMtime:
                 {'primary': 'Blue Bottle Coffee',
                  'common': map([]::VARCHAR[], []::VARCHAR[]),
                  'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-                {'primary': 'coffee_shop'},
+                {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
             )
         """)
@@ -1049,7 +1051,7 @@ class TestRunPipelineMtime:
                 {'primary': 'Golden Gate Park',
                  'common': map([]::VARCHAR[], []::VARCHAR[]),
                  'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-                {'primary': 'park'},
+                {'primary': 'park', 'hierarchy': ['attractions_and_activities', 'park'], 'alternates': []}, 'attractions_and_activities', NULL,
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
             )
         """)

@@ -71,7 +71,9 @@ def _make_overture_export_db(conn, places_rows=None, assignments=None):
             id          VARCHAR PRIMARY KEY,
             bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
             names       STRUCT("primary" VARCHAR),
-            categories  STRUCT("primary" VARCHAR),
+            taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+            basic_category VARCHAR,
+            operating_status VARCHAR,
             addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
             websites    VARCHAR[],
             socials     VARCHAR[],
@@ -97,7 +99,7 @@ def _make_overture_export_db(conn, places_rows=None, assignments=None):
                 '{place_id}',
                 {{'xmin': {lon}-0.001, 'ymin': {lat}-0.001, 'xmax': {lon}+0.001, 'ymax': {lat}+0.001}},
                 {{'primary': '{name}'}},
-                {{'primary': 'coffee_shop'}},
+                {{'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}}, 'food_and_drink', NULL,
                 {addr_sql},
                 NULL, NULL, NULL, NULL,
                 NULL,
@@ -177,6 +179,26 @@ class TestOvertureExportTiles:
             if _id_of(value) == place_id:
                 return value
         return None
+
+    def test_overture_export_taxonomy_attributes(self, overture_parquet, density_parquet, tmp_path):
+        """ov001's attributes carry taxonomy, basic_category and operating_status
+        as Overture names them, and no `categories` key."""
+        db_path = tmp_path / "test_ov_export_taxonomy.duckdb"
+        conn = duckdb.connect(str(db_path))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        self._run_full_pipeline(conn, overture_parquet, density_parquet)
+        record = self._get_record(conn, "ov001")
+        conn.close()
+        assert record is not None, "ov001 must appear in tile_export"
+        attrs = record["attributes"]
+        assert attrs["taxonomy"] == {
+            "primary": "coffee_shop",
+            "hierarchy": ["food_and_drink", "cafe_and_tea", "coffee_shop"],
+            "alternates": ["espresso_bar"],
+        }
+        assert attrs["basic_category"] == "food_and_drink"
+        assert attrs["operating_status"] == "open"
+        assert "categories" not in attrs, f"categories must not be served; got {sorted(attrs)}"
 
     def test_overture_export_addresses_inline(self, overture_parquet, density_parquet, tmp_path):
         """ov001 (one address entry with country='US', region='US-CA') must have an
@@ -361,7 +383,9 @@ class TestVariantAndAttributeNullVsAbsent:
                 id          VARCHAR PRIMARY KEY,
                 bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
                 names       STRUCT("primary" VARCHAR),
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+                basic_category VARCHAR,
+                operating_status VARCHAR,
                 addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
                 websites    VARCHAR[],
                 socials     VARCHAR[],
@@ -380,7 +404,7 @@ class TestVariantAndAttributeNullVsAbsent:
                 'op001',
                 {{'xmin': -122.420, 'ymin': 37.774, 'xmax': -122.418, 'ymax': 37.776}},
                 {{'primary': 'Test Place'}},
-                {{'primary': 'coffee_shop'}},
+                {{'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}}, 'food_and_drink', NULL,
                 NULL, NULL, NULL, NULL, NULL,
                 {brand_sql},
                 0.9, 1, NULL,

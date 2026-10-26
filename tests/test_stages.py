@@ -455,7 +455,7 @@ class TestStageDensityExtractMtime:
                 bbox        STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
                 geometry    VARCHAR,
                 names       STRUCT("primary" VARCHAR),
-                categories  STRUCT("primary" VARCHAR)
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[])
             )
         """)
 
@@ -465,7 +465,7 @@ class TestStageDensityExtractMtime:
                 {'xmin': -122.5, 'ymin': 37.7, 'xmax': -122.4, 'ymax': 37.8},
                 'POINT(-122.45 37.75)',
                 {'primary': 'Place 1'},
-                {'primary': NULL}
+                NULL
             )
         """)
 
@@ -475,7 +475,7 @@ class TestStageDensityExtractMtime:
                 {'xmin': -122.45, 'ymin': 37.75, 'xmax': -122.35, 'ymax': 37.85},
                 'POINT(-122.4 37.8)',
                 {'primary': 'Place 2'},
-                {'primary': NULL}
+                NULL
             )
         """)
 
@@ -858,7 +858,7 @@ def _write_null_key_idf_parquet(path):
     and no duplicates among the non-NULL keys.
 
     Mirrors production reachability: overture_place_idf.sql derives category
-    from categories.primary, and a NULL there survives as a NULL category
+    from taxonomy.primary, and a NULL there survives as a NULL category
     group. Must not trip the uniqueness guard (see
     _write_null_key_density_parquet's docstring for why).
     """
@@ -1966,6 +1966,15 @@ class TestTilesetJson:
             f"categories must be descending by count; got counts={counts}"
         )
 
+    def test_attributes_list_taxonomy_fields_not_categories(self, overture_parquet, tmp_path):
+        """tileset.json attributes include taxonomy, basic_category and
+        operating_status, and exclude categories."""
+        run_dir, _, _ = self._run_export_with_idf(overture_parquet, tmp_path, "cm6a")
+        tileset = json.loads((run_dir / "tileset.json").read_text())
+        attributes = set(tileset["collections"][0].get("attributes") or [])
+        assert {"taxonomy", "basic_category", "operating_status"} <= attributes, attributes
+        assert "categories" not in attributes, attributes
+
     def test_extent_contains_every_exported_point(self, overture_parquet, tmp_path):
         """extent (community.lexicon.location.bbox) equals the union bbox of
         the run's regular-band tile quadkeys (len(qk) >= 6, recovered from
@@ -2315,7 +2324,9 @@ class TestTilesetJson:
                                 common MAP(VARCHAR, VARCHAR),
                                 rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                             ),
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+                basic_category VARCHAR,
+                operating_status VARCHAR,
                 addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
                 websites    VARCHAR[],
                 socials     VARCHAR[],
@@ -2342,7 +2353,7 @@ class TestTilesetJson:
                 'POINT(-122.419 37.775)',
                 {'primary': 'No Brand Place', 'common': map([]::VARCHAR[], []::VARCHAR[]),
                  'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-                {'primary': 'coffee_shop'},
+                {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
                 NULL, NULL, NULL, NULL, NULL, NULL, 0.85, NULL, NULL
             )
         """)
@@ -2353,7 +2364,7 @@ class TestTilesetJson:
                 'POINT(-122.410 37.770)',
                 {'primary': 'Branded Place', 'common': map([]::VARCHAR[], []::VARCHAR[]),
                  'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-                {'primary': 'coffee_shop'},
+                {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
                 NULL, NULL, NULL, NULL, NULL, 'Acme Corp', NULL, NULL, NULL
             )
         """)
