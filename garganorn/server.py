@@ -40,25 +40,41 @@ URN_PREFIX = "urn:atgeo:"
 
 
 class _XrpcServer(lexrpc.Server):
-    """Drops the query parameters sent to a method whose lexicon declares none.
+    """Settles undeclared query parameters before lexrpc's dispatch sees them.
 
-    lexrpc skips validating them, by design (a cache-buster, a utm_* tag), but
-    still passes them on as keyword arguments, where `_`, `input` and `nsid`
-    collide with its own and the handler's argument names. Dropped here, before
-    the dispatch, no name can collide.
+    lexrpc passes query parameters to `Server.call(nsid, input=None, **params)`
+    as keyword arguments, so a key named `input` or `nsid` collides with its
+    own arguments (and `_` with the handler's) and escapes as a TypeError, a
+    500. Settled here, before the dispatch, no name can collide:
+
+    - A method whose lexicon declares no parameters drops them all. lexrpc
+      skips validating them, by design (a cache-buster, a utm_* tag).
+    - Any other method rejects a key its lexicon doesn't declare with a
+      ValueError, which lexrpc answers as 400 InvalidRequest, the same answer
+      its own validation gives every other unknown key (#29).
     """
 
     def __init__(self, lexicons):
         super().__init__(lexicons=lexicons)
-        self._parameterless = {
-            lex["id"] for lex in lexicons
-            if lex["defs"].get("main", {}).get("type") in ("query", "procedure")
-            and "parameters" not in lex["defs"]["main"]
-        }
+        self._parameterless = set()
+        self._declared = {}
+        for lex in lexicons:
+            main = lex["defs"].get("main", {})
+            if main.get("type") not in ("query", "procedure"):
+                continue
+            if "parameters" in main:
+                self._declared[lex["id"]] = main["parameters"].get("properties", {}).keys()
+            else:
+                self._parameterless.add(lex["id"])
 
     def decode_params(self, method_nsid, params):
         if method_nsid in self._parameterless:
             return {}
+        params = list(params)
+        declared = self._declared.get(method_nsid)
+        if declared is not None:
+            if unknown := {name for name, _ in params} - declared:
+                raise ValueError(f"unknown parameters: {unknown}")
         return super().decode_params(method_nsid, params)
 
 

@@ -566,6 +566,29 @@ def test_describe_service_ignores_query_parameters(client, query):
     assert resp.get_json() == expected
 
 
+_PARAMETERIZED_CALLS = {
+    "org.atgeo.getTiles": {"dataset": OVERTURE, "bbox": WORLD},
+    "org.atgeo.getPlace": {"uri": f"urn:atgeo:{OVERTURE}:place:ov001"},
+    "org.atgeo.describeTileset": {"slug": "overture-place"},
+}
+
+
+@pytest.mark.parametrize("nsid", sorted(_PARAMETERIZED_CALLS))
+@pytest.mark.parametrize("key", ["input", "nsid", "x"])
+def test_unknown_query_key_is_invalid_request(client, nsid, key):
+    """A key a method's lexicon doesn't declare is a 400 InvalidRequest naming
+    the key (#29). `input` and `nsid` collide with lexrpc's dispatch arguments
+    and used to escape as a 500; `x` pins the ordinary path to the same answer."""
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    app.testing = False
+    params = _PARAMETERIZED_CALLS[nsid]
+    assert client.get(f"/xrpc/{nsid}", query_string=params).status_code == 200
+    resp = client.get(f"/xrpc/{nsid}", query_string={**params, key: "1"})
+    _assert_json_error(resp, 400, "InvalidRequest")
+    assert key in resp.get_json()["message"]
+
+
 def test_describe_service_cache_buster_is_not_a_500(client):
     """With the app-wide 500 handler answering, a cache-buster is still a 200."""
     app = client.application
