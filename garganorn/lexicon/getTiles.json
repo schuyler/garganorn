@@ -16,7 +16,7 @@
                     "collection": {
                         "type": "string",
                         "maxLength": 64,
-                        "description": "Narrow to the tilesets carrying this collection of the dataset, e.g. 'way'"
+                        "description": "Narrow to the tilesets carrying this collection of the dataset, e.g. 'way'. This selects tilesets, not records: a tileset that carries several collections answers with the same tiles either way, so a collection search downloads every record of that tileset in the area and filters on the device."
                     },
                     "bbox": {
                         "type": "string",

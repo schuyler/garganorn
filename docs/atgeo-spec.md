@@ -318,6 +318,8 @@ The four values use the same words and mean the same things as a tileset's `exte
 
 Without `collection`, the answer covers every tileset carrying the dataset. With one, it covers every tileset carrying that collection. Either way the tiles may hold records of other collections: a caller that asked for a collection keeps the records whose `origin` starts with `urn:atgeo:{dataset}:{collection}:`, and a record with no `origin` matches no collection.
 
+So `collection` narrows which tilesets answer, not which bytes come back. A tileset that carries several collections answers with the same tiles either way: `collection=way` on `osm` fetches the node and relation records in the area too, and the client drops them. On places.atgeo.org's `osm` tileset (OSM release 2026-03-16: 23.1M nodes, 12.7M ways, 0.7M relations), a ways-only search keeps about a third of the records it downloads. The descriptor's per-collection `recordCount` ([describeTileset](#describetileset)) gives that mix tileset-wide; a given area's mix can differ, so it's a rough estimate. Per-collection tilesets would make `collection` cut bytes, but they'd make the common dataset-only search add up more tilesets against the budget and fall back to the overview sooner, so garganorn builds one OSM tileset.
+
 Returns `{"tiles": [...]}`: fully-formed, opaque tile URLs, in ascending string order. Fetch them all and merge; filtering and ordering are yours, applied after the merge. When the answer is the [overview band](#the-overview-band) rather than the regular tiles, the response also carries `"overview": true`.
 
 A bbox may cross the antimeridian: `west > 0 > east` means the box wraps across ±180°. Tiles that merely touch the box at an edge or corner count as covering it.
