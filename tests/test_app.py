@@ -531,7 +531,7 @@ def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
     assert resp.get_json() == {
         "did": "did:web:places.atgeo.org",
-        "maxTiles": 50,
+        "maxTiles": 75,
         "tilesets": [{
             "slug": "overture-place",
             "collections": [{"dataset": OVERTURE, "collection": "place"}],
@@ -539,11 +539,11 @@ def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     }
 
 
-def test_describe_service_max_tiles_defaults_to_50(tmp_path):
+def test_describe_service_max_tiles_defaults_to_75(tmp_path):
     """#19: describeService.maxTiles is the configured getTiles budget; the
-    default is 50."""
+    default is 75."""
     with build_app(serve_run(tmp_path)).test_client() as client:
-        assert client.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 50
+        assert client.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 75
 
 
 @pytest.mark.parametrize("query", [

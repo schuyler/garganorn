@@ -81,7 +81,7 @@ A tile is a set of place records associated with one quadkey cell.
 
 A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the N records of the tileset with the highest `importance`, ties broken by id; garganorn builds with N = 10,000, which is a producer parameter, not protocol. It's one cut, the same for every tileset: the division formula's [administrative floors](#importance) are what keep countries, dependencies and regions in it. A tileset with a band says so in its descriptor's `overview`, whose `records` is how many records the band actually holds, which can be fewer than N. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
 
-`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (garganorn's `max_tiles`, 50 by default, advertised as `describeService`'s `maxTiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a band of 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
+`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (garganorn's `max_tiles`, 75 by default, advertised as `describeService`'s `maxTiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a band of 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
 
 The response says which kind of answer it is. An overview answer carries `"overview": true` alongside `tiles`; a regular answer omits the key, so absent means regular. A client that needs to know reads the flag. It does not look at the length of the quadkey in a tile URL.
 
@@ -241,7 +241,7 @@ The list is authoritative. A dataset absent from it returns `DatasetNotFound` fr
 ```json
 {
   "did": "did:web:places.atgeo.org",
-  "maxTiles": 50,
+  "maxTiles": 75,
   "tilesets": [
     {"slug": "osm", "collections": [
       {"dataset": "openstreetmap.org", "collection": "node"},
