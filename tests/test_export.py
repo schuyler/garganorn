@@ -535,6 +535,48 @@ class TestVariantAndAttributeNullVsAbsent:
             f"as JSON null; got {variant}"
         )
 
+    @pytest.mark.parametrize("primary_category, key, value", [
+        ("amenity=cafe", "amenity", "cafe"),
+        ("shop=a=b", "shop", "a=b"),
+        ("tourism==", "tourism", "="),
+    ])
+    def test_osm_primary_category_value_keeps_everything_after_first_equals(
+            self, primary_category, key, value):
+        """primary_category is `key=value`; the attribute re-added from it
+        keeps the whole value, `=` included (#33). Splitting on every `=`
+        kept only the text before the value's own first `=`."""
+        conn = duckdb.connect()
+        conn.execute("""
+            CREATE TABLE places (
+                rkey             VARCHAR PRIMARY KEY,
+                name             VARCHAR,
+                importance       INTEGER,
+                latitude         DOUBLE,
+                longitude        DOUBLE,
+                variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [],
+                primary_category VARCHAR,
+                tags             MAP(VARCHAR, VARCHAR)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO places VALUES (
+                'osm001', 'Test OSM Place', 50, 37.7749, -122.4194, [],
+                ?, map([]::VARCHAR[], []::VARCHAR[])
+            )
+        """, [primary_category])
+        conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+        conn.execute("INSERT INTO tile_assignments VALUES ('osm001', '023130')")
+        conn.execute("""
+            CREATE TABLE place_containment (
+                place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
+            )
+        """)
+        raw_sql = _load_sql("osm_export_tiles.sql", _subs("osm"))
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+        (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
+        conn.close()
+        assert _value(record_json)["attributes"] == {key: value}
+
 
 # ---------------------------------------------------------------------------
 # Division containment relations JSON for test fixtures
