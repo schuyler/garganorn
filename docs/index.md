@@ -36,6 +36,7 @@
 | Document | Description |
 |----------|-------------|
 | [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (planned) |
+| [intermediate-bands.md](intermediate-bands.md) | Sampled overview bands at z8/z10/z12 so city-sized views get their notable places; measured, depends on a notability signal (proposed) |
 | [planned-features.md](planned-features.md) | New feature ideas not yet designed or scoped |
 
 ## Reference Queries
