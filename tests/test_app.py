@@ -684,6 +684,11 @@ def test_unmatched_routes_are_json_not_found(client, path):
     ("/health", {"GET", "HEAD", "OPTIONS"}),
     ("/tilesets/x", {"GET", "HEAD", "OPTIONS"}),
     ("/tiles/overture-place/x.json", {"GET", "HEAD", "OPTIONS"}),
+    # Every org.atgeo method is a query, so POST is a wrong method on XRPC too.
+    ("/xrpc/org.atgeo.getTiles", {"GET", "HEAD", "OPTIONS"}),
+    ("/xrpc/org.atgeo.getPlace", {"GET", "HEAD", "OPTIONS"}),
+    ("/xrpc/org.atgeo.describeTileset", {"GET", "HEAD", "OPTIONS"}),
+    ("/xrpc/org.atgeo.describeService", {"GET", "HEAD", "OPTIONS"}),
 ])
 def test_wrong_method_is_json_405_with_allow(client, path, allowed):
     resp = client.post(path)
@@ -744,13 +749,14 @@ def test_unhandled_exception_is_json_500_without_details(client, caplog):
 # Errors lexrpc lets through on /xrpc/, NSID gating, redirects, 5xx, CORS
 # ---------------------------------------------------------------------------
 
+# Queries take GET only, but lexrpc still reads a body sent with one.
 def test_xrpc_non_json_body_is_415(client):
-    resp = client.post("/xrpc/org.atgeo.getPlace", data="x", content_type="text/plain")
+    resp = client.get("/xrpc/org.atgeo.getPlace", data="x", content_type="text/plain")
     _assert_json_error(resp, 415, "UnsupportedMediaType")
 
 
 def test_xrpc_malformed_json_body_is_invalid_request_400(client):
-    resp = client.post("/xrpc/org.atgeo.getPlace", data="{nope",
+    resp = client.get("/xrpc/org.atgeo.getPlace", data="{nope",
                        content_type="application/json")
     _assert_json_error(resp, 400, "InvalidRequest")
 
@@ -758,7 +764,39 @@ def test_xrpc_malformed_json_body_is_invalid_request_400(client):
 def test_xrpc_wrong_method_is_405_with_allow(client):
     resp = client.put("/xrpc/org.atgeo.getPlace")
     _assert_json_error(resp, 405, "MethodNotAllowed")
-    assert "GET" in resp.headers["Allow"]
+    assert {m.strip() for m in resp.headers["Allow"].split(",")} == {"GET", "HEAD", "OPTIONS"}
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_wrong_method_to_an_unserved_nsid_is_still_501(client, method):
+    """The spec's 501 row covers every NSID the server doesn't implement,
+    procedures like com.atproto.repo.createRecord included, whatever the
+    HTTP method: a 405 would say the method exists."""
+    resp = getattr(client, method)("/xrpc/com.atproto.repo.createRecord")
+    _assert_json_error(resp, 501, "MethodNotImplemented")
+
+
+def test_a_procedure_takes_post_not_get(tmp_path, monkeypatch):
+    """No org.atgeo method is a procedure yet; if one becomes one, POST
+    reaches it and GET is the wrong method."""
+    from garganorn import server
+
+    real = server.load_lexicons
+
+    def with_a_procedure():
+        lexicons = real()
+        for lex in lexicons:
+            if lex["id"] == "org.atgeo.describeService":
+                lex["defs"]["main"]["type"] = "procedure"
+        return lexicons
+
+    monkeypatch.setattr(server, "load_lexicons", with_a_procedure)
+    app = build_app(serve_run(tmp_path, tiles={QK: [place(OVERTURE, "place", "ov001")]}))
+    with app.test_client() as c:
+        assert c.post("/xrpc/org.atgeo.describeService").status_code == 200
+        resp = c.get("/xrpc/org.atgeo.describeService")
+        _assert_json_error(resp, 405, "MethodNotAllowed")
+        assert {m.strip() for m in resp.headers["Allow"].split(",")} == {"POST", "OPTIONS"}
 
 
 def test_non_xrpc_400_keeps_its_own_name(client):
