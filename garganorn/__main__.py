@@ -2,13 +2,31 @@ import gzip, json, os, logging
 from flask import Flask, abort, jsonify, request, Response
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import safe_join
-from lexrpc.flask_server import init_flask
+from lexrpc.flask_server import XrpcEndpoint
 from lexrpc.base import NSID_RE, XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
 DEFAULT_CONFIG = "config.yaml"
 DEFAULT_MAX_TILES = 75
+
+class _XrpcEndpoint(XrpcEndpoint):
+    """lexrpc's XRPC view, but a query takes GET and a procedure POST.
+
+    lexrpc's own route takes GET and POST for every method, so a POST to a
+    query reached it and came back a 400. Here a served method's wrong HTTP
+    method is a 405 with an Allow header; an NSID that isn't served still
+    falls through to lexrpc's 501 (or 400 for a malformed one)."""
+
+    ALLOWED = {"query": ["GET", "HEAD", "OPTIONS"], "procedure": ["POST", "OPTIONS"]}
+
+    def dispatch_request(self, nsid):
+        if nsid in self.server._methods:
+            allowed = self.ALLOWED.get(self.server.defs[nsid]["type"])
+            if allowed and request.method not in allowed:
+                abort(405, valid_methods=allowed)
+        return super().dispatch_request(nsid)
+
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
@@ -54,7 +72,11 @@ def create_app():
             tile_dirs[slug] = os.path.dirname(run_dir)
         max_tiles = tiles_config.get("max_tiles", DEFAULT_MAX_TILES)
     gazetteer = Server(repo, tilesets, max_tiles, public_base)
-    init_flask(gazetteer.server, app)
+    app.add_url_rule(
+        "/xrpc/<nsid>",
+        view_func=_XrpcEndpoint.as_view("xrpc-endpoint", gazetteer.server),
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
 
     lexicon_map = gazetteer.lexicon_map
 
