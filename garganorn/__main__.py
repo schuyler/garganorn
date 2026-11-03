@@ -191,7 +191,7 @@ def create_app():
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 
-    CACHED_QUERIES = {"org.atgeo.getTiles", "org.atgeo.describeService"}
+    CACHED_QUERIES = {"org.atgeo.getTiles", "org.atgeo.getPlace", "org.atgeo.describeService"}
 
     @app.after_request
     def allow_cross_origin_reads(response):

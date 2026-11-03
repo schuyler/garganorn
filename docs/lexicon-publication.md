@@ -25,8 +25,7 @@ The `org.atgeo.*` files, from the repository root (bash or zsh):
 
 ```
 L=garganorn/lexicon
-FILES=($L/place.json $L/defs.json $L/tilePayload.json $L/getTiles.json
-  $L/getPlace.json $L/describeTileset.json $L/describeService.json)
+FILES=($(grep -l '"id": "org.atgeo\.' $L/*.json))
 
 goat lex lint "${FILES[@]}"
 goat lex parse "${FILES[@]}"

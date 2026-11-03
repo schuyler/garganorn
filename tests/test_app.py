@@ -413,6 +413,24 @@ def test_gettiles_response_has_cache_control(tile_client):
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
 
 
+def test_getplace_response_has_cache_control(client):
+    """getPlace XRPC responses are cached for 1 hour (#53)."""
+    resp = client.get("/xrpc/org.atgeo.getPlace", query_string={
+        "uri": f"urn:atgeo:{OVERTURE}:place:ov001",
+    })
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+
+
+def test_getplace_error_lacks_cache_control(client):
+    """A getPlace error is not cached (#53)."""
+    resp = client.get("/xrpc/org.atgeo.getPlace", query_string={
+        "uri": f"urn:atgeo:{OVERTURE}:place:nope",
+    })
+    _assert_json_error(resp, 400, "PlaceNotFound")
+    assert "Cache-Control" not in resp.headers
+
+
 def test_gettiles_lexicon_route_lacks_cache_control(tile_client):
     """Regression guard: GET /<nsid> (the lexicon route) matches
     view_args == {'nsid': 'org.atgeo.getTiles'}, identical to the XRPC

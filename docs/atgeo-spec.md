@@ -521,12 +521,13 @@ The status differs from XRPC on purpose: XRPC follows the AT Protocol convention
 |---|---|
 | a tile (`/tiles/{slug}/...`) | `public, max-age=604800, immutable` |
 | `getTiles`, 200 only | `public, max-age=3600` |
+| `getPlace`, 200 only | `public, max-age=3600` |
 | `describeService`, 200 only | `public, max-age=3600` |
 | anything else, `searchPlaces` included | none set<sup>1</sup> |
 
-<sup>1</sup> Except a CORS preflight: an `OPTIONS` request to `getTiles` or `describeService` is a 200 and carries `public, max-age=3600` too.
+<sup>1</sup> Except a CORS preflight: an `OPTIONS` request to `getTiles`, `getPlace` or `describeService` is a 200 and carries `public, max-age=3600` too.
 
-Tile URLs are immutable, so tiles are cached for a week and never revalidated. `getTiles` and `describeService` change when the gazetteer publishes a new build, so they carry an hour; a client learns of a new build within an hour of asking. The deployment's build cadence has to respect the week: a retired build whose URLs clients still hold as fresh is a 404.
+Tile URLs are immutable, so tiles are cached for a week and never revalidated. `getTiles`, `getPlace` and `describeService` change when the gazetteer publishes a new build, so they carry an hour; a client learns of a new build within an hour of asking. The deployment's build cadence has to respect the week: a retired build whose URLs clients still hold as fresh is a 404.
 
 **CORS.** Every response from the server, including errors and tiles, carries `Access-Control-Allow-Origin: *`, so browser clients on any origin can read it. A server MUST send it. The header appears exactly once.
 
