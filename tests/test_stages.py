@@ -44,6 +44,7 @@ from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline, SOURCES
 from tests.duckdb_spy import spy_on_duckdb_connect
 from tests.lexicon_helpers import validate_def
+from tests.page_rank_file import empty_page_rank
 
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
@@ -200,7 +201,7 @@ class TestStageExport:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         gz_files = list(tiles_current.rglob("*.json.gz"))
@@ -215,7 +216,7 @@ class TestStageManifest:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_path = tiles_current / "manifest.json"
@@ -230,7 +231,7 @@ class TestStageManifest:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_db = tiles_current / "manifest.duckdb"
@@ -258,7 +259,7 @@ class TestSearchIndex:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
         run_dir = (tmp_path / "overture_place" / "tiles" / "current").resolve()
 
         origins = set()
@@ -294,6 +295,85 @@ class TestSearchIndex:
         assert self._record_count(run_dir) == 2
 
 
+    def test_stage_export_stores_page_rank_for_a_record_with_a_qid(self, tmp_path):
+        from tests.page_rank_file import write_page_rank
+        from tests.test_identity_export import _empty_containment_dir, _hand_built_osm
+
+        places_pq, ta_pq = _hand_built_osm(tmp_path, ["n1", "n2"], "pr")
+        tagged_pq = str(tmp_path / "pr_tagged.parquet")
+        duckdb.execute(
+            f"COPY (SELECT * REPLACE (CASE WHEN rkey = 'n1' THEN map(['wikidata'], ['Q42']) "
+            f"ELSE tags END AS tags) FROM read_parquet('{places_pq}')) "
+            f"TO '{tagged_pq}' (FORMAT PARQUET)")
+        tiles_root = str(tmp_path / "pr_tiles")
+        os.makedirs(tiles_root)
+
+        run_dir = Path(stage_export(
+            "osm", tagged_pq, ta_pq, _empty_containment_dir(tmp_path, "pr_containment"),
+            tiles_root, time.monotonic(), memory_limit="4GB",
+            releases={"openstreetmap.org": RELEASES["openstreetmap.org"]},
+            page_rank_parquet=write_page_rank(tmp_path / "pr.parquet", {"Q42": 0.5}),
+        ))
+
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            ranks = dict(con.execute(
+                "SELECT key, page_rank FROM search_records").fetchall())
+        finally:
+            con.close()
+        assert ranks == {"openstreetmap.org:node:1": 0.5,
+                         "openstreetmap.org:node:2": None}
+
+
+class TestPageRankStage:
+    """stage_page_rank collapses wikimedia-importance.csv.gz to one row per QID."""
+
+    ROWS = [
+        'language,type,title,importance,wikidata_id',
+        'en,article,"Foo, le",0.5,Q1',
+        'en,redirect,Foo,0.5,Q1',
+        'fr,article,Fou,0.7,Q1',
+        'de,article,Fuu,NaN,Q1',
+        'en,article,Bar,0.3,Q2',
+        'en,article,Baz,NaN,Q3',
+    ]
+
+    @classmethod
+    def _csv(cls, tmp_path):
+        path = tmp_path / "wikimedia-importance.csv.gz"
+        with gzip.open(path, "wt") as f:
+            f.write("\n".join(cls.ROWS) + "\n")
+        return str(path)
+
+    @staticmethod
+    def _rows(output):
+        return dict(duckdb.execute(
+            f"SELECT qid, page_rank FROM read_parquet('{output}')").fetchall())
+
+    def test_one_row_per_qid_at_the_max_importance(self, tmp_path):
+        from garganorn.stages import stage_page_rank
+        output = str(tmp_path / "page_rank.parquet")
+
+        stage_page_rank(self._csv(tmp_path), output)
+
+        assert self._rows(output) == {"Q1": 0.7, "Q2": 0.3}
+
+    def test_fresh_output_is_kept_and_a_newer_csv_rebuilds_it(self, tmp_path):
+        from garganorn.stages import stage_page_rank
+        csv = self._csv(tmp_path)
+        output = str(tmp_path / "page_rank.parquet")
+        stage_page_rank(csv, output)
+        first = os.stat(output).st_mtime_ns
+
+        stage_page_rank(csv, output)
+        assert os.stat(output).st_mtime_ns == first
+
+        meta_mtime = os.stat(output + ".meta.json").st_mtime
+        os.utime(csv, (meta_mtime + 10, meta_mtime + 10))
+        stage_page_rank(csv, output)
+        assert os.stat(output).st_mtime_ns != first
+
+
 # ---------------------------------------------------------------------------
 # Tile envelope: tile top-level is exactly {publishedAt, attribution,
 # records}.
@@ -321,7 +401,7 @@ class TestEnvelopeShape:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
         assert set(tile.keys()) == {"publishedAt", "attribution", "records"}, (
@@ -334,7 +414,7 @@ class TestEnvelopeShape:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         with open(tiles_current / "manifest.json") as f:
             manifest = json.load(f)
@@ -397,7 +477,7 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, now=fixed_now, releases=RELEASES)
+                               force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         assert os.path.basename(run_dir.rstrip("/")) == "20260709T180000", (
             f"run dir must be named from the injected now; got {run_dir}"
@@ -415,7 +495,7 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, now=fixed_now, releases=RELEASES)
+                               force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank())
         run_dir = Path(run_dir)
 
         tile = _read_one_tile(run_dir)
@@ -441,7 +521,7 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir = Path(stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                     tiles_root, time.monotonic(), memory_limit="4GB",
-                                    force=True, now=fixed_now, releases=RELEASES))
+                                    force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank()))
 
         gz_files = list(run_dir.rglob("*.json.gz"))
         assert gz_files, "expected at least one tile"
@@ -468,10 +548,10 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir_a = Path(stage_export("overture_place", places_a, ta_a, cont_a,
                                       str(tmp_path / "tiles_d1"), time.monotonic(),
-                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES))
+                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank()))
         run_dir_b = Path(stage_export("overture_place", places_b, ta_b, cont_b,
                                       str(tmp_path / "tiles_d2"), time.monotonic(),
-                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES))
+                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank()))
 
         def _tile_bytes(run_dir):
             out = {}
@@ -697,7 +777,7 @@ class TestStageExportTempDirectory:
         # Must not raise TypeError for an unexpected keyword argument.
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
-                     force=True, temp_directory=str(scratch), releases=RELEASES)
+                     force=True, temp_directory=str(scratch), releases=RELEASES, page_rank_parquet=empty_page_rank())
 
     def test_honors_temp_directory_for_spill_location(
         self, overture_parquet, tmp_path, monkeypatch
@@ -718,7 +798,7 @@ class TestStageExportTempDirectory:
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
-                     force=True, temp_directory=str(scratch), releases=RELEASES)
+                     force=True, temp_directory=str(scratch), releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         before = _statements_before_write_manifest_db(statements)
         temp_dir_stmts = [s for s in before if "SET temp_directory" in s]
@@ -753,7 +833,7 @@ class TestStageExportTempDirectory:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, releases=RELEASES)
+                               force=True, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, f"no SET temp_directory statement recorded: {statements}"
@@ -787,6 +867,7 @@ class TestRunPipelineTempDirectoryThreading:
             "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
             str(tmp_path / "output_rp"), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, temp_directory=str(scratch),
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert calls, "stage_export must have been called"
@@ -1546,7 +1627,7 @@ class TestStageExportMaxTempDirectorySize:
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds1"), time.monotonic(),
-                     memory_limit="4GB", force=True, releases=RELEASES)
+                     memory_limit="4GB", force=True, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         before = _statements_before_write_manifest_db(statements)
         stmts = _max_temp_stmts(before)
@@ -1572,7 +1653,7 @@ class TestStageExportMaxTempDirectorySize:
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds2"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
-                     max_temp_directory_size="9GB", releases=RELEASES)
+                     max_temp_directory_size="9GB", releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         before = _statements_before_write_manifest_db(statements)
         stmts = _max_temp_stmts(before)
@@ -1682,7 +1763,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_wmdb4"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
-                     max_temp_directory_size="12GB", releases=RELEASES)
+                     max_temp_directory_size="12GB", releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         assert calls, "stage_export must have called write_manifest_db"
         assert calls[-1].get("temp_directory") == str(scratch), (
@@ -1715,6 +1796,7 @@ class TestMaxTempDirectorySizeThreading:
             "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
             str(tmp_path / "output_mtds"), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, max_temp_directory_size="11GB",
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert calls, "stage_export must have been called"
@@ -1826,7 +1908,7 @@ class TestMaxTempDirectorySizeThreading:
             memory_limit=None, max_per_tile=None, boundaries=None,
             export_workers=None, density_parquet=None, idf_parquet=None,
             temp_directory=None, max_temp_directory_size=None, force=False,
-            release=[],
+            release=[], page_rank_parquet="/nonexistent/page_rank.parquet",
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -1982,6 +2064,7 @@ class TestTilesetJson:
             tiles_root, time.monotonic(), memory_limit="4GB",
             force=True, idf_parquet=idf_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         return run_dir, idf_parquet, places_parquet
 
@@ -2032,6 +2115,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2091,6 +2175,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, short_ta, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2129,6 +2214,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             str(tmp_path / "tiles_ov0"), time.monotonic(), memory_limit="4GB",
             force=True, releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2162,6 +2248,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, banded_ta, containment_dir,
             str(tmp_path / "tiles_ov1"), time.monotonic(), memory_limit="4GB",
             force=True, releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2199,6 +2286,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
 
         tileset = json.loads((run_dir / "tileset.json").read_text())
@@ -2232,6 +2320,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2274,6 +2363,7 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2322,6 +2412,7 @@ class TestTilesetJson:
             tiles_root, time.monotonic(), memory_limit="4GB",
             force=True, idf_parquet=idf_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2469,7 +2560,7 @@ class TestTilesetJson:
 
         with pytest.raises(RuntimeError, match="simulated crash"):
             stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
-                         tiles_root, time.monotonic(), memory_limit="4GB", force=True, releases=RELEASES)
+                         tiles_root, time.monotonic(), memory_limit="4GB", force=True, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         run_dirs = [d for d in Path(tiles_root).iterdir() if d.is_dir() and not d.is_symlink()]
         assert run_dirs, "expected the interrupted run dir to remain on disk"

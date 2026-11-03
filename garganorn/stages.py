@@ -788,11 +788,12 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
     os.rename(tmp_path, manifest_path)
 
 
-def write_search_index(run_dir: str, *, memory_limit: str = "48GB",
+def write_search_index(run_dir: str, *, page_rank_parquet: str, memory_limit: str = "48GB",
                        temp_directory: str | None = None,
                        max_temp_directory_size: str | None = "250GB") -> None:
     """Write search.duckdb from the run's tiles. Atomic: builds in .tmp,
-    renames into place. A run with no tiles gets the empty tables."""
+    renames into place. A run with no tiles gets the empty tables. Records
+    are ranked by the page rank of their Wikidata QID, then importance."""
     search_path = os.path.join(run_dir, "search.duckdb")
     tmp_path = search_path + ".tmp"
     if os.path.exists(tmp_path):
@@ -809,10 +810,44 @@ def write_search_index(run_dir: str, *, memory_limit: str = "48GB",
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
         con.execute(schema)
         if tiles:
-            con.execute(fill.replace("${tiles}", repr(tiles)))
+            con.execute(fill.replace("${tiles}", repr(tiles))
+                            .replace("${page_rank}", repr(page_rank_parquet)))
     finally:
         con.close()
     os.rename(tmp_path, search_path)
+
+
+def stage_page_rank(csv_path: str, output: str, *, force: bool = False,
+                    memory_limit: str = "48GB") -> None:
+    """Collapse Nominatim's wikimedia-importance.csv.gz to one (qid, page_rank)
+    row per QID: the maximum importance over its articles and redirects."""
+    if not force and artifact_fresh(output, [csv_path], {}):
+        log.info("page_rank: skipping (artifact fresh)")
+        return
+
+    tmp_output = output + ".tmp"
+    if os.path.exists(tmp_output):
+        os.remove(tmp_output)
+
+    csv_sql = csv_path.replace("'", "''")
+    tmp_sql = tmp_output.replace("'", "''")
+
+    con = duckdb.connect()
+    try:
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"""
+            COPY (
+                SELECT wikidata_id AS qid, max(importance) AS page_rank
+                FROM read_csv('{csv_sql}', header = true)
+                WHERE NOT isnan(importance)
+                GROUP BY wikidata_id
+            ) TO '{tmp_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+    finally:
+        con.close()
+
+    finalize_artifact(tmp_output, output, params={}, inputs=[csv_path])
 
 
 def write_manifest(output_dir, *, generated_at):
@@ -2089,7 +2124,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                  force: bool = False,
                  now: datetime | None = None,
                  idf_parquet: str | None = None,
-                 releases: dict[str, str] | None = None) -> str:
+                 releases: dict[str, str] | None = None,
+                 *, page_rank_parquet: str) -> str:
     """Export tiles from parquet artifacts.
 
     Reads places and tile_assignments from parquet artifacts. Builds a
@@ -2377,7 +2413,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     write_manifest_db(tile_assignments_parquet, run_dir, source,
                       temp_directory=temp_directory,
                       max_temp_directory_size=max_temp_directory_size)
-    write_search_index(run_dir, memory_limit=memory_limit, temp_directory=temp_directory,
+    write_search_index(run_dir, page_rank_parquet=page_rank_parquet,
+                       memory_limit=memory_limit, temp_directory=temp_directory,
                        max_temp_directory_size=max_temp_directory_size)
     write_tileset_json(run_dir, source, source_cls, published_at=published_at,
                        manifest=manifest, places_pq=places_pq,

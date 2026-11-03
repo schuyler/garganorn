@@ -2,13 +2,14 @@
 import json
 import logging
 
+import duckdb
 import gunicorn.config
 import gunicorn.glogging
 import pytest
 
 from tests.lexicon_helpers import LEXICON_DIR, validate_def
 from tests.served_runs import (
-    OVERTURE, box, build_app, geo, place, serve_run,
+    OSM, OVERTURE, STAMP, box, build_app, geo, place, serve_run,
 )
 
 QK = "012301"
@@ -279,3 +280,74 @@ def test_gunicorn_error_log_strips_the_query(tmp_path, capfd):
     err = capfd.readouterr().err
     assert "/xrpc/org.atgeo.searchPlaces" in err
     assert NONCE not in err
+
+
+def _osm_found(tmp_path, records, page_rank, q="zed"):
+    app = build_app(serve_run(tmp_path, "osm", [(OSM, "node")], {QK: records},
+                              page_rank=page_rank))
+    with app.test_client() as client:
+        return _names(_search(client, dataset=OSM, q=q))
+
+
+def _osm(id, name, **kwargs):
+    return place(OSM, "node", id, name, **kwargs)
+
+
+def test_notable_record_ranks_before_a_more_important_one(tmp_path):
+    """N1"""
+    records = [_osm("n1", "Zed Plain", importance=90),
+               _osm("n2", "Zed Notable", importance=10, wikidata="Q1")]
+    assert _osm_found(tmp_path, records, {"Q1": 0.1}) == ["Zed Notable", "Zed Plain"]
+
+
+def test_higher_page_rank_ranks_first_despite_lower_importance(tmp_path):
+    records = [_osm("n1", "Zed Low", importance=90, wikidata="Q1"),
+               _osm("n2", "Zed High", importance=10, wikidata="Q2")]
+    assert _osm_found(tmp_path, records, {"Q1": 0.2, "Q2": 0.8}) == ["Zed High", "Zed Low"]
+    con = duckdb.connect(str(tmp_path / "osm" / "tiles" / STAMP / "search.duckdb"),
+                         read_only=True)
+    try:
+        index_order = [r[0] for r in con.execute(
+            "SELECT key FROM search_records ORDER BY rid").fetchall()]
+    finally:
+        con.close()
+    assert index_order == ["openstreetmap.org:node:n2", "openstreetmap.org:node:n1"]
+
+
+def test_equal_page_rank_orders_by_importance_then_key(tmp_path):
+    records = [_osm("n1", "Zed A", importance=10, wikidata="Q1"),
+               _osm("n3", "Zed C", importance=20, wikidata="Q3"),
+               _osm("n2", "Zed B", importance=20, wikidata="Q2")]
+    ranks = {"Q1": 0.5, "Q2": 0.5, "Q3": 0.5}
+    assert _osm_found(tmp_path, records, ranks) == ["Zed B", "Zed C", "Zed A"]
+
+
+def test_qid_absent_from_the_file_ranks_with_the_non_notable(tmp_path):
+    records = [_osm("n1", "Zed Unlisted", importance=10, wikidata="Q9"),
+               _osm("n2", "Zed Plain", importance=50),
+               _osm("n3", "Zed Notable", importance=1, wikidata="Q1"),
+               _osm("n4", "Zed Zero", importance=0, wikidata="Q0")]
+    assert _osm_found(tmp_path, records, {"Q1": 0.1, "Q0": 0.0}) == [
+        "Zed Notable", "Zed Zero", "Zed Plain", "Zed Unlisted"]
+
+
+def test_brand_qid_gives_an_overture_place_no_boost(tmp_path):
+    """N2"""
+    records = [_record("a", "Zed Plain", importance=20),
+               _record("b", "Zed Chain", importance=10, brand_wikidata="Q7")]
+    app = build_app(serve_run(tmp_path, tiles={QK: records}, page_rank={"Q7": 0.9}))
+    with app.test_client() as client:
+        assert _names(_search(client, q="zed")) == ["Zed Plain", "Zed Chain"]
+
+
+def test_dataset_wide_search_ranks_notability_across_tilesets(tmp_path):
+    places = [place(OVERTURE, "place", "p", "Paris Place", importance=90)]
+    divisions = [place(OVERTURE, "division", "d", "Paris Division", importance=10,
+                       wikidata="Q1")]
+    app = build_app(
+        serve_run(tmp_path, "overture-place", [(OVERTURE, "place")], {QK: places}),
+        serve_run(tmp_path, "overture-division", [(OVERTURE, "division")], {QK: divisions},
+                  page_rank={"Q1": 0.5}),
+    )
+    with app.test_client() as client:
+        assert _names(_search(client, q="paris")) == ["Paris Division", "Paris Place"]

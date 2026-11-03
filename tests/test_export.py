@@ -15,6 +15,7 @@ from tests.quadtree_helpers import (
 from tests.duckdb_spy import spy_on_duckdb_connect
 from garganorn.quadtree import SOURCES
 from garganorn.database import DIVISION_URN_PREFIX
+from tests.page_rank_file import empty_page_rank
 
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
@@ -984,6 +985,7 @@ class TestContainmentInExport:
         # If --boundaries is not defined, argparse will raise SystemExit(2).
         test_args = [
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "/tmp/test.parquet",
             "--output", "/tmp/output",
@@ -1341,6 +1343,7 @@ class TestExportRecordParityPhase2:
                 (-122.55, 37.60, -122.30, 37.85),
                 str(root), memory_limit="4GB", max_per_tile=100,
                 density_parquet=density_parquet, force=True, releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
             tiles_current = root / "overture_place" / "tiles" / "current"
             assert tiles_current.exists(), (
@@ -1402,6 +1405,7 @@ class TestSummaryByteIdenticalCopies:
             (-122.55, 37.60, -122.30, 37.85),
             str(root), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, force=True, releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         tiles_current = root / "overture_place" / "tiles" / "current"
         assert tiles_current.exists(), f"tiles must be at {tiles_current}"
@@ -1566,7 +1570,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
-                     releases=RELEASES)
+                     releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         # Every record's value must have relations == {}
         gz_files = list(Path(tiles_root).rglob("*.json.gz"))
@@ -1643,11 +1647,11 @@ class TestStageExportPhase2Body:
         sql_log = spy_on_duckdb_connect(monkeypatch, stages_module)
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_a, t0,
-                     releases=RELEASES, now=fixed_now, export_partition_zoom=6)
+                     releases=RELEASES, now=fixed_now, export_partition_zoom=6, page_rank_parquet=empty_page_rank())
         first_run_sql = list(sql_log)
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root_b, t0,
-                     releases=RELEASES, now=fixed_now, export_partition_zoom=6)
+                     releases=RELEASES, now=fixed_now, export_partition_zoom=6, page_rank_parquet=empty_page_rank())
         second_run_sql = sql_log[len(first_run_sql):]
 
         _assert_two_pass_query_shape(first_run_sql, expected_partitions=3)
@@ -1713,7 +1717,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
-                     releases=RELEASES)
+                     releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         # The incomplete leftover run dir must be deleted
         leftover_run_dir = os.path.join(tiles_root, leftover_ts)
@@ -1738,7 +1742,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
-                     releases=RELEASES)
+                     releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         # Find run dir via tiles/current symlink
         current = os.path.join(tiles_root, "current")
@@ -1769,7 +1773,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
-                     releases=RELEASES)
+                     releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         current = os.path.join(tiles_root, "current")
         assert os.path.islink(current), "tiles/current must be a symlink after stage_export"
@@ -1811,7 +1815,7 @@ class TestStageExportPhase2Body:
         t0 = time.monotonic()
 
         stage_export("overture_place", places_pq, ta_pq, containment_dir, tiles_root, t0,
-                     releases=RELEASES)
+                     releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         # At most 2 complete run dirs survive (keep-2)
         complete_dirs = sorted([
@@ -2053,6 +2057,7 @@ class TestBatchedExportPartitioning:
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
             time.monotonic(), releases=RELEASES, export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert _tile_ids(run_dir, "0123") == {f"short{i}" for i in range(5)}, (
@@ -2105,6 +2110,7 @@ class TestBatchedExportPartitioning:
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
             time.monotonic(), releases=RELEASES, export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert _tile_ids(run_dir, tile_a1) == {"a1_0", "a1_1"}
@@ -2142,6 +2148,7 @@ class TestBatchedExportPartitioning:
         run_dir = stage_export(
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
             time.monotonic(), releases=RELEASES, export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
 
         ids = _tile_ids(run_dir, tile_qk)
@@ -2186,6 +2193,7 @@ class TestBatchedExportPartitioning:
         run_dir = stage_export(
             source, places_pq, ta_pq, containment_dir, tiles_root,
             time.monotonic(), releases=RELEASES, export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert _tile_ids(run_dir, "0123") == {f"{id_prefix}{i}" for i in range(3)}
@@ -2224,6 +2232,7 @@ class TestBatchedExportPartitioning:
             "overture_place", places_pq, ta_pq, containment_dir, tiles_root,
             time.monotonic(), releases=RELEASES, temp_directory=str(temp_dir),
             export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert spy["snapshot"] is not None, "expected at least one tile flush"
@@ -2282,6 +2291,7 @@ class TestBatchedExportPartitioning:
             "overture_place", places_a, ta_a, containment_a, tiles_root_a,
             time.monotonic(), releases=RELEASES, temp_directory=str(temp_dir),
             export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
         assert _tile_ids(run_dir_a, "0000") == {"a0", "a1"}
         # >= 2, not just non-empty: DuckDB's own SET temp_directory spill dir
@@ -2302,6 +2312,7 @@ class TestBatchedExportPartitioning:
             "overture_place", places_b, ta_b, containment_b, tiles_root_b,
             time.monotonic(), releases=RELEASES, temp_directory=str(temp_dir),
             export_partition_zoom=6,
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert _tile_ids(run_dir_b, "3333") == {"b0", "b1"}, (

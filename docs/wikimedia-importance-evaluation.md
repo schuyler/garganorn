@@ -1,16 +1,18 @@
 # Wikimedia Importance as a Data Source
 
-Evaluated 2026-04-11. Not yet implemented.
+Evaluated 2026-04-11. Search uses it: `searchPlaces` ranks places by the
+page rank of their OSM or division Wikidata QID, ahead of importance
+(`design-constraints.md`, "Search ranks notability before importance; tiles
+don't"). Tile importance does not (#46), and Overture places get no signal:
+their only QID is `brand.wikidata`, deliberately unused.
 
 ## Problem
 
 Garganorn's importance formula (`60 * density + 40 * idf` for places; division
 scoring differs — see `design-constraints.md`, "Importance scoring varies by
-entity type") has no notability signal. Garganorn doesn't serve text queries
-today — it registers only `getTiles`, `getPlace`, `describeTileset` and
-`describeService` — but if it did, there would be nothing to distinguish the
-Golden Gate Bridge from a nearby dentist's office with similar density: both
-would rank equally.
+entity type") has no notability signal. Ranked by importance alone, a text
+query has nothing to distinguish the Golden Gate Bridge from a nearby
+dentist's office with similar density: both rank equally.
 
 ## Nominatim's Approach
 
@@ -118,10 +120,9 @@ For connecting garganorn places to Wikipedia importance scores:
 ## Why It Matters
 
 The current importance formula measures "busy area" (density) and "unusual
-category" (IDF). Neither measures "famous." If garganorn served text-only
-queries without a bounding box, the system would need a signal that says
-"Golden Gate Bridge" is a globally-known landmark, not just another POI in a
-dense area.
+category" (IDF). Neither measures "famous." A text-only query without a
+bounding box needs a signal that says "Golden Gate Bridge" is a
+globally-known landmark, not just another POI in a dense area.
 
 Wikipedia importance directly measures notability — how much attention a
 place receives. Places with Wikidata QIDs skew toward exactly the class that
@@ -135,7 +136,7 @@ museums, government buildings, and well-known commercial brands.
 - Places with a Wikidata match could receive a notability bonus that
   supplements or partially replaces the density/IDF formula.
 - Places without Wikidata IDs keep the current formula unchanged.
-- ~10M unique QIDs — small enough for a simple lookup join.
+- ~3.6M unique QIDs (2026-11-03 download) — small enough for a simple lookup join.
 - The importance float (0–1) would need to be scaled to garganorn's 0–100
   integer range.
 - The strongest impact would be on the OSM data source, where wikidata tags

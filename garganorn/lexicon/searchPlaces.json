@@ -4,7 +4,7 @@
     "defs": {
         "main": {
             "type": "query",
-            "description": "Find places in a dataset whose name matches a keyword's words, most important first. Takes no point and ranks by no distance; a region, if given, is whole degrees.",
+            "description": "Find places in a dataset whose name matches a keyword's words, most notable first. Takes no point and ranks by no distance; a region, if given, is whole degrees.",
             "parameters": {
                 "type": "params",
                 "properties": {
@@ -45,7 +45,7 @@
                         "places": {
                             "type": "array",
                             "maxLength": 20,
-                            "description": "At most 20 matches, by importance descending, then record key ascending",
+                            "description": "At most 20 matches, those with a Wikipedia page rank first, highest first; then importance descending; then record key ascending",
                             "items": {
                                 "type": "ref",
                                 "ref": "org.atgeo.getPlace#placeView"
