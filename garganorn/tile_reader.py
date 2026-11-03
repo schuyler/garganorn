@@ -23,30 +23,36 @@ class TileBackedCollection:
         return self._local.con
 
     def get_place(self, key: str):
-        """Look up which tile contains this key, read the tile, and return
-        (record, attribution): the record and the tile's attribution array.
-        Returns None when the key is not found.
+        """Return (record, attribution) for this key, or None when not found."""
+        return self.get_places([key]).get(key)
 
-        fetchone() picks one row arbitrarily when a division key has N
-        record_tiles rows (one per overlapping tile) -- correct only because
-        all copies of a division's record are byte-identical.
+    def get_places(self, keys) -> dict:
+        """Map each found key to (record, attribution): the record and the
+        tile's attribution array. Keys that are not found are absent.
+
+        any_value() picks one tile when a division key has N record_tiles
+        rows (one per overlapping tile) -- correct only because all copies of
+        a division's record are byte-identical.
         """
-        result = self._con.execute(
-            "SELECT tile_qk FROM record_tiles WHERE key = ?", [key]
-        ).fetchone()
-        if result is None:
-            return None
-        try:
-            tile_data = self._read_tile(result[0])
-        except FileNotFoundError:
-            return None
-        origin = "urn:atgeo:" + key
-        for record in tile_data["records"]:
-            if record["value"]["origin"] == origin:
-                # Copies: a caller may replace top-level keys of the record or
-                # edit the list, but `value` and the tile are lru_cache-held.
-                return copy.copy(record), list(tile_data.get("attribution", []))
-        return None
+        # list_contains(?, key) scans the 73M-row Overture manifest 2.5x slower.
+        rows = self._con.execute(
+            "SELECT key, any_value(tile_qk) FROM record_tiles "
+            "WHERE key IN (SELECT unnest(?)) GROUP BY key", [keys]
+        ).fetchall()
+        found = {}
+        for key, tile_qk in rows:
+            try:
+                tile_data = self._read_tile(tile_qk)
+            except FileNotFoundError:
+                continue
+            origin = "urn:atgeo:" + key
+            for record in tile_data["records"]:
+                if record["value"]["origin"] == origin:
+                    # Copies: a caller may replace top-level keys of the record or
+                    # edit the list, but `value` and the tile are lru_cache-held.
+                    found[key] = (copy.copy(record), list(tile_data.get("attribution", [])))
+                    break
+        return found
 
     def _read_tile(self, tile_qk: str) -> dict:
         """Read and decompress a tile file. Uses LRU cache to amortize repeated access."""

@@ -137,9 +137,9 @@ class Server:
     def _view(self, ts, key):
         """The placeView of a key in one tileset, or None when it holds no such record."""
         found = ts.reader.get_place(key)
-        if found is None:
-            return None
-        record, attribution = found
+        return None if found is None else self._place_view(key, *found)
+
+    def _place_view(self, key, record, attribution):
         dataset, collection, id = key.split(":", 2)
         view = {
             "uri": URN_PREFIX + key,
@@ -267,4 +267,12 @@ class Server:
                 tokens, parsed_bbox, scope, SEARCH_LIMIT)
         ]
         hits.sort(key=lambda h: (h[0] is None, -(h[0] or 0.0), -h[1], h[2]))
-        return {"places": [self._view(ts, key) for _, _, key, ts in hits[:SEARCH_LIMIT]]}
+        top = hits[:SEARCH_LIMIT]
+        found = {
+            id(ts): ts.reader.get_places([key for _, _, key, t in top if t is ts])
+            for ts in {id(t): t for *_, t in top}.values()
+        }
+        return {"places": [
+            self._place_view(key, *found[id(ts)][key])
+            for _, _, key, ts in top if key in found[id(ts)]
+        ]}
