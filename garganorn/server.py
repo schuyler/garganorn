@@ -245,7 +245,7 @@ class Server:
 
     def search_places(self, _, dataset: str, q: str, collection: str = None, bbox: str = None):
         """Return up to SEARCH_LIMIT places of the dataset (and collection, if
-        given) with a name matching every word of q, most important first.
+        given) with a name matching every word of q, most notable first.
 
         bbox, if given, is a whole-degree region. Raises KeywordRequired if
         none of q's first SEARCH_TOKEN_LIMIT distinct words has two characters,
@@ -262,8 +262,9 @@ class Server:
             raise XrpcError("q needs a word of two or more characters", "KeywordRequired")
         scope = f"{dataset}:{collection}" if collection is not None else None
         hits = [
-            (importance, key, ts) for ts in selected
-            for key, importance in ts.search.search(tokens, parsed_bbox, scope, SEARCH_LIMIT)
+            (page_rank, importance, key, ts) for ts in selected
+            for key, page_rank, importance in ts.search.search(
+                tokens, parsed_bbox, scope, SEARCH_LIMIT)
         ]
-        hits.sort(key=lambda hit: (-hit[0], hit[1]))
-        return {"places": [self._view(ts, key) for _, key, ts in hits[:SEARCH_LIMIT]]}
+        hits.sort(key=lambda h: (h[0] is None, -(h[0] or 0.0), -h[1], h[2]))
+        return {"places": [self._view(ts, key) for _, _, key, ts in hits[:SEARCH_LIMIT]]}

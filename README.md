@@ -63,9 +63,21 @@ Use a smaller Geofabrik region for local testing — the default `north-america`
 
 ## Tile export pipeline
 
-`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, `density`, `idf`, and `covering` build the shared artifacts the sources depend on, and `search-index` writes the keyword index into an existing run. Invoking it with no subcommand is an error — use `run`.
+`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, `density`, `idf`, `page-rank` and `covering` build the shared artifacts the sources depend on, and `search-index` writes the keyword index into an existing run. Invoking it with no subcommand is an error — use `run`.
 
 Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless. A run also writes `tileset.json`, the tileset's descriptor, and `manifest.duckdb` and `search.duckdb` beside the tiles; see [`docs/pipeline-artifacts.md`](docs/pipeline-artifacts.md).
+
+Search puts places with a Wikipedia page rank first, so every run needs `page_rank.parquet`, which `page-rank` builds from Nominatim's `wikimedia-importance.csv.gz` (about 300 MB):
+
+```
+mkdir -p db/cache/wikimedia data/shared
+curl -fL -A garganorn -o db/cache/wikimedia/wikimedia-importance.csv.gz https://nominatim.org/data/wikimedia-importance.csv.gz
+python -m garganorn.quadtree page-rank \
+  --csv db/cache/wikimedia/wikimedia-importance.csv.gz \
+  --output data/shared/page_rank.parquet
+```
+
+`run` takes its path as `--page-rank-parquet` (required); `all` reads `<output>/shared/page_rank.parquet`. A new parquet reaches search by re-running `search-index` on each run and restarting the server, with no tile rebuild.
 
 Supported sources (for `run --source`):
 
@@ -88,6 +100,7 @@ python -m garganorn.quadtree run \
   --division-parquet db/cache/overture/*/division/*.parquet \
   --division-area-parquet db/cache/overture/*/division_area/*.parquet \
   --release overturemaps.org=2026-09-17.0 \
+  --page-rank-parquet data/shared/page_rank.parquet \
   --output data
 ```
 
@@ -99,6 +112,7 @@ python -m garganorn.quadtree run \
   --parquet 'db/cache/overture/*/part-*.parquet' \
   --boundaries data/overture_division/boundaries.duckdb \
   --release overturemaps.org=2026-09-17.0 \
+  --page-rank-parquet data/shared/page_rank.parquet \
   --output data
 ```
 
@@ -127,7 +141,7 @@ To build every configured source in one shot:
 python -m garganorn.quadtree all --config config.yaml
 ```
 
-`all` supplies the releases itself. The Overture release is the one the configured globs' `*` release segment resolves to (newest); the OSM release is read from the `release` file `scripts/extract-osm-parquet.sh` writes into the parquet directory. `all` stops with a message if a configured source's release is missing. It runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
+`all` supplies the releases itself. The Overture release is the one the configured globs' `*` release segment resolves to (newest); the OSM release is read from the `release` file `scripts/extract-osm-parquet.sh` writes into the parquet directory. `all` stops with a message if a configured source's release is missing. It runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It doesn't build `page_rank.parquet`; run `page-rank` first. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
 
 ## Running the server
 
@@ -151,7 +165,7 @@ Mostly you ask for tile coverage over a bounding box, then fetch the tiles and s
 | Endpoint | Returns |
 |---|---|
 | `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional and picks tilesets, not records (an OSM `way` search still downloads the area's nodes and relations; see [the spec](docs/atgeo-spec.md#orgatgeogettiles)) |
-| `GET /xrpc/org.atgeo.searchPlaces?dataset=&q=&collection=&bbox=` | Up to 20 places whose name matches the first 12 distinct words of `q`, most important first; `collection` and a whole-degree `bbox` are optional |
+| `GET /xrpc/org.atgeo.searchPlaces?dataset=&q=&collection=&bbox=` | Up to 20 places whose name matches the first 12 distinct words of `q`, places with a Wikipedia page rank first, then by importance; `collection` and a whole-degree `bbox` are optional |
 | `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance and its tileset's attribution |
 | `GET /xrpc/org.atgeo.describeTileset?slug=` | A tileset's descriptor: slug, extent, carried and referenced collections with release, licences and attribution |
 | `GET /xrpc/org.atgeo.describeService` | The service's DID, its tile budget (`maxTiles`), and the slug and collections of each tileset |

@@ -82,20 +82,24 @@ accurate but needs an `ST_Intersection` per tile per locality. The impact is
 negligible — density is one component of a composite importance score, so a
 few percent of noise moves rankings very little.
 
-### Six independent CLI subcommands, five freshness-gated
+### Seven independent CLI subcommands, six freshness-gated
 
-There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes six
-subcommands (`quadtree.py`): `density`, `idf`, `covering`, `search-index`
-(one existing run directory), `run` (one source), `all` (every source).
+There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes seven
+subcommands (`quadtree.py`): `density`, `idf`, `page-rank`, `covering`,
+`search-index` (one existing run directory), `run` (one source), `all`
+(every source).
 `search-index` rewrites its run's `search.duckdb` unconditionally. Every
 other stage is independently gated by artifact freshness, so there's no
 shared ordered pipeline object — `all` sequences density → idf per source →
 division → remaining sources, while
 `density`, `idf` and `covering` can be invoked in any order and simply no-op
-if their inputs aren't ready. `run` carries the one ordering constraint: with
-`--boundaries` it requires an already-fresh sibling `covering/` and raises
+if their inputs aren't ready. Two ordering constraints remain. With
+`--boundaries`, `run` requires an already-fresh sibling `covering/` and raises
 `RuntimeError` otherwise, since containment computed against a missing or
-stale covering would silently ship tiles with no `relations.within`. Freshness itself is one mechanism
+stale covering would silently ship tiles with no `relations.within`. And
+`run`, `all` and `search-index` read a `page_rank.parquet` that `page-rank`
+must already have written: none of them builds it, and without it indexing
+a run with tiles fails. Freshness itself is one mechanism
 everywhere: an artifact is fresh iff it exists, its meta sidecar exists
 and parses, the sidecar's recorded `params` matches the caller's exactly,
 the sidecar is strictly newer than every resolved input, and
@@ -370,6 +374,31 @@ changes between building and serving.
 **Applies to**: `garganorn/stages.py` (`write_search_index`, called from
 `stage_export`), `garganorn/sql/search_index.sql`, `garganorn/__main__.py`
 (`create_app`'s run-readiness check)
+
+### Search ranks notability before importance; tiles don't
+
+`search_records` ranks a record by the page rank of its Wikidata QID,
+descending, records without one last; then by `importance` descending, then
+key. The page rank comes from `page_rank.parquet`, Nominatim's Wikipedia
+importance collapsed to its maximum per QID, joined on the top-level
+`wikidata` attribute an OSM record or division carries. The join is exact,
+so a tag spelt other than as the dump spells the QID gets nothing. An
+Overture place's only QID is `brand.wikidata`, which names the chain, so it
+is deliberately not read: every store of a chain would otherwise outrank
+the other matches. Overture places therefore rank by importance alone,
+after every record with a page rank.
+
+Tile `importance` does not use page rank, and tiles carry none: notability
+orders server-side search only. The parquet is read only when
+`search.duckdb` is written and is not a freshness input to `stage_export`,
+so a new page-rank file reaches search by re-running `search-index` on
+existing runs and restarting the server, with no re-export. The server
+merges tilesets on `(page rank, importance, key)`,
+which is sound only while every run was indexed from the same file.
+
+**Applies to**: `garganorn/sql/search_index.sql`, `garganorn/stages.py`
+(`stage_page_rank`, `write_search_index`), `garganorn/server.py`
+(`search_places`)
 
 ### Whole-degree search regions are what make the index's bounds exact
 

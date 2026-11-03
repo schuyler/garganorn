@@ -21,7 +21,7 @@ box, fetches them, and runs matching, ranking and filtering itself. The
 server sees the box and never the query.
 
 **Keyword search.** The server matches a keyword against the names in one
-dataset and returns at most 20 places, most important first. Typing a
+dataset and returns at most 20 places, most notable first. Typing a
 keyword is the user's own action, and a keyword is not evidence of where
 the user is: people look up places they are not at. A search takes no
 point and ranks by no distance, so nothing in it asks "near what?". It may

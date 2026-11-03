@@ -24,7 +24,7 @@ That merged set is the query result. The server never sees what you were looking
 
 For a region too large to cover with the regular tiles, the answer is a sample: see [The overview band](#the-overview-band).
 
-To find a place by name without knowing where it is, call `org.atgeo.searchPlaces` with a dataset and the keyword the user typed. The server answers with at most 20 places, most important first; see [org.atgeo.searchPlaces](#orgatgeosearchplaces). It learns the keyword and nothing about where the user is. Tiles remain the way to search without telling the server what you are looking for.
+To find a place by name without knowing where it is, call `org.atgeo.searchPlaces` with a dataset and the keyword the user typed. The server answers with at most 20 places, most notable first; see [org.atgeo.searchPlaces](#orgatgeosearchplaces). It learns the keyword and nothing about where the user is. Tiles remain the way to search without telling the server what you are looking for.
 
 To fetch a single place whose identity you already hold, call `org.atgeo.getPlace` with its record key (its `origin`). Prefer tiles you already have: `getPlace` tells the server exactly which place you are looking at, which is a sharper signal than the box `getTiles` sees. It exists for resolving a link someone shared, where you have an identity and no region.
 
@@ -177,7 +177,7 @@ Two declared fields are not yet produced: `updatedAt` and `relations.sameAs`. A 
 
 `importance` is an integer from 0 to 100 expressing how much a place matters relative to other places. It blends two signals: how busy the place's surroundings are, and how distinctive its category is (for a division, how many people live in it).
 
-Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together. Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
+Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together (though `searchPlaces` puts every division with a page rank first; see its Ranking). Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
 
 The reference producer computes it as follows. For place records (Overture places, and OSM nodes, ways and relations):
 
@@ -423,7 +423,7 @@ Errors: `PlaceNotFound`, for a URN the server doesn't serve, a collection it doe
 
 ### org.atgeo.searchPlaces
 
-Places in a dataset whose name matches a keyword, most important first.
+Places in a dataset whose name matches a keyword, most notable first.
 
 Parameters: `dataset` (required), `collection` (optional), `q` (required, the keyword, at most 256 bytes of UTF-8), `bbox` (optional, `west,south,east,north` in whole degrees). There is no point parameter and no count parameter.
 
@@ -431,7 +431,7 @@ Parameters: `dataset` (required), `collection` (optional), `q` (required, the ke
 
 **Region.** `bbox` uses the same order and antimeridian rule as `getTiles`, but every coordinate is a whole number of degrees: `10` passes, `10.0`, `10.5` and `1e1` are `BboxTooPrecise`. Whole degrees make every side at least 1°. A place is in the region when its point is, or, for a place with only a bounding box, when that box meets the region; edges count as inside. See [The precision floor](#the-precision-floor).
 
-**Ranking.** By `importance` descending (absent counts as 0), then by record key ascending. No distance enters it. Without `collection`, every tileset carrying the dataset is searched and the results merged, which is sound because importance is comparable across one producer's tilesets for one dataset ([Importance](#importance)).
+**Ranking.** Places with a Wikipedia page rank come first, highest first; then the rest by `importance` descending (absent counts as 0); then by record key ascending. No distance enters it. A place's page rank is its Wikidata item's, from Nominatim's `wikimedia-importance.csv.gz`, the highest over the item's articles and redirects; the item is an OSM record's `wikidata` attribute or a division's `wikidata`. Overture places carry no item the ranking reads (`brand.wikidata` names a chain, not the store), so they rank by importance after every place with a page rank. Page rank orders results and never appears in them. Without `collection`, every tileset carrying the dataset is searched and the results merged, which is sound while every tileset was indexed from the same page-rank file, and importance is comparable across one producer's tilesets for one dataset ([Importance](#importance)).
 
 Returns `{"places": [...]}`, at most 20, each the same `{uri, url, importance?, value, attribution}` view `getPlace` returns for that place. The bound is fixed; there is no pagination.
 

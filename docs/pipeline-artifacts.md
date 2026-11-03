@@ -389,8 +389,10 @@ mechanism is not worth buying back a few dozen GB.
 and before `write_tileset_json`, building into `search.duckdb.tmp` and
 renaming it into place. It reads the run's own tiles (`<run>/*/*.json.gz`),
 keeping one copy per `origin`, so it indexes exactly what the run serves. It
-holds `search_records(rid, key, importance)`, one row per record with `rid`
-its rank under `importance` DESC (NULL as 0), `key` ASC, sorted by `rid`;
+holds `search_records(rid, key, importance, page_rank)`, one row per record
+with `page_rank` the value `page_rank.parquet` holds for its `wikidata` attribute (NULL
+when it has none) and `rid` its rank under `page_rank` DESC NULLS LAST,
+`importance` DESC (NULL as 0), `key` ASC, sorted by `rid`;
 `search_blocks(block, rid, scope, w, e, s, n, names)`, one row per
 distinct pair of a record and the first two characters of one of its name
 words of two or more characters, sorted by `block, rid`, with whole-degree
@@ -404,12 +406,15 @@ and `tileset.json`, and skips a run without one as incomplete. A run
 exported without it, local `db/` runs included, is unserved until indexed:
 
 ```
-python -m garganorn.quadtree search-index data/overture_place/tiles/current
+python -m garganorn.quadtree search-index data/overture_place/tiles/current \
+  --page-rank-parquet data/shared/page_rank.parquet
 ```
 
-`search-index` takes `--memory-limit` (default 48GB), `--temp-directory` and
-`--max-temp-directory-size` (default 250GB), and rewrites the file whether
-or not it exists. The server checks runs at startup, so restart it
+`search-index` requires `--page-rank-parquet`, takes `--memory-limit`
+(default 48GB), `--temp-directory` and `--max-temp-directory-size` (default
+250GB), and rewrites the file whether or not it exists. Re-running it is how
+a new `page_rank.parquet` reaches search, since the parquet is no input to
+the export's freshness. The server checks runs at startup, so restart it
 afterwards.
 
 **`tileset.json`**: `write_tileset_json` runs between `write_search_index`
@@ -481,6 +486,32 @@ segment is an error) and reads the OSM release from the `release` file in
 run from the PBF's `osmosis_replication_timestamp`. An OSM-only build with
 no containment rows references nothing and needs no Overture release.
 
+## 8. `stage_page_rank` (`garganorn/stages.py`)
+
+**Writes**: `page_rank.parquet`, at `shared/page_rank.parquet` under `all`'s
+output, which is where `all` reads it; `run` and `search-index` take its path
+as `--page-rank-parquet`. Nothing in the pipeline builds it: run
+`quadtree page-rank` first, on Nominatim's `wikimedia-importance.csv.gz`
+(about 300 MB, from `nominatim.org/data/`). Local builds need the CSV too.
+Ansible downloads it to `db/cache/wikimedia/` and writes
+`data/shared/page_rank.parquet`.
+
+```
+mkdir -p data/shared
+python -m garganorn.quadtree page-rank \
+  --csv db/cache/wikimedia/wikimedia-importance.csv.gz \
+  --output data/shared/page_rank.parquet
+```
+
+**Schema**: `qid VARCHAR, page_rank DOUBLE`, one row per Wikidata QID (CSV rows without one collapse to a single NULL row that never joins).
+
+**Shape**: `page_rank` is the maximum importance over the QID's articles and
+redirects in every language; NaN importances are dropped first. Gated by
+`artifact_fresh` with the CSV as its one input, so a new download rebuilds
+it. `write_search_index` reads it into `search_records`
+(`design-constraints.md`, "Search ranks notability before importance;
+tiles don't").
+
 ## How the stages compose
 
 Each stage above is independently freshness-gated, so the `density`, `idf` and
@@ -490,7 +521,9 @@ for a source with a `boundaries_db` requires `<dirname(boundaries_db)>/covering/
 to already exist and be strictly newer than `boundaries_db` — it raises
 `RuntimeError` otherwise rather than building it. So the `overture_division`
 pipeline, or a standalone `quadtree covering`, must run before any other source
-that passes `--boundaries`.
+that passes `--boundaries`. Likewise `quadtree page-rank` must run before
+`run`, `all` or `search-index`, which read `page_rank.parquet` and never build
+it.
 
 `run_pipeline()` sequences one source through: `stage_import` (dispatching to
 `stage_division_import` for `overture_division`) → `stage_covering`
@@ -502,7 +535,7 @@ supplied) → `stage_tile_assignment` → `stage_division_tile_references`
 `stage_summary_division_tile_references` (division only) →
 `_union_tile_assignments`, producing `tile_assignments_combined.parquet`
 → containment (in `stages.py`, not one of the
-seven stages above): `stage_division_containment` for `overture_division`,
+eight stages above): `stage_division_containment` for `overture_division`,
 joining Overture's `hierarchies` against the imported places
 (`design-constraints.md`, "Division containment comes from Overture
 hierarchies, not geometry"); `compute_containment` for every other source,
@@ -522,4 +555,5 @@ configured source: `stage_density_extract` once (shared,
 containment step requires — followed by `run_pipeline` for the
 remaining place sources, now supplied
 `boundaries_db`, the shared `density_tiles.parquet`, and each source's own
-`idf.parquet`.
+`idf.parquet`. Every source, `overture_division` included, gets
+`shared/page_rank.parquet`.

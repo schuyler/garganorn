@@ -13,6 +13,7 @@ import duckdb
 from garganorn.__main__ import create_app
 from garganorn.stages import write_search_index
 from tests.lexicon_helpers import goat_validate, validate_def
+from tests.page_rank_file import write_page_rank
 
 OSM = "openstreetmap.org"
 OVERTURE = "overturemaps.org"
@@ -34,10 +35,11 @@ def box(west, south, east, north):
 
 
 def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42,
-          variants=None, locations=None):
+          variants=None, locations=None, wikidata=None, brand_wikidata=None):
     """A tile record {value, importance} for one place; importance=None omits
     the key (the tilePayload lexicon makes it optional). variants is a list of
-    variant names; locations defaults to a point in San Francisco."""
+    variant names; locations defaults to a point in San Francisco. wikidata
+    sets value.attributes.wikidata, brand_wikidata value.attributes.brand.wikidata."""
     value = {
         "$type": "org.atgeo.place",
         "origin": f"urn:atgeo:{dataset}:{collection}:{id}",
@@ -46,6 +48,13 @@ def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42,
     }
     if variants:
         value["variants"] = [{"name": v} for v in variants]
+    attributes = {}
+    if wikidata:
+        attributes["wikidata"] = wikidata
+    if brand_wikidata:
+        attributes["brand"] = {"wikidata": brand_wikidata}
+    if attributes:
+        value["attributes"] = attributes
     goat_validate(value)
     record = {"value": value}
     if importance is not None:
@@ -54,13 +63,15 @@ def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42,
 
 
 def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
-             descriptor=True):
+             descriptor=True, page_rank=None):
     """Write tiles_root/<stamp>/ and return it.
 
     collections: (dataset, collection) pairs the tileset carries.
     tiles: {quadkey: [tile record, ...]}. A quadkey with no records still gets
     a record_tiles row, so the manifest knows the tile.
     complete=False omits manifest.json; descriptor=False omits tileset.json.
+    page_rank: {qid: rank}, written to tiles_root/page_rank.parquet beside the
+    runs (empty by default) and used to order the search index.
     """
     tiles = tiles or {}
     run_dir = tiles_root / stamp
@@ -88,7 +99,8 @@ def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
     finally:
         con.close()
 
-    write_search_index(str(run_dir))
+    page_rank_parquet = write_page_rank(tiles_root / "page_rank.parquet", page_rank)
+    write_search_index(str(run_dir), page_rank_parquet=page_rank_parquet)
 
     if descriptor:
         tileset = {
