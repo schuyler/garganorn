@@ -7,6 +7,8 @@ import gunicorn.config
 import gunicorn.glogging
 import pytest
 
+from tests import served_runs
+from tests.duckdb_spy import spy_on_duckdb_connect
 from tests.lexicon_helpers import LEXICON_DIR, validate_def
 from tests.served_runs import (
     OSM, OVERTURE, STAMP, box, build_app, geo, place, serve_run,
@@ -218,6 +220,15 @@ def test_dataset_wide_search_merges_tilesets(tmp_path):
     with _two_tilesets(tmp_path).test_client() as client:
         names = _names(_search(client, q="merge"))
     assert names == [f"Merge {'pd'[i % 2]}{i // 2}" for i in range(20)]
+
+
+def test_search_looks_up_each_tileset_manifest_once(tmp_path, monkeypatch):
+    statements = spy_on_duckdb_connect(monkeypatch, served_runs)
+    app = _two_tilesets(tmp_path)
+    statements.clear()
+    with app.test_client() as client:
+        assert len(_names(_search(client, q="merge"))) > 2
+    assert sum("record_tiles" in sql for sql in statements) == 2
 
 
 def test_collection_narrows_results(tmp_path):
