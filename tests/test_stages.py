@@ -39,6 +39,7 @@ from garganorn.stages import (
     _coord_exprs,
     quadkey_to_bbox,
 )
+from tests.served_runs import OVERTURE, STAMP, make_run, place
 from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline, SOURCES
 from tests.duckdb_spy import spy_on_duckdb_connect
@@ -239,6 +240,58 @@ class TestStageManifest:
         count = con_check.execute("SELECT count(*) FROM record_tiles").fetchone()[0]
         assert count > 0
         con_check.close()
+
+
+class TestSearchIndex:
+    """search.duckdb, written by stage_export beside manifest.duckdb."""
+
+    @staticmethod
+    def _record_count(run_dir):
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            return con.execute("SELECT count(*) FROM search_records").fetchone()[0]
+        finally:
+            con.close()
+
+    def test_stage_export_writes_one_row_per_distinct_origin(
+            self, overture_parquet, density_parquet, tmp_path):
+        run_pipeline("overture_place", overture_parquet,
+                     (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path), memory_limit="4GB", max_per_tile=100,
+                     density_parquet=density_parquet, releases=RELEASES)
+        run_dir = (tmp_path / "overture_place" / "tiles" / "current").resolve()
+
+        origins = set()
+        for gz in run_dir.rglob("*.json.gz"):
+            with gzip.open(gz, "rt") as f:
+                origins |= {r["value"]["origin"] for r in json.load(f)["records"]}
+
+        assert (run_dir / "search.duckdb").exists()
+        assert origins
+        assert self._record_count(run_dir) == len(origins)
+
+    def test_record_in_several_tiles_counts_once(self, tmp_path):
+        record = place(OVERTURE, "place", "a", "Zed")
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                           {"012301": [record], "012302": [record]})
+        assert self._record_count(run_dir) == 1
+
+    def test_run_without_tiles_gets_an_empty_index(self, tmp_path):
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")])
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            for table in ("search_records", "search_blocks"):
+                assert con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        finally:
+            con.close()
+
+    def test_attribute_keys_unique_to_one_record_build(self, tmp_path):
+        a, b = place(OVERTURE, "place", "a", "Zed"), place(OVERTURE, "place", "b", "Zed")
+        a["value"]["attributes"] = {"only_on_a": "x"}
+        b["value"]["attributes"] = {"only_on_b": ["y"]}
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                           {"012301": [a, b]})
+        assert self._record_count(run_dir) == 2
 
 
 # ---------------------------------------------------------------------------

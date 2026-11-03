@@ -10,7 +10,7 @@ The server is a set of static, pre-built tiles and a few lookups over them. If y
 
 The server must never receive information precise enough to locate a person.
 
-Everything unusual about this interface follows from that one rule. There is no server-side search, so search terms, which reveal intent, never leave the client. There is no way to list or enumerate places. The only spatial question a client can ask is coarse: which tiles cover this region, at a precision floor of roughly a kilometre. The only other question names a place the client already knows the identity of. Neither shape lets a query describe a point, so no query can resolve to a device's position.
+Everything unusual about this interface follows from that one rule: nothing on the wire reveals where the user is unless the user acted to opt in. There is no way to list or enumerate places. The spatial question a client can ask is coarse: which tiles cover this region, at a precision floor of roughly a kilometre. A keyword search takes a keyword the user typed, which is their own action and no evidence of where they are, and an optional region in whole degrees; it takes no point and ranks by no distance. The remaining question names a place the client already knows the identity of. None of these shapes lets a query describe a point, so no query can resolve to a device's position. A keyword still reveals intent, so the server keeps it in no log.
 
 The threat model and the full reasoning are in [tile-privacy-design.md](tile-privacy-design.md). The sections below refer back to this principle rather than re-deriving it.
 
@@ -20,9 +20,11 @@ The threat model and the full reasoning are in [tile-privacy-design.md](tile-pri
 2. Fetch every URL returned and concatenate the `records` arrays.
 3. Deduplicate by `origin`, drop records of collections you didn't ask for, and match, rank and filter locally.
 
-That merged set is the query result. The server never sees what you were looking for. There is no pagination, no server-side ranking, and no partial-result protocol.
+That merged set is the query result. The server never sees what you were looking for. Tiles come with no pagination, no server-side ranking, and no partial-result protocol.
 
 For a region too large to cover with the regular tiles, the answer is a sample: see [The overview band](#the-overview-band).
+
+To find a place by name without knowing where it is, call `org.atgeo.searchPlaces` with a dataset and the keyword the user typed. The server answers with at most 20 places, most important first; see [org.atgeo.searchPlaces](#orgatgeosearchplaces). It learns the keyword and nothing about where the user is. Tiles remain the way to search without telling the server what you are looking for.
 
 To fetch a single place whose identity you already hold, call `org.atgeo.getPlace` with its record key (its `origin`). Prefer tiles you already have: `getPlace` tells the server exactly which place you are looking at, which is a sharper signal than the box `getTiles` sees. It exists for resolving a link someone shared, where you have an identity and no region.
 
@@ -236,7 +238,7 @@ A subtype outside this table fails the producer's build before any artifact is w
 
 `GET /xrpc/org.atgeo.describeService` takes no parameters, and ignores any query parameters it is sent (a cache-buster, say). It returns `{did, maxTiles, tilesets}`. `did` is the `did:web` the deployment identifies as, the same identifier `/.well-known/did.json` carries. It's informational: no discovery path resolves a DID to a gazetteer yet, so a client that has this answer already knew the server's URL. `maxTiles` is the tile budget: the most regular tiles a `getTiles` answer may list before it falls back to [the overview band](#the-overview-band) or `BboxTooLarge`. It's informational too, good for a README or a log line. A client can't use it to plan requests, because tile zooms are adaptive and it does no quadkey math, so it can't predict how many tiles a box will need. `maxTiles` is optional in the lexicon, so another producer may leave it out; garganorn always sends it. Each element of `tilesets` is `{slug, collections}`, with `collections` a list of `{dataset, collection}`.
 
-The list is authoritative. A dataset absent from it returns `DatasetNotFound` from `getTiles`.
+The list is authoritative. A dataset absent from it returns `DatasetNotFound` from `getTiles` and `searchPlaces`.
 
 ```json
 {
@@ -306,7 +308,7 @@ The list is authoritative. A dataset absent from it returns `DatasetNotFound` fr
 
 ## XRPC methods
 
-Four queries, all `GET /xrpc/{nsid}`, all described by lexicons. Responses may include keys not documented here; per the forward-compatibility rule above, ignore them.
+Five queries, all `GET /xrpc/{nsid}`, all described by lexicons. Responses may include keys not documented here; per the forward-compatibility rule above, ignore them.
 
 ### org.atgeo.getTiles
 
@@ -322,7 +324,7 @@ So `collection` narrows which tilesets answer, not which bytes come back. A tile
 
 Returns `{"tiles": [...]}`: fully-formed, opaque tile URLs, in ascending string order. Fetch them all and merge; filtering and ordering are yours, applied after the merge. When the answer is the [overview band](#the-overview-band) rather than the regular tiles, the response also carries `"overview": true`.
 
-A bbox may cross the antimeridian: `west > 0 > east` means the box wraps across ±180°. Tiles that merely touch the box at an edge or corner count as covering it.
+A bbox may cross the antimeridian: `west > 0 > east` means the box wraps across ±180°, provided it has width (`180,10,-180,11` has none). Tiles that merely touch the box at an edge or corner count as covering it.
 
 ```
 GET /xrpc/org.atgeo.getTiles?dataset=openstreetmap.org&collection=way&bbox=-71.55,43.20,-71.50,43.25
@@ -419,6 +421,34 @@ GET /xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetmap.org:node:10080395917
 
 Errors: `PlaceNotFound`, for a URN the server doesn't serve, a collection it doesn't carry, a malformed `atgeo` URN, or a URI that isn't a URN at all. A string that isn't a valid URI is `InvalidRequest`.
 
+### org.atgeo.searchPlaces
+
+Places in a dataset whose name matches a keyword, most important first.
+
+Parameters: `dataset` (required), `collection` (optional), `q` (required, the keyword, at most 256 bytes of UTF-8), `bbox` (optional, `west,south,east,north` in whole degrees). There is no point parameter and no count parameter.
+
+**Matching.** The keyword and every name are lowercased, stripped of accents, stripped of apostrophes, and split into words at punctuation and whitespace. A place matches when every word of the keyword begins some word of **one** of its names: its `name` or one of its `variants`. So `st louis` finds `St. Louis`, `mcdonalds` finds `McDonald's`, and `golden puerta` finds nothing when `Golden` is in the name and `Puerta` only in a variant. Only the first 12 distinct words of the keyword count, and at least one of those must be two or more characters long. That floor and that cap are what bound a search's cost; the price is that a name whose every word is one character (`Å`, `Y`) can't be found this way.
+
+**Region.** `bbox` uses the same order and antimeridian rule as `getTiles`, but every coordinate is a whole number of degrees: `10` passes, `10.0`, `10.5` and `1e1` are `BboxTooPrecise`. Whole degrees make every side at least 1°. A place is in the region when its point is, or, for a place with only a bounding box, when that box meets the region; edges count as inside. See [The precision floor](#the-precision-floor).
+
+**Ranking.** By `importance` descending (absent counts as 0), then by record key ascending. No distance enters it. Without `collection`, every tileset carrying the dataset is searched and the results merged, which is sound because importance is comparable across one producer's tilesets for one dataset ([Importance](#importance)).
+
+Returns `{"places": [...]}`, at most 20, each the same `{uri, url, importance?, value, attribution}` view `getPlace` returns for that place. The bound is fixed; there is no pagination.
+
+```
+GET /xrpc/org.atgeo.searchPlaces?dataset=overturemaps.org&q=golden%20gate%20bridge
+```
+
+Errors, in evaluation order:
+
+- `BboxTooPrecise` — a `bbox` coordinate that isn't a whole number of degrees.
+- `InvalidBbox` — as for `getTiles`.
+- `DatasetNotFound` — no tileset carries the dataset.
+- `CollectionNotFound` — the dataset is served but no tileset carries the collection.
+- `KeywordRequired` — among `q`'s first 12 distinct words, none is two or more characters long. `""`, `"&"`, `"Å"` and `"a b"` all qualify. A missing `q` is `InvalidRequest`, as is any parameter the lexicon doesn't declare.
+
+A search response carries no `Cache-Control` (see [Headers](#headers)), so no shared cache is invited to keep a URL with a keyword in it.
+
 ### org.atgeo.describeService and org.atgeo.describeTileset
 
 See [above](#tilesets-on-the-wire-describeservice-and-describetileset). `describeTileset` takes `slug` and has one error, `TilesetNotFound`. `describeService` has none.
@@ -432,15 +462,17 @@ Every error the methods raise returns **HTTP 400** with a body of `{"error": nam
 | `InvalidRequest` | 400 | a required parameter is missing, a parameter doesn't fit its lexicon, the NSID is malformed, or a request body isn't valid JSON |
 | `UnsupportedMediaType` | 415 | a request body with a non-JSON `Content-Type` |
 | `MethodNotAllowed` | 405 | an HTTP method the route doesn't take, with an `Allow` header |
-| `MethodNotImplemented` | 501 | the NSID isn't one of the four methods the server implements, including every `com.atproto.*` method and a served record lexicon such as `org.atgeo.place` |
+| `MethodNotImplemented` | 501 | the NSID isn't one of the five methods the server implements, including every `com.atproto.*` method and a served record lexicon such as `org.atgeo.place` |
 
 A 5xx means the server broke, not that it refused you; see [Errors on plain-HTTP routes](#plain-http).
 
 ### The precision floor
 
-Bounding-box coordinates in `getTiles` carry at most two decimal places, a 0.01° grid about 1.1 km across at the equator. This is the safety principle made concrete. Search terms are already gone, but a box centred on a device's raw GPS fix still locates the person to about ten metres however large the box is, and a minimum-area check doesn't catch that. Holding every coordinate to 0.01° limits what the server can extract to "which grid cell", not "which street corner".
+Bounding-box coordinates in `getTiles` carry at most two decimal places, a 0.01° grid about 1.1 km across at the equator. This is the safety principle made concrete. A box centred on a device's raw GPS fix locates the person to about ten metres however large the box is, and a minimum-area check doesn't catch that. Holding every coordinate to 0.01° limits what the server can extract to "which grid cell", not "which street corner".
 
-The floor is enforced, not advised. The check is textual, on the string you sent: `37.770` fails on its trailing zero, and scientific notation (`1e2`) is rejected outright. The server rejects rather than truncating, so a client that leaks precision hears about it instead of being silently covered for. Clients snap before sending; the server refuses regardless, so a client built without that logic can't leak systematically. Snap outward, so the grid box contains your region.
+A `searchPlaces` region is held to whole degrees, a grid about 111 km north to south. The keyword does the narrowing there, so the region has no need to be fine, and a region an app attaches without asking, a map viewport say, tells the server no more than which degree cell the user is looking at.
+
+Both floors are enforced, not advised. The check is textual, on the string you sent: `37.770` fails on its trailing zero, and scientific notation (`1e2`) is rejected outright. The server rejects rather than truncating, so a client that leaks precision hears about it instead of being silently covered for. Clients snap before sending; the server refuses regardless, so a client built without that logic can't leak systematically. Snap outward, so the grid box contains your region.
 
 Refusal doesn't protect the coordinates in the refused request: the server has to receive a value to judge it. The guarantee is against sustained exposure. A leaking client is caught on its first exchange instead of running unnoticed.
 
@@ -490,7 +522,7 @@ The status differs from XRPC on purpose: XRPC follows the AT Protocol convention
 | a tile (`/tiles/{slug}/...`) | `public, max-age=604800, immutable` |
 | `getTiles`, 200 only | `public, max-age=3600` |
 | `describeService`, 200 only | `public, max-age=3600` |
-| anything else | none set<sup>1</sup> |
+| anything else, `searchPlaces` included | none set<sup>1</sup> |
 
 <sup>1</sup> Except a CORS preflight: an `OPTIONS` request to `getTiles` or `describeService` is a 200 and carries `public, max-age=3600` too.
 

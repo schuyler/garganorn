@@ -788,6 +788,33 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
     os.rename(tmp_path, manifest_path)
 
 
+def write_search_index(run_dir: str, *, memory_limit: str = "48GB",
+                       temp_directory: str | None = None,
+                       max_temp_directory_size: str | None = "250GB") -> None:
+    """Write search.duckdb from the run's tiles. Atomic: builds in .tmp,
+    renames into place. A run with no tiles gets the empty tables."""
+    search_path = os.path.join(run_dir, "search.duckdb")
+    tmp_path = search_path + ".tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    tiles = sorted(glob_module.glob(os.path.join(run_dir, "*", "*.json.gz")))
+    schema, fill = (_SQL_DIR / "search_index.sql").read_text().split("-- fill\n")
+    con = duckdb.connect(tmp_path)
+    try:
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(schema)
+        if tiles:
+            con.execute(fill.replace("${tiles}", repr(tiles)))
+    finally:
+        con.close()
+    os.rename(tmp_path, search_path)
+
+
 def write_manifest(output_dir, *, generated_at):
     """Write manifest.json as the run's completeness marker.
 
@@ -2067,7 +2094,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
 
     Reads places and tile_assignments from parquet artifacts. Builds a
     timestamped run dir under tiles_root with per-tile .json.gz files,
-    manifest.duckdb, tileset.json, and manifest.json. Updates tiles_root/current symlink.
+    manifest.duckdb, search.duckdb, tileset.json, and manifest.json. Updates
+    tiles_root/current symlink.
 
     Args:
         source: Source key (overture_place, osm, overture_division).
@@ -2349,6 +2377,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     write_manifest_db(tile_assignments_parquet, run_dir, source,
                       temp_directory=temp_directory,
                       max_temp_directory_size=max_temp_directory_size)
+    write_search_index(run_dir, memory_limit=memory_limit, temp_directory=temp_directory,
+                       max_temp_directory_size=max_temp_directory_size)
     write_tileset_json(run_dir, source, source_cls, published_at=published_at,
                        manifest=manifest, places_pq=places_pq,
                        containment_expr=containment_expr, idf_parquet=idf_parquet,

@@ -1,4 +1,4 @@
-import gzip, json, os, logging
+import gzip, json, os, logging, re
 from flask import Flask, abort, jsonify, request, Response
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import safe_join
@@ -9,6 +9,14 @@ from garganorn.config import load_config
 
 DEFAULT_CONFIG = "config.yaml"
 DEFAULT_MAX_TILES = 75
+
+def _strip_query(record):
+    """Logging filter: drop every URL query string from the record's message,
+    so a search keyword in a logged request line never reaches a log."""
+    record.msg = re.sub(r"\?\S*", "", record.getMessage())
+    record.args = None
+    return True
+
 
 class _XrpcEndpoint(XrpcEndpoint):
     """lexrpc's XRPC view, but a query takes GET and a procedure POST.
@@ -33,6 +41,7 @@ def create_app():
     repo, tiles_config, public_base = load_config(config_path)
 
     app = Flask("garganorn")
+    logging.getLogger("gunicorn.error").addFilter(_strip_query)
     app.logger.setLevel(logging.INFO)
     tilesets = {}  # slug -> ServedTileset, in config order
     tile_dirs = {}  # slug -> directory holding the run directories
@@ -40,13 +49,14 @@ def create_app():
     if tiles_config:
         from garganorn.quadtree import TileManifest
         from garganorn.server import ServedTileset
-        from garganorn.tile_reader import TileBackedCollection
+        from garganorn.tile_reader import TileBackedCollection, TileSearchIndex
         for cfg in tiles_config.get("tilesets", []):
             # A run is only ready to serve when manifest.json (the completeness
-            # marker, written last) exists beside manifest.duckdb and tileset.json.
+            # marker, written last) exists beside manifest.duckdb, search.duckdb
+            # and tileset.json.
             run_dir = os.path.realpath(cfg["run_dir"])
             if not all(os.path.isfile(os.path.join(run_dir, f))
-                       for f in ("manifest.duckdb", "manifest.json", "tileset.json")):
+                       for f in ("manifest.duckdb", "search.duckdb", "manifest.json", "tileset.json")):
                 app.logger.warning(
                     "Tile run %s is incomplete or missing; tile serving disabled for it",
                     cfg["run_dir"],
@@ -68,6 +78,7 @@ def create_app():
                 descriptor,
                 TileManifest(manifest_path, f"{base_url}/{stamp}"),
                 TileBackedCollection(manifest_path, run_dir),
+                TileSearchIndex(os.path.join(run_dir, "search.duckdb")),
             )
             tile_dirs[slug] = os.path.dirname(run_dir)
         max_tiles = tiles_config.get("max_tiles", DEFAULT_MAX_TILES)

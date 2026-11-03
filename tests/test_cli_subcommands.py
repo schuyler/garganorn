@@ -8,9 +8,11 @@ import os
 import sys
 from unittest.mock import patch, MagicMock, call
 
+import duckdb
 import pytest
 
 from garganorn import quadtree as _qt
+from tests.served_runs import OVERTURE, STAMP, make_run, place
 
 
 def _overture_cache(root):
@@ -509,3 +511,19 @@ class TestForceSemantics:
             "force=True for overture_division must call os.remove on boundaries.duckdb "
             "before rebuilding. os.remove calls seen: " + repr(removed_paths)
         )
+
+
+class TestSearchIndexSubcommand:
+    def test_search_index_writes_index_into_an_existing_run(self, tmp_path, monkeypatch):
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                           {"012301": [place(OVERTURE, "place", "a", "Zed")]})
+        (run_dir / "search.duckdb").unlink()
+        monkeypatch.setattr(sys, "argv", ["qt", "search-index", str(run_dir)])
+
+        _qt.main()
+
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            assert con.execute("SELECT count(*) FROM search_records").fetchone()[0] == 1
+        finally:
+            con.close()

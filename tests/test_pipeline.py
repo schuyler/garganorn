@@ -66,7 +66,7 @@ class TestRunPipeline:
         assert "generated_at" in manifest, "manifest.json missing 'generated_at'"
 
         # No leftover .duckdb temp file (manifest.duckdb is expected)
-        duckdb_files = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        duckdb_files = [f for f in output_dir.rglob("*.duckdb") if f.name not in ("manifest.duckdb", "search.duckdb")]
         assert not duckdb_files, (
             f"run_pipeline must not leave .duckdb files behind: {duckdb_files}"
         )
@@ -117,7 +117,7 @@ class TestRunPipeline:
         finally:
             con.close()
 
-        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name not in ("manifest.duckdb", "search.duckdb")]
         assert not leftover_dbs, (
             f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
         )
@@ -168,7 +168,7 @@ class TestRunPipeline:
         finally:
             con.close()
 
-        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name not in ("manifest.duckdb", "search.duckdb")]
         assert not leftover_dbs, (
             f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
         )
@@ -977,7 +977,7 @@ class TestTimestampedExport:
         ov_dir = output_dir / "overture_place"
         leftover_dbs = [
             f for f in ov_dir.rglob("*.duckdb")
-            if f.name != "manifest.duckdb"
+            if f.name not in ("manifest.duckdb", "search.duckdb")
         ]
         assert not leftover_dbs, (
             f"run_pipeline must not leave non-manifest .duckdb files under {ov_dir}: "
@@ -1375,7 +1375,7 @@ class TestExportPhase2:
         # Only manifest.duckdb and boundaries.duckdb are permitted .duckdb files
         duckdb_files = [
             f for f in output_dir.rglob("*.duckdb")
-            if f.name not in ("manifest.duckdb", "boundaries.duckdb")
+            if f.name not in ("manifest.duckdb", "search.duckdb", "boundaries.duckdb")
         ]
         assert not duckdb_files, (
             f"run_pipeline must not leave working .duckdb files; found: {duckdb_files}"

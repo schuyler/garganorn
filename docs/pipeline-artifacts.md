@@ -320,7 +320,8 @@ coarser tile.
 
 **Writes**: a new timestamped run directory,
 `<tiles_root>/<YYYYMMDDTHHMMSS>/<qk[:6]>/<qk>.json.gz` (one gzip file per
-tile), plus `manifest.duckdb`, `tileset.json` and `manifest.json` in the run dir, then
+tile), plus `manifest.duckdb`, `search.duckdb`, `tileset.json` and
+`manifest.json` in the run dir, then
 swaps the `<tiles_root>/current` symlink to point at it. `qk[:6]` returns
 the whole key for the summary band's sub-6-char quadkeys, so those tiles
 land at `<qk>/<qk>.json.gz` in the same layout. The server serves each tile
@@ -383,7 +384,35 @@ references come from the covering artifact rather than their own `qk17`,
 so a places-side filter would drop them silently. A second export
 mechanism is not worth buying back a few dozen GB.
 
-**`tileset.json`**: `write_tileset_json` runs between `write_manifest_db`
+**`search.duckdb`**: the run's keyword index for `searchPlaces`.
+`write_search_index` runs `sql/search_index.sql` after `write_manifest_db`
+and before `write_tileset_json`, building into `search.duckdb.tmp` and
+renaming it into place. It reads the run's own tiles (`<run>/*/*.json.gz`),
+keeping one copy per `origin`, so it indexes exactly what the run serves. It
+holds `search_records(rid, key, importance)`, one row per record with `rid`
+its rank under `importance` DESC (NULL as 0), `key` ASC, sorted by `rid`;
+`search_blocks(block, rid, scope, w, e, s, n, names)`, one row per
+distinct pair of a record and the first two characters of one of its name
+words of two or more characters, sorted by `block, rid`, with whole-degree
+bounds and each name as a
+space-led word string; and the `name_tokens` macro both sides tokenise with
+(`design-constraints.md`, "The search index derives from the served tiles").
+A zero-tile run gets the empty tables.
+
+The server requires `search.duckdb` beside `manifest.duckdb`, `manifest.json`
+and `tileset.json`, and skips a run without one as incomplete. A run
+exported without it, local `db/` runs included, is unserved until indexed:
+
+```
+python -m garganorn.quadtree search-index data/overture_place/tiles/current
+```
+
+`search-index` takes `--memory-limit` (default 48GB), `--temp-directory` and
+`--max-temp-directory-size` (default 250GB), and rewrites the file whether
+or not it exists. The server checks runs at startup, so restart it
+afterwards.
+
+**`tileset.json`**: `write_tileset_json` runs between `write_search_index`
 and `write_manifest`, writing the `org.atgeo.defs#tileset` descriptor as
 `tileset.json`, sibling to `manifest.json` in the run dir. This seam is the
 only point where every input is simultaneously in hand: the per-tile

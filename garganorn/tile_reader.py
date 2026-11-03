@@ -64,3 +64,52 @@ class TileBackedCollection:
         # to clear stale cache entries.
         with gzip.open(tile_path, "rt") as f:
             return json.load(f)
+
+
+_SEARCH_SQL = """
+SELECT rid FROM search_blocks
+WHERE block = $block
+  AND ($scope IS NULL OR scope = $scope)
+  AND ($rw IS NULL OR (s <= $rn AND n >= $rs AND (
+        CASE WHEN $rw <= $re THEN w <= $re AND e >= $rw ELSE e >= $rw OR w <= $re END)))
+  AND len(list_filter(names,
+          nm -> len(list_filter($tokens, t -> NOT contains(nm, ' ' || t))) = 0)) > 0
+ORDER BY rid
+LIMIT $limit
+"""
+
+
+class TileSearchIndex:
+    """Searches a run's search.duckdb: names by word prefix, in rank order."""
+
+    def __init__(self, search_db_path: str):
+        self._db_path = search_db_path
+        self._local = threading.local()
+
+    @property
+    def _con(self):
+        """Per-thread DuckDB connection (DuckDB connections are not thread-safe)."""
+        if not hasattr(self._local, "con"):
+            self._local.con = duckdb.connect(self._db_path, read_only=True)
+        return self._local.con
+
+    def tokens(self, q: str) -> list[str]:
+        return self._con.execute("SELECT name_tokens(?)", [q]).fetchone()[0]
+
+    def search(self, tokens: list[str], bbox: tuple | None, scope: str | None,
+               limit: int) -> list[tuple[str, int]]:
+        """(key, importance) of up to `limit` records, best first, with some
+        name having every token as a word prefix. bbox is whole-degree
+        (west, south, east, north); scope is '{dataset}:{collection}'."""
+        rw, rs, re, rn = (int(v) for v in bbox) if bbox else (None,) * 4
+        params = {
+            "block": max(tokens, key=len)[:2], "scope": scope, "tokens": tokens,
+            "rw": rw, "rs": rs, "re": re, "rn": rn, "limit": limit,
+        }
+        rids = [row[0] for row in self._con.execute(_SEARCH_SQL, params).fetchall()]
+        return [
+            self._con.execute(
+                "SELECT key, importance FROM search_records WHERE rid = ?", [rid]
+            ).fetchone()
+            for rid in rids
+        ]

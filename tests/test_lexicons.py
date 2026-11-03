@@ -19,6 +19,12 @@ def test_atgeo_lexicons_found():
     assert len(_atgeo_lexicon_files()) >= 7
 
 
+def test_search_places_lexicon_is_shipped():
+    assert "org.atgeo.searchPlaces" in {
+        json.loads(p.read_text())["id"] for p in _atgeo_lexicon_files()
+    }
+
+
 # goat warns that `type` is a commonly reserved keyword. #variant.type and
 # #relation.type are wire fields every SDK reads; renaming them is a lexicon
 # break, not a lint fix.

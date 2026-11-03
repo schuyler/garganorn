@@ -8,7 +8,7 @@ The wire format is in [atgeo-spec.md](atgeo-spec.md), which is normative for any
 
 ## Why two calls
 
-The gazetteer serves a few things a client can call to read places: `getTiles` and `getPlace` for places, `describeService` and `describeTileset` for what a server holds. A larger search surface would be inventing capabilities the server doesn't have.
+The gazetteer serves a few things a client can call to read places: `getTiles`, `getPlace` and `org.atgeo.searchPlaces` for places, `describeService` and `describeTileset` for what a server holds. The SDK's `searchPlaces` is built on `getTiles`, not on the server's `org.atgeo.searchPlaces`, a keyword search over a whole dataset ([atgeo-spec.md](atgeo-spec.md#orgatgeosearchplaces)). Wiring the SDK to it is separate work, and would change the port contract's rule that search text never goes on the wire.
 
 | SDK | Server |
 |---|---|
@@ -86,7 +86,7 @@ The client doesn't retry a failed tile. Tolerance runs the other way too: it rea
 
 Unbounded by design, bounded in practice.
 
-The protocol places no limit on how much a client fetches and filters. There is no pagination, no server-side ranking, no partial-result protocol to cut the set down. That is the whole point of client-side search, and building a limit into the SDK would reintroduce the thing the architecture removed.
+The protocol places no limit on how much a client fetches and filters. `getTiles` has no pagination, no server-side ranking, no partial-result protocol to cut the set down. That is the whole point of client-side search, and building a limit into the SDK would reintroduce the thing the architecture removed.
 
 In practice the ceiling is `getTiles`'s tile budget, 75 by default on garganorn (a deployment sets it with `max_tiles`, and advertises it as `maxTiles` in its `describeService` answer). That number is for humans: tile zooms are adaptive and the client does no quadkey math, so it can't tell in advance whether a region will exceed it. The budget bites soonest where the SDK is most useful: in Manhattan or Shibuya, tiles subdivide to keep up with density, so the same map view costs 25 Overture tiles in Berlin and 88 in midtown.
 
@@ -172,7 +172,7 @@ The server's error codes pass through as the `code` of the SDK's `AtgeoError`, w
 
 ## What is deliberately absent
 
-**Region-less search.** You cannot search for "Kyoto" without knowing roughly where Kyoto is. Tiles killed couch-geocoding: fetching tiles for a place requires locating it first. `region` is required. The overview band makes a very large region (the whole world, say) answerable, and the SDK will filter and rank whatever comes back, so a name search over a huge box can find places important enough to be in the overview band. It is a property of what the server returns, not a feature of the SDK, and carries the caveat above.
+**Region-less search.** The SDK cannot search for "Kyoto" without knowing roughly where Kyoto is: fetching tiles for a place requires locating it first. `region` is required. The server's `org.atgeo.searchPlaces` finds a place by name anywhere in a dataset; the SDK does not call it. The overview band makes a very large region (the whole world, say) answerable, and the SDK will filter and rank whatever comes back, so a name search over a huge box can find places important enough to be in the overview band. It is a property of what the server returns, not a feature of the SDK, and carries the caveat above.
 
 **The write path.** `composeLocation`, `checkin`, and anything else that writes to a repo. Blocked on a check-in lexicon that nobody has drafted, and out of scope for the gazetteer besides. When there is a lexicon there can be a separate package; the read SDK should not carry a write path shaped around a guess.
 

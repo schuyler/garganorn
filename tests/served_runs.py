@@ -1,7 +1,7 @@
 """Hand-built tileset runs and Flask apps over them, for server tests.
 
-A run is written the way the export writes it: manifest.duckdb, tileset.json,
-gzip tiles, and manifest.json last. Descriptors and tiles are checked against
+A run is written the way the export writes it: manifest.duckdb, search.duckdb,
+tileset.json, gzip tiles, and manifest.json last. Descriptors and tiles are checked against
 the frozen lexicons so a fixture cannot drift from them.
 """
 import gzip
@@ -11,6 +11,7 @@ from unittest.mock import patch
 import duckdb
 
 from garganorn.__main__ import create_app
+from garganorn.stages import write_search_index
 from tests.lexicon_helpers import goat_validate, validate_def
 
 OSM = "openstreetmap.org"
@@ -22,18 +23,29 @@ PUBLISHED_AT = "2026-01-01T00:00:00Z"
 EXTENT = {"north": "37.80", "west": "-122.42", "south": "37.77", "east": "-122.41"}
 
 
-def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42):
+def geo(latitude, longitude):
+    return {"$type": "community.lexicon.location.geo",
+            "latitude": latitude, "longitude": longitude}
+
+
+def box(west, south, east, north):
+    return {"$type": "community.lexicon.location.bbox",
+            "west": west, "south": south, "east": east, "north": north}
+
+
+def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42,
+          variants=None, locations=None):
     """A tile record {value, importance} for one place; importance=None omits
-    the key (the tilePayload lexicon makes it optional)."""
+    the key (the tilePayload lexicon makes it optional). variants is a list of
+    variant names; locations defaults to a point in San Francisco."""
     value = {
         "$type": "org.atgeo.place",
         "origin": f"urn:atgeo:{dataset}:{collection}:{id}",
         "name": name,
-        "locations": [{
-            "$type": "community.lexicon.location.geo",
-            "latitude": "37.774900", "longitude": "-122.419400",
-        }],
+        "locations": locations or [geo("37.774900", "-122.419400")],
     }
+    if variants:
+        value["variants"] = [{"name": v} for v in variants]
     goat_validate(value)
     record = {"value": value}
     if importance is not None:
@@ -75,6 +87,8 @@ def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
             con.execute("INSERT INTO record_tiles VALUES (?, ?)", [key, qk])
     finally:
         con.close()
+
+    write_search_index(str(run_dir))
 
     if descriptor:
         tileset = {
