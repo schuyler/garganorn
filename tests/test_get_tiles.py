@@ -80,6 +80,13 @@ class TestGetTiles:
         assert resp.status_code == 400
         assert resp.get_json()["error"] == "InvalidBbox"
 
+    def test_zero_width_antimeridian_box_raises_invalid_bbox(self, tmp_path):
+        """180 and -180 are the same meridian, so this box has no width."""
+        with build_app(_overture(tmp_path)).test_client() as client:
+            resp = _get_tiles(client, bbox="180,10,-180,10.01")
+        assert resp.status_code == 400
+        assert resp.get_json()["error"] == "InvalidBbox"
+
     @pytest.mark.parametrize("bbox", [
         "-180,-90,180,90",
         "-180,10,-179,11",

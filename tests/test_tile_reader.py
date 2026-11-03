@@ -12,7 +12,8 @@ from unittest.mock import patch
 
 import duckdb
 
-from garganorn.tile_reader import TileBackedCollection
+from garganorn.tile_reader import TileBackedCollection, TileSearchIndex
+from tests.served_runs import OVERTURE, STAMP, make_run, place
 
 PREFIX = "overturemaps.org:place:"
 
@@ -196,3 +197,47 @@ class TestTileBackedCollection:
         record2, attribution2 = col.get_place(f"{PREFIX}place001")
         assert "importance" in record2
         assert attribution2 == [{"dataset": "d", "collection": "c"}]
+
+
+class TestTileSearchIndexPlan:
+    """The early stop: the statement search() runs walks one block in rank
+    order and stops at the limit, which its output cannot show."""
+
+    def test_search_plans_top_n_on_rid_with_block_scan_and_dynamic_filter(
+            self, tmp_path, monkeypatch):
+        records = [place(OVERTURE, "place", f"p{i}", f"Coffee {i}", importance=i)
+                   for i in range(30)]
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                           {"012301": records})
+        index_path = str(run_dir / "search.duckdb")
+
+        executed = []
+        real_connect = duckdb.connect
+
+        class _Recording:
+            def __init__(self, real):
+                self._real = real
+
+            def execute(self, sql, params=None, *a, **kw):
+                executed.append((sql, params))
+                return self._real.execute(sql, params, *a, **kw)
+
+            def __getattr__(self, name):
+                return getattr(self._real, name)
+
+        monkeypatch.setattr(duckdb, "connect",
+                            lambda *a, **kw: _Recording(real_connect(*a, **kw)))
+        hits = TileSearchIndex(index_path).search(["co"], None, None, 20)
+        monkeypatch.undo()
+
+        assert len(hits) == 20
+        (sql, params), = [e for e in executed if "search_blocks" in e[0]]
+        con = duckdb.connect(index_path, read_only=True)
+        try:
+            plan = "\n".join(str(row[1]) for row in
+                             con.execute("EXPLAIN " + sql, params).fetchall())
+        finally:
+            con.close()
+        assert "TOP_N" in plan
+        assert "block=" in plan
+        assert "Dynamic Filter" in plan

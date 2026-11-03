@@ -63,10 +63,6 @@ class TestGetTilesAntimeridian:
         """Extreme antimeridian bbox (179 to -179) is accepted."""
         assert _tiles(client, "179,-10,-179,10") == []
 
-    def test_bbox_exact_180_meridian(self, client):
-        """xmin=180 with xmax=-180 is accepted."""
-        assert _tiles(client, "180,-10,-180,10") == []
-
     def test_bbox_nearly_global_antimeridian(self, client):
         """Nearly global bbox crossing the antimeridian is accepted and
         selects Fiji's tile."""

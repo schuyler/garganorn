@@ -19,6 +19,7 @@ from .stages import (
     stage_division_containment,
     write_manifest,
     write_manifest_db,
+    write_search_index,
     stage_import,
     stage_density_extract,
     stage_idf,
@@ -319,6 +320,17 @@ def _cmd_covering(args):
     if args.vertex_capacity is not None:
         kwargs["cover_vertex_capacity"] = args.vertex_capacity
     stage_covering(args.boundaries, output, **kwargs)
+
+
+def _cmd_search_index(args):
+    kwargs = {}
+    if args.memory_limit is not None:
+        kwargs["memory_limit"] = args.memory_limit
+    if args.temp_directory is not None:
+        kwargs["temp_directory"] = args.temp_directory
+    if args.max_temp_directory_size is not None:
+        kwargs["max_temp_directory_size"] = args.max_temp_directory_size
+    write_search_index(args.run_dir, **kwargs)
 
 
 def _cmd_run(args, run_parser):
@@ -632,6 +644,20 @@ def main():
     covering_p.add_argument("--force", action="store_true", default=False,
                             help="Force rebuild even if output is fresh")
 
+    # --- search-index subcommand ---
+    search_index_p = subparsers.add_parser(
+        "search-index", help="Write search.duckdb into an existing run directory"
+    )
+    search_index_p.add_argument("run_dir", help="Run directory holding the tiles")
+    search_index_p.add_argument("--memory-limit", default=None, dest="memory_limit",
+                                help="DuckDB memory limit")
+    search_index_p.add_argument("--temp-directory", default=None, dest="temp_directory",
+                                help="DuckDB temp directory")
+    search_index_p.add_argument("--max-temp-directory-size", default=None,
+                                dest="max_temp_directory_size",
+                                help="DuckDB max_temp_directory_size (e.g. 250GB); "
+                                     "bounds spill under --temp-directory")
+
     # --- run subcommand ---
     run_p = subparsers.add_parser(
         "run", help="Run the full pipeline for a data source"
@@ -704,6 +730,8 @@ def main():
         _cmd_idf(args, idf_p)
     elif args.subcommand == "covering":
         _cmd_covering(args)
+    elif args.subcommand == "search-index":
+        _cmd_search_index(args)
     elif args.subcommand == "run":
         _cmd_run(args, run_p)
     elif args.subcommand == "all":

@@ -82,13 +82,15 @@ accurate but needs an `ST_Intersection` per tile per locality. The impact is
 negligible — density is one component of a composite importance score, so a
 few percent of noise moves rankings very little.
 
-### Five independent, freshness-gated CLI subcommands
+### Six independent CLI subcommands, five freshness-gated
 
-There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes five
-subcommands (`quadtree.py`): `density`, `idf`, `covering`, `run`
-(one source), `all` (every source). Each stage is independently gated by
-artifact freshness, so there's no shared ordered pipeline object — `all`
-sequences density → idf per source → division → remaining sources, while
+There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes six
+subcommands (`quadtree.py`): `density`, `idf`, `covering`, `search-index`
+(one existing run directory), `run` (one source), `all` (every source).
+`search-index` rewrites its run's `search.duckdb` unconditionally. Every
+other stage is independently gated by artifact freshness, so there's no
+shared ordered pipeline object — `all` sequences density → idf per source →
+division → remaining sources, while
 `density`, `idf` and `covering` can be invoked in any order and simply no-op
 if their inputs aren't ready. `run` carries the one ordering constraint: with
 `--boundaries` it requires an already-fresh sibling `covering/` and raises
@@ -337,8 +339,9 @@ check)
 
 ### The bbox precision check is a backstop, not the mechanism
 
-Clients must snap to the 0.01° grid before sending; `_check_bbox_precision`
-refuses anything finer anyway, so a conforming client would never trip the
+Clients must snap to the 0.01° grid (`getTiles`) or the 1° grid
+(`searchPlaces`) before sending; `_check_bbox_precision` refuses anything
+finer anyway, so a conforming client would never trip the
 check — which is not the same as redundant. Two things follow for anyone
 editing it. Don't replace the refusal with server-side snapping: that
 silences the only signal that a client is sending raw GPS. Don't fold it
@@ -348,7 +351,57 @@ the two answer different threats and neither subsumes the other.
 `tile-privacy-design.md` holds the reasoning.
 
 **Applies to**: `garganorn/server.py` (`_check_bbox_precision`),
-`garganorn/lexicon/getTiles.json`
+`garganorn/lexicon/getTiles.json`, `garganorn/lexicon/searchPlaces.json`
+
+### The search index derives from the served tiles
+
+`search.duckdb` is built from the run's own `*.json.gz` tiles, not from
+`places.parquet`, so the names, variants, importance, location and key it
+searches are exactly what the run serves, and one SQL file covers all three
+sources. It follows that the index can be written into any finished run
+without re-exporting it (`quadtree search-index`), and that the server
+treats it as part of the run: a run without `search.duckdb` is not served
+at all, rather than served without search.
+
+The normaliser, `name_tokens`, is a macro stored in the same file, so the
+index and the query side tokenise with the same code even if the code
+changes between building and serving.
+
+**Applies to**: `garganorn/stages.py` (`write_search_index`, called from
+`stage_export`), `garganorn/sql/search_index.sql`, `garganorn/__main__.py`
+(`create_app`'s run-readiness check)
+
+### Whole-degree search regions are what make the index's bounds exact
+
+`search_blocks` stores each record's bounds as `ceil(west)`, `floor(east)`,
+`ceil(south)`, `floor(north)` in `SMALLINT`s. For an integer region edge
+that rounding is exact (`west <= E` iff `ceil(west) <= E`), so the region
+test includes on-edge points with no false hits or misses. The exactness
+rests entirely on `searchPlaces` refusing a non-integer `bbox`. Snapping a
+fractional region instead of refusing it would lose the backstop above;
+accepting one would make the stored bounds silently wrong.
+
+**Applies to**: `garganorn/sql/search_index.sql`, `garganorn/tile_reader.py`
+(`TileSearchIndex.search`), `garganorn/server.py` (`search_places`)
+
+### The keyword floor and token cap bound a search's cost
+
+There is no per-query time limit. Cost is bounded by two rules together.
+The two-character floor (`KeywordRequired`) confines every query to one
+block, the rows whose name has a word starting with the first two
+characters of the keyword's longest word; without such a word there is no
+block, and the query would scan every name. Within the block, rows are
+sorted by `rid`, the record's rank, so `ORDER BY rid LIMIT 20` stops after
+the first matching row groups. A keyword matching fewer than 20 records
+reads the whole block and tests every keyword word against every name in
+it, so the 12-distinct-word cap is what bounds the no-match case. Relaxing
+either rule, or a plan change that drops the early stop, changes the worst
+case, not the results; the `EXPLAIN` test in `tests/test_tile_reader.py`
+pins the plan.
+
+**Applies to**: `garganorn/server.py` (`search_places`, `SEARCH_LIMIT`,
+`SEARCH_TOKEN_LIMIT`), `garganorn/tile_reader.py` (`TileSearchIndex`),
+`garganorn/sql/search_index.sql`
 
 ### Optional-but-not-nullable lexicon fields must be omitted, not null
 
@@ -438,7 +491,8 @@ derivation is unnecessary.
 - Quadkey zoom levels: z17 for places, z15 for density, z6-z17 for tiles
   plus a z1-z5 summary band
 - Coordinate precision in export: `DECIMAL(10,6)` → 6 decimal places (~0.1m)
-- Bbox privacy grid: 0.01° (~1km) enforced by `_check_bbox_precision()`
+- Bbox privacy grid: 0.01° (~1km) for `getTiles`, 1° for `searchPlaces`,
+  enforced by `_check_bbox_precision()`
 - Latitude for a quadkey is clamped to ±85.05101030905541, the centre of the
   outermost z17 row — not the Mercator limit, which wraps (see the
   `ST_QuadKey` entry in `gotchas.md`). Safe at any zoom ≤ 17: a point inside

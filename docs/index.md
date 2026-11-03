@@ -4,7 +4,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [tile-privacy-design.md](tile-privacy-design.md) | Why there is no server-side search. The constraint the rest of the architecture is derived from. |
+| [tile-privacy-design.md](tile-privacy-design.md) | Why search runs over tiles on the client, what a keyword search may tell the server, and why no log keeps the keyword. The constraint the rest of the architecture is derived from. |
 
 ## Pipeline
 
