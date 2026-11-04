@@ -39,6 +39,7 @@ from garganorn.stages import (
     _coord_exprs,
     quadkey_to_bbox,
 )
+from garganorn.tile_reader import TileBackedCollection
 from tests.served_runs import OVERTURE, STAMP, make_run, place
 from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline, SOURCES
@@ -241,6 +242,42 @@ class TestStageManifest:
         count = con_check.execute("SELECT count(*) FROM record_tiles").fetchone()[0]
         assert count > 0
         con_check.close()
+
+    @pytest.fixture
+    def manifest_db(self, tmp_path):
+        """A manifest.duckdb written by write_manifest_db over synthetic tile assignments."""
+        ta_parquet = str(tmp_path / "ta.parquet")
+        con = duckdb.connect()
+        con.execute(f"""
+            COPY (SELECT uuid()::varchar AS place_id, 'q' || (i % 100) AS tile_qk
+                  FROM range(10000) t(i)) TO '{ta_parquet}'
+        """)
+        con.close()
+        write_manifest_db(ta_parquet, str(tmp_path), "overture_place")
+        return str(tmp_path / "manifest.duckdb")
+
+    def test_manifest_indexes_record_tiles_key(self, manifest_db):
+        """manifest.duckdb holds an index on record_tiles(key)."""
+        con = duckdb.connect(manifest_db, read_only=True)
+        sql = [r[0] for r in con.execute(
+            "SELECT sql FROM duckdb_indexes() WHERE table_name = 'record_tiles'"
+        ).fetchall()]
+        con.close()
+        assert len(sql) == 1 and '("key")' in sql[0], f"indexes on record_tiles: {sql}"
+
+    def test_get_places_plans_an_index_scan(self, manifest_db, tmp_path):
+        """get_places' own query runs as an Index Scan (the runtime profile; EXPLAIN can't show it)."""
+        profile = tmp_path / "profile.json"
+        reader = TileBackedCollection(manifest_db, str(tmp_path))
+        con = reader._con
+        key = con.execute("SELECT key FROM record_tiles LIMIT 1").fetchone()[0]
+        con.execute("PRAGMA enable_profiling = 'json'")
+        con.execute(f"PRAGMA profiling_output = '{profile}'")
+
+        reader.get_places([key])
+
+        text = profile.read_text()
+        assert "Index Scan" in text, "get_places did not plan an Index Scan"
 
 
 class TestSearchIndex:
