@@ -65,6 +65,32 @@ merged_areas_interior AS (
     SELECT division_id, geometry,
            ST_PointOnSurface(geometry) AS interior_point
     FROM merged_areas
+),
+-- Minimal longitude interval of a division wider than 180 degrees planar: cut at
+-- the largest gap between polygon parts, unless the gap across +-180 is at least
+-- as large (then planar is minimal). A gap is measured from the running maximum
+-- end of earlier parts, so a part nested in a wider one opens none.
+wide_parts AS (
+    SELECT division_id, ST_XMin(p.geom) AS s, ST_XMax(p.geom) AS e
+    FROM (SELECT division_id, unnest(ST_Dump(geometry)) AS p
+          FROM merged_areas_interior
+          WHERE ST_XMax(geometry) - ST_XMin(geometry) > 180)
+),
+wide_gaps AS (
+    SELECT division_id, s AS west, prev_e AS east, s - prev_e AS gap
+    FROM (SELECT division_id, s,
+                 max(e) OVER (PARTITION BY division_id ORDER BY s
+                              ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) AS prev_e
+          FROM wide_parts)
+),
+wide_extent AS (
+    SELECT g.division_id, g.cut.west, g.cut.east
+    FROM (SELECT division_id, max(gap) AS gap,
+                 arg_max(struct_pack(west := west, east := east), gap) AS cut
+          FROM wide_gaps GROUP BY division_id) g
+    JOIN (SELECT division_id, 360 - (max(e) - min(s)) AS across
+          FROM wide_parts GROUP BY division_id) a USING (division_id)
+    WHERE g.gap > a.across
 )
 SELECT
     d.id,
@@ -92,12 +118,13 @@ SELECT
     -- min/max extents stored flat for fast bbox-filter in containment queries
     ST_YMin(ma.geometry) AS min_latitude,
     ST_YMax(ma.geometry) AS max_latitude,
-    ST_XMin(ma.geometry) AS min_longitude,
-    ST_XMax(ma.geometry) AS max_longitude,
+    coalesce(we.west, ST_XMin(ma.geometry)) AS min_longitude,
+    coalesce(we.east, ST_XMax(ma.geometry)) AS max_longitude,
     ST_X(ma.interior_point) AS interior_lon,
     ST_Y(ma.interior_point) AS interior_lat
 FROM division d
-JOIN merged_areas_interior ma ON ma.division_id = d.id;
+JOIN merged_areas_interior ma ON ma.division_id = d.id
+LEFT JOIN wide_extent we ON we.division_id = d.id;
 
 CREATE TABLE places AS
 -- Compute average density for localities: find all z15 density tiles whose

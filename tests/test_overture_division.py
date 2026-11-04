@@ -991,3 +991,139 @@ class TestImportanceAdminFloor:
         county do not displace them."""
         _, band = self._build(floor_fixture, tmp_path, n=3)
         assert band == {"c1", "d1", "r1"}
+
+
+# ---------------------------------------------------------------------------
+# Divisions that cross +-180 get the minimal longitude interval
+# ---------------------------------------------------------------------------
+
+def _part(xmin, xmax, ymin, ymax):
+    return f"(({xmin} {ymin}, {xmin} {ymax}, {xmax} {ymax}, {xmax} {ymin}, {xmin} {ymin}))"
+
+
+def _import_divisions(tmp_path, *divisions):
+    """Import divisions div_0, div_1, ... whose geometries are MULTIPOLYGONs
+    of the given tuples of parts; return the path of the resulting
+    boundaries.duckdb."""
+    division_path = tmp_path / "division.parquet"
+    division_area_path = tmp_path / "division_area.parquet"
+    wkts = ["MULTIPOLYGON(" + ",".join(parts) + ")" for parts in divisions]
+    conn = duckdb.connect(":memory:")
+    conn.execute("INSTALL spatial; LOAD spatial;")
+    division_rows = " UNION ALL ".join(f"""
+        SELECT 'div_{i}' AS id,
+               {{'primary': 'Wide Land', 'common': map([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]}} AS names,
+               'country' AS subtype, 'US' AS country, NULL::VARCHAR AS region,
+               'Q1' AS wikidata, 1000::BIGINT AS population, NULL::VARCHAR AS parent_division_id"""
+        for i in range(len(wkts)))
+    conn.execute(f"COPY ({division_rows}) TO '{division_path}' (FORMAT PARQUET)")
+    area_rows = " UNION ALL ".join(f"""
+        SELECT 'div_{i}' AS division_id, 1 AS admin_level, true AS is_land,
+               '{wkt}' AS geometry,
+               {{'xmin': ST_XMin(g), 'ymin': ST_YMin(g), 'xmax': ST_XMax(g), 'ymax': ST_YMax(g)}} AS bbox
+        FROM (SELECT ST_GeomFromText('{wkt}') AS g)"""
+        for i, wkt in enumerate(wkts))
+    conn.execute(f"COPY ({area_rows}) TO '{division_area_path}' (FORMAT PARQUET)")
+    conn.close()
+    _stages.stage_import("overture_division", (str(division_path), str(division_area_path)),
+                         (-180.0, -90.0, 180.0, 90.0), str(tmp_path / "places.parquet"))
+    return str(tmp_path / "boundaries.duckdb")
+
+
+def _import_division(tmp_path, *parts):
+    return _import_divisions(tmp_path, parts)
+
+
+def _extent(boundaries, i=0):
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial;")
+    con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
+    row = con.execute("SELECT min_longitude, max_longitude FROM bnd.places "
+                      f"WHERE id = 'div_{i}'").fetchone()
+    con.close()
+    return row
+
+
+US_LIKE = (_part(-180, -170, 50, 55), _part(-125, -67, 25, 49),
+           _part(-100, -90, 60, 65), _part(170, 180, 50, 55))
+
+
+class TestDivisionExtentAntimeridian:
+    """A division's min_longitude/max_longitude are the minimal longitude
+    interval containing its geometry; west > east when that interval
+    contains 180."""
+
+    def test_parts_either_side_of_180_cross(self, tmp_path):
+        """US-like parts at +-180 plus a mainland part with a part nested
+        in it give 170..-67, not the planar -180..180."""
+        assert _extent(_import_division(tmp_path, *US_LIKE)) == (170.0, -67.0)
+
+    def test_crossing_without_touching_180(self, tmp_path):
+        """New Zealand-like parts at 166..175 and -177..-176 cross although
+        no part touches +-180."""
+        parts = (_part(166, 175, -47, -40), _part(-177, -176, -45, -44))
+        assert _extent(_import_division(tmp_path, *parts)) == (166.0, -176.0)
+
+    def test_non_crossing_extent_is_unchanged(self, tmp_path):
+        parts = (_part(0, 10, 0, 10), _part(20, 30, 20, 30))
+        assert _extent(_import_division(tmp_path, *parts)) == (0.0, 30.0)
+
+    def test_full_circle_with_nested_islands_keeps_whole_range(self, tmp_path):
+        """An Antarctica-like full-circle part with islands nested in it,
+        one at the far end of the circle, keeps -180..180."""
+        parts = (_part(-180, 180, -90, -80), _part(-170, -160, -75, -70),
+                 _part(170, 175, -70, -65))
+        assert _extent(_import_division(tmp_path, *parts)) == (-180.0, 180.0)
+
+    def test_touching_parts_covering_the_circle_keep_whole_range(self, tmp_path):
+        """Parts -180..-90, -90..90 and 90..180 meet with zero gaps, as
+        does the gap across +-180; the extent stays -180..180."""
+        parts = (_part(-180, -90, 0, 5), _part(-90, 90, 10, 15), _part(90, 180, 20, 25))
+        assert _extent(_import_division(tmp_path, *parts)) == (-180.0, 180.0)
+
+    def test_widest_gap_across_180_keeps_planar_extent(self, tmp_path):
+        """Parts -90..-80, 0..10, 100..110 have gaps 80 and 90 inside and
+        160 across +-180; the planar extent -90..110 is minimal."""
+        parts = (_part(-90, -80, 0, 5), _part(0, 10, 10, 15), _part(100, 110, 20, 25))
+        assert _extent(_import_division(tmp_path, *parts)) == (-90.0, 110.0)
+
+    def test_wide_divisions_imported_together_get_their_own_extents(self, tmp_path):
+        """A US-like and a New Zealand-like division in one import keep
+        170..-67 and 166..-176."""
+        nz = (_part(166, 175, -47, -40), _part(-177, -176, -45, -44))
+        boundaries = _import_divisions(tmp_path, US_LIKE, nz)
+        assert (_extent(boundaries, 0), _extent(boundaries, 1)) == ((170.0, -67.0), (166.0, -176.0))
+
+    def test_part_nested_in_a_wider_earlier_part_does_not_open_a_gap(self, tmp_path):
+        """Parts -170..-160, -100..175 and -90..-80 (the last sorted part
+        nested in the one before it) give -100..-160."""
+        parts = (_part(-170, -160, 0, 5), _part(-100, 175, 10, 15), _part(-90, -80, 20, 25))
+        assert _extent(_import_division(tmp_path, *parts)) == (-100.0, -160.0)
+
+    def test_crossing_division_covers_the_same_tiles_as_planar_extent(self, tmp_path):
+        """The US-like fixture, once its extent crosses, yields the same
+        covering tiles as when its extent is the planar -180..180."""
+        from garganorn.covering import stage_covering
+
+        boundaries = _import_division(tmp_path, *US_LIKE)
+        assert _extent(boundaries)[0] > _extent(boundaries)[1], "fixture must cross"
+
+        def tiles(db, name):
+            out = str(tmp_path / name)
+            stage_covering(db, out, cover_min_zoom=4, cover_max_zoom=4)
+            return set(duckdb.connect().execute(
+                "SELECT tile_qk FROM read_parquet(?)", [os.path.join(out, "*.parquet")]
+            ).fetchall())
+
+        crossing = tiles(boundaries, "covering_crossing")
+
+        planar_db = str(tmp_path / "planar.duckdb")
+        con = duckdb.connect(planar_db)
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.execute(f"ATTACH '{boundaries}' AS src (READ_ONLY)")
+        con.execute("CREATE TABLE places AS SELECT * FROM src.places")
+        con.execute("UPDATE places SET min_longitude = ST_XMin(geometry), "
+                    "max_longitude = ST_XMax(geometry)")
+        con.close()
+
+        assert crossing == tiles(planar_db, "covering_planar")

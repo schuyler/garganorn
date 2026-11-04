@@ -87,6 +87,11 @@ max_latitude, min_longitude, max_longitude, interior_lon, interior_lat,
 importance INTEGER, variants STRUCT(name, type, language)[]`. `level`
 comes from `garganorn.levels.LEVEL_VOCAB` via a generated `CASE` with no `ELSE`
 branch — an unmapped `subtype` must surface as NULL, not a silent default.
+`min_longitude` and `max_longitude` are the minimal longitude interval
+containing the geometry, so `min_longitude > max_longitude` when that interval
+contains 180° (fifteen divisions in Overture 2026-10-21.0, among them the
+United States, Russia, Fiji and New Zealand). A geometry that covers the whole
+circle keeps `-180..180`. The `bbox` struct stays the planar min/max.
 
 **Schema** (`boundaries.duckdb`, table `places`): `id, geometry GEOMETRY,
 level, names, subtype, country, region, wikidata, population,

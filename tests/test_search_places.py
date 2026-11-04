@@ -173,6 +173,25 @@ def test_antimeridian_region(tmp_path, lon, kept):
     assert (_found(tmp_path, records, q="zed", bbox=FIJI_REGION) == ["Zed"]) == kept
 
 
+FIJI_BOX = [box("177.500000", "-19.000000", "-179.500000", "-16.000000")]
+
+
+@pytest.mark.parametrize("bbox,kept", [
+    ("175,-20,178,-10", True), ("-180,-20,-170,-10", True), (FIJI_REGION, True),
+    ("0,-20,10,-10", False),
+])
+def test_crossing_box_is_kept_by_a_region_that_meets_it(tmp_path, bbox, kept):
+    records = [_record("a", "Zed", locations=FIJI_BOX)]
+    assert (_found(tmp_path, records, q="zed", bbox=bbox) == ["Zed"]) == kept
+
+
+@pytest.mark.parametrize("bbox,kept", [("50,10,60,11", False), ("10,10,11,11", True),
+                                       ("138,10,-122,11", False)])
+def test_narrow_box_is_not_read_as_crossing(tmp_path, bbox, kept):
+    records = [_record("a", "Zed", locations=[box("10.200000", "10.200000", "10.700000", "10.700000")])]
+    assert (_found(tmp_path, records, q="zed", bbox=bbox) == ["Zed"]) == kept
+
+
 def test_lexicon_declares_no_point():
     lexicon = json.loads((LEXICON_DIR / "searchPlaces.json").read_text())
     props = lexicon["defs"]["main"]["parameters"]["properties"]
