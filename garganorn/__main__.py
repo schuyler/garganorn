@@ -203,11 +203,11 @@ def create_app():
 
     @app.after_request
     def add_cache_control(response):
-        if (
+        cached = request.endpoint == "place" or (
             request.endpoint == "xrpc-endpoint"
             and request.view_args.get("nsid") in CACHED_QUERIES
-            and response.status_code == 200
-        ):
+        )
+        if cached and response.status_code == 200:
             response.headers["Cache-Control"] = "public, max-age=3600"
         return response
 

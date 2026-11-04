@@ -401,7 +401,7 @@ def test_tile_route_roots_at_tiles_not_run_dir(tile_client):
 
 
 # ---------------------------------------------------------------------------
-# getTiles responses are cached; the lexicon route is not
+# getTiles, getPlace and the URN alias are cached; the lexicon route is not
 # ---------------------------------------------------------------------------
 
 def test_gettiles_response_has_cache_control(tile_client):
@@ -428,6 +428,21 @@ def test_getplace_error_lacks_cache_control(client):
         "uri": f"urn:atgeo:{OVERTURE}:place:nope",
     })
     _assert_json_error(resp, 400, "PlaceNotFound")
+    assert "Cache-Control" not in resp.headers
+
+
+def test_place_alias_response_has_cache_control(client):
+    """The URN alias route is cached for 1 hour, like getPlace."""
+    resp = client.get(f"/{OVERTURE}/place/ov001")
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+
+
+@pytest.mark.parametrize("path", [f"/{OVERTURE}/place/nope", "/osm/place/ov001"])
+def test_place_alias_404_lacks_cache_control(client, path):
+    """A URN alias 404 is not cached, including a dataset with no dot."""
+    resp = client.get(path)
+    _assert_json_error(resp, 404, "PlaceNotFound")
     assert "Cache-Control" not in resp.headers
 
 
