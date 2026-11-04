@@ -782,6 +782,7 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
             FROM read_parquet('{tile_assignments_parquet}')
             ORDER BY key
         """)
+        con.execute("CREATE INDEX record_tiles_key ON manifest.record_tiles(key)")
         con.execute("DETACH manifest")
     finally:
         con.close()

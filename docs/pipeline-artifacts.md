@@ -337,7 +337,11 @@ attributes, relations`); `importance` sits beside it, not in it.
 `manifest.duckdb` has one table, `record_tiles(key VARCHAR, tile_qk
 VARCHAR)`, where `key` is `{dataset}:{collection}:{id}` (the place's
 `origin` without `urn:atgeo:`), built by the source class's
-`manifest_key_sql`. `manifest.json` is just `{generated_at}`.
+`manifest_key_sql`. `key` has an index (`record_tiles_key`), which
+single-record and batched lookups use. On 73.6M synthetic keys shaped like
+the Overture-place manifest, it takes a lookup from about 0.3 s to a few
+milliseconds and grows the file from 2 GB to 7.4 GB.
+`manifest.json` is just `{generated_at}`.
 
 **Sort**: two passes. Pass 1 copies the export query's output into a
 staging directory, Hive-partitioned by `left(tile_qk,
@@ -349,7 +353,8 @@ at a time with `ORDER BY tile_qk, place_id` and streams it to the flush
 loop below. `place_id` is a deterministic tiebreaker with no meaning
 downstream, kept solely so repeated runs over identical inputs produce
 byte-identical gzip output. `manifest.duckdb`'s `record_tiles` is sorted
-by `key`, since lookups against it are by record key.
+by `key`, but zone maps cannot prune on it (DuckDB keeps 8 bytes of string
+statistics and every key shares a prefix), so lookups go through the index.
 
 **Shape**: the staging directory is private to the stage, which creates
 and destroys it, so it never appears in `Writes` above. It sits beside

@@ -34,7 +34,7 @@ class TileBackedCollection:
         rows (one per overlapping tile) -- correct only because all copies of
         a division's record are byte-identical.
         """
-        # list_contains(?, key) scans the 73M-row Overture manifest 2.5x slower.
+        # list_contains(?, key) bypasses the key index and scans the 73M-row Overture manifest.
         rows = self._con.execute(
             "SELECT key, any_value(tile_qk) FROM record_tiles "
             "WHERE key IN (SELECT unnest(?)) GROUP BY key", [keys]
