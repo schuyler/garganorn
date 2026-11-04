@@ -77,7 +77,9 @@ SELECT rid FROM search_blocks
 WHERE block = $block
   AND ($scope IS NULL OR scope = $scope)
   AND ($rw IS NULL OR (s <= $rn AND n >= $rs AND (
-        CASE WHEN $rw <= $re THEN w <= $re AND e >= $rw ELSE e >= $rw OR w <= $re END)))
+        CASE WHEN $rw <= $re
+             THEN CASE WHEN w - e > 1 THEN w <= $re OR e >= $rw ELSE w <= $re AND e >= $rw END
+             ELSE w - e > 1 OR e >= $rw OR w <= $re END)))
   AND len(list_filter(names,
           nm -> len(list_filter($tokens, t -> NOT contains(nm, ' ' || t))) = 0)) > 0
 ORDER BY rid

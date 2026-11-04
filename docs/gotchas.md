@@ -300,6 +300,13 @@ sites: the bbox filter and the density-tile overlap join), and
 first paragraph names as the bug, so features crossing ±180° are dropped
 there.
 
+Division `min_longitude`/`max_longitude` are the minimal interval, so a
+crossing division exports `west > east` (the places-parquet `bbox` struct stays
+the planar min/max). `covering_seed.sql` prefilters with the two-lobe test. The
+search index stores whole-degree bounds `w=ceil(west)`, `e=floor(east)`, and a
+sub-degree box that sits inside one degree cell also gives `w > e`, so
+`tile_reader._SEARCH_SQL` reads a record as crossing only when `w - e > 1`.
+
 **Why it matters**: it affects Pacific data — eastern Russia, Fiji, Antarctica. A
 global build makes it reachable where a CONUS-bounded one did not.
 
