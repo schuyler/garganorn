@@ -125,7 +125,7 @@ class TestOvertureImport:
                                 common MAP(VARCHAR, VARCHAR),
                                 rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                             ),
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
                 addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
                 websites    VARCHAR[],
                 socials     VARCHAR[],
@@ -151,7 +151,7 @@ class TestOvertureImport:
                     {'primary': ?,
                      'common': map([]::VARCHAR[], []::VARCHAR[]),
                      'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-                    {'primary': 'coffee_shop'},
+                    {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []},
                     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
                 )
             """, [place_id, name])
@@ -192,7 +192,7 @@ class TestOvertureImport:
                                 common MAP(VARCHAR, VARCHAR),
                                 rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                             ),
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
                 addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
                 websites    VARCHAR[],
                 socials     VARCHAR[],
@@ -212,7 +212,7 @@ class TestOvertureImport:
                 {'primary': 'Whitespace Variant Place',
                  'common': map(['en'], ['   ']),
                  'rules':  [{'language': 'de', 'value': '  ', 'variant': 'short'}]},
-                {'primary': 'coffee_shop'},
+                {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []},
                 NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
             )
         """)
@@ -352,3 +352,75 @@ class TestOvertureImportArtifactPhase2:
         con.close()
         non_null = [v for v in rows if v is not None]
         assert non_null == sorted(non_null), "qk17 values must be in sorted order"
+
+
+# ---------------------------------------------------------------------------
+# Tests: category score keyed on the taxonomy leaf
+# ---------------------------------------------------------------------------
+
+class TestOvertureTaxonomyImportance:
+    """importance's category term is keyed on taxonomy.primary."""
+
+    LON, LAT = -122.419, 37.775
+    DENSITY_NORM = 10.0
+    IDF_NORM = 18.0
+
+    def _import(self, tmp_path, place_rows, idf_rows):
+        """Import `place_rows` (all in one z15 cell, density 5.0) and return
+        {id: importance}."""
+        from tests.quadtree_helpers import write_minimal_overture_parquet
+
+        base = tmp_path / "taxonomy_fixture"
+        base.mkdir()
+        write_minimal_overture_parquet(base / "ov_taxonomy.parquet", place_rows)
+
+        probe = duckdb.connect(":memory:")
+        probe.execute("INSTALL spatial; LOAD spatial;")
+        qk15s = {
+            probe.execute("SELECT ST_QuadKey(?, ?, 17)", [lon, lat]).fetchone()[0][:15]
+            for _, lon, lat, _ in place_rows
+        }
+        probe.close()
+        assert len(qk15s) == 1, f"fixture places must share one z15 cell; got {qk15s}"
+
+        conn = duckdb.connect(str(tmp_path / "test_taxonomy.duckdb"))
+        conn.execute("INSTALL spatial; LOAD spatial;")
+        run_overture_import(
+            conn, str(base / "*.parquet"),
+            density_rows=[(qk15s.pop(), 5.0, -122.5, 37.7, -122.4, 37.8)],
+            idf_rows=idf_rows,
+            density_norm=self.DENSITY_NORM, idf_norm=self.IDF_NORM,
+        )
+        result = dict(conn.execute("SELECT id, importance FROM places").fetchall())
+        conn.close()
+        return result
+
+    def test_rarer_leaf_outscores_common_leaf_at_equal_density(self, tmp_path):
+        """Both idf scores sit below idf_norm, so least(..., 1) cannot tie them."""
+        importance = self._import(
+            tmp_path,
+            [
+                ("rare", self.LON, self.LAT, "rare_leaf"),
+                ("common", self.LON + 0.00001, self.LAT, "common_leaf"),
+            ],
+            [("rare_leaf", 15.0), ("common_leaf", 3.0)],
+        )
+        assert importance["rare"] > importance["common"], (
+            f"rare-leaf place must outscore common-leaf place at equal density; "
+            f"got {importance}"
+        )
+
+    def test_place_without_taxonomy_is_imported_and_scores_density_only(self, tmp_path):
+        """A NULL taxonomy contributes 0 to importance: round(60 * 5/10) = 30."""
+        importance = self._import(
+            tmp_path,
+            [
+                ("leafless", self.LON, self.LAT, None),
+                ("leafed", self.LON + 0.00001, self.LAT, "rare_leaf"),
+            ],
+            [("rare_leaf", 15.0)],
+        )
+        assert importance["leafless"] == 30, (
+            f"NULL-taxonomy place must score on density alone (30); got {importance}"
+        )
+        assert importance["leafed"] > importance["leafless"]

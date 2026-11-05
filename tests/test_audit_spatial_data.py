@@ -73,7 +73,7 @@ class TestCoordinateRangeValidation:
                 SELECT 'ov001' AS id,
                        'Test Place' AS name,
                        ST_Point(200.0, 37.7749) AS geometry,
-                       {'primary': 'amenity=cafe'} AS categories,
+                       {'primary': 'amenity=cafe', 'hierarchy': ['services', 'amenity=cafe'], 'alternates': []} AS taxonomy,
                        {xmin: 200.0, xmax: 200.1, ymin: 37.7, ymax: 37.9} AS bbox,
                        {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
@@ -121,7 +121,7 @@ class TestCoordinateRangeValidation:
                 SELECT 'ov002' AS id,
                        'Test Place' AS name,
                        ST_Point(-122.4194, 100.0) AS geometry,
-                       {'primary': 'amenity=cafe'} AS categories,
+                       {'primary': 'amenity=cafe', 'hierarchy': ['services', 'amenity=cafe'], 'alternates': []} AS taxonomy,
                        {xmin: -122.5, xmax: -122.3, ymin: 100.0, ymax: 100.2} AS bbox,
                        {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
@@ -278,7 +278,7 @@ class TestBboxOverlapFilter:
                 SELECT 'ov001' AS id,
                        'Test Place' AS name,
                        ST_Point(-122.5, 37.7749) AS geometry,
-                       {'primary': 'amenity=cafe'} AS categories,
+                       {'primary': 'amenity=cafe', 'hierarchy': ['services', 'amenity=cafe'], 'alternates': []} AS taxonomy,
                        {xmin: -122.6, xmax: -122.4, ymin: 37.7, ymax: 37.9} AS bbox,
                        {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)
@@ -392,7 +392,7 @@ class TestBboxNormalization:
                 SELECT 'ov001' AS id,
                        'Test Place' AS name,
                        ST_Point(-122.4194, 37.7749) AS geometry,
-                       {'primary': 'amenity=cafe'} AS categories,
+                       {'primary': 'amenity=cafe', 'hierarchy': ['services', 'amenity=cafe'], 'alternates': []} AS taxonomy,
                        {xmin: -122.3, xmax: -122.5, ymin: 37.9, ymax: 37.7} AS bbox,
                        {'primary': 'Test Place', 'common': MAP([]::VARCHAR[], []::VARCHAR[]), 'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
             """)

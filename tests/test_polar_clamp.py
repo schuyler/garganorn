@@ -72,7 +72,7 @@ class TestSouthernPolarCoordinateGetsSouthernTile:
                 SELECT 'ov001' AS id,
                        'Amundsen-Scott' AS name,
                        ST_Point(0.0, -89.99) AS geometry,
-                       {'primary': 'amenity=cafe'} AS categories,
+                       {'primary': 'amenity=cafe', 'hierarchy': ['services', 'amenity=cafe'], 'alternates': []} AS taxonomy,
                        {xmin: -0.1, xmax: 0.1, ymin: -89.99, ymax: -89.99} AS bbox,
                        {'primary': 'Amundsen-Scott', 'common': MAP([]::VARCHAR[], []::VARCHAR[]),
                         'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]} AS names
