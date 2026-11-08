@@ -21,7 +21,7 @@
 | Document | Description |
 |----------|-------------|
 | [atgeo-spec.md](atgeo-spec.md) | The gazetteer interface: place identity (`urn:atgeo:` origins), tilesets, tile format, place records, importance, containment levels, the XRPC methods and plain-HTTP routes, error statuses, caching and CORS. Normative for anything on the wire |
-| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design rationale and port-relevant behavior: two calls, `searchPlaces` and `getPlace` (describes the shipped TypeScript SDK; not normative for the wire) |
+| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design rationale and port-relevant behavior: four searches (`searchNearby`, `searchByKeyword`, `searchNearbyThenByKeyword`, `autocompleteByKeyword`) and `getPlace` (describes the shipped TypeScript SDK; not normative for the wire) |
 | [atgeo-appview-design.md](atgeo-appview-design.md) | Firehose sidecar serving live location records as tiles (unbuilt; pending overhaul — not normative) |
 | [lexicon-publication.md](lexicon-publication.md) | Runbook: the `_lexicon.atgeo.org` TXT record and publishing the `org.atgeo.*` lexicons with `goat` |
 

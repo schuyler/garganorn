@@ -1,27 +1,34 @@
 # The ATGeo client SDK
 
-Two calls do the work. `searchPlaces` finds places in a region; `getPlace` fetches one by its `origin`. Tile lookup, tile fetching, matching, ranking, and caching all happen inside them and are not the developer's problem.
+Two kinds of call do the work. Four search methods find places: `searchNearby` in a region, `searchByKeyword` by name anywhere in a dataset, `searchNearbyThenByKeyword` nearby first and by name if that finds nothing solid, and `autocompleteByKeyword` for a search box. `getPlace` fetches one place by its `origin`. Tile lookup, tile fetching, matching, ranking, and caching all happen inside them and are not the developer's problem.
 
 The TypeScript SDK ([atgeo-sdk-js](https://github.com/schuyler/atgeo-sdk-js), `@atgeo/client`) is the first implementation. Its README is the developer reference: signatures, options, result shapes, and error codes. This document is the design rationale, and the behavior a port to another language has to make a decision about. The exact, testable statement of that behavior is the SDK repo's [port contract](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md), written for porters; where it and this document disagree about what the client does, it wins.
 
 The wire format is in [atgeo-spec.md](atgeo-spec.md), which is normative for anything on the network. Where the two disagree, the spec wins.
 
-## Why two calls
+## Which server calls the SDK makes
 
-The gazetteer serves a few things a client can call to read places: `getTiles`, `getPlace` and `org.atgeo.searchPlaces` for places, `describeService` and `describeTileset` for what a server holds. The SDK's `searchPlaces` is built on `getTiles`, not on the server's `org.atgeo.searchPlaces`, a keyword search over a whole dataset ([atgeo-spec.md](atgeo-spec.md#orgatgeosearchplaces)). Wiring the SDK to it is separate work, and would change the port contract's rule that search text never goes on the wire.
+The gazetteer serves a few things a client can call to read places: `getTiles`, `getPlace` and `org.atgeo.searchPlaces` for places, `describeService` and `describeTileset` for what a server holds. The two searches differ on purpose. The tile search sends the server no text at all and finds places in a region; the server's `org.atgeo.searchPlaces` ([atgeo-spec.md](atgeo-spec.md#orgatgeosearchplaces)) is a keyword search over a whole dataset, which has to be told the keyword. The SDK exposes both, under names that say which is which.
 
 | SDK | Server |
 |---|---|
-| `searchPlaces` | `org.atgeo.getTiles`, then N tile fetches |
+| `searchNearby` | `org.atgeo.getTiles`, then N tile fetches |
+| `searchByKeyword` | `org.atgeo.searchPlaces` |
+| `searchNearbyThenByKeyword` | what `searchNearby` calls, then `org.atgeo.searchPlaces` only when the nearby results have no solid hit |
+| `autocompleteByKeyword` | its `searchByKeyword` calls `org.atgeo.searchPlaces`, designed to send only a keyword the server would accept (the margins are in the port contract's section 17: compatibility characters, half-width kana) |
 | `getPlace` | the cached tiles, else `org.atgeo.getPlace` |
 | `describeService` | `org.atgeo.describeService` |
 | `describeTileset` | `org.atgeo.describeTileset` |
+
+### The naming rule
+
+Every method whose name contains `Keyword` may send search text to the server. No other method does. In an options object, the field that carries text is called `text` where it never leaves the device (`searchNearby`) and `keyword` where it may. A developer can tell from the method name what leaves the device, and the SDK never decides that for them: there is no method that quietly falls back to a global query. `searchNearbyThenByKeyword` is the one that sends text only sometimes, and its name says so.
 
 The client does not implement quadkeys. Tile URLs are opaque and the server works out which tiles cover a box. That deletes the hardest half of what a client would otherwise have to get right, and it's the main reason this shape is worth having rather than merely smaller.
 
 The two describe calls are plain pass-throughs for callers who want to know what a server holds. They take no part in search; `describeService` is cached for an hour, `describeTileset` is not cached.
 
-## searchPlaces
+## searchNearby
 
 Internally: snap the region outward, ask `getTiles`, fetch the tiles it names, parse, dedupe, filter to the collection, filter to the region, match, rank, and hand back places. One `getTiles` round trip per bounding box (two across the antimeridian), then tile fetches, eight at a time.
 
@@ -70,9 +77,15 @@ Results are filtered back to the caller's original region before they are return
 
 ### What goes on the wire
 
-A search sends `getTiles` with the snapped bounding box, the dataset, and the collection if there is one. Then it sends GETs for tile URLs exactly as the server named them. Nothing else: not the search text, in any form, and not the precise region. The server can tell which tiles a client has fetched before, but nothing finer than the tiles themselves. `getPlace` on a cache miss sends the `origin` of the place asked for, and nothing else.
+`searchNearby` sends `getTiles` with the snapped bounding box, the dataset, and the collection if there is one. Then it sends GETs for tile URLs exactly as the server named them. Nothing else: not the search text, in any form, and not the precise region. The server can tell which tiles a client has fetched before, but nothing finer than the tiles themselves. `getPlace` on a cache miss sends the `origin` of the place asked for, and nothing else.
+
+The keyword methods are the exception, and say so in their names. `searchByKeyword` sends `org.atgeo.searchPlaces` with the dataset, the collection if there is one, `q` (the keyword exactly as passed), and `bbox` if the caller gave a region. The server learns the keyword and, with a region, the whole-degree box that covers it; see [Keyword search](#searchbykeyword).
 
 Diagnostics stay in the app's process. The client sends no telemetry and no error report, anywhere. A failed-tile entry carries a tile URL and what fetching it produced, never the search text or the region. The port contract's "Privacy invariants" section lists the tests a port has to pass.
+
+### What the server learned: `disclosed`
+
+Every search result carries `disclosed`, a record of what the server learned during that call: `keyword` is true if the keyword was sent, and `region` is the grid, in degrees, of the finest region sent (`0.01` for tile requests, `1` for a keyword region), or null if none was. The point is that a developer can show it to users, or log it in their own tests. A `searchNearby` answered entirely from cache reports `region: null`, since nothing was sent; a combined search that sent both reports the finer grid.
 
 ### Partial results
 
@@ -102,7 +115,7 @@ Measured on places.atgeo.org's 2026-10-26 builds, for a 506 by 470 pixel map vie
 
 A z13 view is about 3.5 km across at mid latitudes; z14 is half that. Beijing and Shanghai are cheap because both sources are sparse there, not because the cities are. The budget went from 50 to 75 on these numbers: z14 works in nearly every big city, at about 1.5 times the bytes.
 
-When the regular answer would exceed the budget, a server whose tilesets all have an overview band does not fail. It answers with the coarse zoom 1 to 5 overview tiles that intersect the region, which hold only each tileset's most important records, as many as its descriptor's `overview.records` (see [the overview band](atgeo-spec.md#the-overview-band), and for the design reasoning [design-constraints.md](design-constraints.md#the-summary-band-is-a-coarse-tile-tier-for-region-less-resolution)). The server marks such an answer with `overview: true` in the `getTiles` response, and the SDK exposes it as `SearchResult.overview`, always present and `false` for a regular answer. The SDK follows tile URLs without interpreting them, so it never infers the flag from their shape. It fetches the tiles, filters them to the region, and ranks them like any others. The result is a deliberately incomplete sample of the region, and `overview` is how a caller tells "everything here" from "the important things here".
+When the regular answer would exceed the budget, a server whose tilesets all have an overview band does not fail. It answers with the coarse zoom 1 to 5 overview tiles that intersect the region, which hold only each tileset's most important records, as many as its descriptor's `overview.records` (see [the overview band](atgeo-spec.md#the-overview-band), and for the design reasoning [design-constraints.md](design-constraints.md#the-summary-band-is-a-coarse-tile-tier-for-region-less-resolution)). The server marks such an answer with `overview: true` in the `getTiles` response, and the SDK exposes it as `NearbySearchResult.overview`, always present and `false` for a regular answer. The SDK follows tile URLs without interpreting them, so it never infers the flag from their shape. It fetches the tiles, filters them to the region, and ranks them like any others. The result is a deliberately incomplete sample of the region, and `overview` is how a caller tells "everything here" from "the important things here".
 
 `overview` is independent of `complete`, which means only that no tile fetch failed. An overview answer with every tile loaded is `overview: true, complete: true`. If either bbox of an antimeridian-split search comes back as an overview, the result is `overview: true`.
 
@@ -110,9 +123,9 @@ When the regular answer would exceed the budget, a server whose tilesets all hav
 
 ### Attribution on results
 
-A search result carries the notices for what it shows. `SearchResult.attribution` is the union of the `attribution` entries of every tile the search loaded, deduplicated by `(dataset, collection)` and sorted by `(dataset, collection)` in ordinal string order, not tile order, so every SDK agrees. It includes referenced collections, not just the ones that produced a hit: an OSM hit's `relations.within` carries Overture division names, so showing it conveys Overture data, and the tile's reference entry is how the server says so.
+A search result carries the notices for what it shows. `NearbySearchResult.attribution` is the union of the `attribution` entries of every tile the search loaded, deduplicated by `(dataset, collection)` and sorted by `(dataset, collection)` in ordinal string order, not tile order, so every SDK agrees. It includes referenced collections, not just the ones that produced a hit: an OSM hit's `relations.within` carries Overture division names, so showing it conveys Overture data, and the tile's reference entry is how the server says so. A keyword result's `attribution` is the union of its places' own `attribution` entries, sorted the same way.
 
-Each hit also gets `SearchHit.collection`, a `{dataset, collection}` pair or null. It is one field rather than two because the pair is the unit of licensing and the halves are never useful apart. The SDK fills it by matching the hit's `origin` against `urn:atgeo:{dataset}:{collection}:` for each entry in its tile's `attribution`, the same prefix test as the collection filter, rather than parsing the URN. A record whose origin matches no entry gets null.
+Each hit also gets `collection`, a `{dataset, collection}` pair or null. It is one field rather than two because the pair is the unit of licensing and the halves are never useful apart. The SDK fills it by matching the hit's `origin` against `urn:atgeo:{dataset}:{collection}:` for each entry in its tile's `attribution` (a keyword hit: the place's own `attribution`), the same prefix test as the collection filter, rather than parsing the URN. A record whose origin matches no entry gets null.
 
 The tile cache keeps each tile's `attribution` beside its records, so a warm search has it too. These fields come with the port-contract revision ([atgeo-sdk-js#43](https://github.com/schuyler/atgeo-sdk-js/issues/43)); ports pick them up from there.
 
@@ -137,6 +150,37 @@ Three sort modes:
 
 A missing `importance` counts as 0, and a place with no `origin` sorts after those that have one. The `origin` tiebreak makes the order total.
 
+## searchByKeyword
+
+`searchByKeyword` finds a place by name without knowing where it is. It is one `org.atgeo.searchPlaces` request: a keyword, a dataset, optionally a collection and a region. It needs no region, so "Kyoto" works from anywhere. The server answers with at most 20 places, most notable first; the SDK keeps the server's order and does no ranking, filtering or deduplication of its own, since the server returns each place once. Each hit carries `via: "keyword"` and has no `distance` or `score`: the server ranks by neither, and an app that wants distance computes it from the hit's `location`.
+
+The match rule is the server's: every word of the keyword must begin some word of one of the place's names, and at least one word must be two or more characters long. A keyword the server refuses for that reason is not caught on the client; the call rejects with `KeywordRequired`. The keyword goes out exactly as passed, up to 256 bytes of UTF-8 (`InvalidRequest` past that).
+
+The optional `region` is a bounding box only, never a circle: an API that takes a circle invites a device's GPS position as its centre. The SDK snaps it outward to whole degrees, the grid the server accepts for this call, and never sends anything finer. See [The precision floor](atgeo-spec.md#the-precision-floor) for why the grid is that coarse here and 0.01 degrees for tiles. A box that crosses the antimeridian, or whose snapped edges would meet or pass each other, goes as the smallest box the server accepts that covers it, up to the full longitude band.
+
+Keyword calls are not cached; every call is one request. `getPlace` on a keyword hit's `origin` consults the tile cache and then the network, as for any `origin`.
+
+## searchNearbyThenByKeyword
+
+The combined search is for the search box that should work whether the place is next door or across the world, without sending a global query for "Starbucks" when six are within five miles. It runs `searchNearby` with the keyword as `text`, and looks at the result. If any nearby hit is a tier-1 match, one of the place's names having every query word as the start of one of its words (the server's own match rule), the nearby result is a solid answer and the call returns it. No keyword request is made, and `disclosed.keyword` is false. If no hit is solid, the call makes the `searchByKeyword` request and merges.
+
+Two decisions are the caller's rather than the SDK's:
+
+- `keywordRegion` is required: `"none"` sends the keyword alone, `"degree"` sends it with the nearby region converted to a box and snapped to whole degrees. With `"none"`, the server learns only the keyword, which finds "Kyoto" but returns the globally most notable "Starbucks", useless as a fallback. With `"degree"` it learns the keyword together with a degree cell. The SDK does not choose, because the disclosure is the developer's choice every time.
+- The `keyword` is required, since the fallback needs text.
+
+The merged list has the keyword hits first, in the server's order, then the nearby hits in their order, dropping any nearby hit whose `origin` equals a keyword hit's. Keyword hits lead because they pass the tier-1 rule and every nearby hit here is a fuzzy (tier-2) match; tier 1 precedes tier 2 everywhere in the SDK. Each hit's `via` says which request produced it. `disclosed.region` is the finest region sent during the whole call, so a cold search with `"degree"` reports `0.01` even though the keyword travelled with a one-degree box.
+
+A keyword the server would refuse for being too short is designed not to be sent (with the margins of contract section 17): the nearby result is returned as it is. A nearby search with failed tiles and no solid hit still falls back, though the missing tiles might have held one. A typo such as `Starbux` has no tier-1 match, so the fallback fires and discloses the keyword for an answer that is almost certainly empty, because the server matches by prefix. A failed keyword request rejects the call, as a failed `getTiles` does.
+
+## autocompleteByKeyword
+
+`autocompleteByKeyword` returns an object with a `searchByKeyword(keyword)` method, for a text field that searches as the user types. It is a separate object rather than a client method because "the previous call" is per text field: two fields on one page sharing a client must not cancel each other.
+
+Every keyword that qualifies is sent to the server as typed, prefixes included. The server keeps no log of it ([tile-privacy-design.md](tile-privacy-design.md)), but a hostile operator can record what it receives. Debouncing reduces how many prefixes go out and is the app's to choose. A keyword that cannot qualify (one character, say) resolves empty with no request, and `disclosed` says `keyword: false`.
+
+Each call cancels the previous call on the same autocompleter. How the superseded call ends is the port's cancellation idiom: an `AbortError` in TypeScript, `CancellationError` in Swift, `CancellationException` in Kotlin, `asyncio.CancelledError` in Python's async client, and `Error::Superseded` in Rust's async client, which has no cancellation error because dropping a future cancels it and the autocompleter does not own the caller's future. In each port that superseded outcome means "superseded" and is for the app to ignore; the caller's own cancellation still reaches the call. The blocking clients (Python's and Rust's) cannot cancel a call in flight and offer no autocompleter.
+
 ## getPlace
 
 Cache first, network second. If the place's tile is already in the cache (the common case, because the user just tapped a search result) it comes from memory, which is both faster and tells the server nothing. Otherwise the SDK asks the server with `org.atgeo.getPlace`, passing the `origin` as `uri`. No discovery call comes first: the server takes a URN whole, so the client needs nothing but the identity it already holds.
@@ -149,9 +193,9 @@ Without a manifest the client cannot work out which tile holds an arbitrary plac
 
 ## Caching
 
-Tile URLs are immutable and change wholesale when the gazetteer publishes a new build, so tiles cache until evicted and never revalidate. `getTiles` responses and the service description are held for an hour, matching the `max-age=3600` the server sends on them, so a client picks up a new build within an hour. The SDK holds them for a fixed hour rather than reading the header. The tile cache is in memory only, least-recently-used out first, 50 MiB by default (measured as the length of each tile's response); a new client starts cold. Once a region has been searched, searching it again makes no requests while its tile list is fresh and its tiles are still cached, and changing only `text` or `sort` reuses everything.
+Tile URLs are immutable and change wholesale when the gazetteer publishes a new build, so tiles cache until evicted and never revalidate. `getTiles` responses and the service description are held for an hour, matching the `max-age=3600` the server sends on them, so a client picks up a new build within an hour. The SDK holds them for a fixed hour rather than reading the header. The tile cache is in memory only, least-recently-used out first, 50 MiB by default (measured as the length of each tile's response); a new client starts cold. Once a region has been searched, searching it again makes no requests while its tile list is fresh and its tiles are still cached, and changing only `text` or `sort` reuses everything. Keyword calls are not cached.
 
-There is no `prefetch` method. A `searchPlaces` call with no text and a large region is already a warm-up, and a method whose only job is to be a different name for that would be surface without capability. If deliberate offline support turns out to be a real requirement, it earns its own design. Persisting tiles to disk is the same story: the HTTP layer is the seam, and an app that wants a disk cache can supply a transport that has one.
+There is no `prefetch` method. A `searchNearby` call with no text and a large region is already a warm-up, and a method whose only job is to be a different name for that would be surface without capability. If deliberate offline support turns out to be a real requirement, it earns its own design. Persisting tiles to disk is the same story: the HTTP layer is the seam, and an app that wants a disk cache can supply a transport that has one.
 
 ## Errors
 
@@ -162,17 +206,16 @@ The server's error codes pass through as the `code` of the SDK's `AtgeoError`, w
 | `BboxTooLarge` | `getTiles` | Budget exceeded and a selected tileset has no overview band. Ask for less. |
 | `DatasetNotFound` | `getTiles` | The server serves no tileset carrying that dataset. |
 | `CollectionNotFound` | `getTiles` | The server serves the dataset, but no tileset carrying that collection. |
+| `KeywordRequired` | `searchPlaces` | No word among the keyword's first 12 distinct words is two or more characters long. |
 | `PlaceNotFound` | `getPlace` | The server serves no place with that key (its origin). |
 | `TilesetNotFound` | `describeTileset` | The server serves no tileset with that slug. |
-| `InvalidRequest` | any | A malformed parameter, such as a `getPlace` argument that isn't a URI. |
+| `InvalidRequest` | any | A malformed parameter, such as a `getPlace` argument that isn't a URI, or a keyword over 256 bytes of UTF-8. |
 | `InternalServerError`, `ServiceUnavailable`, … | any | The server failed (5xx); garganorn answers these as JSON too, with a generic message. |
 | `HttpError` | any | Non-2xx without a parseable error body, which from garganorn means something in between, such as a proxy or CDN. |
 
-`InvalidBbox` and `BboxTooPrecise` are unreachable by construction: the SDK validates the region and snaps it before sending. If either shows up in the wild, the SDK has a bug. An invalid region (non-finite or out-of-range coordinates, `south > north`, negative radius) and `similarity` sort without text throw a synchronous `TypeError` before any request. A failed `getTiles` request rejects the search; a failed tile is skipped with `complete: false`.
+`InvalidBbox` and `BboxTooPrecise` are unreachable by construction: the SDK validates the region and snaps it before sending, to 0.01 degrees for tiles and to whole degrees for a keyword region. If either shows up in the wild, the SDK has a bug. An invalid region (non-finite or out-of-range coordinates, `south > north`, negative radius), a keyword region that is not a bounding box, and `similarity` sort without text throw a synchronous `TypeError` before any request, as does a non-string keyword (except in the autocompleter's `searchByKeyword`, which is async and rejects with `TypeError`). `KeywordRequired` reaches a caller of `searchByKeyword`; the combined search and the autocompleter are designed not to send a keyword that would draw it, with the margins of the port contract's section 17 (compatibility characters, half-width kana). A failed `getTiles` request rejects the search; a failed tile is skipped with `complete: false`.
 
 ## What is deliberately absent
-
-**Region-less search.** The SDK cannot search for "Kyoto" without knowing roughly where Kyoto is: fetching tiles for a place requires locating it first. `region` is required. The server's `org.atgeo.searchPlaces` finds a place by name anywhere in a dataset; the SDK does not call it. The overview band makes a very large region (the whole world, say) answerable, and the SDK will filter and rank whatever comes back, so a name search over a huge box can find places important enough to be in the overview band. It is a property of what the server returns, not a feature of the SDK, and carries the caveat above.
 
 **The write path.** `composeLocation`, `checkin`, and anything else that writes to a repo. Blocked on a check-in lexicon that nobody has drafted, and out of scope for the gazetteer besides. When there is a lexicon there can be a separate package; the read SDK should not carry a write path shaped around a guess.
 
@@ -189,7 +232,9 @@ The SDK's `fixtures/` directory holds language-neutral reference behavior for po
 - `normalize.json`: input/output pairs for `N(s)`, which a port must match exactly.
 - `jaro-winkler.json`: input/output pairs for the similarity function, to within the rounding of the fixture.
 - `ranking-scenarios.json`: regions, text, and records, asserting which places land in the top K. It checks membership rather than exact order, because the weights are expected to change.
-- `lenient-readers.json`: a response body for each of the five wire readers (`getTiles`, a tile payload, `getPlace`, `describeService`, `describeTileset`) and what a port's reader keeps of it, or that it rejects the body as unusable.
+- `keyword-fallback.json`: scenarios for `searchNearbyThenByKeyword`: tiles, the server's keyword answer, and the expected requests, merged order and `disclosed`. It pins the solid-hit decision and the merge, and checks exact order.
+- `keyword-regions.json`: an input box and the whole-degree box a keyword request carries for it, at every seam (fractional, zero-width, polar, antimeridian-crossing and ±180 boxes).
+- `lenient-readers.json`: a response body for each of the six wire readers (`getTiles`, a tile payload, `getPlace`, `searchPlaces`, `describeService`, `describeTileset`) and what a port's reader keeps of it, or that it rejects the body as unusable.
 
 The SDK's `test/lexicon/` directory holds copies of this repo's lexicons, taken from a recorded garganorn commit, which its fake server validates every request and response against, so a test can't pass on a response the real server would never send.
 
@@ -197,7 +242,7 @@ The fixtures show what the reference implementation does and a port should aim t
 
 ## Open questions
 
-- **`region` stays required.** Whether the SDK should offer an explicit world-scale mode on top of the overview band, rather than leaving callers to pass a huge region, is undecided. The `overview` flag in the `getTiles` response tells such a mode when it got a sample.
+- **`searchNearby`'s `region` stays required.** `searchByKeyword` is how to find a place without one. Whether the SDK should offer an explicit world-scale mode on top of the overview band, rather than leaving callers to pass a huge region, is undecided. The `overview` flag in the `getTiles` response tells such a mode when it got a sample.
 - **What a maximal query costs on a phone.** The radius and the bytes are measured (see [How much this costs](#how-much-this-costs)); the parse time and memory on a phone browser aren't. A full 75-tile Overture search is about 70 MB of JSON, more than the SDK's default 50 MiB tile cache holds, so panning around one area refetches tiles.
 - **Default host.** `https://places.atgeo.org` is the constructor default. Once `dataset` is required (the port-contract revision, [atgeo-sdk-js#43](https://github.com/schuyler/atgeo-sdk-js/issues/43)), that default no longer implies a publisher's data: the host is a default, and which dataset to search is always the app's call. The server still has to serve the dataset asked for, and `DatasetNotFound` says when it doesn't. The zero-configuration constructor is most of the adoption argument, and it needs a deployment behind it with someone paying for the bandwidth. This is a governance question wearing a technical hat.
 - **Pre-release ports.** TypeScript is the first implementation. Swift, Kotlin, Python and Rust ports are built ([atgeo-sdk-swift](https://github.com/schuyler/atgeo-sdk-swift), [-kotlin](https://github.com/schuyler/atgeo-sdk-kotlin), [-python](https://github.com/schuyler/atgeo-sdk-python), [-rs](https://github.com/schuyler/atgeo-sdk-rs)), all pre-release and installed from GitHub. Each shares the fixtures and the port contract, and has a `CONFORMANCE.md` listing where it differs at the margins. Each vendors the fixtures and lexicons at a pinned commit, and every port's CI runs a pin check, `scripts/check-fixtures.sh` in atgeo-sdk-js: it fails if a vendored file differs from its pinned commit's, and warns when the pin is behind the reference.
