@@ -24,7 +24,7 @@ That merged set is the query result. The server never sees what you were looking
 
 For a region too large to cover with the regular tiles, the answer is a sample: see [The overview band](#the-overview-band).
 
-To find a place by name without knowing where it is, call `org.atgeo.searchPlaces` with a dataset and the keyword the user typed. The server answers with at most 20 places, most notable first; see [org.atgeo.searchPlaces](#orgatgeosearchplaces). It learns the keyword and nothing about where the user is. Tiles remain the way to search without telling the server what you are looking for.
+To find a place by name without knowing where it is, call `org.atgeo.searchPlaces` with a dataset and the keyword the user typed. The server answers with at most 20 places, most notable first; see [org.atgeo.searchPlaces](#orgatgeosearchplaces). It learns the keyword and nothing about where the user is. Tiles remain the way to search without telling the server what you are looking for. The SDK's `searchByKeyword` makes this call and its `searchNearby` never does; see [the client SDK](atgeo-client-sdk.md#which-server-calls-the-sdk-makes).
 
 To fetch a single place whose identity you already hold, call `org.atgeo.getPlace` with its record key (its `origin`). Prefer tiles you already have: `getPlace` tells the server exactly which place you are looking at, which is a sharper signal than the box `getTiles` sees. It exists for resolving a link someone shared, where you have an identity and no region.
 
@@ -445,7 +445,7 @@ Errors, in evaluation order:
 - `InvalidBbox` — as for `getTiles`.
 - `DatasetNotFound` — no tileset carries the dataset.
 - `CollectionNotFound` — the dataset is served but no tileset carries the collection.
-- `KeywordRequired` — among `q`'s first 12 distinct words, none is two or more characters long. `""`, `"&"`, `"Å"` and `"a b"` all qualify. A missing `q` is `InvalidRequest`, as is any parameter the lexicon doesn't declare.
+- `KeywordRequired` — among `q`'s first 12 distinct words, none is two or more characters long. Each of `""`, `"&"`, `"Å"` and `"a b"` is refused with it. A missing `q` is `InvalidRequest`, as is any parameter the lexicon doesn't declare.
 
 A search response carries no `Cache-Control` (see [Headers](#headers)), so no shared cache is invited to keep a URL with a keyword in it.
 
