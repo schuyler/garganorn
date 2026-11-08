@@ -2,7 +2,7 @@
 
 Two kinds of call do the work. Four search methods find places: `searchNearby` in a region, `searchByKeyword` by name anywhere in a dataset, `searchNearbyThenByKeyword` nearby first and by name if that finds nothing solid, and `autocompleteByKeyword` for a search box. `getPlace` fetches one place by its `origin`. Tile lookup, tile fetching, matching, ranking, and caching all happen inside them and are not the developer's problem.
 
-This is the search the SDK is meant to have. The four methods, what each one sends, and how results are matched and ranked are settled design, not a first cut awaiting a different search.
+This is the search the SDK is meant to have. The four methods, what each one sends, and the approach to matching and ranking are settled design, not a first cut awaiting a different search. The weights and thresholds are still being tuned.
 
 The TypeScript SDK ([atgeo-sdk-js](https://github.com/schuyler/atgeo-sdk-js), `@atgeo/client`) is the first implementation. Its README is the developer reference: signatures, options, result shapes, and error codes. This document is the design rationale, and the behavior a port to another language has to make a decision about. The exact, testable statement of that behavior is the SDK repo's [port contract](https://github.com/schuyler/atgeo-sdk-js/blob/main/docs/port-contract.md), written for porters; where it and this document disagree about what the client does, it wins.
 
