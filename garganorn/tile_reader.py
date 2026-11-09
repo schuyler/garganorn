@@ -78,7 +78,9 @@ WHERE block = $block
   AND ($scope IS NULL OR scope = $scope)
   AND ($rw IS NULL OR (s <= $rn AND n >= $rs AND (
         CASE WHEN $rw <= $re
-             THEN CASE WHEN w - e > 1 THEN w <= $re OR e >= $rw ELSE w <= $re AND e >= $rw END
+             THEN CASE WHEN w - e > 1 THEN w <= $re OR e >= $rw
+                       ELSE (w <= $re AND e >= $rw)
+                            OR (e = 180 AND $rw = -180) OR (w = -180 AND $re = 180) END
              ELSE w - e > 1 OR e >= $rw OR w <= $re END)))
   AND len(list_filter(names,
           nm -> len(list_filter($tokens, t -> NOT contains(nm, ' ' || t))) = 0)) > 0

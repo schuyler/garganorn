@@ -173,6 +173,19 @@ def test_antimeridian_region(tmp_path, lon, kept):
     assert (_found(tmp_path, records, q="zed", bbox=FIJI_REGION) == ["Zed"]) == kept
 
 
+@pytest.mark.parametrize("location,bbox,kept", [
+    (geo("-15.000000", "180.000000"), "-180,-20,-170,-10", True),
+    (geo("-15.000000", "-180.000000"), "170,-20,180,-10", True),
+    (geo("-15.000000", "180.000000"), "170,-20,180,-10", True),
+    (box("170.000000", "-16.000000", "180.000000", "-14.000000"), "-180,-20,-170,-10", True),
+    (geo("-15.000000", "179.500000"), "-180,-20,-170,-10", False),
+    (geo("-15.000000", "-179.500000"), "170,-20,180,-10", False),
+])
+def test_lon_180_and_minus_180_are_one_meridian(tmp_path, location, bbox, kept):
+    records = [_record("a", "Zed", locations=[location])]
+    assert (_found(tmp_path, records, q="zed", bbox=bbox) == ["Zed"]) == kept
+
+
 FIJI_BOX = [box("177.500000", "-19.000000", "-179.500000", "-16.000000")]
 
 
