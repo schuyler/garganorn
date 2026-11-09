@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import duckdb
 import pytest
+from tests.page_rank_file import empty_page_rank
 
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
@@ -46,6 +47,7 @@ class TestRunPipeline:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         # At least one tile file under output_dir/overture_place/tiles/current/
@@ -66,7 +68,7 @@ class TestRunPipeline:
         assert "generated_at" in manifest, "manifest.json missing 'generated_at'"
 
         # No leftover .duckdb temp file (manifest.duckdb is expected)
-        duckdb_files = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        duckdb_files = [f for f in output_dir.rglob("*.duckdb") if f.name not in ("manifest.duckdb", "search.duckdb")]
         assert not duckdb_files, (
             f"run_pipeline must not leave .duckdb files behind: {duckdb_files}"
         )
@@ -91,6 +93,7 @@ class TestRunPipeline:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         ov_dir = output_dir / "overture_place"
@@ -117,7 +120,7 @@ class TestRunPipeline:
         finally:
             con.close()
 
-        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name not in ("manifest.duckdb", "search.duckdb")]
         assert not leftover_dbs, (
             f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
         )
@@ -142,6 +145,7 @@ class TestRunPipeline:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         osm_dir = output_dir / "osm"
@@ -168,7 +172,7 @@ class TestRunPipeline:
         finally:
             con.close()
 
-        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name != "manifest.duckdb"]
+        leftover_dbs = [f for f in output_dir.rglob("*.duckdb") if f.name not in ("manifest.duckdb", "search.duckdb")]
         assert not leftover_dbs, (
             f"run_pipeline must not leave temp .duckdb files behind: {leftover_dbs}"
         )
@@ -196,6 +200,7 @@ class TestRunPipeline:
                 memory_limit="4GB",
                 max_per_tile=100,
                 releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
 
 
@@ -271,6 +276,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--output", output_dir,
@@ -313,6 +319,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-122.55", "37.60", "-122.30", "37.85",
@@ -359,6 +366,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -402,6 +410,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -439,6 +448,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -519,6 +529,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "osm",
             "--parquet-dir", "/some/dir",
             "--output", str(tmp_path / "tiles_osm"),
@@ -600,6 +611,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--output", str(tmp_path / "tiles_no_bbox"),
@@ -621,6 +633,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "db/cache/overture_place/*.parquet",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -651,6 +664,7 @@ class TestQuadtreeMainCLI:
         argv = [
             "garganorn.quadtree",
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "osm",
             "--parquet-dir", "/some/dir",
             "--bbox", "-74.1", "40.6", "-73.8", "40.9",
@@ -728,6 +742,7 @@ class TestRunPipelineStaleDb:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
     def test_osm_pipeline_succeeds_with_stale_places_table(self, osm_parquet, density_parquet, tmp_path):
@@ -755,6 +770,7 @@ class TestRunPipelineStaleDb:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
 
@@ -784,6 +800,7 @@ class TestTimestampedExport:
             density_parquet=density_parquet,
             force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
     def test_creates_timestamped_subdir(self, overture_parquet, density_parquet, tmp_path):
@@ -945,6 +962,7 @@ class TestTimestampedExport:
                     max_per_tile=100,
                     density_parquet=density_parquet,
                     releases=RELEASES,
+                    page_rank_parquet=empty_page_rank(),
                 )
 
         ov_dir = output_dir / "overture_place"
@@ -977,7 +995,7 @@ class TestTimestampedExport:
         ov_dir = output_dir / "overture_place"
         leftover_dbs = [
             f for f in ov_dir.rglob("*.duckdb")
-            if f.name != "manifest.duckdb"
+            if f.name not in ("manifest.duckdb", "search.duckdb")
         ]
         assert not leftover_dbs, (
             f"run_pipeline must not leave non-manifest .duckdb files under {ov_dir}: "
@@ -1111,6 +1129,7 @@ class TestRunPipelineMtime:
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
                 releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
 
         # Verify first run created output
@@ -1136,6 +1155,7 @@ class TestRunPipelineMtime:
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
                 releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
 
         # Verify no new timestamped dir was created
@@ -1171,6 +1191,7 @@ class TestRunPipelineMtime:
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
                 releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
 
         # Verify output was created
@@ -1197,6 +1218,7 @@ class TestRunPipelineMtime:
             memory_limit="4GB",
             density_parquet=small_density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         ov_dir = output_dir / "overture_place"
@@ -1231,6 +1253,7 @@ class TestRunPipelineMtime:
                 memory_limit="4GB",
                 density_parquet=small_density_parquet,
                 releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
 
         # Verify new timestamped dir was created
@@ -1256,6 +1279,7 @@ class TestRunPipelineMtime:
             memory_limit="4GB",
             density_parquet=small_density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         ov_dir = output_dir / "overture_place"
@@ -1280,6 +1304,7 @@ class TestRunPipelineMtime:
                 density_parquet=small_density_parquet,
                 force=True,
                 releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
 
         # Verify new timestamped dir was created
@@ -1314,6 +1339,7 @@ class TestExportPhase2:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         # tiles live under <src>/tiles/current/
         tiles_current = output_dir / "overture_place" / "tiles" / "current"
@@ -1339,6 +1365,7 @@ class TestExportPhase2:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         # Find the timestamped run dir via the current symlink
         tiles_current = output_dir / "overture_place" / "tiles" / "current"
@@ -1373,11 +1400,12 @@ class TestExportPhase2:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         # Only manifest.duckdb and boundaries.duckdb are permitted .duckdb files
         duckdb_files = [
             f for f in output_dir.rglob("*.duckdb")
-            if f.name not in ("manifest.duckdb", "boundaries.duckdb")
+            if f.name not in ("manifest.duckdb", "search.duckdb", "boundaries.duckdb")
         ]
         assert not duckdb_files, (
             f"run_pipeline must not leave working .duckdb files; found: {duckdb_files}"

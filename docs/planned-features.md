@@ -40,7 +40,8 @@ would hash differently and break its own CID. The spec's recommended
 workaround for anything that needs a float is exactly what the location
 lexicons do: encode it as a string. That one answer opens onto the rest —
 what a lexicon is, why records have URIs instead of IDs, what an NSID and a
-DID are, and why there is no `/search` endpoint to call.
+DID are, and why most search runs over tiles instead of a `/search`
+endpoint.
 
 **AT Protocol developers arriving at geospatial** need the opposite. Why a
 bounding box and not a radius; what a quadkey is and why tiles come at mixed

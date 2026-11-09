@@ -149,6 +149,7 @@ def run_overture_import(conn, parquet_glob, bbox=None, density_rows=None, idf_ro
         "idf_cte": idf_cte,
         "density_norm": density_norm,
         "idf_norm": idf_norm,
+        "base_scale": 0.8,
     }
     raw_sql = _load_sql("overture_place_import.sql", substitutions)
     sql = _strip_spatial_install(_strip_memory_limit(raw_sql))

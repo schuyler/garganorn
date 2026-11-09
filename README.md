@@ -12,7 +12,7 @@ The project is named after the earliest recorded [mammoth goose](https://en.wiki
 
 ## What it serves
 
-Three tilesets today, one per source: [Overture Maps](https://overturemaps.org/) places (slug `overture-place`, collection `(overturemaps.org, place)`), [OpenStreetMap](https://www.openstreetmap.org/) (slug `osm`, collections `(openstreetmap.org, node)`, `way` and `relation`), and Overture administrative divisions (slug `overture-division`, collection `(overturemaps.org, division)`). A collection is one sub-division of one dataset; it names the places' URNs (`urn:atgeo:openstreetmap.org:way:{id}`) and is the unit of licensing. Tiles are pre-built and stored gzip-compressed on disk, but served as plain JSON — wire compression is negotiated separately via `Accept-Encoding`. There's no live search or query-by-name; you discover tiles for a bounding box and fetch them.
+Three tilesets today, one per source: [Overture Maps](https://overturemaps.org/) places (slug `overture-place`, collection `(overturemaps.org, place)`), [OpenStreetMap](https://www.openstreetmap.org/) (slug `osm`, collections `(openstreetmap.org, node)`, `way` and `relation`), and Overture administrative divisions (slug `overture-division`, collection `(overturemaps.org, division)`). A collection is one sub-division of one dataset; it names the places' URNs (`urn:atgeo:openstreetmap.org:way:{id}`) and is the unit of licensing. Tiles are pre-built and stored gzip-compressed on disk, but served as plain JSON — wire compression is negotiated separately via `Accept-Encoding`. You discover tiles for a bounding box and fetch them, or look a place up by keyword.
 
 ## Configuration
 
@@ -24,10 +24,10 @@ tiles:
   tilesets:
     - run_dir: data/overture_place/tiles/current
       base_url: https://places.atgeo.org/tiles/overture-place
-  max_tiles: 50
+  max_tiles: 75
 ```
 
-`repo` is the server's hostname; it determines the `did:web` identity. `run_dir` is a tile run directory (or the `current` symlink to one); the server reads `manifest.duckdb`, `manifest.json` and `tileset.json` from it and resolves the symlink once, at startup. `max_tiles` caps the tiles in a `getTiles` answer before it falls back to overview tiles; `describeService` advertises it as `maxTiles`.
+`repo` is the server's hostname; it determines the `did:web` identity. `run_dir` is a tile run directory (or the `current` symlink to one); the server reads `manifest.duckdb`, `search.duckdb`, `manifest.json` and `tileset.json` from it and resolves the symlink once, at startup. `max_tiles` caps the tiles in a `getTiles` answer before it falls back to overview tiles; `describeService` advertises it as `maxTiles`.
 
 A tileset's slug is fixed when it is built, stored in its `tileset.json`, and the tileset is served under it: tiles at `/tiles/{slug}/...`, the descriptor at `/tilesets/{slug}`. `base_url` must end in `/{slug}`, or the tile URLs `getTiles` emits would not resolve. Two tilesets with the same slug fail startup.
 
@@ -63,9 +63,21 @@ Use a smaller Geofabrik region for local testing — the default `north-america`
 
 ## Tile export pipeline
 
-`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, and `density`, `idf`, and `covering` build the shared artifacts the sources depend on. Invoking it with no subcommand is an error — use `run`.
+`python -m garganorn.quadtree` builds quadtree tile exports from parquet data. It takes a subcommand: `run` builds one source end to end, `all` builds every source named in a config file, `density`, `idf`, `page-rank` and `covering` build the shared artifacts the sources depend on, and `search-index` writes the keyword index into an existing run. Invoking it with no subcommand is an error — use `run`.
 
-Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless. A run also writes `tileset.json`, the tileset's descriptor, and `manifest.duckdb` beside the tiles; see [`docs/pipeline-artifacts.md`](docs/pipeline-artifacts.md).
+Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless. A run also writes `tileset.json`, the tileset's descriptor, and `manifest.duckdb` and `search.duckdb` beside the tiles; see [`docs/pipeline-artifacts.md`](docs/pipeline-artifacts.md).
+
+An OSM record's or division's Wikipedia page rank raises its `importance`, so every run needs `page_rank.parquet`, which `page-rank` builds from Nominatim's `wikimedia-importance.csv.gz` (about 300 MB):
+
+```
+mkdir -p db/cache/wikimedia data/shared
+curl -fL -A garganorn -o db/cache/wikimedia/wikimedia-importance.csv.gz https://nominatim.org/data/wikimedia-importance.csv.gz
+python -m garganorn.quadtree page-rank \
+  --csv db/cache/wikimedia/wikimedia-importance.csv.gz \
+  --output data/shared/page_rank.parquet
+```
+
+`run` takes its path as `--page-rank-parquet` (required); `all` reads `<output>/shared/page_rank.parquet`. A new parquet is an input to the OSM and `overture_division` imports, so the next `run` rebuilds them.
 
 Supported sources (for `run --source`):
 
@@ -88,6 +100,7 @@ python -m garganorn.quadtree run \
   --division-parquet db/cache/overture/*/division/*.parquet \
   --division-area-parquet db/cache/overture/*/division_area/*.parquet \
   --release overturemaps.org=2026-09-17.0 \
+  --page-rank-parquet data/shared/page_rank.parquet \
   --output data
 ```
 
@@ -99,6 +112,7 @@ python -m garganorn.quadtree run \
   --parquet 'db/cache/overture/*/part-*.parquet' \
   --boundaries data/overture_division/boundaries.duckdb \
   --release overturemaps.org=2026-09-17.0 \
+  --page-rank-parquet data/shared/page_rank.parquet \
   --output data
 ```
 
@@ -127,7 +141,7 @@ To build every configured source in one shot:
 python -m garganorn.quadtree all --config config.yaml
 ```
 
-`all` supplies the releases itself. The Overture release is the one the configured globs' `*` release segment resolves to (newest); the OSM release is read from the `release` file `scripts/extract-osm-parquet.sh` writes into the parquet directory. `all` stops with a message if a configured source's release is missing. It runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
+`all` supplies the releases itself. The Overture release is the one the configured globs' `*` release segment resolves to (newest); the OSM release is read from the `release` file `scripts/extract-osm-parquet.sh` writes into the parquet directory. `all` stops with a message if a configured source's release is missing. It runs, in order: the shared density extract, per-source category IDF, `overture_division`, then the remaining sources. It doesn't build `page_rank.parquet`; run `page-rank` first. It reads the `pipeline:` section of the config (paths, `memory_limit`, `max_per_tile`, `temp_directory`, `max_temp_directory_size`, `bbox`, and the per-source inputs); the `tiles:` section is server-side config only.
 
 ## Running the server
 
@@ -146,11 +160,12 @@ gunicorn "garganorn.__main__:create_app()" --bind 0.0.0.0:8000 --workers 2
 
 ## Querying the service
 
-There's no search — you ask for tile coverage over a bounding box, then fetch the tiles directly. Bounding boxes must be snapped to a 0.01° grid (that's the privacy model: coarse enough that the server can't infer a client's precise location from requests).
+Mostly you ask for tile coverage over a bounding box, then fetch the tiles and search them yourself. Bounding boxes must be snapped to a 0.01° grid (that's the privacy model: coarse enough that the server can't infer a client's precise location from requests). `searchPlaces` finds places by keyword across a whole dataset, and takes no location finer than a whole-degree region; see [the spec](docs/atgeo-spec.md#orgatgeosearchplaces).
 
 | Endpoint | Returns |
 |---|---|
-| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional |
+| `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional and picks tilesets, not records (an OSM `way` search still downloads the area's nodes and relations; see [the spec](docs/atgeo-spec.md#orgatgeogettiles)) |
+| `GET /xrpc/org.atgeo.searchPlaces?dataset=&q=&collection=&bbox=` | Up to 20 places whose name matches the first 12 distinct words of `q`, by importance (which carries page rank), then key; `collection` and a whole-degree `bbox` are optional |
 | `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance and its tileset's attribution |
 | `GET /xrpc/org.atgeo.describeTileset?slug=` | A tileset's descriptor: slug, extent, carried and referenced collections with release, licences and attribution |
 | `GET /xrpc/org.atgeo.describeService` | The service's DID, its tile budget (`maxTiles`), and the slug and collections of each tileset |
@@ -168,6 +183,7 @@ Every error is JSON, `{"error": "<Name>", "message": "<text>"}`, and every respo
 | Method | Errors (HTTP 400) |
 |---|---|
 | `getTiles` | `InvalidBbox`, `BboxTooPrecise`, `DatasetNotFound`, `CollectionNotFound`, `BboxTooLarge` |
+| `searchPlaces` | `BboxTooPrecise`, `InvalidBbox`, `DatasetNotFound`, `CollectionNotFound`, `KeywordRequired` |
 | `getPlace` | `PlaceNotFound` |
 | `describeTileset` | `TilesetNotFound` |
 | `describeService` | none |
@@ -253,6 +269,7 @@ An unknown or unserved URN is a `PlaceNotFound` error (HTTP 400 over XRPC; 404 a
 * [`org.atgeo.defs`](garganorn/lexicon/defs.json)
 * [`org.atgeo.tilePayload`](garganorn/lexicon/tilePayload.json)
 * [`org.atgeo.getTiles`](garganorn/lexicon/getTiles.json)
+* [`org.atgeo.searchPlaces`](garganorn/lexicon/searchPlaces.json)
 * [`org.atgeo.getPlace`](garganorn/lexicon/getPlace.json)
 * [`org.atgeo.describeTileset`](garganorn/lexicon/describeTileset.json)
 * [`org.atgeo.describeService`](garganorn/lexicon/describeService.json)

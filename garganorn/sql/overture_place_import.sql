@@ -37,10 +37,10 @@ WITH ov_base AS (
       AND names.primary IS NOT NULL AND TRIM(names.primary) != ''
 )
 SELECT b.*,
-       round(
+       round(${base_scale} * round(
            60 * least(coalesce(od.density_score, 0) / ${density_norm}, 1.0)
          + 40 * least(coalesce(oi.idf_score, 0) / ${idf_norm}, 1.0)
-       )::INTEGER AS importance,
+       ))::INTEGER AS importance,
        -- Compute variants from names.common and names.rules per-row.
        -- names.common entries are always typed 'alternate'; names.rules
        -- entries are mapped by their `variant` string. Concatenating the

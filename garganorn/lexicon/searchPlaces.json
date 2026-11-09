@@ -1,0 +1,81 @@
+{
+    "lexicon": 1,
+    "id": "org.atgeo.searchPlaces",
+    "defs": {
+        "main": {
+            "type": "query",
+            "description": "Find places in a dataset whose name matches a keyword's words, most notable first. Takes no point and ranks by no distance; a region, if given, is whole degrees.",
+            "parameters": {
+                "type": "params",
+                "properties": {
+                    "dataset": {
+                        "type": "string",
+                        "maxLength": 253,
+                        "description": "The dataset to search, e.g. 'overturemaps.org'"
+                    },
+                    "collection": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "description": "Narrow results to records of this collection of the dataset"
+                    },
+                    "q": {
+                        "type": "string",
+                        "maxLength": 256,
+                        "description": "The keyword. A place matches when each word of the keyword begins a word of one of the place's names, ignoring case and accents; apostrophes are dropped and other punctuation splits words. Only the first 12 distinct words are used; at least one of them must be two or more characters long"
+                    },
+                    "bbox": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "description": "Optional region, west,south,east,north in whole degrees; west > 0 > east crosses the antimeridian, if the box has width. A place matches when its point lies in the region, or, with no point, its bounding box meets it"
+                    }
+                },
+                "required": [
+                    "dataset",
+                    "q"
+                ]
+            },
+            "output": {
+                "encoding": "application/json",
+                "schema": {
+                    "type": "object",
+                    "required": [
+                        "places"
+                    ],
+                    "properties": {
+                        "places": {
+                            "type": "array",
+                            "maxLength": 20,
+                            "description": "At most 20 matches, importance descending, then record key ascending",
+                            "items": {
+                                "type": "ref",
+                                "ref": "org.atgeo.getPlace#placeView"
+                            }
+                        }
+                    }
+                }
+            },
+            "errors": [
+                {
+                    "name": "KeywordRequired",
+                    "description": "Among q's first 12 distinct words, once case, accents and punctuation are removed, none is two or more characters long"
+                },
+                {
+                    "name": "BboxTooPrecise",
+                    "description": "A bbox coordinate is not a whole number of degrees"
+                },
+                {
+                    "name": "InvalidBbox",
+                    "description": "The bbox parameter must be four comma-separated numbers with south < north and west < east, except that a box crossing the antimeridian has west > 0 > east and is not 180 to -180"
+                },
+                {
+                    "name": "DatasetNotFound",
+                    "description": "This server serves no tileset carrying the dataset"
+                },
+                {
+                    "name": "CollectionNotFound",
+                    "description": "This server serves the dataset but no tileset carrying the collection"
+                }
+            ]
+        }
+    }
+}

@@ -10,7 +10,7 @@ The server is a set of static, pre-built tiles and a few lookups over them. If y
 
 The server must never receive information precise enough to locate a person.
 
-Everything unusual about this interface follows from that one rule. There is no server-side search, so search terms, which reveal intent, never leave the client. There is no way to list or enumerate places. The only spatial question a client can ask is coarse: which tiles cover this region, at a precision floor of roughly a kilometre. The only other question names a place the client already knows the identity of. Neither shape lets a query describe a point, so no query can resolve to a device's position.
+Everything unusual about this interface follows from that one rule: nothing on the wire reveals where the user is unless the user acted to opt in. There is no way to list or enumerate places. The spatial question a client can ask is coarse: which tiles cover this region, at a precision floor of roughly a kilometre. A keyword search takes a keyword the user typed, which is their own action and no evidence of where they are, and an optional region in whole degrees; it takes no point and ranks by no distance. The remaining question names a place the client already knows the identity of. None of these shapes lets a query describe a point, so no query can resolve to a device's position. A keyword still reveals intent, so the server keeps it in no log.
 
 The threat model and the full reasoning are in [tile-privacy-design.md](tile-privacy-design.md). The sections below refer back to this principle rather than re-deriving it.
 
@@ -20,9 +20,11 @@ The threat model and the full reasoning are in [tile-privacy-design.md](tile-pri
 2. Fetch every URL returned and concatenate the `records` arrays.
 3. Deduplicate by `origin`, drop records of collections you didn't ask for, and match, rank and filter locally.
 
-That merged set is the query result. The server never sees what you were looking for. There is no pagination, no server-side ranking, and no partial-result protocol.
+That merged set is the query result. The server never sees what you were looking for. Tiles come with no pagination, no server-side ranking, and no partial-result protocol.
 
 For a region too large to cover with the regular tiles, the answer is a sample: see [The overview band](#the-overview-band).
+
+To find a place by name without knowing where it is, call `org.atgeo.searchPlaces` with a dataset and the keyword the user typed. The server answers with at most 20 places, most notable first; see [org.atgeo.searchPlaces](#orgatgeosearchplaces). It learns the keyword and nothing about where the user is. Tiles remain the way to search without telling the server what you are looking for. The SDK's `searchByKeyword` makes this call and its `searchNearby` never does; see [the client SDK](atgeo-client-sdk.md#which-server-calls-the-sdk-makes).
 
 To fetch a single place whose identity you already hold, call `org.atgeo.getPlace` with its record key (its `origin`). Prefer tiles you already have: `getPlace` tells the server exactly which place you are looking at, which is a sharper signal than the box `getTiles` sees. It exists for resolving a link someone shared, where you have an identity and no region.
 
@@ -79,9 +81,9 @@ A tile is a set of place records associated with one quadkey cell.
 
 ### The overview band
 
-A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the N records of the tileset with the highest `importance`, ties broken by id; garganorn builds with N = 10,000, which is a producer parameter, not protocol. It's one cut, the same for every tileset: the division formula's [administrative floors](#importance) are what keep countries, dependencies and regions in it. A tileset with a band says so in its descriptor's `overview`, whose `records` is how many records the band actually holds, which can be fewer than N. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
+A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the N records of the tileset with the highest `importance`, ties broken by id; garganorn builds with N = 10,000, which is a producer parameter, not protocol. It's one plain [importance](#importance) cut, the same for every tileset. In an OSM tileset it keeps the cities and towns, universities, stations and the few landmarks scoring above the cutoff; most city-scale landmarks stay outside it until the overview pyramid ([#36](https://github.com/schuyler/garganorn/issues/36)). A tileset with a band says so in its descriptor's `overview`, whose `records` is how many records the band actually holds, which can be fewer than N. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
 
-`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (garganorn's `max_tiles`, 50 by default, advertised as `describeService`'s `maxTiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a band of 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
+`getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (garganorn's `max_tiles`, 75 by default, advertised as `describeService`'s `maxTiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a band of 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
 
 The response says which kind of answer it is. An overview answer carries `"overview": true` alongside `tiles`; a regular answer omits the key, so absent means regular. A client that needs to know reads the flag. It does not look at the length of the quadkey in a tile URL.
 
@@ -173,41 +175,39 @@ Two declared fields are not yet produced: `updatedAt` and `relations.sameAs`. A 
 
 ## Importance
 
-`importance` is an integer from 0 to 100 expressing how much a place matters relative to other places. It blends two signals: how busy the place's surroundings are, and how distinctive its category is (for a division, how many people live in it).
+`importance` is an integer from 0 to 100 expressing how much a place matters relative to other places. It blends how busy the place's surroundings are, how distinctive its category is (for a division, how many people live in it or how large it is), and, where the source ties the place to a Wikidata item, how well known that item is.
 
-Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together. Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
+Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together by one number. Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
 
-The reference producer computes it as follows. For place records (Overture places, and OSM nodes, ways and relations):
+The reference producer computes it in two steps: a base score, then a lift for notability.
 
-    importance = round(60 · min(density / 10, 1) + 40 · min(idf / 18, 1))
+**Base, places.** For Overture places and OSM nodes, ways and relations:
+
+    base = round(60 · min(density / 10, 1) + 40 · min(idf / 18, 1))
 
 where `density` is ln(1 + n) for n the count of Overture places in the enclosing zoom-15 cell (Overture-derived even when scoring OSM records, so both share one notion of "busy"), and `idf` is ln(N / n) over the source's own corpus of named places, n being the places in the record's primary category: rare categories score high, ubiquitous ones low.
 
-For division records, the administrative level sets a floor and a ceiling, and a 0-to-1 signal places the division between them:
+**Base, divisions.** A division's base depends on how many people live in it or how big it is, and on nothing else; subtype and administrative level don't enter:
 
-    importance = round(floor + (ceiling − floor) · s)
+    base = round(100 · max(min(ln(1 + pop) / 20, 1), min(ln(1 + area) / 16, 1)))
 
-    s = min(ln(1 + population) / 20, 1)                                       every subtype but locality
-    s = 0.6 · min(density / 10, 1) + 0.4 · min(ln(1 + population) / 20, 1)   locality
+`pop` is the division's recorded population (0 when none) and `area` the area of its bounding box in km², computed planar (the longitude span is widened by 360 across the antimeridian). Population is logarithmic because it spans one to 1.4 billion, and 20 saturates near 500 million, so only China and India cap. Area stands in where population is missing, which Overture lacks for about a fifth of countries and most regions; 16 saturates near 9 million km², about the area of China or the US. It is the weakest term, since a bounding box exaggerates a sparse district, but a division with no page rank tops out at 80 regardless. The two signals combine with `max` rather than a sum so a large, populous division isn't counted twice.
 
-with `density` averaged over the zoom-15 cells intersecting the locality's bounding box. A division with no recorded population (and, for a locality, no density) sits at its floor.
+**Scale.** Every base is multiplied by 0.8: `b = 0.8 · base`, so `b` is at most 80. The remaining 20 points are headroom for notability, and the scale keeps a place with no notability evidence below one that has plenty: unscaled, downtown businesses with no notability score 89 to 93 and lead a city view ahead of its landmarks; at 0.8 they cap near 76. A record with no Wikidata item, or whose item has no page rank, scores `round(0.8 · base)` and nothing more. Overture places get this and nothing else: their only Wikidata field (`brand.wikidata`) names a chain, not the store, so their ranking reflects busy area and rare category alone, scaled into 0 to 80 so they stay comparable with divisions.
 
-| subtype | floor | ceiling |
-|---|--:|--:|
-| `country` | 90 | 100 |
-| `dependency` | 85 | 100 |
-| `region` | 80 | 100 |
-| `county` | 40 | 79 |
-| `localadmin` | 35 | 79 |
-| `locality` | 30 | 79 |
-| `borough` | 20 | 79 |
-| `macrohood` | 15 | 79 |
-| `neighborhood` | 10 | 79 |
-| `microhood` | 5 | 79 |
+**Lift.** For an OSM record or a division with a Wikidata item, the item's Wikipedia page rank `pr` (Nominatim's `wikimedia-importance.csv.gz`, the highest over the item's articles and redirects) raises the score:
 
-The floors fall in [containment](#containment-levels) order, country highest. Countries, dependencies and regions share the 80-to-100 range and everything below them tops out at 79, so the weakest region still outranks the densest city. That's what lets the [overview band](#the-overview-band) be a plain importance cut. Within the upper range the bands overlap on purpose: a floor is a minimum, so a populous dependency can outrank a tiny country.
+    x          = clamp((pr − 0.20) / 0.80, 0, 1)
+    f          = ln(1 + 50x) / ln(51)
+    g          = 1 − clamp(ln(nc / 1000) / ln(10), 0, 1)
+    importance = round(b + (100 − b) · 0.95 · f · g)
 
-The normalization constants (10, 18, 20) and the floors and ceilings are producer parameters, not protocol. Another producer could choose differently and still be an ATGeo gazetteer.
+- `x` and 0.20: below 0.20 a page rank earns no lift. A floor of 0.20 rather than 0.25 lifts more of the moderately known landmarks, and a weakly notable place (page rank 0.25) on a modest base still ranks below a busy place with none.
+- `f` and k = 50: a concave ramp, steep early, so that a moderately notable place (a museum, a bridge) is lifted most of the way and the very best known are still told apart. A linear ramp saturated at the middle of the range and tied Paris with a theatre; k = 50 kept search margins of several points between a city and the best-known lookalike.
+- 0.95: full notability takes 95% of the headroom `100 − b`, never all of it, so the base still orders records of equal notability.
+- `g` damps the lift for names that many places share. `nc` is the largest count, over every record of the build, of the normalized name `lower(strip_accents(trim(name)))` among the records sharing the item. A chain's item (Pizza Hut, McDonald's) sits on thousands of identically named stores, and without damping they would score 84 to 93 and crowd into the overview band. Damping starts at 1,000 because landmark names and mid-size brands overlap in the hundreds (Springfield, 513; Paris, 429), and it reaches zero at 10,000, below the largest chains (McDonald's 29,702, Starbucks 18,355, Lidl 12,897), so they get no lift at all. Taking the per-item maximum also damps a chain's localized names, which are rare on their own. A build over a region sees only that region's counts, so names that would be damped at planet scale may escape it.
+
+The constants (10, 18, 20, 16, 0.8, 0.20, 50, 0.95, 1,000 and 10,000) and the formulas are producer parameters, not protocol. Another producer could choose differently and still be an ATGeo gazetteer.
 
 ## Containment levels
 
@@ -236,12 +236,12 @@ A subtype outside this table fails the producer's build before any artifact is w
 
 `GET /xrpc/org.atgeo.describeService` takes no parameters, and ignores any query parameters it is sent (a cache-buster, say). It returns `{did, maxTiles, tilesets}`. `did` is the `did:web` the deployment identifies as, the same identifier `/.well-known/did.json` carries. It's informational: no discovery path resolves a DID to a gazetteer yet, so a client that has this answer already knew the server's URL. `maxTiles` is the tile budget: the most regular tiles a `getTiles` answer may list before it falls back to [the overview band](#the-overview-band) or `BboxTooLarge`. It's informational too, good for a README or a log line. A client can't use it to plan requests, because tile zooms are adaptive and it does no quadkey math, so it can't predict how many tiles a box will need. `maxTiles` is optional in the lexicon, so another producer may leave it out; garganorn always sends it. Each element of `tilesets` is `{slug, collections}`, with `collections` a list of `{dataset, collection}`.
 
-The list is authoritative. A dataset absent from it returns `DatasetNotFound` from `getTiles`.
+The list is authoritative. A dataset absent from it returns `DatasetNotFound` from `getTiles` and `searchPlaces`.
 
 ```json
 {
   "did": "did:web:places.atgeo.org",
-  "maxTiles": 50,
+  "maxTiles": 75,
   "tilesets": [
     {"slug": "osm", "collections": [
       {"dataset": "openstreetmap.org", "collection": "node"},
@@ -306,7 +306,7 @@ The list is authoritative. A dataset absent from it returns `DatasetNotFound` fr
 
 ## XRPC methods
 
-Four queries, all `GET /xrpc/{nsid}`, all described by lexicons. Responses may include keys not documented here; per the forward-compatibility rule above, ignore them.
+Five queries, all `GET /xrpc/{nsid}`, all described by lexicons. Responses may include keys not documented here; per the forward-compatibility rule above, ignore them.
 
 ### org.atgeo.getTiles
 
@@ -318,9 +318,11 @@ The four values use the same words and mean the same things as a tileset's `exte
 
 Without `collection`, the answer covers every tileset carrying the dataset. With one, it covers every tileset carrying that collection. Either way the tiles may hold records of other collections: a caller that asked for a collection keeps the records whose `origin` starts with `urn:atgeo:{dataset}:{collection}:`, and a record with no `origin` matches no collection.
 
+So `collection` narrows which tilesets answer, not which bytes come back. A tileset that carries several collections answers with the same tiles either way: `collection=way` on `osm` fetches the node and relation records in the area too, and the client drops them. On places.atgeo.org's `osm` tileset (OSM release 2026-03-16: 23.1M nodes, 12.7M ways, 0.7M relations), a ways-only search keeps about a third of the records it downloads. The descriptor's per-collection `recordCount` ([describeTileset](#describetileset)) gives that mix tileset-wide; a given area's mix can differ, so it's a rough estimate. Per-collection tilesets would make `collection` cut bytes, but they'd make the common dataset-only search add up more tilesets against the budget and fall back to the overview sooner, so garganorn builds one OSM tileset.
+
 Returns `{"tiles": [...]}`: fully-formed, opaque tile URLs, in ascending string order. Fetch them all and merge; filtering and ordering are yours, applied after the merge. When the answer is the [overview band](#the-overview-band) rather than the regular tiles, the response also carries `"overview": true`.
 
-A bbox may cross the antimeridian: `west > 0 > east` means the box wraps across ±180°. Tiles that merely touch the box at an edge or corner count as covering it.
+A bbox may cross the antimeridian: `west > 0 > east` means the box wraps across ±180°, provided it has width (`180,10,-180,11` has none). Tiles that merely touch the box at an edge or corner count as covering it.
 
 ```
 GET /xrpc/org.atgeo.getTiles?dataset=openstreetmap.org&collection=way&bbox=-71.55,43.20,-71.50,43.25
@@ -417,6 +419,34 @@ GET /xrpc/org.atgeo.getPlace?uri=urn:atgeo:openstreetmap.org:node:10080395917
 
 Errors: `PlaceNotFound`, for a URN the server doesn't serve, a collection it doesn't carry, a malformed `atgeo` URN, or a URI that isn't a URN at all. A string that isn't a valid URI is `InvalidRequest`.
 
+### org.atgeo.searchPlaces
+
+Places in a dataset whose name matches a keyword, most notable first.
+
+Parameters: `dataset` (required), `collection` (optional), `q` (required, the keyword, at most 256 bytes of UTF-8), `bbox` (optional, `west,south,east,north` in whole degrees). There is no point parameter and no count parameter.
+
+**Matching.** The keyword and every name are lowercased, stripped of accents, stripped of apostrophes, and split into words at punctuation and whitespace. A place matches when every word of the keyword begins some word of **one** of its names: its `name` or one of its `variants`. So `st louis` finds `St. Louis`, `mcdonalds` finds `McDonald's`, and `golden puerta` finds nothing when `Golden` is in the name and `Puerta` only in a variant. Only the first 12 distinct words of the keyword count, and at least one of those must be two or more characters long. That floor and that cap are what bound a search's cost; the price is that a name whose every word is one character (`Å`, `Y`) can't be found this way.
+
+**Region.** `bbox` uses the same order and antimeridian rule as `getTiles`, but every coordinate is a whole number of degrees: `10` passes, `10.0`, `10.5` and `1e1` are `BboxTooPrecise`. Whole degrees make every side at least 1°. A place is in the region when its point is, or, for a place with only a bounding box, when that box meets the region; edges count as inside. See [The precision floor](#the-precision-floor).
+
+**Ranking.** Results are ordered by `importance` descending (absent counts as 0), then by record key ascending. No distance enters it, and nothing else does: a place's Wikipedia page rank counts only through the `importance` it was scored with ([Importance](#importance)), the same number the tiles carry. Without `collection`, every tileset carrying the dataset is searched and the results merged, which is sound because importance is comparable across one producer's tilesets for one dataset.
+
+Returns `{"places": [...]}`, at most 20, each the same `{uri, url, importance?, value, attribution}` view `getPlace` returns for that place. The bound is fixed; there is no pagination.
+
+```
+GET /xrpc/org.atgeo.searchPlaces?dataset=overturemaps.org&q=golden%20gate%20bridge
+```
+
+Errors, in evaluation order:
+
+- `BboxTooPrecise` — a `bbox` coordinate that isn't a whole number of degrees.
+- `InvalidBbox` — as for `getTiles`.
+- `DatasetNotFound` — no tileset carries the dataset.
+- `CollectionNotFound` — the dataset is served but no tileset carries the collection.
+- `KeywordRequired` — among `q`'s first 12 distinct words, none is two or more characters long. Each of `""`, `"&"`, `"Å"` and `"a b"` is refused with it. A missing `q` is `InvalidRequest`, as is any parameter the lexicon doesn't declare.
+
+A search response carries no `Cache-Control` (see [Headers](#headers)), so no shared cache is invited to keep a URL with a keyword in it.
+
 ### org.atgeo.describeService and org.atgeo.describeTileset
 
 See [above](#tilesets-on-the-wire-describeservice-and-describetileset). `describeTileset` takes `slug` and has one error, `TilesetNotFound`. `describeService` has none.
@@ -430,15 +460,17 @@ Every error the methods raise returns **HTTP 400** with a body of `{"error": nam
 | `InvalidRequest` | 400 | a required parameter is missing, a parameter doesn't fit its lexicon, the NSID is malformed, or a request body isn't valid JSON |
 | `UnsupportedMediaType` | 415 | a request body with a non-JSON `Content-Type` |
 | `MethodNotAllowed` | 405 | an HTTP method the route doesn't take, with an `Allow` header |
-| `MethodNotImplemented` | 501 | the NSID isn't one of the four methods the server implements, including every `com.atproto.*` method and a served record lexicon such as `org.atgeo.place` |
+| `MethodNotImplemented` | 501 | the NSID isn't one of the five methods the server implements, including every `com.atproto.*` method and a served record lexicon such as `org.atgeo.place` |
 
 A 5xx means the server broke, not that it refused you; see [Errors on plain-HTTP routes](#plain-http).
 
 ### The precision floor
 
-Bounding-box coordinates in `getTiles` carry at most two decimal places, a 0.01° grid about 1.1 km across at the equator. This is the safety principle made concrete. Search terms are already gone, but a box centred on a device's raw GPS fix still locates the person to about ten metres however large the box is, and a minimum-area check doesn't catch that. Holding every coordinate to 0.01° limits what the server can extract to "which grid cell", not "which street corner".
+Bounding-box coordinates in `getTiles` carry at most two decimal places, a 0.01° grid about 1.1 km across at the equator. This is the safety principle made concrete. A box centred on a device's raw GPS fix locates the person to about ten metres however large the box is, and a minimum-area check doesn't catch that. Holding every coordinate to 0.01° limits what the server can extract to "which grid cell", not "which street corner".
 
-The floor is enforced, not advised. The check is textual, on the string you sent: `37.770` fails on its trailing zero, and scientific notation (`1e2`) is rejected outright. The server rejects rather than truncating, so a client that leaks precision hears about it instead of being silently covered for. Clients snap before sending; the server refuses regardless, so a client built without that logic can't leak systematically. Snap outward, so the grid box contains your region.
+A `searchPlaces` region is held to whole degrees, a grid about 111 km north to south. The keyword does the narrowing there, so the region has no need to be fine, and a region an app attaches without asking, a map viewport say, tells the server no more than which degree cell the user is looking at.
+
+Both floors are enforced, not advised. The check is textual, on the string you sent: `37.770` fails on its trailing zero, and scientific notation (`1e2`) is rejected outright. The server rejects rather than truncating, so a client that leaks precision hears about it instead of being silently covered for. Clients snap before sending; the server refuses regardless, so a client built without that logic can't leak systematically. Snap outward, so the grid box contains your region.
 
 Refusal doesn't protect the coordinates in the refused request: the server has to receive a value to judge it. The guarantee is against sustained exposure. A leaking client is caught on its first exchange instead of running unnoticed.
 
@@ -487,12 +519,14 @@ The status differs from XRPC on purpose: XRPC follows the AT Protocol convention
 |---|---|
 | a tile (`/tiles/{slug}/...`) | `public, max-age=604800, immutable` |
 | `getTiles`, 200 only | `public, max-age=3600` |
+| `getPlace`, 200 only | `public, max-age=3600` |
+| `/{dataset}/{collection}/{id}`, 200 only | `public, max-age=3600` |
 | `describeService`, 200 only | `public, max-age=3600` |
-| anything else | none set<sup>1</sup> |
+| anything else, `searchPlaces` included | none set<sup>1</sup> |
 
-<sup>1</sup> Except a CORS preflight: an `OPTIONS` request to `getTiles` or `describeService` is a 200 and carries `public, max-age=3600` too.
+<sup>1</sup> Except a CORS preflight: an `OPTIONS` request to `getTiles`, `getPlace`, `describeService` or `/{dataset}/{collection}/{id}` is a 200 and carries `public, max-age=3600` too.
 
-Tile URLs are immutable, so tiles are cached for a week and never revalidated. `getTiles` and `describeService` change when the gazetteer publishes a new build, so they carry an hour; a client learns of a new build within an hour of asking. The deployment's build cadence has to respect the week: a retired build whose URLs clients still hold as fresh is a 404.
+Tile URLs are immutable, so tiles are cached for a week and never revalidated. `getTiles`, `getPlace` (and its `/{dataset}/{collection}/{id}` alias) and `describeService` change when the gazetteer publishes a new build, so they carry an hour; a client learns of a new build within an hour of asking. The deployment's build cadence has to respect the week: a retired build whose URLs clients still hold as fresh is a 404.
 
 **CORS.** Every response from the server, including errors and tiles, carries `Access-Control-Allow-Origin: *`, so browser clients on any origin can read it. A server MUST send it. The header appears exactly once.
 

@@ -232,17 +232,14 @@ SELECT
         list_filter(
             map_entries(f.tags),
             e -> e.key != split_part(f.primary_category, '=', 1)
-               AND (
-                   e.key LIKE 'name:%'
-                   OR e.key IN (
-                       'alt_name', 'old_name', 'official_name',
-                       'short_name', 'loc_name', 'int_name',
-                       'cuisine', 'sport', 'religion', 'denomination',
-                       'opening_hours', 'phone', 'website', 'wikidata',
-                       'wheelchair', 'internet_access',
-                       'addr:street', 'addr:housenumber', 'addr:city',
-                       'addr:postcode', 'addr:country')
-               )
+               AND e.key IN (
+                   'alt_name', 'old_name', 'official_name',
+                   'short_name', 'loc_name', 'int_name',
+                   'cuisine', 'sport', 'religion', 'denomination',
+                   'opening_hours', 'phone', 'website', 'wikidata',
+                   'wheelchair', 'internet_access',
+                   'addr:street', 'addr:housenumber', 'addr:city',
+                   'addr:postcode', 'addr:country')
         )
     ) AS tags,
     {'xmin': f.longitude - 0.0001,
@@ -438,17 +435,14 @@ SELECT
         list_filter(
             map_entries(wb.tags),
             e -> e.key != split_part(wb.primary_category, '=', 1)
-               AND (
-                   e.key LIKE 'name:%'
-                   OR e.key IN (
-                       'alt_name', 'old_name', 'official_name',
-                       'short_name', 'loc_name', 'int_name',
-                       'cuisine', 'sport', 'religion', 'denomination',
-                       'opening_hours', 'phone', 'website', 'wikidata',
-                       'wheelchair', 'internet_access',
-                       'addr:street', 'addr:housenumber', 'addr:city',
-                       'addr:postcode', 'addr:country')
-               )
+               AND e.key IN (
+                   'alt_name', 'old_name', 'official_name',
+                   'short_name', 'loc_name', 'int_name',
+                   'cuisine', 'sport', 'religion', 'denomination',
+                   'opening_hours', 'phone', 'website', 'wikidata',
+                   'wheelchair', 'internet_access',
+                   'addr:street', 'addr:housenumber', 'addr:city',
+                   'addr:postcode', 'addr:country')
         )
     ) AS tags,
     {'xmin': wb.longitude - 0.0001,
@@ -709,17 +703,14 @@ SELECT
         list_filter(
             map_entries(rb.tags),
             e -> e.key != split_part(rb.primary_category, '=', 1)
-               AND (
-                   e.key LIKE 'name:%'
-                   OR e.key IN (
-                       'alt_name', 'old_name', 'official_name',
-                       'short_name', 'loc_name', 'int_name',
-                       'cuisine', 'sport', 'religion', 'denomination',
-                       'opening_hours', 'phone', 'website', 'wikidata',
-                       'wheelchair', 'internet_access',
-                       'addr:street', 'addr:housenumber', 'addr:city',
-                       'addr:postcode', 'addr:country')
-               )
+               AND e.key IN (
+                   'alt_name', 'old_name', 'official_name',
+                   'short_name', 'loc_name', 'int_name',
+                   'cuisine', 'sport', 'religion', 'denomination',
+                   'opening_hours', 'phone', 'website', 'wikidata',
+                   'wheelchair', 'internet_access',
+                   'addr:street', 'addr:housenumber', 'addr:city',
+                   'addr:postcode', 'addr:country')
         )
     ) AS tags,
     {'xmin': rb.longitude - 0.0001,

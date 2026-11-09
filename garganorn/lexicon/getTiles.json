@@ -4,7 +4,7 @@
     "defs": {
         "main": {
             "type": "query",
-            "description": "Get the URLs of the tiles covering a bounding box for a dataset, optionally narrowed to one of its collections. Tiles may hold records of other collections: a caller that asked for a collection keeps the records whose origin starts with urn:atgeo:{dataset}:{collection}:, and a record with no origin matches no collection. There is deliberately no text or name search parameter: the server learns only a coarse area, never what the user is looking for.",
+            "description": "Get the URLs of the tiles covering a bounding box for a dataset, optionally narrowed to one of its collections. Tiles may hold records of other collections: a caller that asked for a collection keeps the records whose origin starts with urn:atgeo:{dataset}:{collection}:, and a record with no origin matches no collection. There is deliberately no text or name search parameter: the server learns only a coarse area, never what the user is looking for. A keyword search is org.atgeo.searchPlaces.",
             "parameters": {
                 "type": "params",
                 "properties": {
@@ -16,7 +16,7 @@
                     "collection": {
                         "type": "string",
                         "maxLength": 64,
-                        "description": "Narrow to the tilesets carrying this collection of the dataset, e.g. 'way'"
+                        "description": "Narrow to the tilesets carrying this collection of the dataset, e.g. 'way'. This selects tilesets, not records: a tileset that carries several collections answers with the same tiles either way, so a collection search downloads every record of that tileset in the area and filters on the device."
                     },
                     "bbox": {
                         "type": "string",
@@ -71,7 +71,7 @@
                 },
                 {
                     "name": "InvalidBbox",
-                    "description": "The bbox parameter must be four comma-separated numbers with south < north and west < east, except that a box crossing the antimeridian has west > 0 > east"
+                    "description": "The bbox parameter must be four comma-separated numbers with south < north and west < east, except that a box crossing the antimeridian has west > 0 > east and is not 180 to -180"
                 }
             ]
         }

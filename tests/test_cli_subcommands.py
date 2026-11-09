@@ -8,9 +8,12 @@ import os
 import sys
 from unittest.mock import patch, MagicMock, call
 
+import duckdb
 import pytest
 
 from garganorn import quadtree as _qt
+from tests.served_runs import OVERTURE, STAMP, make_run, place
+from tests.page_rank_file import empty_page_rank
 
 
 def _overture_cache(root):
@@ -66,6 +69,29 @@ class TestSubcommandParsing:
                     "subcommand not recognized by the CLI parser"
                 )
 
+    def test_page_rank_subcommand_recognized(self, tmp_path, monkeypatch):
+        """'page-rank' accepts --csv, --output, --force and --memory-limit."""
+        monkeypatch.setattr(sys, "argv", [
+            "qt", "page-rank",
+            "--csv", str(tmp_path / "pr.csv"),
+            "--output", str(tmp_path / "page_rank.parquet"),
+            "--force",
+            "--memory-limit", "4GB",
+        ])
+        with patch.object(_qt, "stage_page_rank", return_value=None) as mock_stage:
+            try:
+                _qt.main()
+            except SystemExit as e:
+                pytest.fail(
+                    f"'page-rank' subcommand caused SystemExit({e.code}); "
+                    "subcommand not recognized"
+                )
+        mock_stage.assert_called_once()
+        kwargs = mock_stage.call_args.kwargs
+        assert mock_stage.call_args.args == (str(tmp_path / "pr.csv"), str(tmp_path / "page_rank.parquet"))
+        assert kwargs["force"] is True
+        assert kwargs["memory_limit"] == "4GB"
+
     def test_idf_subcommand_recognized(self, tmp_path, overture_parquet, monkeypatch):
         """'idf' subcommand must be accepted by the CLI."""
         output = str(tmp_path / "idf.parquet")
@@ -88,11 +114,12 @@ class TestSubcommandParsing:
         """'run' subcommand must be accepted by the CLI."""
         monkeypatch.setattr(sys, "argv", [
             "qt", "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", overture_parquet,
             "--output", str(tmp_path),
         ])
-        with patch.object(_qt, "run_pipeline", return_value=None):
+        with patch.object(_qt, "run_pipeline", return_value=None) as mock_run:
             try:
                 _qt.main()
             except SystemExit as e:
@@ -100,6 +127,7 @@ class TestSubcommandParsing:
                     f"'run' subcommand caused SystemExit({e.code}); "
                     "subcommand not recognized"
                 )
+        assert mock_run.call_args.kwargs["page_rank_parquet"] == empty_page_rank()
 
     def test_all_subcommand_recognized(self, tmp_path, monkeypatch):
         """'all' subcommand must be accepted by the CLI."""
@@ -287,6 +315,7 @@ class TestReleases:
                                                   monkeypatch):
         monkeypatch.setattr(sys, "argv", [
             "qt", "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", overture_parquet,
             "--output", str(tmp_path),
@@ -328,6 +357,28 @@ pipeline:
                 "overturemaps.org": "2026-08-19.0",
                 "openstreetmap.org": "2026-09-01T00:00:00Z",
             }
+
+    def test_all_passes_the_shared_page_rank_parquet_to_every_run(self, tmp_path,
+                                                                  monkeypatch):
+        cache = _overture_cache(tmp_path / "overture")
+        config = tmp_path / "config.yaml"
+        config.write_text(f"""
+pipeline:
+  output: {tmp_path}/tiles
+  sources:
+    overture_place:
+      parquet: {cache["parquet"]}
+    overture_division:
+      division_parquet: {cache["division_parquet"]}
+      division_area_parquet: {cache["division_area_parquet"]}
+""")
+
+        mock_pipeline = _run_all(config, monkeypatch)
+
+        assert mock_pipeline.call_count == 2
+        for c in mock_pipeline.call_args_list:
+            assert c.kwargs["page_rank_parquet"] == os.path.join(
+                str(tmp_path / "tiles"), "shared", "page_rank.parquet")
 
     def test_all_exits_when_overture_patterns_resolve_no_release(self, tmp_path,
                                                                  monkeypatch):
@@ -389,6 +440,7 @@ class TestForceSemantics:
         """'run --force' must not raise SystemExit (flag must be accepted by parser)."""
         monkeypatch.setattr(sys, "argv", [
             "qt", "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", overture_parquet,
             "--output", str(tmp_path),
@@ -442,6 +494,7 @@ class TestForceSemantics:
                 memory_limit="4GB",
                 density_parquet=density_parquet,
                 force=True,
+                page_rank_parquet=empty_page_rank(),
             )
         except Exception:
             pass
@@ -499,6 +552,7 @@ class TestForceSemantics:
                     str(tmp_path),
                     memory_limit="4GB",
                     force=True,
+                    page_rank_parquet=empty_page_rank(),
                 )
             except Exception:
                 pass
@@ -509,3 +563,23 @@ class TestForceSemantics:
             "force=True for overture_division must call os.remove on boundaries.duckdb "
             "before rebuilding. os.remove calls seen: " + repr(removed_paths)
         )
+
+
+class TestSearchIndexSubcommand:
+    @staticmethod
+    def _run(tmp_path, records):
+        return make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                        {"012301": records})
+
+    def test_search_index_writes_index_into_an_existing_run(self, tmp_path, monkeypatch):
+        run_dir = self._run(tmp_path, [place(OVERTURE, "place", "a", "Zed")])
+        (run_dir / "search.duckdb").unlink()
+        monkeypatch.setattr(sys, "argv", ["qt", "search-index", str(run_dir)])
+
+        _qt.main()
+
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            assert con.execute("SELECT count(*) FROM search_records").fetchone()[0] == 1
+        finally:
+            con.close()

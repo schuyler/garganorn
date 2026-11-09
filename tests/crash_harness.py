@@ -22,6 +22,7 @@ Usage (called by test_crash_recovery.py via subprocess.run):
       --source overture_place \\
       --parquet <glob> \\
       --output <dir> \\
+      --page-rank-parquet <file> \\
       [--bbox XMIN YMIN XMAX YMAX]
 
 Exit codes:
@@ -72,6 +73,7 @@ def main():
     parser.add_argument("--bbox", nargs=4, type=float,
                         metavar=("XMIN", "YMIN", "XMAX", "YMAX"), default=None)
     parser.add_argument("--memory-limit", default="4GB", dest="memory_limit")
+    parser.add_argument("--page-rank-parquet", required=True, dest="page_rank_parquet")
     args = parser.parse_args()
 
     crash_point = os.environ.get("GARGANORN_CRASH_POINT", "")
@@ -107,6 +109,7 @@ def main():
         args.output,
         memory_limit=args.memory_limit,
         max_per_tile=100,
+        page_rank_parquet=args.page_rank_parquet,
         releases={"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"},
     )
 

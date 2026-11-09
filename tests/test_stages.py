@@ -39,10 +39,13 @@ from garganorn.stages import (
     _coord_exprs,
     quadkey_to_bbox,
 )
+from garganorn.tile_reader import TileBackedCollection
+from tests.served_runs import OVERTURE, STAMP, make_run, place
 from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline, SOURCES
 from tests.duckdb_spy import spy_on_duckdb_connect
 from tests.lexicon_helpers import validate_def
+from tests.page_rank_file import empty_page_rank
 
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
@@ -56,7 +59,7 @@ class TestStageTileAssignment:
         ta_parquet = str(tmp_path / "tile_assignments.parquet")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
@@ -73,7 +76,7 @@ class TestStageTileAssignment:
         ta_parquet = str(tmp_path / "tile_assignments_pb.parquet")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         import garganorn.stages as stages_mod
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
@@ -92,7 +95,7 @@ class TestStageTileAssignment:
         ta_parquet = str(tmp_path / "tile_assignments_ml.parquet")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         import garganorn.stages as stages_mod
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
@@ -114,7 +117,7 @@ class TestStageContainment:
         containment_dir = str(tmp_path / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
@@ -144,7 +147,7 @@ class TestStageContainment:
         containment_dir = str(tmp_path / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
@@ -170,7 +173,7 @@ class TestStageContainment:
         containment_dir = str(tmp_path / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         stage_covering(str(division_db_path), covering_dir,
@@ -199,7 +202,7 @@ class TestStageExport:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         gz_files = list(tiles_current.rglob("*.json.gz"))
@@ -214,7 +217,7 @@ class TestStageManifest:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_path = tiles_current / "manifest.json"
@@ -229,7 +232,7 @@ class TestStageManifest:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
 
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         manifest_db = tiles_current / "manifest.duckdb"
@@ -239,6 +242,143 @@ class TestStageManifest:
         count = con_check.execute("SELECT count(*) FROM record_tiles").fetchone()[0]
         assert count > 0
         con_check.close()
+
+    @pytest.fixture
+    def manifest_db(self, tmp_path):
+        """A manifest.duckdb written by write_manifest_db over synthetic tile assignments."""
+        ta_parquet = str(tmp_path / "ta.parquet")
+        con = duckdb.connect()
+        con.execute(f"""
+            COPY (SELECT uuid()::varchar AS place_id, 'q' || (i % 100) AS tile_qk
+                  FROM range(10000) t(i)) TO '{ta_parquet}'
+        """)
+        con.close()
+        write_manifest_db(ta_parquet, str(tmp_path), "overture_place")
+        return str(tmp_path / "manifest.duckdb")
+
+    def test_manifest_indexes_record_tiles_key(self, manifest_db):
+        """manifest.duckdb holds an index on record_tiles(key)."""
+        con = duckdb.connect(manifest_db, read_only=True)
+        sql = [r[0] for r in con.execute(
+            "SELECT sql FROM duckdb_indexes() WHERE table_name = 'record_tiles'"
+        ).fetchall()]
+        con.close()
+        assert len(sql) == 1 and '("key")' in sql[0], f"indexes on record_tiles: {sql}"
+
+    def test_get_places_plans_an_index_scan(self, manifest_db, tmp_path):
+        """get_places' own query runs as an Index Scan (the runtime profile; EXPLAIN can't show it)."""
+        profile = tmp_path / "profile.json"
+        reader = TileBackedCollection(manifest_db, str(tmp_path))
+        con = reader._con
+        key = con.execute("SELECT key FROM record_tiles LIMIT 1").fetchone()[0]
+        con.execute("PRAGMA enable_profiling = 'json'")
+        con.execute(f"PRAGMA profiling_output = '{profile}'")
+
+        reader.get_places([key])
+
+        text = profile.read_text()
+        assert "Index Scan" in text, "get_places did not plan an Index Scan"
+
+
+class TestSearchIndex:
+    """search.duckdb, written by stage_export beside manifest.duckdb."""
+
+    @staticmethod
+    def _record_count(run_dir):
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            return con.execute("SELECT count(*) FROM search_records").fetchone()[0]
+        finally:
+            con.close()
+
+    def test_stage_export_writes_one_row_per_distinct_origin(
+            self, overture_parquet, density_parquet, tmp_path):
+        run_pipeline("overture_place", overture_parquet,
+                     (-122.55, 37.60, -122.30, 37.85),
+                     str(tmp_path), memory_limit="4GB", max_per_tile=100,
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
+        run_dir = (tmp_path / "overture_place" / "tiles" / "current").resolve()
+
+        origins = set()
+        for gz in run_dir.rglob("*.json.gz"):
+            with gzip.open(gz, "rt") as f:
+                origins |= {r["value"]["origin"] for r in json.load(f)["records"]}
+
+        assert (run_dir / "search.duckdb").exists()
+        assert origins
+        assert self._record_count(run_dir) == len(origins)
+
+    def test_record_in_several_tiles_counts_once(self, tmp_path):
+        record = place(OVERTURE, "place", "a", "Zed")
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                           {"012301": [record], "012302": [record]})
+        assert self._record_count(run_dir) == 1
+
+    def test_run_without_tiles_gets_an_empty_index(self, tmp_path):
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")])
+        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+        try:
+            for table in ("search_records", "search_blocks"):
+                assert con.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
+        finally:
+            con.close()
+
+    def test_attribute_keys_unique_to_one_record_build(self, tmp_path):
+        a, b = place(OVERTURE, "place", "a", "Zed"), place(OVERTURE, "place", "b", "Zed")
+        a["value"]["attributes"] = {"only_on_a": "x"}
+        b["value"]["attributes"] = {"only_on_b": ["y"]}
+        run_dir = make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
+                           {"012301": [a, b]})
+        assert self._record_count(run_dir) == 2
+
+
+class TestPageRankStage:
+    """stage_page_rank collapses wikimedia-importance.csv.gz to one row per QID."""
+
+    ROWS = [
+        'language,type,title,importance,wikidata_id',
+        'en,article,"Foo, le",0.5,Q1',
+        'en,redirect,Foo,0.5,Q1',
+        'fr,article,Fou,0.7,Q1',
+        'de,article,Fuu,NaN,Q1',
+        'en,article,Bar,0.3,Q2',
+        'en,article,Baz,NaN,Q3',
+    ]
+
+    @classmethod
+    def _csv(cls, tmp_path):
+        path = tmp_path / "wikimedia-importance.csv.gz"
+        with gzip.open(path, "wt") as f:
+            f.write("\n".join(cls.ROWS) + "\n")
+        return str(path)
+
+    @staticmethod
+    def _rows(output):
+        return dict(duckdb.execute(
+            f"SELECT qid, page_rank FROM read_parquet('{output}')").fetchall())
+
+    def test_one_row_per_qid_at_the_max_importance(self, tmp_path):
+        from garganorn.stages import stage_page_rank
+        output = str(tmp_path / "page_rank.parquet")
+
+        stage_page_rank(self._csv(tmp_path), output)
+
+        assert self._rows(output) == {"Q1": 0.7, "Q2": 0.3}
+
+    def test_fresh_output_is_kept_and_a_newer_csv_rebuilds_it(self, tmp_path):
+        from garganorn.stages import stage_page_rank
+        csv = self._csv(tmp_path)
+        output = str(tmp_path / "page_rank.parquet")
+        stage_page_rank(csv, output)
+        first = os.stat(output).st_mtime_ns
+
+        stage_page_rank(csv, output)
+        assert os.stat(output).st_mtime_ns == first
+
+        meta_mtime = os.stat(output + ".meta.json").st_mtime
+        os.utime(csv, (meta_mtime + 10, meta_mtime + 10))
+        stage_page_rank(csv, output)
+        assert os.stat(output).st_mtime_ns != first
 
 
 # ---------------------------------------------------------------------------
@@ -268,7 +408,7 @@ class TestEnvelopeShape:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         tile = _read_one_tile(tiles_current)
         assert set(tile.keys()) == {"publishedAt", "attribution", "records"}, (
@@ -281,7 +421,7 @@ class TestEnvelopeShape:
         run_pipeline("overture_place", overture_parquet,
                      (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path), memory_limit="4GB", max_per_tile=100,
-                     density_parquet=density_parquet, releases=RELEASES)
+                     density_parquet=density_parquet, releases=RELEASES, page_rank_parquet=empty_page_rank())
         tiles_current = tmp_path / "overture_place" / "tiles" / "current"
         with open(tiles_current / "manifest.json") as f:
             manifest = json.load(f)
@@ -315,7 +455,7 @@ class TestPublishedAtDeterminismAndCoherence:
         containment_dir = str(base / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         pk_expr = SOURCES["overture_place"].source_pk
@@ -734,6 +874,7 @@ class TestRunPipelineTempDirectoryThreading:
             "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
             str(tmp_path / "output_rp"), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, temp_directory=str(scratch),
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert calls, "stage_export must have been called"
@@ -778,7 +919,7 @@ class TestStageImportTempDirectory:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     temp_directory=str(scratch))
+                     temp_directory=str(scratch), page_rank_parquet=empty_page_rank())
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, (
@@ -806,7 +947,7 @@ class TestStageImportTempDirectory:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert not temp_dir_stmts, (
@@ -892,7 +1033,7 @@ class TestStageImportLookupKeyUniqueness:
         with pytest.raises(ValueError) as excinfo:
             stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
-                         density_parquet=str(density_path))
+                         density_parquet=str(density_path), page_rank_parquet=empty_page_rank())
 
         msg = str(excinfo.value)
         assert str(density_path) in msg, f"error must name the offending file; got: {msg!r}"
@@ -905,22 +1046,12 @@ class TestStageImportLookupKeyUniqueness:
             "stage_import must fail before writing any output artifact"
         )
 
-    @pytest.mark.parametrize(
-        "source", ["overture_place", "osm", "overture_division"]
-    )
+    @pytest.mark.parametrize("source", ["overture_place", "osm"])
     def test_duplicate_density_tile_qk15_raises_for_every_density_parquet_consumer(
-        self, source, overture_parquet, osm_parquet, division_parquet, tmp_path
+        self, source, overture_parquet, osm_parquet, tmp_path
     ):
-        """stage_import dispatches to stage_division_import for
-        overture_division and RETURNS before its own _assert_unique_key call
-        -- but overture_division is on the global run path and IS passed
-        density_parquet (quadtree.py _cmd_all). Without a guard covering it,
-        a duplicated tile_qk15 in --density-parquet silently corrupts
-        importance for division rows too (division_density's
-        avg(density_score) double-counts the duplicate), rather than
-        raising. Parametrized over every source that can receive
-        --density-parquet through stage_import so a fix covering only the
-        non-division path can't pass silently."""
+        """A duplicated tile_qk15 in --density-parquet raises for every
+        source that joins density through stage_import."""
         density_path = tmp_path / f"dup_density_{source}.parquet"
         _write_duplicate_density_parquet(density_path)
         places_parquet = str(tmp_path / f"places_dup_density_{source}.parquet")
@@ -928,13 +1059,12 @@ class TestStageImportLookupKeyUniqueness:
         parquet_glob = {
             "overture_place": overture_parquet,
             "osm": (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
-            "overture_division": division_parquet,
         }[source]
 
         with pytest.raises(ValueError) as excinfo:
             stage_import(source, parquet_glob, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
-                         density_parquet=str(density_path))
+                         density_parquet=str(density_path), page_rank_parquet=empty_page_rank())
 
         msg = str(excinfo.value)
         assert str(density_path) in msg, f"error must name the offending file; got: {msg!r}"
@@ -942,49 +1072,6 @@ class TestStageImportLookupKeyUniqueness:
         assert not os.path.exists(places_parquet), (
             f"stage_import must fail before writing any output artifact "
             f"(source={source})"
-        )
-        if source == "overture_division":
-            boundaries_path = str(Path(places_parquet).parent / "boundaries.duckdb")
-            assert not os.path.exists(boundaries_path), (
-                "stage_import must fail before writing boundaries.duckdb "
-                "for overture_division"
-            )
-
-    def test_uniqueness_check_runs_before_division_dispatch(
-        self, division_parquet, tmp_path, monkeypatch
-    ):
-        """The density guard for overture_division must run before
-        stage_import dispatches to stage_division_import (and returns) --
-        otherwise duplicate density keys silently reach division_density's
-        avg() aggregation instead of raising. Spy on stage_division_import
-        to prove it is never called when the density lookup fails
-        uniqueness -- the same ordering guarantee
-        test_uniqueness_check_runs_before_expensive_import_sql below pins
-        for the non-division sources."""
-        import garganorn.stages as stages_mod
-
-        density_path = tmp_path / "dup_density_division_ordering.parquet"
-        _write_duplicate_density_parquet(density_path)
-        places_parquet = str(tmp_path / "places_dup_density_division_ordering.parquet")
-
-        calls = []
-        real_stage_division_import = stages_mod.stage_division_import
-
-        def spy_stage_division_import(*args, **kwargs):
-            calls.append((args, kwargs))
-            return real_stage_division_import(*args, **kwargs)
-
-        monkeypatch.setattr(stages_mod, "stage_division_import", spy_stage_division_import)
-
-        with pytest.raises(ValueError):
-            stages_mod.stage_import(
-                "overture_division", division_parquet, (-122.55, 37.60, -122.30, 37.85),
-                places_parquet, force=True, density_parquet=str(density_path),
-            )
-
-        assert not calls, (
-            "stage_division_import must not be called when the density "
-            f"uniqueness check fails; got {len(calls)} call(s)"
         )
 
     def test_duplicate_idf_category_raises(self, overture_parquet, tmp_path):
@@ -995,7 +1082,7 @@ class TestStageImportLookupKeyUniqueness:
         with pytest.raises(ValueError) as excinfo:
             stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
-                         idf_parquet=str(idf_path))
+                         idf_parquet=str(idf_path), page_rank_parquet=empty_page_rank())
 
         msg = str(excinfo.value)
         assert str(idf_path) in msg, f"error must name the offending file; got: {msg!r}"
@@ -1019,7 +1106,7 @@ class TestStageImportLookupKeyUniqueness:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=str(density_path))
+                     density_parquet=str(density_path), page_rank_parquet=empty_page_rank())
         assert os.path.exists(places_parquet)
 
     def test_null_idf_category_does_not_raise(self, overture_parquet, tmp_path):
@@ -1031,7 +1118,7 @@ class TestStageImportLookupKeyUniqueness:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     idf_parquet=str(idf_path))
+                     idf_parquet=str(idf_path), page_rank_parquet=empty_page_rank())
         assert os.path.exists(places_parquet)
 
     def test_uniqueness_check_runs_before_expensive_import_sql(
@@ -1063,6 +1150,7 @@ class TestStageImportLookupKeyUniqueness:
                 "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                 places_parquet, memory_limit="4GB", force=True,
                 density_parquet=str(density_path),
+                page_rank_parquet=empty_page_rank(),
             )
 
         assert not calls, (
@@ -1079,7 +1167,7 @@ class TestStageImportLookupKeyUniqueness:
         places_parquet = str(tmp_path / "places_clean.parquet")
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
         assert os.path.exists(places_parquet)
 
         con = duckdb.connect()
@@ -1105,7 +1193,7 @@ class TestStageImportLookupKeyUniqueness:
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_stream.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True, density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         assert not any("_density_uniqueness_check" in s for s in statements), (
             f"density_parquet must not be materialized into a TEMP TABLE "
@@ -1128,7 +1216,7 @@ class TestStageImportLookupKeyUniqueness:
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_memlimit.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True, density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         assert statements, "expected at least one statement recorded"
         assert "SET memory_limit" in statements[0] and "4GB" in statements[0], (
@@ -1178,7 +1266,7 @@ def _build_export_inputs(overture_parquet, tmp_path, subdir):
     containment_dir = str(base / "containment")
 
     stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                 places_parquet, memory_limit="4GB", force=True)
+                 places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
     stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                           max_per_tile=100, memory_limit="4GB", force=True)
     pk_expr = SOURCES["overture_place"].source_pk
@@ -1203,7 +1291,7 @@ class TestConfiguredSourceGlobPreflight:
 
         with pytest.raises(RuntimeError) as excinfo:
             stage_import("overture_place", empty_glob, (-122.55, 37.60, -122.30, 37.85),
-                         places_parquet, memory_limit="4GB", force=True)
+                         places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(places_parquet), (
@@ -1220,7 +1308,7 @@ class TestConfiguredSourceGlobPreflight:
 
         with pytest.raises(RuntimeError) as excinfo:
             stage_import("osm", (node_glob, way_glob, relation_glob), (-122.55, 37.60, -122.30, 37.85),
-                         places_parquet, memory_limit="4GB", force=True)
+                         places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(places_parquet), (
@@ -1242,7 +1330,7 @@ class TestConfiguredSourceGlobPreflight:
         with pytest.raises(RuntimeError) as excinfo:
             stage_import("overture_division", (division_path, division_area_path),
                          (-122.55, 37.60, -122.30, 37.85),
-                         places_parquet, memory_limit="4GB", force=True)
+                         places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(places_parquet), (
@@ -1325,7 +1413,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
-                     temp_directory=str(scratch), max_temp_directory_size="8GB")
+                     temp_directory=str(scratch), max_temp_directory_size="8GB", page_rank_parquet=empty_page_rank())
 
         before = self._statements_before_density_check(statements)
         stmts = _max_temp_stmts(before)
@@ -1352,7 +1440,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu_notd.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True, density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         before = self._statements_before_density_check(statements)
         stmts = _max_temp_stmts(before)
@@ -1396,7 +1484,7 @@ class TestStageImportMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds.parquet"), memory_limit="4GB",
                      force=True,
-                     temp_directory=str(scratch), max_temp_directory_size="7GB")
+                     temp_directory=str(scratch), max_temp_directory_size="7GB", page_rank_parquet=empty_page_rank())
 
         stmts = _max_temp_stmts(statements)
         assert stmts, (
@@ -1421,7 +1509,7 @@ class TestStageImportMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_def.parquet"), memory_limit="4GB",
                      force=True,
-                     temp_directory=str(scratch))
+                     temp_directory=str(scratch), page_rank_parquet=empty_page_rank())
 
         stmts = _max_temp_stmts(statements)
         assert stmts, f"expected a default bound; statements: {statements}"
@@ -1443,7 +1531,7 @@ class TestStageImportMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_none.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
-                     temp_directory=str(scratch), max_temp_directory_size=None)
+                     temp_directory=str(scratch), max_temp_directory_size=None, page_rank_parquet=empty_page_rank())
 
         assert not _max_temp_stmts(statements), (
             f"max_temp_directory_size=None must issue no bound; got: "
@@ -1463,7 +1551,7 @@ class TestStageImportMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_notd.parquet"), memory_limit="4GB",
-                     force=True)
+                     force=True, page_rank_parquet=empty_page_rank())
 
         stmts = _max_temp_stmts(statements)
         assert stmts, (
@@ -1662,6 +1750,7 @@ class TestMaxTempDirectorySizeThreading:
             "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
             str(tmp_path / "output_mtds"), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, max_temp_directory_size="11GB",
+            page_rank_parquet=empty_page_rank(),
         )
 
         assert calls, "stage_export must have been called"
@@ -1773,7 +1862,7 @@ class TestMaxTempDirectorySizeThreading:
             memory_limit=None, max_per_tile=None, boundaries=None,
             export_workers=None, density_parquet=None, idf_parquet=None,
             temp_directory=None, max_temp_directory_size=None, force=False,
-            release=[],
+            release=[], page_rank_parquet="/nonexistent/page_rank.parquet",
         )
         defaults.update(overrides)
         return argparse.Namespace(**defaults)
@@ -2141,7 +2230,7 @@ class TestTilesetJson:
         # stage_import, so stage_tile_assignment and stage_export see zero
         # places/tiles all the way through.
         stage_import("overture_place", overture_parquet, (0.0, 0.0, 0.01, 0.01),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         pk_expr = SOURCES["overture_place"].source_pk
@@ -2213,7 +2302,7 @@ class TestTilesetJson:
         containment_dir = str(base / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         stage_covering(str(division_db_path), covering_dir,
@@ -2259,7 +2348,7 @@ class TestTilesetJson:
 
         stage_import("osm", (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
                      (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "osm",
                               max_per_tile=100, memory_limit="4GB", force=True)
         pk_expr = SOURCES["osm"].source_pk

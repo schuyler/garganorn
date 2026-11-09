@@ -1,33 +1,62 @@
-import gzip, json, os, logging
+import gzip, json, os, logging, re
 from flask import Flask, abort, jsonify, request, Response
 from werkzeug.exceptions import HTTPException
 from werkzeug.utils import safe_join
-from lexrpc.flask_server import init_flask
+from lexrpc.flask_server import XrpcEndpoint
 from lexrpc.base import NSID_RE, XrpcError
 from garganorn import Server
 from garganorn.config import load_config
 
 DEFAULT_CONFIG = "config.yaml"
+DEFAULT_MAX_TILES = 75
+
+def _strip_query(record):
+    """Logging filter: drop every URL query string from the record's message,
+    so a search keyword in a logged request line never reaches a log."""
+    record.msg = re.sub(r"\?\S*", "", record.getMessage())
+    record.args = None
+    return True
+
+
+class _XrpcEndpoint(XrpcEndpoint):
+    """lexrpc's XRPC view, but a query takes GET and a procedure POST.
+
+    lexrpc's own route takes GET and POST for every method, so a POST to a
+    query reached it and came back a 400. Here a served method's wrong HTTP
+    method is a 405 with an Allow header; an NSID that isn't served still
+    falls through to lexrpc's 501 (or 400 for a malformed one)."""
+
+    ALLOWED = {"query": ["GET", "HEAD", "OPTIONS"], "procedure": ["POST", "OPTIONS"]}
+
+    def dispatch_request(self, nsid):
+        if nsid in self.server._methods:
+            allowed = self.ALLOWED.get(self.server.defs[nsid]["type"])
+            if allowed and request.method not in allowed:
+                abort(405, valid_methods=allowed)
+        return super().dispatch_request(nsid)
+
 
 def create_app():
     config_path = os.getenv("GARGANORN_CONFIG", DEFAULT_CONFIG)
     repo, tiles_config, public_base = load_config(config_path)
 
     app = Flask("garganorn")
+    logging.getLogger("gunicorn.error").addFilter(_strip_query)
     app.logger.setLevel(logging.INFO)
     tilesets = {}  # slug -> ServedTileset, in config order
     tile_dirs = {}  # slug -> directory holding the run directories
-    max_tiles = 50
+    max_tiles = DEFAULT_MAX_TILES
     if tiles_config:
         from garganorn.quadtree import TileManifest
         from garganorn.server import ServedTileset
-        from garganorn.tile_reader import TileBackedCollection
+        from garganorn.tile_reader import TileBackedCollection, TileSearchIndex
         for cfg in tiles_config.get("tilesets", []):
             # A run is only ready to serve when manifest.json (the completeness
-            # marker, written last) exists beside manifest.duckdb and tileset.json.
+            # marker, written last) exists beside manifest.duckdb, search.duckdb
+            # and tileset.json.
             run_dir = os.path.realpath(cfg["run_dir"])
             if not all(os.path.isfile(os.path.join(run_dir, f))
-                       for f in ("manifest.duckdb", "manifest.json", "tileset.json")):
+                       for f in ("manifest.duckdb", "search.duckdb", "manifest.json", "tileset.json")):
                 app.logger.warning(
                     "Tile run %s is incomplete or missing; tile serving disabled for it",
                     cfg["run_dir"],
@@ -49,11 +78,16 @@ def create_app():
                 descriptor,
                 TileManifest(manifest_path, f"{base_url}/{stamp}"),
                 TileBackedCollection(manifest_path, run_dir),
+                TileSearchIndex(os.path.join(run_dir, "search.duckdb")),
             )
             tile_dirs[slug] = os.path.dirname(run_dir)
-        max_tiles = tiles_config.get("max_tiles", 50)
+        max_tiles = tiles_config.get("max_tiles", DEFAULT_MAX_TILES)
     gazetteer = Server(repo, tilesets, max_tiles, public_base)
-    init_flask(gazetteer.server, app)
+    app.add_url_rule(
+        "/xrpc/<nsid>",
+        view_func=_XrpcEndpoint.as_view("xrpc-endpoint", gazetteer.server),
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    )
 
     lexicon_map = gazetteer.lexicon_map
 
@@ -157,7 +191,7 @@ def create_app():
         response.headers["Cache-Control"] = "public, max-age=604800, immutable"
         return response
 
-    CACHED_QUERIES = {"org.atgeo.getTiles", "org.atgeo.describeService"}
+    CACHED_QUERIES = {"org.atgeo.getTiles", "org.atgeo.getPlace", "org.atgeo.describeService"}
 
     @app.after_request
     def allow_cross_origin_reads(response):
@@ -169,11 +203,11 @@ def create_app():
 
     @app.after_request
     def add_cache_control(response):
-        if (
+        cached = request.endpoint == "place" or (
             request.endpoint == "xrpc-endpoint"
             and request.view_args.get("nsid") in CACHED_QUERIES
-            and response.status_code == 200
-        ):
+        )
+        if cached and response.status_code == 200:
             response.headers["Cache-Control"] = "public, max-age=3600"
         return response
 

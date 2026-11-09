@@ -4,7 +4,7 @@
 
 | Document | Description |
 |----------|-------------|
-| [tile-privacy-design.md](tile-privacy-design.md) | Why there is no server-side search. The constraint the rest of the architecture is derived from. |
+| [tile-privacy-design.md](tile-privacy-design.md) | Why search runs over tiles on the client, what a keyword search may tell the server, and why no log keeps the keyword. The constraint the rest of the architecture is derived from. |
 
 ## Pipeline
 
@@ -21,7 +21,7 @@
 | Document | Description |
 |----------|-------------|
 | [atgeo-spec.md](atgeo-spec.md) | The gazetteer interface: place identity (`urn:atgeo:` origins), tilesets, tile format, place records, importance, containment levels, the XRPC methods and plain-HTTP routes, error statuses, caching and CORS. Normative for anything on the wire |
-| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design rationale and port-relevant behavior: two calls, `searchPlaces` and `getPlace` (describes the shipped TypeScript SDK; not normative for the wire) |
+| [atgeo-client-sdk.md](atgeo-client-sdk.md) | Client SDK design rationale and port-relevant behavior: four searches (`searchNearby`, `searchByKeyword`, `searchNearbyThenByKeyword`, `autocompleteByKeyword`) and `getPlace` (describes the shipped TypeScript SDK; not normative for the wire) |
 | [atgeo-appview-design.md](atgeo-appview-design.md) | Firehose sidecar serving live location records as tiles (unbuilt; pending overhaul — not normative) |
 | [lexicon-publication.md](lexicon-publication.md) | Runbook: the `_lexicon.atgeo.org` TXT record and publishing the `org.atgeo.*` lexicons with `goat` |
 
@@ -35,7 +35,8 @@
 
 | Document | Description |
 |----------|-------------|
-| [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (planned) |
+| [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (a lift in `importance`, shared by tiles and search) |
+| [intermediate-bands.md](intermediate-bands.md) | Sampled overview levels (the pyramid) so city-sized views get their notable places, and how the notability signal in `importance` feeds them; measured, proposed in [#36](https://github.com/schuyler/garganorn/issues/36) |
 | [planned-features.md](planned-features.md) | New feature ideas not yet designed or scoped |
 
 ## Reference Queries

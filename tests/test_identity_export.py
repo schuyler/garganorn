@@ -20,6 +20,7 @@ from garganorn.levels import LEVEL_VOCAB
 from garganorn.quadtree import run_pipeline
 from garganorn.stages import stage_export
 from tests.lexicon_helpers import goat_validate, validate_def
+from tests.page_rank_file import empty_page_rank
 
 BBOX = (-122.55, 37.60, -122.30, 37.85)
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
@@ -106,12 +107,12 @@ def _expected_importance(source, places_pq, dataset):
 def built(division_parquet, overture_parquet, density_parquet, osm_parquet, tmp_path_factory):
     out = str(tmp_path_factory.mktemp("identity_export"))
     kwargs = dict(memory_limit="4GB", max_per_tile=100, releases=RELEASES)
-    run_pipeline("overture_division", division_parquet, BBOX, out, **kwargs)
+    run_pipeline("overture_division", division_parquet, BBOX, out, **kwargs, page_rank_parquet=empty_page_rank())
     boundaries = os.path.join(out, "overture_division", "boundaries.duckdb")
     run_pipeline("overture_place", overture_parquet, BBOX, out,
-                 boundaries_db=boundaries, density_parquet=density_parquet, **kwargs)
+                 boundaries_db=boundaries, density_parquet=density_parquet, **kwargs, page_rank_parquet=empty_page_rank())
     run_pipeline("osm", (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]), BBOX, out,
-                 boundaries_db=boundaries, density_parquet=density_parquet, **kwargs)
+                 boundaries_db=boundaries, density_parquet=density_parquet, **kwargs, page_rank_parquet=empty_page_rank())
 
     runs = {}
     for source in SLUGS:

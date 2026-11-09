@@ -23,7 +23,7 @@ SELECT
                     coalesce(p.tags, MAP([], [])),
                     map(
                         [split_part(p.primary_category, '=', 1)],
-                        [split_part(p.primary_category, '=', 2)]
+                        [substr(p.primary_category, strpos(p.primary_category, '=') + 1)]
                     )
                 )
                 ELSE coalesce(p.tags, MAP([], []))

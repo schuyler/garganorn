@@ -14,17 +14,6 @@ Two consumers derive from this dict so SQL and Python cannot drift:
     checks every division subtype against LEVEL_VOCAB's keys and raises
     RuntimeError listing any unmapped subtypes.
 
-IMPORTANCE_BAND gives each LEVEL_VOCAB subtype the (floor, ceiling) range of its
-`importance` score. A division's score is floor + (ceiling - floor) * s, where
-s in [0, 1] is its population (and, for localities, density) signal. Floors
-fall strictly down the containment hierarchy, and the weakest country,
-dependency or region outranks every lower-level division, so a plain top-N cut
-keeps them. Two more helpers render the floor and ceiling as SQL CASE
-expressions, substituted into overture_division_import.sql.
-
-Values follow a uniform stride-5: borough=55, macrohood=60, neighborhood=65,
-microhood=70.
-
 Level 0 (continent) has no producer entry: continents are never emitted as
 division rows, so they never appear as a LEVEL_VOCAB key.
 """
@@ -42,21 +31,6 @@ LEVEL_VOCAB: dict[str, int] = {
     "microhood": 70,
 }
 
-# subtype -> (floor, ceiling) of the importance score, 0 <= floor <= ceiling <= 100.
-# Country, dependency and region occupy 80-100; everything below tops out at 79.
-IMPORTANCE_BAND: dict[str, tuple[int, int]] = {
-    "country": (90, 100),
-    "dependency": (85, 100),
-    "region": (80, 100),
-    "county": (40, 79),
-    "localadmin": (35, 79),
-    "locality": (30, 79),
-    "borough": (20, 79),
-    "macrohood": (15, 79),
-    "neighborhood": (10, 79),
-    "microhood": (5, 79),
-}
-
 
 def _subtype_case_sql(mapping: dict, subtype_expr: str) -> str:
     """Render a CASE over subtype_expr with one WHEN per mapping entry and NO
@@ -65,17 +39,6 @@ def _subtype_case_sql(mapping: dict, subtype_expr: str) -> str:
         f"            WHEN {subtype_expr} = '{subtype}' THEN {value}"
         for subtype, value in mapping.items()
     ) + "\n        END"
-
-
-def importance_floor_case_sql(subtype_expr: str = "db.subtype") -> str:
-    """Render the IMPORTANCE_BAND floors as a CASE with NO ELSE branch (an
-    unmapped subtype is already caught by the fail-loud validator)."""
-    return _subtype_case_sql({k: v[0] for k, v in IMPORTANCE_BAND.items()}, subtype_expr)
-
-
-def importance_ceiling_case_sql(subtype_expr: str = "db.subtype") -> str:
-    """Render the IMPORTANCE_BAND ceilings as a CASE with NO ELSE branch."""
-    return _subtype_case_sql({k: v[1] for k, v in IMPORTANCE_BAND.items()}, subtype_expr)
 
 
 def level_case_sql(subtype_expr: str = "d.subtype", alias: str | None = None) -> str:

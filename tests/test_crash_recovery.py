@@ -24,6 +24,7 @@ import pytest
 
 from garganorn.quadtree import run_pipeline
 import garganorn.stages as _stages
+from tests.page_rank_file import empty_page_rank
 
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
@@ -84,6 +85,7 @@ def control_run(overture_parquet, density_parquet, tmp_path_factory):
         max_per_tile=100,
         density_parquet=density_parquet,
         releases=RELEASES,
+        page_rank_parquet=empty_page_rank(),
     )
     tiles_current = _find_tiles_current(out, "overture_place")
     canonical = _collect_tiles(str(tiles_current))
@@ -114,6 +116,7 @@ class TestCrashStateMatrix:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         tiles_current = _find_tiles_current(output_dir, "overture_place")
         return _collect_tiles(str(tiles_current))
@@ -152,6 +155,7 @@ class TestCrashStateMatrix:
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         tiles_root = output_dir / "overture_place" / "tiles"
         # Plant a fake incomplete run dir (has tile files but no manifest.json)
@@ -168,6 +172,7 @@ class TestCrashStateMatrix:
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, force=True,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         assert not fake_run.exists(), (
             f"Incomplete run dir {fake_run} must be deleted at next export start"
@@ -187,6 +192,7 @@ class TestCrashStateMatrix:
             str(output_dir), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         ov_dir = output_dir / "overture_place"
         places = ov_dir / "places.parquet"
@@ -279,6 +285,7 @@ class TestCrashStateMatrix:
                     memory_limit="4GB",
                     max_per_tile=100,
                     releases=RELEASES,
+                    page_rank_parquet=empty_page_rank(),
                 )
             except Exception:
                 pass  # Pipeline may fail for other reasons; we check explicit WAL deletion
@@ -319,7 +326,8 @@ class TestKillNineAcceptance:
              "--source", "overture_place",
              "--parquet", overture_parquet,
              "--output", str(output_dir),
-             "--bbox", "-122.55", "37.60", "-122.30", "37.85"],
+             "--bbox", "-122.55", "37.60", "-122.30", "37.85",
+             "--page-rank-parquet", empty_page_rank()],
             env=env,
             timeout=120,
         )
@@ -342,6 +350,7 @@ class TestKillNineAcceptance:
             max_per_tile=100,
             density_parquet=density_parquet,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         tiles_current = _find_tiles_current(output_dir, "overture_place")
         recovered_tiles = _collect_tiles(str(tiles_current))

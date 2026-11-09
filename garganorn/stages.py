@@ -28,8 +28,7 @@ from garganorn.database import (
     COLLECTION_TERMS, DIVISION_URN_PREFIX, OverturePlaces, OpenStreetMap, OvertureDivisions,
 )
 from garganorn.levels import (
-    IMPORTANCE_BAND, LEVEL_VOCAB, importance_ceiling_case_sql,
-    importance_floor_case_sql, level_case_sql,
+    LEVEL_VOCAB, level_case_sql,
 )
 
 log = logging.getLogger(__name__)
@@ -212,6 +211,42 @@ def _run_sql(con, source, stage, filename, t0, **params):
     log.info("[%s] %s: done (%.1fs, %d places)", source, stage, time.monotonic() - t0, count)
 
 
+# Read when a stage runs (tests monkeypatch them); recorded in freshness params
+# so a change rebuilds the import.
+NOTABILITY_PR_FLOOR = 0.20      # page rank below which there's no lift
+NOTABILITY_RAMP = 50            # k in ln(1 + kx) / ln(1 + k)
+NOTABILITY_WEIGHT = 0.95        # share of the headroom full notability takes
+NAME_COUNT_FLOOR = 1000         # name count where damping starts
+NAME_COUNT_CEILING = 10000      # name count where the lift is gone
+BASE_SCALE = 0.8                # scale on every base importance
+DIVISION_AREA_NORM = 16         # ln(1 + km2) saturation of the division area signal
+
+
+def _notability_params():
+    return {
+        "notability_pr_floor": NOTABILITY_PR_FLOOR,
+        "notability_ramp": NOTABILITY_RAMP,
+        "notability_weight": NOTABILITY_WEIGHT,
+        "name_count_floor": NAME_COUNT_FLOOR,
+        "name_count_ceiling": NAME_COUNT_CEILING,
+        "base_scale": BASE_SCALE,
+    }
+
+
+def _run_notability(con, table, qid, name, page_rank_parquet):
+    """Rewrite `table`'s importance with the notability modifier (notability.sql)."""
+    sql = (_SQL_DIR / "notability.sql").read_text()
+    for k, v in {
+        "table": table, "qid": qid, "name": name,
+        "page_rank": repr(str(page_rank_parquet)),
+        "weight": NOTABILITY_WEIGHT, "ramp": NOTABILITY_RAMP,
+        "pr_floor": NOTABILITY_PR_FLOOR, "nc_floor": NAME_COUNT_FLOOR,
+        "nc_ceiling": NAME_COUNT_CEILING, "base_scale": BASE_SCALE,
+    }.items():
+        sql = sql.replace(f"${{{k}}}", str(v))
+    con.execute(sql)
+
+
 def _assert_unique_key(con, table, key_col, source_path):
     """Raise if `table`.`key_col` has a duplicate non-NULL value.
 
@@ -269,22 +304,12 @@ def _assert_interior_points(con, source_expr, description):
 def _assert_density_parquet_unique(density_parquet, *, temp_directory=None,
                                    max_temp_directory_size="250GB",
                                    memory_limit=None):
-    """Check density_parquet's tile_qk15 key is unique, once, ahead of ANY
-    stage_import dispatch.
+    """Check density_parquet's tile_qk15 key is unique, once, ahead of the
+    stage_import SQL.
 
-    stage_import has three destinations for density_parquet: overture_place
-    and osm build their own density_tiles TEMP TABLE directly; overture_division
-    dispatches to stage_division_import and RETURNS before that point is ever
-    reached, though it is on the global run path and does receive
-    density_parquet (quadtree.py _cmd_all). A duplicate
-    tile_qk15 there does not fan out any join row count (division_density's
-    avg(density_score) just double-counts the duplicate), so it produces a
-    silently wrong importance value rather than an error -- exactly the
-    failure mode _assert_unique_key exists to turn loud.
-
-    Calling this once, here, ahead of the dispatch branch, is what keeps
-    all three consumers on one guard instead of two independently
-    maintained copies of it.
+    stage_import's destinations for density_parquet, overture_place and osm,
+    build their own density_tiles TEMP TABLE directly; this is the one guard
+    for both.
 
     The uniqueness count runs directly against read_parquet(density_parquet)
     rather than materializing it into a TEMP TABLE first, so DuckDB streams
@@ -782,10 +807,72 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
             FROM read_parquet('{tile_assignments_parquet}')
             ORDER BY key
         """)
+        con.execute("CREATE INDEX record_tiles_key ON manifest.record_tiles(key)")
         con.execute("DETACH manifest")
     finally:
         con.close()
     os.rename(tmp_path, manifest_path)
+
+
+def write_search_index(run_dir: str, *, memory_limit: str = "48GB",
+                       temp_directory: str | None = None,
+                       max_temp_directory_size: str | None = "250GB") -> None:
+    """Write search.duckdb from the run's tiles. Atomic: builds in .tmp,
+    renames into place. A run with no tiles gets the empty tables. Records
+    are ranked by importance, then key."""
+    search_path = os.path.join(run_dir, "search.duckdb")
+    tmp_path = search_path + ".tmp"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    tiles = sorted(glob_module.glob(os.path.join(run_dir, "*", "*.json.gz")))
+    schema, fill = (_SQL_DIR / "search_index.sql").read_text().split("-- fill\n")
+    con = duckdb.connect(tmp_path)
+    try:
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        if temp_directory:
+            con.execute(f"SET temp_directory = '{temp_directory}'")
+        if max_temp_directory_size:
+            con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
+        con.execute(schema)
+        if tiles:
+            con.execute(fill.replace("${tiles}", repr(tiles)))
+    finally:
+        con.close()
+    os.rename(tmp_path, search_path)
+
+
+def stage_page_rank(csv_path: str, output: str, *, force: bool = False,
+                    memory_limit: str = "48GB") -> None:
+    """Collapse Nominatim's wikimedia-importance.csv.gz to one (qid, page_rank)
+    row per QID: the maximum importance over its articles and redirects."""
+    if not force and artifact_fresh(output, [csv_path], {}):
+        log.info("page_rank: skipping (artifact fresh)")
+        return
+
+    tmp_output = output + ".tmp"
+    if os.path.exists(tmp_output):
+        os.remove(tmp_output)
+
+    csv_sql = csv_path.replace("'", "''")
+    tmp_sql = tmp_output.replace("'", "''")
+
+    con = duckdb.connect()
+    try:
+        con.execute(f"SET memory_limit = '{memory_limit}'")
+        con.execute("SET enable_progress_bar = false")
+        con.execute(f"""
+            COPY (
+                SELECT wikidata_id AS qid, max(importance) AS page_rank
+                FROM read_csv('{csv_sql}', header = true)
+                WHERE NOT isnan(importance)
+                GROUP BY wikidata_id
+            ) TO '{tmp_sql}' (FORMAT PARQUET, COMPRESSION ZSTD)
+        """)
+    finally:
+        con.close()
+
+    finalize_artifact(tmp_output, output, params={}, inputs=[csv_path])
 
 
 def write_manifest(output_dir, *, generated_at):
@@ -993,13 +1080,13 @@ _GEOM_COL = {
 def stage_division_import(parquet_glob, bbox, output_path, *,
                           memory_limit="48GB", temp_directory=None,
                           max_temp_directory_size="250GB",
-                          density_parquet=None,
-                          density_norm=10.0, pop_norm=20.0,
+                          page_rank_parquet, pop_norm=20.0,
                           force=False) -> None:
     """Write places.parquet + boundaries.duckdb for overture_division.
 
     One ephemeral in-memory DuckDB connection. Sequence:
-      1. Run overture_division_import.sql transformed to CREATE TEMP TABLE division_all.
+      1. Run overture_division_import.sql transformed to CREATE TEMP TABLE division_all,
+         then the notability pass over division_all.
       2. COPY (SELECT * EXCLUDE (geometry) FROM division_all ORDER BY qk17 NULLS LAST)
          to places.parquet.tmp (FORMAT PARQUET, COMPRESSION ZSTD).
       3. Delete stale boundaries.duckdb.tmp + .wal (crash recovery).
@@ -1021,8 +1108,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         max_temp_directory_size: DuckDB max_temp_directory_size string,
             bounding spill (default "250GB"), independently of whether
             temp_directory is also supplied.
-        density_parquet: Path to density_tiles.parquet (optional).
-        density_norm: Density normalization constant (must be > 0).
+        page_rank_parquet: Path to page_rank.parquet (input to importance).
         pop_norm: Population normalization constant (must be > 0).
         force: Re-build even when artifacts are fresh.
     """
@@ -1038,12 +1124,8 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         xmin, ymin, xmax, ymax = -180, -90, 180, 90
 
     # Validate norm constants
-    invalid_norms = []
-    for name, val in [("density_norm", density_norm), ("pop_norm", pop_norm)]:
-        if val is not None and val <= 0:
-            invalid_norms.append(name)
-    if invalid_norms:
-        raise ValueError(f"{', '.join(invalid_norms)} must be positive")
+    if pop_norm is not None and pop_norm <= 0:
+        raise ValueError("pop_norm must be positive")
 
     division_parquet_path, division_area_parquet_path = parquet_glob
 
@@ -1052,16 +1134,14 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         _resolve_glob_paths(division_parquet_path, required=True) +
         _resolve_glob_paths(division_area_parquet_path, required=True)
     )
-    if density_parquet:
-        input_files += _resolve_glob_paths(str(density_parquet))
+    input_files += _resolve_glob_paths(str(page_rank_parquet), required=True)
 
     params = {
         "source": "overture_division",
         "bbox": [xmin, ymin, xmax, ymax],
-        "density_norm": density_norm,
         "pop_norm": pop_norm,
-        # Lists, not tuples: artifact_fresh compares against JSON-loaded meta.
-        "importance_bands": {k: list(v) for k, v in IMPORTANCE_BAND.items()},
+        "division_area_norm": DIVISION_AREA_NORM,
+        **_notability_params(),
     }
 
     # boundaries.duckdb lives alongside places.parquet
@@ -1073,20 +1153,6 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         if artifact_fresh(output_path, input_files, params) and os.path.exists(boundaries_path):
             log.info("[overture_division] import: skipping (artifact fresh)")
             return
-
-    # Build density CTE (empty if no density_parquet provided)
-    if density_parquet:
-        density_cte = (
-            f"CREATE TEMP TABLE density_tiles AS "
-            f"SELECT * FROM read_parquet('{density_parquet}');"
-        )
-    else:
-        density_cte = (
-            "CREATE TEMP TABLE density_tiles AS "
-            "SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, "
-            "NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, "
-            "NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
-        )
 
     # Render the subtype -> level CASE from garganorn.levels.LEVEL_VOCAB (the
     # single source of truth) so SQL and Python can't drift. NO ELSE branch:
@@ -1100,18 +1166,15 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
     #   - Trailing DROP TABLE statements are left in place (harmless cleanup)
     sql = (_SQL_DIR / "overture_division_import.sql").read_text()
     sql = sql.replace("${memory_limit}", memory_limit)
-    sql = sql.replace("${density_cte}", density_cte)
     sql = sql.replace("${division_parquet}", division_parquet_path)
     sql = sql.replace("${division_area_parquet}", division_area_parquet_path)
     sql = sql.replace("${xmin}", str(xmin))
     sql = sql.replace("${ymin}", str(ymin))
     sql = sql.replace("${xmax}", str(xmax))
     sql = sql.replace("${ymax}", str(ymax))
-    sql = sql.replace("${density_norm}", str(density_norm))
     sql = sql.replace("${pop_norm}", str(pop_norm))
+    sql = sql.replace("${area_norm}", str(DIVISION_AREA_NORM))
     sql = sql.replace("${level_case}", level_case)
-    sql = sql.replace("${importance_floor}", importance_floor_case_sql())
-    sql = sql.replace("${importance_ceiling}", importance_ceiling_case_sql())
     sql = sql.replace("DROP TABLE IF EXISTS places;\n", "")
     sql = sql.replace("CREATE TABLE places AS\n", "CREATE TEMP TABLE division_all AS\n")
 
@@ -1139,6 +1202,7 @@ def stage_division_import(parquet_glob, bbox, output_path, *,
         # Step 1: Create division_all TEMP TABLE (geometry included for boundaries export)
         log.info("[overture_division] import: starting")
         con.execute(sql)
+        _run_notability(con, "division_all", "wikidata", "names.primary", page_rank_parquet)
         count = con.execute("SELECT count(*) FROM division_all").fetchone()[0]
         log.info("[overture_division] import: %d rows loaded (%.1fs)",
                  count, time.monotonic() - t0)
@@ -1228,6 +1292,7 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
                  memory_limit="48GB", temp_directory=None,
                  max_temp_directory_size="250GB",
                  density_parquet=None, idf_parquet=None,
+                 page_rank_parquet,
                  density_norm=10.0, idf_norm=18.0, pop_norm=20.0,
                  force=False) -> None:
     """Write a places.parquet artifact for the given source.
@@ -1252,6 +1317,8 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
             temp_directory is also supplied.
         density_parquet: Path to density_tiles.parquet (optional).
         idf_parquet: Path to idf_scores.parquet (optional).
+        page_rank_parquet: Path to page_rank.parquet (input to importance for
+            osm and overture_division; overture_place ignores it).
         density_norm: Density normalization constant (must be > 0).
         idf_norm: IDF normalization constant (must be > 0).
         pop_norm: Population normalization constant (must be > 0).
@@ -1259,23 +1326,19 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     """
     t0 = time.monotonic()
 
-    # Check density_parquet's join-key uniqueness once, ahead of ANY
-    # dispatch below -- see _assert_density_parquet_unique for why this
-    # must happen here rather than inside each destination separately.
-    _assert_density_parquet_unique(density_parquet, temp_directory=temp_directory,
-                                   max_temp_directory_size=max_temp_directory_size,
-                                   memory_limit=memory_limit)
-
     # overture_division has its own two-artifact stage; dispatch immediately.
     if source == "overture_division":
         return stage_division_import(
             parquet_glob, bbox, output_path,
             memory_limit=memory_limit, temp_directory=temp_directory,
             max_temp_directory_size=max_temp_directory_size,
-            density_parquet=density_parquet,
-            density_norm=density_norm, pop_norm=pop_norm,
+            page_rank_parquet=page_rank_parquet, pop_norm=pop_norm,
             force=force,
         )
+
+    _assert_density_parquet_unique(density_parquet, temp_directory=temp_directory,
+                                   max_temp_directory_size=max_temp_directory_size,
+                                   memory_limit=memory_limit)
 
     # Normalize bbox: accept tuple (xmin, ymin, xmax, ymax) or dict
     if isinstance(bbox, dict):
@@ -1317,12 +1380,18 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
     if idf_parquet:
         input_files += _resolve_glob_paths(str(idf_parquet))
 
+    if source == "osm":
+        input_files += _resolve_glob_paths(str(page_rank_parquet), required=True)
+
     params = {
         "source": source,
         "bbox": [xmin, ymin, xmax, ymax],
         "density_norm": density_norm,
         "idf_norm": idf_norm,
+        "base_scale": BASE_SCALE,
     }
+    if source == "osm":
+        params.update(_notability_params())
 
     if not force and artifact_fresh(output_path, input_files, params):
         log.info("[%s] import: skipping (artifact fresh)", source)
@@ -1369,16 +1438,15 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
         # Load the lookup tables as a standalone step, ahead of the import
         # SQL, so their join key uniqueness can be asserted before any join
         # runs (see _assert_unique_key). density_tiles' own uniqueness was
-        # already checked once above (_assert_density_parquet_unique, ahead
-        # of the overture_division dispatch); idf_scores has no
-        # overture_division counterpart, so it is checked here as before.
+        # already checked once above (_assert_density_parquet_unique);
+        # idf_scores is checked here.
         # The import SQL's ${density_cte}/${idf_cte} placeholders are then
         # substituted with no-ops below, since the tables already exist on
         # this connection.
         con.execute(density_cte)
         con.execute(idf_cte)
         _assert_unique_key(con, "idf_scores", "category", idf_parquet)
-        no_op_density_cte = "-- density_tiles loaded above (uniqueness-checked ahead of dispatch)"
+        no_op_density_cte = "-- density_tiles loaded above (uniqueness-checked above)"
         no_op_idf_cte = "-- idf_scores loaded and uniqueness-checked above"
 
         if source == "osm":
@@ -1393,12 +1461,14 @@ def stage_import(source, parquet_glob, bbox, output_path, *,
                      osm_category_case=osm_category_case,
                      density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
                      density_norm=density_norm, idf_norm=idf_norm)
+            _run_notability(con, "places", "tags['wikidata']", "name", page_rank_parquet)
         else:  # overture_place
             _run_sql(con, source, "import", "overture_place_import.sql", t0,
                      memory_limit=memory_limit, parquet_glob=parquet_glob,
                      xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax,
                      density_cte=no_op_density_cte, idf_cte=no_op_idf_cte,
-                     density_norm=density_norm, idf_norm=idf_norm)
+                     density_norm=density_norm, idf_norm=idf_norm,
+                     base_scale=BASE_SCALE)
 
         # Write to a temp file first; finalize_artifact does the atomic rename
         tmp_output = output_path + ".tmp"
@@ -1759,9 +1829,7 @@ def stage_summary_tile_assignment(places_parquet, output_path, source, *,
     tile_assignments.parquet.
 
     The summary set is the top-n places by importance DESC, place_id ASC.
-    For overture_division the administrative floors in importance
-    (levels.IMPORTANCE_BAND) keep countries, dependencies and regions inside
-    that cut. Assignment then reuses
+    Assignment then reuses
     stage_tile_assignment's coarsest-fit algorithm over that subset, in the
     z1-z5 band -- z5 is a hard floor, so a z5 tile may exceed
     max_per_tile; that already falls out of stage_tile_assignment's
@@ -2067,7 +2135,8 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
 
     Reads places and tile_assignments from parquet artifacts. Builds a
     timestamped run dir under tiles_root with per-tile .json.gz files,
-    manifest.duckdb, tileset.json, and manifest.json. Updates tiles_root/current symlink.
+    manifest.duckdb, search.duckdb, tileset.json, and manifest.json. Updates
+    tiles_root/current symlink.
 
     Args:
         source: Source key (overture_place, osm, overture_division).
@@ -2349,6 +2418,9 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
     write_manifest_db(tile_assignments_parquet, run_dir, source,
                       temp_directory=temp_directory,
                       max_temp_directory_size=max_temp_directory_size)
+    write_search_index(run_dir,
+                       memory_limit=memory_limit, temp_directory=temp_directory,
+                       max_temp_directory_size=max_temp_directory_size)
     write_tileset_json(run_dir, source, source_cls, published_at=published_at,
                        manifest=manifest, places_pq=places_pq,
                        containment_expr=containment_expr, idf_parquet=idf_parquet,

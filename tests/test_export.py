@@ -15,6 +15,7 @@ from tests.quadtree_helpers import (
 from tests.duckdb_spy import spy_on_duckdb_connect
 from garganorn.quadtree import SOURCES
 from garganorn.database import DIVISION_URN_PREFIX
+from tests.page_rank_file import empty_page_rank
 
 RELEASES = {"overturemaps.org": "2026-09-17.0", "openstreetmap.org": "2026-10-01T00:00:00Z"}
 
@@ -559,6 +560,48 @@ class TestVariantAndAttributeNullVsAbsent:
             f"as JSON null; got {variant}"
         )
 
+    @pytest.mark.parametrize("primary_category, key, value", [
+        ("amenity=cafe", "amenity", "cafe"),
+        ("shop=a=b", "shop", "a=b"),
+        ("tourism==", "tourism", "="),
+    ])
+    def test_osm_primary_category_value_keeps_everything_after_first_equals(
+            self, primary_category, key, value):
+        """primary_category is `key=value`; the attribute re-added from it
+        keeps the whole value, `=` included (#33). Splitting on every `=`
+        kept only the text before the value's own first `=`."""
+        conn = duckdb.connect()
+        conn.execute("""
+            CREATE TABLE places (
+                rkey             VARCHAR PRIMARY KEY,
+                name             VARCHAR,
+                importance       INTEGER,
+                latitude         DOUBLE,
+                longitude        DOUBLE,
+                variants         STRUCT(name VARCHAR, type VARCHAR, language VARCHAR)[] DEFAULT [],
+                primary_category VARCHAR,
+                tags             MAP(VARCHAR, VARCHAR)
+            )
+        """)
+        conn.execute("""
+            INSERT INTO places VALUES (
+                'osm001', 'Test OSM Place', 50, 37.7749, -122.4194, [],
+                ?, map([]::VARCHAR[], []::VARCHAR[])
+            )
+        """, [primary_category])
+        conn.execute("CREATE TABLE tile_assignments (place_id VARCHAR, tile_qk VARCHAR)")
+        conn.execute("INSERT INTO tile_assignments VALUES ('osm001', '023130')")
+        conn.execute("""
+            CREATE TABLE place_containment (
+                place_id VARCHAR, relations_json VARCHAR, tile_qk VARCHAR
+            )
+        """)
+        raw_sql = _load_sql("osm_export_tiles.sql", _subs("osm"))
+        conn.execute(_strip_spatial_install(_strip_memory_limit(raw_sql)))
+        (record_json,) = conn.execute("SELECT record_json FROM tile_export").fetchone()
+        conn.close()
+        assert _value(record_json)["attributes"] == {key: value}
+
 
 # ---------------------------------------------------------------------------
 # Division containment relations JSON for test fixtures
@@ -966,6 +1009,7 @@ class TestContainmentInExport:
         # If --boundaries is not defined, argparse will raise SystemExit(2).
         test_args = [
             "run",
+            "--page-rank-parquet", empty_page_rank(),
             "--source", "overture_place",
             "--parquet", "/tmp/test.parquet",
             "--output", "/tmp/output",
@@ -1323,6 +1367,7 @@ class TestExportRecordParityPhase2:
                 (-122.55, 37.60, -122.30, 37.85),
                 str(root), memory_limit="4GB", max_per_tile=100,
                 density_parquet=density_parquet, force=True, releases=RELEASES,
+                page_rank_parquet=empty_page_rank(),
             )
             tiles_current = root / "overture_place" / "tiles" / "current"
             assert tiles_current.exists(), (
@@ -1384,6 +1429,7 @@ class TestSummaryByteIdenticalCopies:
             (-122.55, 37.60, -122.30, 37.85),
             str(root), memory_limit="4GB", max_per_tile=100,
             density_parquet=density_parquet, force=True, releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
         tiles_current = root / "overture_place" / "tiles" / "current"
         assert tiles_current.exists(), f"tiles must be at {tiles_current}"

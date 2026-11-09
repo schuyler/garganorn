@@ -3,6 +3,7 @@ import pytest
 import duckdb
 
 from garganorn.database import OverturePlaces, OvertureDivisions
+from tests.page_rank_file import set_empty_path, write_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -581,6 +582,15 @@ def overture_parquet(tmp_path_factory):
     conn.close()
 
     return str(base / "*.parquet")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def empty_page_rank_parquet(tmp_path_factory):
+    """An empty page-rank parquet (qid VARCHAR, page_rank DOUBLE), reachable
+    from any test as tests.page_rank_file.empty_page_rank()."""
+    path = write_page_rank(tmp_path_factory.mktemp("page_rank") / "page_rank.parquet")
+    set_empty_path(path)
+    return path
 
 
 @pytest.fixture(scope="session")

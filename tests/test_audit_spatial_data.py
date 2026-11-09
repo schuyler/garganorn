@@ -92,6 +92,7 @@ class TestCoordinateRangeValidation:
                 "idf_cte": idf_cte,
                 "density_norm": 10.0,
                 "idf_norm": 18.0,
+                "base_scale": 0.8,
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
@@ -140,6 +141,7 @@ class TestCoordinateRangeValidation:
                 "idf_cte": idf_cte,
                 "density_norm": 10.0,
                 "idf_norm": 18.0,
+                "base_scale": 0.8,
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
@@ -203,8 +205,6 @@ class TestBboxOverlapFilter:
 
     def test_overture_division_partial_overlap(self):
         """Division partially overlapping bbox should be included."""
-        # #14: the importance CASE needs the floor/ceiling placeholders.
-        from garganorn.levels import importance_ceiling_case_sql, importance_floor_case_sql
         with tempfile.TemporaryDirectory() as tmpdir:
             db_path = pathlib.Path(tmpdir) / "test.duckdb"
             con = duckdb.connect(str(db_path))
@@ -238,19 +238,15 @@ class TestBboxOverlapFilter:
             con.execute("COPY test_division_area TO '" + str(pathlib.Path(tmpdir) / "division_area.parquet") + "' (FORMAT PARQUET);")
 
             # Run division import SQL
-            density_cte = "CREATE TEMP TABLE density_tiles AS SELECT NULL::VARCHAR AS tile_qk15, NULL::DOUBLE AS density_score, NULL::DOUBLE AS tile_xmin, NULL::DOUBLE AS tile_ymin, NULL::DOUBLE AS tile_xmax, NULL::DOUBLE AS tile_ymax WHERE 1=0;"
             substitutions = {
                 "memory_limit": "4GB",
                 "division_parquet": str(pathlib.Path(tmpdir) / "division.parquet"),
                 "division_area_parquet": str(pathlib.Path(tmpdir) / "division_area.parquet"),
                 "xmin": -122.55, "xmax": -122.30,
                 "ymin": 37.60, "ymax": 37.85,
-                "density_cte": density_cte,
-                "density_norm": 10.0,
+                "area_norm": 16,
                 "pop_norm": 15.0,
                 "level_case": level_case_sql(),
-                "importance_floor": importance_floor_case_sql(),
-                "importance_ceiling": importance_ceiling_case_sql(),
             }
             raw_sql = _load_sql("overture_division_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
@@ -296,6 +292,7 @@ class TestBboxOverlapFilter:
                 "idf_cte": idf_cte,
                 "density_norm": 10.0,
                 "idf_norm": 18.0,
+                "base_scale": 0.8,
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))
@@ -410,6 +407,7 @@ class TestBboxNormalization:
                 "idf_cte": idf_cte,
                 "density_norm": 10.0,
                 "idf_norm": 18.0,
+                "base_scale": 0.8,
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))

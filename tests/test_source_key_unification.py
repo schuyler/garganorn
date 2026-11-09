@@ -7,6 +7,7 @@ dropped as a data source (not renamed) and has no class or SQL files.
 import importlib
 import pytest
 from pathlib import Path
+from tests.page_rank_file import empty_page_rank
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -240,6 +241,7 @@ class TestQuadtreeSourceKeys:
             memory_limit="4GB",
             max_per_tile=100,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         current_dir = output_dir / "overture_division" / "tiles" / "current"

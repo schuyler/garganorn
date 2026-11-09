@@ -8,6 +8,7 @@ import duckdb
 import pytest
 
 from garganorn.stages import stage_import
+from tests.page_rank_file import empty_page_rank
 
 
 class TestNegativePopulationClamping:
@@ -115,7 +116,8 @@ class TestNegativePopulationClamping:
         places_parquet = str(self.tmpdir_path / "places.parquet")
         stage_import("overture_division", (division_parquet, division_area_parquet),
                      None, places_parquet, memory_limit="4GB",
-                     density_norm=10.0, pop_norm=20.0, force=True)
+                     density_norm=10.0, pop_norm=20.0, force=True,
+                     page_rank_parquet=empty_page_rank())
         self.con.execute(f"CREATE OR REPLACE TEMP TABLE places AS SELECT * FROM read_parquet('{places_parquet}')")
 
         # Check that all importance scores are non-negative
@@ -135,17 +137,16 @@ class TestNegativePopulationClamping:
         assert test_div_2[2] >= 0, f"test_div_2 (population={test_div_2[1]}) has negative importance: {test_div_2[2]}"
         assert test_div_3[2] >= 0, f"test_div_3 (population={test_div_3[1]}) has negative importance: {test_div_3[2]}"
 
-        # Negative population (-1000) clamps to 0, so the score s is 0 and the
-        # locality sits at its floor (#14): importance = 30
-        assert test_div_1[2] == 30, f"test_div_1 (population=-1000) should have importance=30 (locality floor), got {test_div_1[2]}"
+        # Negative population (-1000) clamps to 0; the fixture's points have no
+        # area, so base = 0 and importance = round(0.8 * 0) = 0
+        assert test_div_1[2] == 0, f"test_div_1 (population=-1000) should have importance=0, got {test_div_1[2]}"
 
-        # test_div_2 has population=0, should also sit at the floor
-        assert test_div_2[2] == 30, f"test_div_2 (population=0) should have importance=30 (locality floor), got {test_div_2[2]}"
+        # test_div_2 has population=0, so the same
+        assert test_div_2[2] == 0, f"test_div_2 (population=0) should have importance=0, got {test_div_2[2]}"
 
-        # test_div_3 has positive population (50000), should have positive importance
-        # ln(1 + 50000) ≈ 10.82, so s = 0.4 * 10.82/20.0 ≈ 0.216 (no density) and
-        # importance = round(30 + 49 * s) = round(40.6) = 41
-        assert test_div_3[2] > 0, f"test_div_3 (population=50000) should have positive importance, got {test_div_3[2]}"
+        # test_div_3: population 50000, no page rank. base = round(100 * ln(50001) / 20)
+        # = round(54.1) = 54; importance = round(0.8 * 54) = round(43.2) = 43
+        assert test_div_3[2] == 43, f"test_div_3 (population=50000) should have importance=43, got {test_div_3[2]}"
 
     def test_negative_population_not_nan(self):
         """Division with negative population does not produce NaN importance.
@@ -158,7 +159,8 @@ class TestNegativePopulationClamping:
         places_parquet = str(self.tmpdir_path / "places.parquet")
         stage_import("overture_division", (division_parquet, division_area_parquet),
                      None, places_parquet, memory_limit="4GB",
-                     density_norm=10.0, pop_norm=20.0, force=True)
+                     density_norm=10.0, pop_norm=20.0, force=True,
+                     page_rank_parquet=empty_page_rank())
         self.con.execute(f"CREATE OR REPLACE TEMP TABLE places AS SELECT * FROM read_parquet('{places_parquet}')")
 
         # Check that no importance is NaN or NULL
@@ -190,7 +192,8 @@ class TestNegativePopulationClamping:
         places_parquet = str(self.tmpdir_path / "places.parquet")
         stage_import("overture_division", (division_parquet, division_area_parquet),
                      None, places_parquet, memory_limit="4GB",
-                     density_norm=10.0, pop_norm=20.0, force=True)
+                     density_norm=10.0, pop_norm=20.0, force=True,
+                     page_rank_parquet=empty_page_rank())
         self.con.execute(f"CREATE OR REPLACE TEMP TABLE places AS SELECT * FROM read_parquet('{places_parquet}')")
 
         # test_div_1 is still imported even though its population is negative.

@@ -28,25 +28,22 @@ scheme) uses the same freshness/atomicity pattern:
 **Schema**: `tile_qk15 VARCHAR, density_score DOUBLE, tile_xmin DOUBLE,
 tile_ymin DOUBLE, tile_xmax DOUBLE, tile_ymax DOUBLE`.
 
-**Sort**: `ORDER BY tile_qk15`. Every import stage loads this file
+**Sort**: `ORDER BY tile_qk15`. Each place import loads this file
 wholesale (`CREATE TEMP TABLE density_tiles AS SELECT * FROM
 read_parquet(...)`) with no predicate, so nothing is pruned; the
 downstream join — a `left(qk17, 15)` prefix equality
-(`overture_place_import.sql`, `osm_import.sql`) or a bbox-overlap join on
-`tile_xmin`/`tile_xmax`/`tile_ymin`/`tile_ymax`
-(`overture_division_import.sql`) — runs against an already-resident temp
-table. Sorting here is for deterministic output, not zone-map pruning,
+(`overture_place_import.sql`, `osm_import.sql`) — runs against an
+already-resident temp table. Sorting here is for deterministic output, not zone-map pruning,
 same as `stage_idf`'s entry.
 
 **Shape**: Runs globally over the raw Overture place parquet (no bbox
 filter) on an ephemeral in-memory connection — density feeds importance
-scoring for every source and every bbox subset, so it is computed once and
+scoring for the place sources and every bbox subset, so it is computed once and
 shared rather than per-source or per-bbox. `density_score = ln(1 + count)`
 per z15 tile. Tile bounds are precomputed here via the `qk_env()` SQL
 macro (`garganorn/sql/qk_env_macro.sql`) and stored as flat
-`tile_xmin`/`tile_ymin`/`tile_xmax`/`tile_ymax` columns, so the
-bbox-overlap join against localities in `overture_division_import.sql`
-is a plain numeric comparison rather than a per-row macro or geometry
+`tile_xmin`/`tile_ymin`/`tile_xmax`/`tile_ymax` columns, so a bounds
+comparison is plain numeric rather than a per-row macro or geometry
 call. `qk_env()` is verified to agree with the Python `quadkey_to_bbox()`
 to within 1e-9 over 10,000 random quadkeys.
 
@@ -84,9 +81,14 @@ and `boundaries.duckdb`.
 country, region, level INTEGER, wikidata, population, parent_division_id,
 bbox STRUCT(xmin, ymin, xmax, ymax), qk17 VARCHAR, min_latitude,
 max_latitude, min_longitude, max_longitude, interior_lon, interior_lat,
-importance INTEGER, variants STRUCT(name, type, language)[]`. `level`
+importance INTEGER, variants STRUCT(name, type, language)[]`. `importance` is the division base (population or bounding-box area), scaled and lifted by page rank in `notability.sql` before either artifact is written (`design-constraints.md`, "Importance is a scaled base plus a notability lift"). `level`
 comes from `garganorn.levels.LEVEL_VOCAB` via a generated `CASE` with no `ELSE`
 branch — an unmapped `subtype` must surface as NULL, not a silent default.
+`min_longitude` and `max_longitude` are the minimal longitude interval
+containing the geometry, so `min_longitude > max_longitude` when that interval
+contains 180° (fifteen divisions in Overture 2026-10-21.0, among them the
+United States, Russia, Fiji and New Zealand). A geometry that covers the whole
+circle keeps `-180..180`. The `bbox` struct stays the planar min/max.
 
 **Schema** (`boundaries.duckdb`, table `places`): `id, geometry GEOMETRY,
 level, names, subtype, country, region, wikidata, population,
@@ -193,14 +195,13 @@ parquet by a qk17 range — dropping it makes `places_slim`'s re-sort real,
 costing ~160s of a 9,659.8s build (measured 2026-08-13), and plausibly
 costs compression here too, though that half is unmeasured.
 
-**Shape**: `importance = round(60 * least(density/density_norm, 1.0) + 40
-* least(idf/idf_norm, 1.0))`, computed inline in the same `CREATE TABLE
-... AS` that imports the source data — one pass, not an import followed
-by a separate scoring pass. `density_tiles`/`idf_scores` are loaded as
+**Shape**: the base `importance = round(60 * least(density/density_norm, 1.0) + 40
+* least(idf/idf_norm, 1.0))` is computed inline in the same `CREATE TABLE
+... AS` that imports the source data. For `overture_place` the import also scales it by `BASE_SCALE` (0.8); for OSM, `notability.sql` then scales it and adds the page-rank lift in place
+(`design-constraints.md`, "Importance is a scaled base plus a notability lift"). `density_tiles`/`idf_scores` are loaded as
 standalone temp tables *before* the source SQL runs. `idf_scores`' join-key
 uniqueness is checked here (`_assert_unique_key`); `density_tiles`' was
-already checked by `_assert_density_parquet_unique`, ahead of the
-`overture_division` dispatch — a duplicate key would otherwise silently
+already checked by `_assert_density_parquet_unique` — a duplicate key would otherwise silently
 fan out place rows through the `LEFT JOIN`. Both lookup tables are also
 pre-deduplicated (`GROUP BY ... any_value(...)`) at the join site as a second line of
 defense. `overture_place`'s `ov_base` CTE and OSM's `filtered`/`way_base`/`rel_base`
@@ -287,10 +288,9 @@ with the summary band's own tile references) in place of
 (`garganorn/stages.py`) writes `<source>/summary_tile_assignments.parquet`,
 same schema, restricted to the top-N places by `importance DESC, place_id
 ASC` (default N=10000), a plain cut for every source. For
-`overture_division` the administrative floors in importance
-(`levels.IMPORTANCE_BAND`) keep every `country`, `dependency` and `region`
-inside it (`docs/design-constraints.md`, "The summary band is a coarse tile
-tier for region-less resolution"). It reuses this stage's coarsest-fit algorithm
+`overture_division` the importance is population or area lifted by page rank, with no subtype term, so the band holds
+whichever divisions score highest (`docs/design-constraints.md`, "The summary
+band is a coarse tile tier for region-less resolution"). It reuses this stage's coarsest-fit algorithm
 over that subset, but in a z1-z5 band instead of z6-z17; z5 is a hard
 floor, so a z5 tile may exceed `max_per_tile`.
 
@@ -320,7 +320,8 @@ coarser tile.
 
 **Writes**: a new timestamped run directory,
 `<tiles_root>/<YYYYMMDDTHHMMSS>/<qk[:6]>/<qk>.json.gz` (one gzip file per
-tile), plus `manifest.duckdb`, `tileset.json` and `manifest.json` in the run dir, then
+tile), plus `manifest.duckdb`, `search.duckdb`, `tileset.json` and
+`manifest.json` in the run dir, then
 swaps the `<tiles_root>/current` symlink to point at it. `qk[:6]` returns
 the whole key for the summary band's sub-6-char quadkeys, so those tiles
 land at `<qk>/<qk>.json.gz` in the same layout. The server serves each tile
@@ -336,7 +337,11 @@ attributes, relations`); `importance` sits beside it, not in it.
 `manifest.duckdb` has one table, `record_tiles(key VARCHAR, tile_qk
 VARCHAR)`, where `key` is `{dataset}:{collection}:{id}` (the place's
 `origin` without `urn:atgeo:`), built by the source class's
-`manifest_key_sql`. `manifest.json` is just `{generated_at}`.
+`manifest_key_sql`. `key` has an index (`record_tiles_key`), which
+single-record and batched lookups use. On 73.6M synthetic keys shaped like
+the Overture-place manifest, it takes a lookup from about 0.3 s to a few
+milliseconds and grows the file from 2 GB to 7.4 GB.
+`manifest.json` is just `{generated_at}`.
 
 **Sort**: two passes. Pass 1 copies the export query's output into a
 staging directory, Hive-partitioned by `left(tile_qk,
@@ -348,7 +353,8 @@ at a time with `ORDER BY tile_qk, place_id` and streams it to the flush
 loop below. `place_id` is a deterministic tiebreaker with no meaning
 downstream, kept solely so repeated runs over identical inputs produce
 byte-identical gzip output. `manifest.duckdb`'s `record_tiles` is sorted
-by `key`, since lookups against it are by record key.
+by `key`, but zone maps cannot prune on it (DuckDB keeps 8 bytes of string
+statistics and every key shares a prefix), so lookups go through the index.
 
 **Shape**: the staging directory is private to the stage, which creates
 and destroys it, so it never appears in `Writes` above. It sits beside
@@ -383,7 +389,35 @@ references come from the covering artifact rather than their own `qk17`,
 so a places-side filter would drop them silently. A second export
 mechanism is not worth buying back a few dozen GB.
 
-**`tileset.json`**: `write_tileset_json` runs between `write_manifest_db`
+**`search.duckdb`**: the run's keyword index for `searchPlaces`.
+`write_search_index` runs `sql/search_index.sql` after `write_manifest_db`
+and before `write_tileset_json`, building into `search.duckdb.tmp` and
+renaming it into place. It reads the run's own tiles (`<run>/*/*.json.gz`),
+keeping one copy per `origin`, so it indexes exactly what the run serves. It
+holds `search_records(rid, key, importance)`, one row per record
+with `rid` its rank under `importance` DESC (NULL as 0), `key` ASC, sorted by `rid`;
+`search_blocks(block, rid, scope, w, e, s, n, names)`, one row per
+distinct pair of a record and the first two characters of one of its name
+words of two or more characters, sorted by `block, rid`, with whole-degree
+bounds and each name as a
+space-led word string; and the `name_tokens` macro both sides tokenise with
+(`design-constraints.md`, "The search index derives from the served tiles").
+A zero-tile run gets the empty tables.
+
+The server requires `search.duckdb` beside `manifest.duckdb`, `manifest.json`
+and `tileset.json`, and skips a run without one as incomplete. A run
+exported without it, local `db/` runs included, is unserved until indexed:
+
+```
+python -m garganorn.quadtree search-index data/overture_place/tiles/current
+```
+
+`search-index` takes `--memory-limit`
+(default 48GB), `--temp-directory` and `--max-temp-directory-size` (default
+250GB), and rewrites the file whether or not it exists. The server checks runs at startup, so restart it
+afterwards.
+
+**`tileset.json`**: `write_tileset_json` runs between `write_search_index`
 and `write_manifest`, writing the `org.atgeo.defs#tileset` descriptor as
 `tileset.json`, sibling to `manifest.json` in the run dir. This seam is the
 only point where every input is simultaneously in hand: the per-tile
@@ -452,6 +486,30 @@ segment is an error) and reads the OSM release from the `release` file in
 run from the PBF's `osmosis_replication_timestamp`. An OSM-only build with
 no containment rows references nothing and needs no Overture release.
 
+## 8. `stage_page_rank` (`garganorn/stages.py`)
+
+**Writes**: `page_rank.parquet`, at `shared/page_rank.parquet` under `all`'s
+output, which is where `all` reads it; `run` takes its path
+as `--page-rank-parquet`. Nothing in the pipeline builds it: run
+`quadtree page-rank` first, on Nominatim's `wikimedia-importance.csv.gz`
+(about 300 MB, from `nominatim.org/data/`). Local builds need the CSV too.
+Ansible downloads it to `db/cache/wikimedia/` and writes
+`data/shared/page_rank.parquet`.
+
+```
+mkdir -p data/shared
+python -m garganorn.quadtree page-rank \
+  --csv db/cache/wikimedia/wikimedia-importance.csv.gz \
+  --output data/shared/page_rank.parquet
+```
+
+**Schema**: `qid VARCHAR, page_rank DOUBLE`, one row per Wikidata QID (CSV rows without one collapse to a single NULL row that never joins).
+
+**Shape**: `page_rank` is the maximum importance over the QID's articles and
+redirects in every language; NaN importances are dropped first. Gated by
+`artifact_fresh` with the CSV as its one input, so a new download rebuilds
+it. The OSM and `overture_division` imports read it through the notability pass, which lifts `importance` (`design-constraints.md`, "Importance is a scaled base plus a notability lift").
+
 ## How the stages compose
 
 Each stage above is independently freshness-gated, so the `density`, `idf` and
@@ -461,7 +519,9 @@ for a source with a `boundaries_db` requires `<dirname(boundaries_db)>/covering/
 to already exist and be strictly newer than `boundaries_db` — it raises
 `RuntimeError` otherwise rather than building it. So the `overture_division`
 pipeline, or a standalone `quadtree covering`, must run before any other source
-that passes `--boundaries`.
+that passes `--boundaries`. Likewise `quadtree page-rank` must run before
+`run` or `all`, which read `page_rank.parquet` and never build
+it.
 
 `run_pipeline()` sequences one source through: `stage_import` (dispatching to
 `stage_division_import` for `overture_division`) → `stage_covering`
@@ -473,7 +533,7 @@ supplied) → `stage_tile_assignment` → `stage_division_tile_references`
 `stage_summary_division_tile_references` (division only) →
 `_union_tile_assignments`, producing `tile_assignments_combined.parquet`
 → containment (in `stages.py`, not one of the
-seven stages above): `stage_division_containment` for `overture_division`,
+eight stages above): `stage_division_containment` for `overture_division`,
 joining Overture's `hierarchies` against the imported places
 (`design-constraints.md`, "Division containment comes from Overture
 hierarchies, not geometry"); `compute_containment` for every other source,
@@ -493,4 +553,5 @@ configured source: `stage_density_extract` once (shared,
 containment step requires — followed by `run_pipeline` for the
 remaining place sources, now supplied
 `boundaries_db`, the shared `density_tiles.parquet`, and each source's own
-`idf.parquet`.
+`idf.parquet`. Every source, `overture_division` included, gets
+`shared/page_rank.parquet`.

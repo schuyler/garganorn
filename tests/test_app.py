@@ -401,7 +401,7 @@ def test_tile_route_roots_at_tiles_not_run_dir(tile_client):
 
 
 # ---------------------------------------------------------------------------
-# getTiles responses are cached; the lexicon route is not
+# getTiles, getPlace and the URN alias are cached; the lexicon route is not
 # ---------------------------------------------------------------------------
 
 def test_gettiles_response_has_cache_control(tile_client):
@@ -411,6 +411,39 @@ def test_gettiles_response_has_cache_control(tile_client):
     })
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+
+
+def test_getplace_response_has_cache_control(client):
+    """getPlace XRPC responses are cached for 1 hour (#53)."""
+    resp = client.get("/xrpc/org.atgeo.getPlace", query_string={
+        "uri": f"urn:atgeo:{OVERTURE}:place:ov001",
+    })
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+
+
+def test_getplace_error_lacks_cache_control(client):
+    """A getPlace error is not cached (#53)."""
+    resp = client.get("/xrpc/org.atgeo.getPlace", query_string={
+        "uri": f"urn:atgeo:{OVERTURE}:place:nope",
+    })
+    _assert_json_error(resp, 400, "PlaceNotFound")
+    assert "Cache-Control" not in resp.headers
+
+
+def test_place_alias_response_has_cache_control(client):
+    """The URN alias route is cached for 1 hour, like getPlace."""
+    resp = client.get(f"/{OVERTURE}/place/ov001")
+    assert resp.status_code == 200
+    assert resp.headers.get("Cache-Control") == "public, max-age=3600"
+
+
+@pytest.mark.parametrize("path", [f"/{OVERTURE}/place/nope", "/osm/place/ov001"])
+def test_place_alias_404_lacks_cache_control(client, path):
+    """A URN alias 404 is not cached, including a dataset with no dot."""
+    resp = client.get(path)
+    _assert_json_error(resp, 404, "PlaceNotFound")
+    assert "Cache-Control" not in resp.headers
 
 
 def test_gettiles_lexicon_route_lacks_cache_control(tile_client):
@@ -531,7 +564,7 @@ def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
     assert resp.get_json() == {
         "did": "did:web:places.atgeo.org",
-        "maxTiles": 50,
+        "maxTiles": 75,
         "tilesets": [{
             "slug": "overture-place",
             "collections": [{"dataset": OVERTURE, "collection": "place"}],
@@ -539,11 +572,11 @@ def test_describe_service_endpoint_returns_did_and_tilesets(tmp_path):
     }
 
 
-def test_describe_service_max_tiles_defaults_to_50(tmp_path):
+def test_describe_service_max_tiles_defaults_to_75(tmp_path):
     """#19: describeService.maxTiles is the configured getTiles budget; the
-    default is 50."""
+    default is 75."""
     with build_app(serve_run(tmp_path)).test_client() as client:
-        assert client.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 50
+        assert client.get("/xrpc/org.atgeo.describeService").get_json()["maxTiles"] == 75
 
 
 @pytest.mark.parametrize("query", [
@@ -564,6 +597,29 @@ def test_describe_service_ignores_query_parameters(client, query):
     assert resp.status_code == 200
     assert resp.headers.get("Cache-Control") == "public, max-age=3600"
     assert resp.get_json() == expected
+
+
+_PARAMETERIZED_CALLS = {
+    "org.atgeo.getTiles": {"dataset": OVERTURE, "bbox": WORLD},
+    "org.atgeo.getPlace": {"uri": f"urn:atgeo:{OVERTURE}:place:ov001"},
+    "org.atgeo.describeTileset": {"slug": "overture-place"},
+}
+
+
+@pytest.mark.parametrize("nsid", sorted(_PARAMETERIZED_CALLS))
+@pytest.mark.parametrize("key", ["input", "nsid", "x"])
+def test_unknown_query_key_is_invalid_request(client, nsid, key):
+    """A key a method's lexicon doesn't declare is a 400 InvalidRequest naming
+    the key (#29). `input` and `nsid` collide with lexrpc's dispatch arguments
+    and used to escape as a 500; `x` pins the ordinary path to the same answer."""
+    app = client.application
+    app.config["PROPAGATE_EXCEPTIONS"] = False
+    app.testing = False
+    params = _PARAMETERIZED_CALLS[nsid]
+    assert client.get(f"/xrpc/{nsid}", query_string=params).status_code == 200
+    resp = client.get(f"/xrpc/{nsid}", query_string={**params, key: "1"})
+    _assert_json_error(resp, 400, "InvalidRequest")
+    assert key in resp.get_json()["message"]
 
 
 def test_describe_service_cache_buster_is_not_a_500(client):
@@ -661,6 +717,11 @@ def test_unmatched_routes_are_json_not_found(client, path):
     ("/health", {"GET", "HEAD", "OPTIONS"}),
     ("/tilesets/x", {"GET", "HEAD", "OPTIONS"}),
     ("/tiles/overture-place/x.json", {"GET", "HEAD", "OPTIONS"}),
+    # Every org.atgeo method is a query, so POST is a wrong method on XRPC too.
+    ("/xrpc/org.atgeo.getTiles", {"GET", "HEAD", "OPTIONS"}),
+    ("/xrpc/org.atgeo.getPlace", {"GET", "HEAD", "OPTIONS"}),
+    ("/xrpc/org.atgeo.describeTileset", {"GET", "HEAD", "OPTIONS"}),
+    ("/xrpc/org.atgeo.describeService", {"GET", "HEAD", "OPTIONS"}),
 ])
 def test_wrong_method_is_json_405_with_allow(client, path, allowed):
     resp = client.post(path)
@@ -721,13 +782,14 @@ def test_unhandled_exception_is_json_500_without_details(client, caplog):
 # Errors lexrpc lets through on /xrpc/, NSID gating, redirects, 5xx, CORS
 # ---------------------------------------------------------------------------
 
+# Queries take GET only, but lexrpc still reads a body sent with one.
 def test_xrpc_non_json_body_is_415(client):
-    resp = client.post("/xrpc/org.atgeo.getPlace", data="x", content_type="text/plain")
+    resp = client.get("/xrpc/org.atgeo.getPlace", data="x", content_type="text/plain")
     _assert_json_error(resp, 415, "UnsupportedMediaType")
 
 
 def test_xrpc_malformed_json_body_is_invalid_request_400(client):
-    resp = client.post("/xrpc/org.atgeo.getPlace", data="{nope",
+    resp = client.get("/xrpc/org.atgeo.getPlace", data="{nope",
                        content_type="application/json")
     _assert_json_error(resp, 400, "InvalidRequest")
 
@@ -735,7 +797,39 @@ def test_xrpc_malformed_json_body_is_invalid_request_400(client):
 def test_xrpc_wrong_method_is_405_with_allow(client):
     resp = client.put("/xrpc/org.atgeo.getPlace")
     _assert_json_error(resp, 405, "MethodNotAllowed")
-    assert "GET" in resp.headers["Allow"]
+    assert {m.strip() for m in resp.headers["Allow"].split(",")} == {"GET", "HEAD", "OPTIONS"}
+
+
+@pytest.mark.parametrize("method", ["post", "put"])
+def test_wrong_method_to_an_unserved_nsid_is_still_501(client, method):
+    """The spec's 501 row covers every NSID the server doesn't implement,
+    procedures like com.atproto.repo.createRecord included, whatever the
+    HTTP method: a 405 would say the method exists."""
+    resp = getattr(client, method)("/xrpc/com.atproto.repo.createRecord")
+    _assert_json_error(resp, 501, "MethodNotImplemented")
+
+
+def test_a_procedure_takes_post_not_get(tmp_path, monkeypatch):
+    """No org.atgeo method is a procedure yet; if one becomes one, POST
+    reaches it and GET is the wrong method."""
+    from garganorn import server
+
+    real = server.load_lexicons
+
+    def with_a_procedure():
+        lexicons = real()
+        for lex in lexicons:
+            if lex["id"] == "org.atgeo.describeService":
+                lex["defs"]["main"]["type"] = "procedure"
+        return lexicons
+
+    monkeypatch.setattr(server, "load_lexicons", with_a_procedure)
+    app = build_app(serve_run(tmp_path, tiles={QK: [place(OVERTURE, "place", "ov001")]}))
+    with app.test_client() as c:
+        assert c.post("/xrpc/org.atgeo.describeService").status_code == 200
+        resp = c.get("/xrpc/org.atgeo.describeService")
+        _assert_json_error(resp, 405, "MethodNotAllowed")
+        assert {m.strip() for m in resp.headers["Allow"].split(",")} == {"POST", "OPTIONS"}
 
 
 def test_non_xrpc_400_keeps_its_own_name(client):

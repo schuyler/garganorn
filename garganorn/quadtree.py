@@ -19,6 +19,7 @@ from .stages import (
     stage_division_containment,
     write_manifest,
     write_manifest_db,
+    write_search_index,
     stage_import,
     stage_density_extract,
     stage_idf,
@@ -27,6 +28,7 @@ from .stages import (
     stage_division_tile_references,
     stage_summary_division_tile_references,
     stage_export,
+    stage_page_rank,
     resolve_newest_release,
 )
 from .covering import stage_covering
@@ -80,7 +82,7 @@ def _union_tile_assignments(regular_path, summary_path, output_path, *,
     finalize_artifact(tmp_output, output_path, params={}, inputs=inputs)
 
 
-def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB", releases=None):
+def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", max_per_tile=1000, boundaries_db=None, export_workers=None, density_parquet=None, idf_parquet=None, force=False, temp_directory=None, max_temp_directory_size="250GB", releases=None, *, page_rank_parquet):
     """Orchestrates import → covering → tile-assign → containment → export."""
     source_dir = os.path.join(output_dir, source)
     tiles_root = os.path.join(source_dir, "tiles")
@@ -129,6 +131,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                  memory_limit=memory_limit, temp_directory=temp_directory,
                  max_temp_directory_size=max_temp_directory_size,
                  density_parquet=density_parquet, idf_parquet=idf_parquet,
+                 page_rank_parquet=page_rank_parquet,
                  force=force)
 
     # Division-only: build covering from the just-written boundaries.duckdb
@@ -321,6 +324,24 @@ def _cmd_covering(args):
     stage_covering(args.boundaries, output, **kwargs)
 
 
+def _cmd_page_rank(args):
+    kwargs = dict(force=args.force)
+    if args.memory_limit is not None:
+        kwargs["memory_limit"] = args.memory_limit
+    stage_page_rank(args.csv, args.output, **kwargs)
+
+
+def _cmd_search_index(args):
+    kwargs = {}
+    if args.memory_limit is not None:
+        kwargs["memory_limit"] = args.memory_limit
+    if args.temp_directory is not None:
+        kwargs["temp_directory"] = args.temp_directory
+    if args.max_temp_directory_size is not None:
+        kwargs["max_temp_directory_size"] = args.max_temp_directory_size
+    write_search_index(args.run_dir, **kwargs)
+
+
 def _cmd_run(args, run_parser):
     """Validate per-source flags and dispatch to run_pipeline."""
     if args.source == "osm":
@@ -391,6 +412,7 @@ def _cmd_run(args, run_parser):
         max_temp_directory_size=max_temp_directory_size,
         force=args.force,
         releases=releases,
+        page_rank_parquet=args.page_rank_parquet,
     )
 
 
@@ -462,6 +484,7 @@ def _cmd_all(args):
     # Derived paths
     shared_dir = os.path.join(output_dir, "shared")
     density_parquet_path = os.path.join(shared_dir, "density_tiles.parquet")
+    page_rank_parquet_path = os.path.join(shared_dir, "page_rank.parquet")
 
     boundaries_db_path = None
     if division_cfg:
@@ -512,11 +535,11 @@ def _cmd_all(args):
             output_dir,
             memory_limit=memory_limit,
             max_per_tile=max_per_tile,
-            density_parquet=density_parquet_path if overture_cfg else None,
             temp_directory=temp_directory,
             max_temp_directory_size=max_temp_directory_size,
             force=args.force,
             releases=releases,
+            page_rank_parquet=page_rank_parquet_path,
         )
 
     # Step 4: run each remaining configured place source
@@ -549,6 +572,7 @@ def _cmd_all(args):
             max_temp_directory_size=max_temp_directory_size,
             force=args.force,
             releases=releases,
+            page_rank_parquet=page_rank_parquet_path,
         )
 
 
@@ -605,6 +629,19 @@ def main():
     idf_p.add_argument("--force", action="store_true", default=False,
                        help="Force rebuild even if output is fresh")
 
+    # --- page-rank subcommand ---
+    page_rank_p = subparsers.add_parser(
+        "page-rank", help="Collapse the Wikimedia importance CSV to page_rank.parquet"
+    )
+    page_rank_p.add_argument("--csv", required=True,
+                             help="Path to wikimedia-importance.csv.gz")
+    page_rank_p.add_argument("--output", required=True,
+                             help="Output path for page_rank.parquet")
+    page_rank_p.add_argument("--memory-limit", default=None, dest="memory_limit",
+                             help="DuckDB memory limit")
+    page_rank_p.add_argument("--force", action="store_true", default=False,
+                             help="Force rebuild even if output is fresh")
+
     # --- covering subcommand ---
     covering_p = subparsers.add_parser(
         "covering", help="Build quadkey covering from division boundaries"
@@ -631,6 +668,20 @@ def main():
                                  "bounds spill under --temp-directory")
     covering_p.add_argument("--force", action="store_true", default=False,
                             help="Force rebuild even if output is fresh")
+
+    # --- search-index subcommand ---
+    search_index_p = subparsers.add_parser(
+        "search-index", help="Write search.duckdb into an existing run directory"
+    )
+    search_index_p.add_argument("run_dir", help="Run directory holding the tiles")
+    search_index_p.add_argument("--memory-limit", default=None, dest="memory_limit",
+                                help="DuckDB memory limit")
+    search_index_p.add_argument("--temp-directory", default=None, dest="temp_directory",
+                                help="DuckDB temp directory")
+    search_index_p.add_argument("--max-temp-directory-size", default=None,
+                                dest="max_temp_directory_size",
+                                help="DuckDB max_temp_directory_size (e.g. 250GB); "
+                                     "bounds spill under --temp-directory")
 
     # --- run subcommand ---
     run_p = subparsers.add_parser(
@@ -668,6 +719,8 @@ def main():
                        help="Path to density_tiles.parquet (input)")
     run_p.add_argument("--idf-parquet", default=None, dest="idf_parquet",
                        help="Path to idf.parquet (input)")
+    run_p.add_argument("--page-rank-parquet", required=True, dest="page_rank_parquet",
+                       help="Path to page_rank.parquet (input)")
     run_p.add_argument("--temp-directory", default=None, dest="temp_directory",
                        help="DuckDB temp directory for spill")
     run_p.add_argument("--max-temp-directory-size", default=None,
@@ -694,16 +747,20 @@ def main():
     if args.subcommand is None:
         parser.error(
             "No subcommand specified. Use 'run' to process a single source, "
-            "'all' to run all configured sources, or 'density'/'idf'/'covering' "
-            "for individual stages."
+            "'all' to run all configured sources, or "
+            "'density'/'idf'/'covering'/'page-rank'/'search-index' for individual stages."
         )
 
     if args.subcommand == "density":
         _cmd_density(args)
     elif args.subcommand == "idf":
         _cmd_idf(args, idf_p)
+    elif args.subcommand == "page-rank":
+        _cmd_page_rank(args)
     elif args.subcommand == "covering":
         _cmd_covering(args)
+    elif args.subcommand == "search-index":
+        _cmd_search_index(args)
     elif args.subcommand == "run":
         _cmd_run(args, run_p)
     elif args.subcommand == "all":

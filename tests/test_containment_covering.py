@@ -26,6 +26,7 @@ import pytest
 from garganorn.database import DIVISION_URN_PREFIX
 from garganorn.stages import compute_containment, quadkey_to_bbox
 from garganorn.quadtree import run_pipeline
+from tests.page_rank_file import empty_page_rank
 
 # ---------------------------------------------------------------------------
 # Shared helpers
@@ -392,7 +393,7 @@ class TestNoNullLevels:
 
         output = str(tmp_path / "places.parquet")
         bbox = (-122.55, 37.60, -122.30, 37.85)
-        stages.stage_import("overture_division", division_parquet, bbox, output)
+        stages.stage_import("overture_division", division_parquet, bbox, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -864,6 +865,7 @@ class TestExportIntegration:
             memory_limit="4GB",
             max_per_tile=100,
             releases=RELEASES,
+            page_rank_parquet=empty_page_rank(),
         )
 
         expected_covering = os.path.join(output_dir, "overture_division", "covering")
@@ -906,6 +908,7 @@ class TestExportIntegration:
             density_parquet=density_parquet,
             releases=RELEASES,
             force=True,
+            page_rank_parquet=empty_page_rank(),
         )
 
         after = json.loads(open(meta_path).read())
@@ -933,6 +936,7 @@ class TestExportIntegration:
                 max_per_tile=100,
                 boundaries_db=str(bnd_path),
                 density_parquet=density_parquet,
+                page_rank_parquet=empty_page_rank(),
             )
 
     def test_run_pipeline_stale_covering_dir_raises(
@@ -961,6 +965,7 @@ class TestExportIntegration:
                 max_per_tile=100,
                 boundaries_db=str(bnd_path),
                 density_parquet=density_parquet,
+                page_rank_parquet=empty_page_rank(),
             )
 
     def test_place_containment_view_join_compatible_with_export(

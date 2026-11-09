@@ -418,7 +418,8 @@ Tags: **S** stated by the owner, **M** from memory or existing docs, **I**
 inferred and vetoable, **O** open. Each item is an outcome; the mechanisms
 the design fixes appear as acceptance criteria. Premises binding every
 tranche, not items to satisfy: the upstream licences; the user-safety
-principle (no nearest-neighbour or full-text search over the network);
+principle (nothing a client sends reveals the user's location unless the
+user took an action to opt in; see `tile-privacy-design.md`);
 R13.
 
 **Approval status.** Tranches 0, 1 and 2: approved by the owner

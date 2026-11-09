@@ -29,71 +29,37 @@ inline in `stages.py:stage_tile_assignment`; `compute_tile_assignments.sql`
 is the reference implementation the parity test compares it against, not
 pipeline SQL.
 
-### Importance scoring varies by entity type
+### Importance is a scaled base plus a notability lift
 
-- **Places (Overture, OSM)**: `60% density + 40% IDF`
-  - Formula: `round(60 * least(density/density_norm, 1.0) + 40 * least(idf/idf_norm, 1.0))`
-  - Defaults: `density_norm=10.0`, `idf_norm=18.0`
-  - OSM's IDF term reads node, way, and relation parquet in both the
-    numerator and the denominator (`osm_idf.sql`), so every OSM
-    importance value shifts whenever the relation arm's counts change.
-- **Divisions (Overture)**: a per-subtype floor and ceiling, with a 0-1
-  signal `s` placing the division between them
-  - Formula: `round(floor + (ceiling - floor) * s)`, with `floor` and
-    `ceiling` from `IMPORTANCE_BAND` in `levels.py`
-  - Localities: `s = 0.6 * least(avg_density/density_norm, 1.0) + 0.4 * least(ln(1+population)/pop_norm, 1.0)`
-  - Every other subtype: `s = least(ln(1+population)/pop_norm, 1.0)`
-  - Defaults: `density_norm=10.0`, `pop_norm=20.0`
-  - Floors fall strictly in `LEVEL_VOCAB` order. Country, dependency and
-    region span 80-100 and every lower subtype tops out at 79, so the
-    weakest region outranks every lower-level division and the summary
-    band's plain top-N cut keeps the upper tier. Before this, non-locality
-    divisions capped at 40 and a dense locality beat every country.
+The spec's [Importance](atgeo-spec.md#importance) section states the formulas and the reasons for the constants. In code:
 
-The norm divisors (`density_norm=10.0`, `idf_norm=18.0`, `pop_norm=20.0`)
-are not arbitrary: each comes from a statistical analysis of that
-variable's distribution, chosen so the term scales to roughly `[0, 1)`
-before weighting. The 60/40 split rests on no such analysis — it was
-chosen by eyeballing search results across categories and picking
-coefficients that made the ranking look subjectively reasonable. Don't
-conflate the two when tuning or explaining this formula. The division
-floors and ceilings rest on no analysis either: only their order and the
-80/79 gap between the upper tier and the rest are load-bearing, and
-`tests/test_levels.py` pins both.
+- **Base, places (Overture, OSM)**: `round(60 * least(density/density_norm, 1.0) + 40 * least(idf/idf_norm, 1.0))`, with `density_norm=10.0` and `idf_norm=18.0`. OSM's IDF term reads node, way, and relation parquet in both the numerator and the denominator (`osm_idf.sql`), so every OSM importance value shifts whenever the relation arm's counts change.
+- **Base, divisions (Overture)**: `round(100 * max(min(ln(1+pop)/pop_norm, 1), min(ln(1+area_km2)/DIVISION_AREA_NORM, 1)))`, with `pop_norm=20.0` and `DIVISION_AREA_NORM=16`; `area_km2` is the planar area of the box spanned by `min_longitude`/`max_longitude` (the minimal longitude interval) and the latitude extent. No subtype, level or density enters it, so being a region gives no advantage over a city.
+- **Scale**: every base is multiplied by `BASE_SCALE = 0.8`.
+- **Lift (OSM and divisions)**: `notability.sql` rewrites the table's `importance` as `round(b + (100 - b) * lift)` after the import, where the lift comes from the QID's page rank (`NOTABILITY_PR_FLOOR`, `NOTABILITY_RAMP`, `NOTABILITY_WEIGHT`) damped by the QID's largest normalized-name count (`NAME_COUNT_FLOOR`, `NAME_COUNT_CEILING`). The QID is OSM's `wikidata` tag or a division's `wikidata`. A row without one is not lifted. The join is exact, so a tag spelt other than as the dump spells the QID (`Q1;Q2`, `q123`) gets no lift. Overture places get no lift: their only QID is `brand.wikidata`, which names the chain, so reading it would lift every store of a chain.
 
-**Applies to**: `overture_place_import.sql`,
-`osm_import.sql`, `overture_division_import.sql`
+The notability constants and `DIVISION_AREA_NORM` live in the block near the top of `stages.py`; `density_norm`, `idf_norm` and `pop_norm` are the import stages' keyword defaults, and all are recorded in the import artifacts' freshness params, so changing one rebuilds the import. The `density_norm`, `idf_norm` and `pop_norm` divisors come from the distribution of each variable, chosen so the term scales to roughly `[0, 1)`. The 60/40 split rests on no such analysis: it was chosen by eyeballing search results across categories. The notability constants were chosen against landmark and chain examples; their reasons are in the spec. Don't conflate the two when tuning or explaining the formula.
 
-### Density tiles use bbox-overlap join
+**Applies to**: `overture_place_import.sql`, `osm_import.sql`, `overture_division_import.sql`, `notability.sql`, `stages.py`
 
-The density spatial join for division localities uses bbox-overlap-bbox
-rather than centroid-in-bbox. A density tile contributes to a locality's
-score if the tile bbox intersects the locality bbox.
+### Seven independent CLI subcommands, six freshness-gated
 
-**Applies to**: `overture_division_import.sql` (`division_density` CTE)
-
-**Why it matters**: Centroid-based joins systematically under-scored small
-localities, which may contain no tile centroid at all and so scored zero.
-
-The tradeoff is deliberate and unfixed: a tile that barely touches a
-locality's bbox still contributes to its density average, so density is
-over-estimated near division edges. Weighted intersection area would be more
-accurate but needs an `ST_Intersection` per tile per locality. The impact is
-negligible — density is one component of a composite importance score, so a
-few percent of noise moves rankings very little.
-
-### Five independent, freshness-gated CLI subcommands
-
-There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes five
-subcommands (`quadtree.py`): `density`, `idf`, `covering`, `run`
-(one source), `all` (every source). Each stage is independently gated by
-artifact freshness, so there's no shared ordered pipeline object — `all`
-sequences density → idf per source → division → remaining sources, while
+There is no single `STAGE_ORDER` constant. `garganorn.quadtree` exposes seven
+subcommands (`quadtree.py`): `density`, `idf`, `page-rank`, `covering`,
+`search-index` (one existing run directory), `run` (one source), `all`
+(every source).
+`search-index` rewrites its run's `search.duckdb` unconditionally. Every
+other stage is independently gated by artifact freshness, so there's no
+shared ordered pipeline object — `all` sequences density → idf per source →
+division → remaining sources, while
 `density`, `idf` and `covering` can be invoked in any order and simply no-op
-if their inputs aren't ready. `run` carries the one ordering constraint: with
-`--boundaries` it requires an already-fresh sibling `covering/` and raises
+if their inputs aren't ready. Two ordering constraints remain. With
+`--boundaries`, `run` requires an already-fresh sibling `covering/` and raises
 `RuntimeError` otherwise, since containment computed against a missing or
-stale covering would silently ship tiles with no `relations.within`. Freshness itself is one mechanism
+stale covering would silently ship tiles with no `relations.within`. And
+`run` and `all` read a `page_rank.parquet` that `page-rank`
+must already have written: neither builds it, and without it the OSM and
+`overture_division` imports fail. Freshness itself is one mechanism
 everywhere: an artifact is fresh iff it exists, its meta sidecar exists
 and parses, the sidecar's recorded `params` matches the caller's exactly,
 the sidecar is strictly newer than every resolved input, and
@@ -293,9 +259,9 @@ Each source's tileset carries a z1-z5 band alongside the regular z6-z17 grid,
 holding only the top-N=10,000 records by `importance` DESC (ties by
 `<pk>` ASC), so a client with no region can resolve a name without
 prefetching the whole tileset. The cut is a plain top-N for every source,
-divisions included: the administrative floors in division importance (see
-"Importance scoring varies by entity type") keep countries, dependencies
-and regions in it. The tileset descriptor records the band's actual size as
+divisions included; division importance follows population or area, not
+level, so a division is in the band on its own score ("Importance is a
+scaled base plus a notability lift"). The tileset descriptor records the band's actual size as
 `overview.records`.
 
 z0 is excluded because its quadkey is the empty string, which degenerates
@@ -337,8 +303,9 @@ check)
 
 ### The bbox precision check is a backstop, not the mechanism
 
-Clients must snap to the 0.01° grid before sending; `_check_bbox_precision`
-refuses anything finer anyway, so a conforming client would never trip the
+Clients must snap to the 0.01° grid (`getTiles`) or the 1° grid
+(`searchPlaces`) before sending; `_check_bbox_precision` refuses anything
+finer anyway, so a conforming client would never trip the
 check — which is not the same as redundant. Two things follow for anyone
 editing it. Don't replace the refusal with server-side snapping: that
 silences the only signal that a client is sending raw GPS. Don't fold it
@@ -348,7 +315,65 @@ the two answer different threats and neither subsumes the other.
 `tile-privacy-design.md` holds the reasoning.
 
 **Applies to**: `garganorn/server.py` (`_check_bbox_precision`),
-`garganorn/lexicon/getTiles.json`
+`garganorn/lexicon/getTiles.json`, `garganorn/lexicon/searchPlaces.json`
+
+### The search index derives from the served tiles
+
+`search.duckdb` is built from the run's own `*.json.gz` tiles, not from
+`places.parquet`, so the names, variants, importance, location and key it
+searches are exactly what the run serves, and one SQL file covers all three
+sources. It follows that the index can be written into any finished run
+without re-exporting it (`quadtree search-index`), and that the server
+treats it as part of the run: a run without `search.duckdb` is not served
+at all, rather than served without search.
+
+The normaliser, `name_tokens`, is a macro stored in the same file, so the
+index and the query side tokenise with the same code even if the code
+changes between building and serving.
+
+**Applies to**: `garganorn/stages.py` (`write_search_index`, called from
+`stage_export`), `garganorn/sql/search_index.sql`, `garganorn/__main__.py`
+(`create_app`'s run-readiness check)
+
+### Search ranks by the importance the tiles carry
+
+`search_records` ranks a record by `importance` descending, then key. Page rank is not a separate sort key: it is an input to `importance` at import ("Importance is a scaled base plus a notability lift"), so the index, the tiles and the server's merge across tilesets (`(importance, key)`) all use one number. `page_rank.parquet` is therefore not read when `search.duckdb` is written, and a new page-rank file reaches search only through a rebuilt import and export.
+
+**Applies to**: `garganorn/sql/search_index.sql`, `garganorn/stages.py`
+(`stage_page_rank`, `write_search_index`), `garganorn/server.py`
+(`search_places`)
+
+### Whole-degree search regions are what make the index's bounds exact
+
+`search_blocks` stores each record's bounds as `ceil(west)`, `floor(east)`,
+`ceil(south)`, `floor(north)` in `SMALLINT`s. For an integer region edge
+that rounding is exact (`west <= E` iff `ceil(west) <= E`), so the region
+test includes on-edge points with no false hits or misses. The exactness
+rests entirely on `searchPlaces` refusing a non-integer `bbox`. Snapping a
+fractional region instead of refusing it would lose the backstop above;
+accepting one would make the stored bounds silently wrong.
+
+**Applies to**: `garganorn/sql/search_index.sql`, `garganorn/tile_reader.py`
+(`TileSearchIndex.search`), `garganorn/server.py` (`search_places`)
+
+### The keyword floor and token cap bound a search's cost
+
+There is no per-query time limit. Cost is bounded by two rules together.
+The two-character floor (`KeywordRequired`) confines every query to one
+block, the rows whose name has a word starting with the first two
+characters of the keyword's longest word; without such a word there is no
+block, and the query would scan every name. Within the block, rows are
+sorted by `rid`, the record's rank, so `ORDER BY rid LIMIT 20` stops after
+the first matching row groups. A keyword matching fewer than 20 records
+reads the whole block and tests every keyword word against every name in
+it, so the 12-distinct-word cap is what bounds the no-match case. Relaxing
+either rule, or a plan change that drops the early stop, changes the worst
+case, not the results; the `EXPLAIN` test in `tests/test_tile_reader.py`
+pins the plan.
+
+**Applies to**: `garganorn/server.py` (`search_places`, `SEARCH_LIMIT`,
+`SEARCH_TOKEN_LIMIT`), `garganorn/tile_reader.py` (`TileSearchIndex`),
+`garganorn/sql/search_index.sql`
 
 ### Optional-but-not-nullable lexicon fields must be omitted, not null
 
@@ -424,7 +449,13 @@ derivation is unnecessary.
 | `density_norm` | 10.0 | Importance density component (all place sources) |
 | `idf_norm` | 18.0 | Importance IDF component (Overture, OSM) |
 | `pop_norm` | 20.0 | Importance population component (Overture divisions) |
-| `IMPORTANCE_BAND` | country 90-100 … microhood 5-79 (`levels.py`) | Per-subtype floor and ceiling of division importance |
+| `DIVISION_AREA_NORM` | 16 | Importance area component (Overture divisions) |
+| `BASE_SCALE` | 0.8 | Scale on every base importance |
+| `NOTABILITY_PR_FLOOR` | 0.20 | Page rank below which there is no lift |
+| `NOTABILITY_RAMP` | 50 | `k` in the page-rank ramp `ln(1 + kx) / ln(1 + k)` |
+| `NOTABILITY_WEIGHT` | 0.95 | Share of the headroom full notability takes |
+| `NAME_COUNT_FLOOR` | 1,000 | Name count where lift damping starts |
+| `NAME_COUNT_CEILING` | 10,000 | Name count where the lift is gone |
 | `COVER_MIN_ZOOM` | 4 | Covering descent start level |
 | `COVER_MIN_LEAF_ZOOM` | 12 | Shallowest level an edge leaf may be emitted at; bounds edge-join fan-out |
 | `COVER_MAX_ZOOM` | 16 | Covering descent end level; a fragment still over capacity here is emitted anyway |
@@ -438,7 +469,8 @@ derivation is unnecessary.
 - Quadkey zoom levels: z17 for places, z15 for density, z6-z17 for tiles
   plus a z1-z5 summary band
 - Coordinate precision in export: `DECIMAL(10,6)` → 6 decimal places (~0.1m)
-- Bbox privacy grid: 0.01° (~1km) enforced by `_check_bbox_precision()`
+- Bbox privacy grid: 0.01° (~1km) for `getTiles`, 1° for `searchPlaces`,
+  enforced by `_check_bbox_precision()`
 - Latitude for a quadkey is clamped to ±85.05101030905541, the centre of the
   outermost z17 row — not the Mercator limit, which wraps (see the
   `ST_QuadKey` entry in `gotchas.md`). Safe at any zoom ≤ 17: a point inside

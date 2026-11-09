@@ -110,8 +110,7 @@ time:
 
 **Applies to**: `stages.py:compute_containment()`, where `p` is materialized as
 its own `CREATE TEMP TABLE` (not left as a CTE over `places_slim`) for exactly
-this reason; `garganorn/sql/overture_division_import.sql`, which materializes
-`division_base` ahead of the `division_density` join for the same reason.
+this reason.
 
 **Why it matters**: an expensive per-row predicate is not the trigger — the
 second case has none — so any join whose probe side is a filtered CTE over a
@@ -294,11 +293,18 @@ tile-seed set built as the union of the two lobes.
 
 **Applies to**: `stages.py` (`bboxes_intersect` wrap branches) and
 `covering_seed.sql`'s join implement this. The import-side bbox filters do
-not — `overture_place_import.sql`, `overture_division_import.sql` (two
-sites: the bbox filter and the density-tile overlap join), and
+not — `overture_place_import.sql`, `overture_division_import.sql` (the
+bbox filter), and
 `osm_import.sql` (two sites) use the naive `BETWEEN` shape this entry's
 first paragraph names as the bug, so features crossing ±180° are dropped
 there.
+
+Division `min_longitude`/`max_longitude` are the minimal interval, so a
+crossing division exports `west > east` (the places-parquet `bbox` struct stays
+the planar min/max). `covering_seed.sql` prefilters with the two-lobe test. The
+search index stores whole-degree bounds `w=ceil(west)`, `e=floor(east)`, and a
+sub-degree box that sits inside one degree cell also gives `w > e`, so
+`tile_reader._SEARCH_SQL` reads a record as crossing only when `w - e > 1`.
 
 **Why it matters**: it affects Pacific data — eastern Russia, Fiji, Antarctica. A
 global build makes it reachable where a CONUS-bounded one did not.

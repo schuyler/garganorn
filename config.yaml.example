@@ -12,7 +12,7 @@ tiles:
       base_url: https://places.atgeo.org/tiles/overture-division
     - run_dir: data/osm/tiles/current
       base_url: https://places.atgeo.org/tiles/osm
-  max_tiles: 50
+  max_tiles: 75
 
 # Two runs are retained and tiles serve max-age=604800, so a build interval
 # under about 3.5 days would delete a run while clients still hold its URLs
