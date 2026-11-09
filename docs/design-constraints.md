@@ -335,6 +335,32 @@ changes between building and serving.
 `stage_export`), `garganorn/sql/search_index.sql`, `garganorn/__main__.py`
 (`create_app`'s run-readiness check)
 
+### The search index build is chunked and has its own memory limit
+
+The `search_blocks` insert used to be one `ORDER BY block, rid` over every
+block row, with every name of the record repeated on each row. On the OSM
+planet (89.7M rows) that sort set a peak near 20 GiB and was OOM-killed on a
+32 GiB host beside the serving workers (#70). The builder now sorts one
+block range at a time, sized by `SEARCH_CHUNK_ROWS` rather than by the
+dataset, so the peak no longer grows with the source; it reconnects before
+the sorted inserts, because the tile decoding leaves gigabytes freed but
+still held until the database is closed; and it carries only the four
+whole-degree bounds per record, not the location structs.
+
+Because its footprint is set by the chunk size, the step has its own
+`memory_limit` default (8GB) instead of the run-wide one, which import and
+export want large. Two things keep the result identical to a single sort:
+the chunks are contiguous, ascending block ranges inserted in order, which
+relies on `preserve_insertion_order` staying at its default; and the range
+bounds are bound parameters, since a block can begin with an invisible
+character such as U+200E that text quoting would alter.
+`tests/test_search_index_build.py` compares the output, row for row and in
+physical order, with a frozen copy of the single-sort builder.
+
+**Applies to**: `garganorn/stages.py` (`write_search_index`,
+`SEARCH_CHUNK_ROWS`, `_block_chunks`, the call in `stage_export`),
+`garganorn/sql/search_index.sql`
+
 ### Search ranks by the importance the tiles carry
 
 `search_records` ranks a record by `importance` descending, then key. Page rank is not a separate sort key: it is an input to `importance` at import ("Importance is a scaled base plus a notability lift"), so the index, the tiles and the server's merge across tilesets (`(importance, key)`) all use one number. `page_rank.parquet` is therefore not read when `search.duckdb` is written, and a new page-rank file reaches search only through a rebuilt import and export.

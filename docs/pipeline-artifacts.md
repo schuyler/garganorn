@@ -405,6 +405,17 @@ string (a name with none, such as `"."`, is left out); and the
 (`design-constraints.md`, "The search index derives from the served tiles").
 A zero-tile run gets the empty tables.
 
+The build holds its intermediate tables (the decoded tile records, and the
+block rows unsorted) in `search.duckdb.scratch`, a second DuckDB file beside
+the `.tmp` that is deleted afterwards; DuckDB doesn't shrink a file when a
+table is dropped, so keeping them in the index itself would bloat the
+served file. It then reconnects, and writes `search_blocks` in chunks of
+whole block ranges of about `SEARCH_CHUNK_ROWS` (8M) rows, each sorted by
+`block, rid`, in ascending block order. That gives the same rows in the
+same physical order as one global sort, at a fraction of the memory
+(`design-constraints.md`, "The search index build is chunked and has its
+own memory limit").
+
 The server requires `search.duckdb` beside `manifest.duckdb`, `manifest.json`
 and `tileset.json`, and skips a run without one as incomplete. A run
 exported without it, local `db/` runs included, is unserved until indexed:
@@ -414,7 +425,8 @@ python -m garganorn.quadtree search-index data/overture_place/tiles/current
 ```
 
 `search-index` takes `--memory-limit`
-(default 48GB), `--temp-directory` and `--max-temp-directory-size` (default
+(default 8GB, and the export's call uses the same default rather than the
+run-wide limit), `--temp-directory` and `--max-temp-directory-size` (default
 250GB), and rewrites the file whether or not it exists. The server checks runs at startup, so restart it
 afterwards.
 
