@@ -20,7 +20,7 @@ CREATE TABLE search_records (rid INTEGER, key VARCHAR, importance INTEGER);
 -- One row per distinct (block, record), sorted by block, rid. block is the
 -- first two characters of a name token of two or more characters. The bounds
 -- are ceil(west), floor(east), ceil(south), floor(north); names holds each
--- name as ' ' || its tokens joined by ' '.
+-- name with at least one token, as ' ' || its tokens joined by ' '.
 CREATE TABLE search_blocks (
     block VARCHAR, rid INTEGER, scope VARCHAR,
     w SMALLINT, e SMALLINT, s SMALLINT, n SMALLINT,
@@ -66,6 +66,8 @@ SELECT
     floor(coalesce(geo.longitude, bbox.east)::DOUBLE)::SMALLINT,
     ceil(coalesce(geo.latitude, bbox.south)::DOUBLE)::SMALLINT,
     floor(coalesce(geo.latitude, bbox.north)::DOUBLE)::SMALLINT,
-    list_transform(raw_names, n -> ' ' || array_to_string(name_tokens(n), ' '))
+    list_transform(
+        list_filter(list_transform(raw_names, n -> name_tokens(n)), tl -> len(tl) > 0),
+        tl -> ' ' || array_to_string(tl, ' '))
 FROM tile_records JOIN search_records USING (key)
 ORDER BY block, rid;
