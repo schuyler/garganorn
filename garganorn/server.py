@@ -262,17 +262,16 @@ class Server:
             raise XrpcError("q needs a word of two or more characters", "KeywordRequired")
         scope = f"{dataset}:{collection}" if collection is not None else None
         hits = [
-            (page_rank, importance, key, ts) for ts in selected
-            for key, page_rank, importance in ts.search.search(
-                tokens, parsed_bbox, scope, SEARCH_LIMIT)
+            (importance, key, ts) for ts in selected
+            for key, importance in ts.search.search(tokens, parsed_bbox, scope, SEARCH_LIMIT)
         ]
-        hits.sort(key=lambda h: (h[0] is None, -(h[0] or 0.0), -h[1], h[2]))
+        hits.sort(key=lambda h: (-h[0], h[1]))
         top = hits[:SEARCH_LIMIT]
         found = {
-            id(ts): ts.reader.get_places([key for _, _, key, t in top if t is ts])
+            id(ts): ts.reader.get_places([key for _, key, t in top if t is ts])
             for ts in {id(t): t for *_, t in top}.values()
         }
         return {"places": [
             self._place_view(key, *found[id(ts)][key])
-            for _, _, key, ts in top if key in found[id(ts)]
+            for _, key, ts in top if key in found[id(ts)]
         ]}

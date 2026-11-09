@@ -189,7 +189,6 @@ def _export_hand_built_osm(tmp_path, rkeys, name):
     return stage_export(
         "osm", places_pq, ta_pq, containment, tiles_root, time.monotonic(),
         memory_limit="4GB", releases={"openstreetmap.org": RELEASES["openstreetmap.org"]},
-        page_rank_parquet=empty_page_rank(),
     )
 
 
@@ -416,7 +415,6 @@ def test_osm_referencing_divisions_needs_the_overture_release(built, tmp_path):
         stage_export(
             "osm", run["places"], run["combined"], containment, tiles_root, time.monotonic(),
             memory_limit="4GB", releases={"openstreetmap.org": RELEASES["openstreetmap.org"]},
-            page_rank_parquet=empty_page_rank(),
         )
 
 

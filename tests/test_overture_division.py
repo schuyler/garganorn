@@ -14,6 +14,7 @@ import garganorn.stages as _stages
 from garganorn.quadtree import SOURCES
 
 from tests.quadtree_helpers import REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit
+from tests.page_rank_file import empty_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +113,8 @@ class TestPipelineSkipsImportanceVariants:
     """run_pipeline computes importance/variants inline for all sources.
 
     All sources compute these values inline during import; there is no
-    separate importance or variants stage. overture_division uses a hybrid
-    importance formula (density+population) and derives variants from
+    separate importance or variants stage. overture_division derives its
+    importance from population and bounding-box area, and derives variants from
     names.common/names.rules inline in its import SQL, the same expression
     overture_place uses.
     """
@@ -378,13 +379,13 @@ class TestDivisionImportArtifactPhase2:
     def test_stage_division_import_writes_places_parquet(self, division_parquet, tmp_path):
         """stage_import for overture_division must write places.parquet."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_stage_division_import_writes_boundaries_duckdb(self, division_parquet, tmp_path):
         """stage_import for overture_division must write boundaries.duckdb in the same dir."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = tmp_path / "boundaries.duckdb"
         assert boundaries.exists(), f"boundaries.duckdb not written alongside places.parquet"
 
@@ -395,7 +396,7 @@ class TestDivisionImportArtifactPhase2:
         integer throughout the boundaries.duckdb export.
         """
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
         con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
@@ -411,7 +412,7 @@ class TestDivisionImportArtifactPhase2:
     def test_boundaries_duckdb_has_rtree_index(self, division_parquet, tmp_path):
         """boundaries.duckdb must have an R-tree index on geometry."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
         con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
@@ -430,7 +431,7 @@ class TestDivisionImportArtifactPhase2:
         """bnd.places must be physically sorted by ST_Hilbert(geometry) over the
         world BOX_2D (zone maps require sorted columns)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -448,7 +449,7 @@ class TestDivisionImportArtifactPhase2:
     def test_places_parquet_no_geometry_column(self, division_parquet, tmp_path):
         """division places.parquet must not contain 'geometry' column."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
             f"DESCRIBE SELECT * FROM read_parquet('{output}')"
@@ -461,14 +462,14 @@ class TestDivisionImportArtifactPhase2:
     def test_single_meta_gates_both_artifacts(self, division_parquet, tmp_path):
         """Deleting boundaries.duckdb must make stage_import stale (single meta gates both)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         mtime1 = os.path.getmtime(output)
         # Remove boundaries.duckdb to simulate it being stale/missing
         boundaries = tmp_path / "boundaries.duckdb"
         boundaries.unlink()
         time.sleep(0.05)
         # Rerun without force — must rebuild because boundaries.duckdb is gone
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         mtime2 = os.path.getmtime(output)
         assert mtime2 > mtime1, (
             "stage_import must rebuild when boundaries.duckdb is missing "
@@ -565,7 +566,7 @@ class TestMultiAreaDivisionMerge:
         bnd.places record, whose geometry is the MULTIPOLYGON union of both
         parts, with extents spanning both squares."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", multi_area_division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", multi_area_division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
 
         con = duckdb.connect()
@@ -677,7 +678,7 @@ class TestDivisionVariantsDerived:
         names.common) and 'Florence' (official, from names.rules) -- not the
         hardcoded []."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_with_variants_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_with_variants_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         con = duckdb.connect()
         variants = con.execute(
@@ -775,7 +776,7 @@ class TestDivisionVariantLanguageValidation:
         survive; the valid entry is untouched (same-fixture regression
         guard)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_invalid_language_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_invalid_language_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         con = duckdb.connect()
         variants = con.execute(
@@ -882,118 +883,6 @@ class TestAssertInteriorPoints:
 
 
 # ---------------------------------------------------------------------------
-# Importance: administrative floors (#14)
-# ---------------------------------------------------------------------------
-
-_FLOOR_ROWS = [
-    # id, subtype, population, west edge of a disjoint 0.5-degree square
-    ("c1", "country", 1_000, -120.0),
-    ("d1", "dependency", 0, -118.0),
-    ("r1", "region", None, -116.0),
-    ("k1", "county", 10_000_000, -114.0),
-    ("l1", "locality", 8_000_000, -112.0),
-    ("n1", "neighborhood", 0, -110.0),
-]
-
-
-@pytest.fixture
-def floor_fixture(tmp_path):
-    """(division_parquet, division_area_parquet, density_parquet) for six
-    divisions with disjoint polygons. l1 is a dense, populous locality (one
-    density tile covering its bbox, density_score=10)."""
-    division = tmp_path / "division.parquet"
-    area = tmp_path / "division_area.parquet"
-    density = tmp_path / "density.parquet"
-    con = duckdb.connect()
-    con.execute("INSTALL spatial; LOAD spatial;")
-    con.execute("""
-        CREATE TABLE d (id VARCHAR,
-            names STRUCT("primary" VARCHAR, common MAP(VARCHAR, VARCHAR),
-                         rules STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]),
-            subtype VARCHAR, country VARCHAR, region VARCHAR, wikidata VARCHAR,
-            population BIGINT, parent_division_id VARCHAR,
-            hierarchies STRUCT(division_id VARCHAR, subtype VARCHAR, name VARCHAR)[][])
-    """)
-    con.execute("""
-        CREATE TABLE a (division_id VARCHAR, admin_level INTEGER, is_land BOOLEAN,
-            geometry VARCHAR,
-            bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE))
-    """)
-    for id, subtype, pop, west in _FLOOR_ROWS:
-        east = west + 0.5
-        pop_sql = "NULL" if pop is None else str(pop)
-        con.execute(f"""
-            INSERT INTO d VALUES ('{id}',
-                {{'primary': '{id}', 'common': map(['en'], ['{id}']),
-                  'rules': []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]}},
-                '{subtype}', 'US', NULL, NULL, {pop_sql}, NULL,
-                [[{{'division_id': '{id}', 'subtype': '{subtype}', 'name': '{id}'}}]]
-                    ::STRUCT(division_id VARCHAR, subtype VARCHAR, name VARCHAR)[][])
-        """)
-        con.execute(f"""
-            INSERT INTO a VALUES ('{id}', 1, true,
-                'POLYGON(({west} 35, {west} 35.5, {east} 35.5, {east} 35, {west} 35))',
-                {{'xmin': {west}, 'ymin': 35.0, 'xmax': {east}, 'ymax': 35.5}})
-        """)
-    con.execute(f"COPY d TO '{division}' (FORMAT PARQUET)")
-    con.execute(f"COPY a TO '{area}' (FORMAT PARQUET)")
-    l1_west = next(w for i, _, _, w in _FLOOR_ROWS if i == "l1")
-    con.execute(f"""
-        COPY (SELECT 'x' AS tile_qk15, 10.0 AS density_score,
-                     {l1_west - 0.1} AS tile_xmin, 34.9 AS tile_ymin,
-                     {l1_west + 0.6} AS tile_xmax, 35.6 AS tile_ymax)
-        TO '{density}' (FORMAT PARQUET)
-    """)
-    con.close()
-    return str(division), str(area), str(density)
-
-
-class TestImportanceAdminFloor:
-    """#14: an administrative level contributes a floor to a division's
-    importance, so the plain top-N overview cut keeps every country,
-    dependency and region ahead of every lower-level division."""
-
-    def _build(self, floor_fixture, tmp_path, n=3):
-        division, area, density = floor_fixture
-        places = str(tmp_path / "places.parquet")
-        _stages.stage_division_import((division, area), None, places,
-                                      density_parquet=density)
-        summary = str(tmp_path / "summary.parquet")
-        _stages.stage_summary_tile_assignment(places, summary, "overture_division", n=n)
-        con = duckdb.connect()
-        try:
-            importance = dict(con.execute(
-                f"SELECT id, importance FROM read_parquet('{places}')").fetchall())
-            band = {r[0] for r in con.execute(
-                f"SELECT DISTINCT place_id FROM read_parquet('{summary}')").fetchall()}
-        finally:
-            con.close()
-        return importance, band
-
-    def test_importance_values_follow_the_floor_formula(self, floor_fixture, tmp_path):
-        """importance = round(floor + (ceiling - floor) * s): a weak country
-        93, dependency at pop 0 -> its floor 85, region with NULL population
-        -> its floor 80, county 71, dense populous locality 75, empty
-        neighborhood 10."""
-        importance, _ = self._build(floor_fixture, tmp_path)
-        assert importance == {"c1": 93, "d1": 85, "r1": 80, "k1": 71, "l1": 75, "n1": 10}
-
-    def test_country_dependency_region_rank_above_every_other_division(
-            self, floor_fixture, tmp_path):
-        importance, _ = self._build(floor_fixture, tmp_path)
-        upper = min(importance[i] for i in ("c1", "d1", "r1"))
-        rest = max(v for i, v in importance.items() if i not in ("c1", "d1", "r1"))
-        assert upper > rest
-
-    def test_plain_top_n_band_keeps_country_dependency_region(self, floor_fixture, tmp_path):
-        """With n=3 the plain top-N cut keeps exactly {c1, d1, r1}: no
-        special case is needed, and the dense locality and the populous
-        county do not displace them."""
-        _, band = self._build(floor_fixture, tmp_path, n=3)
-        assert band == {"c1", "d1", "r1"}
-
-
-# ---------------------------------------------------------------------------
 # Divisions that cross +-180 get the minimal longitude interval
 # ---------------------------------------------------------------------------
 
@@ -1026,7 +915,7 @@ def _import_divisions(tmp_path, *divisions):
     conn.execute(f"COPY ({area_rows}) TO '{division_area_path}' (FORMAT PARQUET)")
     conn.close()
     _stages.stage_import("overture_division", (str(division_path), str(division_area_path)),
-                         (-180.0, -90.0, 180.0, 90.0), str(tmp_path / "places.parquet"))
+                         (-180.0, -90.0, 180.0, 90.0), str(tmp_path / "places.parquet"), page_rank_parquet=empty_page_rank())
     return str(tmp_path / "boundaries.duckdb")
 
 

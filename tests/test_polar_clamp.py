@@ -92,6 +92,7 @@ class TestSouthernPolarCoordinateGetsSouthernTile:
                 "idf_cte": idf_cte,
                 "density_norm": 10.0,
                 "idf_norm": 18.0,
+                "base_scale": 0.8,
             }
             raw_sql = _load_sql("overture_place_import.sql", substitutions)
             sql = _strip_spatial_install(_strip_memory_limit(raw_sql))

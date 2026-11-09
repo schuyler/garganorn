@@ -81,7 +81,7 @@ A tile is a set of place records associated with one quadkey cell.
 
 ### The overview band
 
-A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the N records of the tileset with the highest `importance`, ties broken by id; garganorn builds with N = 10,000, which is a producer parameter, not protocol. It's one cut, the same for every tileset: the division formula's [administrative floors](#importance) are what keep countries, dependencies and regions in it. A tileset with a band says so in its descriptor's `overview`, whose `records` is how many records the band actually holds, which can be fewer than N. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
+A tileset may carry a coarse band of tiles at zooms 1 through 5 (quadkeys shorter than six characters) alongside the regular tiles. It holds the N records of the tileset with the highest `importance`, ties broken by id; garganorn builds with N = 10,000, which is a producer parameter, not protocol. It's one plain [importance](#importance) cut, the same for every tileset. In an OSM tileset it keeps the cities and towns, universities, stations and the few landmarks scoring above the cutoff; most city-scale landmarks stay outside it until the overview pyramid ([#36](https://github.com/schuyler/garganorn/issues/36)). A tileset with a band says so in its descriptor's `overview`, whose `records` is how many records the band actually holds, which can be fewer than N. A record in the band is byte-identical to its copy in the regular tiles, so the deduplication rule covers it. Zoom 5 is the finest the band goes, so an overview tile can hold more records than the per-tile cap.
 
 `getTiles` uses the band as a fallback. It answers from the regular tiles first. If that answer would cover more than the deployment's tile budget (garganorn's `max_tiles`, 75 by default, advertised as `describeService`'s `maxTiles`) and every selected tileset has an overview band, it returns the overview tiles that intersect the box instead, with no budget applied, and sets `"overview": true`. An overview answer is not subject to `max_tiles`, and can exceed it. It is bounded in practice: no more than 1,364 tiles exist per tileset at zooms 1 through 5, and a band of 10,000 records usually has a few dozen. The result is deliberately a sample of the region, not everything in it.
 
@@ -175,41 +175,39 @@ Two declared fields are not yet produced: `updatedAt` and `relations.sameAs`. A 
 
 ## Importance
 
-`importance` is an integer from 0 to 100 expressing how much a place matters relative to other places. It blends two signals: how busy the place's surroundings are, and how distinctive its category is (for a division, how many people live in it).
+`importance` is an integer from 0 to 100 expressing how much a place matters relative to other places. It blends how busy the place's surroundings are, how distinctive its category is (for a division, how many people live in it or how large it is), and, where the source ties the place to a Wikidata item, how well known that item is.
 
-Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together (though `searchPlaces` puts every division with a page rank first; see its Ranking). Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
+Scores are comparable across the tilesets one producer builds from one dataset, and meaningless across producers. So garganorn's `overture-place` and `overture-division` scores can be ranked against each other, and a dataset-wide `overturemaps.org` search can rank places and divisions together by one number. Another producer's 62 tells you nothing about garganorn's 62: the formula, its constants and its corpora are all the producer's own. Nor does the promise stretch across datasets: an Overture place scoring 62 and an OSM place scoring 62 are scored against different corpora with different category vocabularies.
 
-The reference producer computes it as follows. For place records (Overture places, and OSM nodes, ways and relations):
+The reference producer computes it in two steps: a base score, then a lift for notability.
 
-    importance = round(60 · min(density / 10, 1) + 40 · min(idf / 18, 1))
+**Base, places.** For Overture places and OSM nodes, ways and relations:
+
+    base = round(60 · min(density / 10, 1) + 40 · min(idf / 18, 1))
 
 where `density` is ln(1 + n) for n the count of Overture places in the enclosing zoom-15 cell (Overture-derived even when scoring OSM records, so both share one notion of "busy"), and `idf` is ln(N / n) over the source's own corpus of named places, n being the places in the record's primary category: rare categories score high, ubiquitous ones low.
 
-For division records, the administrative level sets a floor and a ceiling, and a 0-to-1 signal places the division between them:
+**Base, divisions.** A division's base depends on how many people live in it or how big it is, and on nothing else; subtype and administrative level don't enter:
 
-    importance = round(floor + (ceiling − floor) · s)
+    base = round(100 · max(min(ln(1 + pop) / 20, 1), min(ln(1 + area) / 16, 1)))
 
-    s = min(ln(1 + population) / 20, 1)                                       every subtype but locality
-    s = 0.6 · min(density / 10, 1) + 0.4 · min(ln(1 + population) / 20, 1)   locality
+`pop` is the division's recorded population (0 when none) and `area` the area of its bounding box in km², computed planar (the longitude span is widened by 360 across the antimeridian). Population is logarithmic because it spans one to 1.4 billion, and 20 saturates near 500 million, so only China and India cap. Area stands in where population is missing, which Overture lacks for about a fifth of countries and most regions; 16 saturates near 9 million km², about the area of China or the US. It is the weakest term, since a bounding box exaggerates a sparse district, but a division with no page rank tops out at 80 regardless. The two signals combine with `max` rather than a sum so a large, populous division isn't counted twice.
 
-with `density` averaged over the zoom-15 cells intersecting the locality's bounding box. A division with no recorded population (and, for a locality, no density) sits at its floor.
+**Scale.** Every base is multiplied by 0.8: `b = 0.8 · base`, so `b` is at most 80. The remaining 20 points are headroom for notability, and the scale keeps a place with no notability evidence below one that has plenty: unscaled, downtown businesses with no notability score 89 to 93 and lead a city view ahead of its landmarks; at 0.8 they cap near 76. A record with no Wikidata item, or whose item has no page rank, scores `round(0.8 · base)` and nothing more. Overture places get this and nothing else: their only Wikidata field (`brand.wikidata`) names a chain, not the store, so their ranking reflects busy area and rare category alone, scaled into 0 to 80 so they stay comparable with divisions.
 
-| subtype | floor | ceiling |
-|---|--:|--:|
-| `country` | 90 | 100 |
-| `dependency` | 85 | 100 |
-| `region` | 80 | 100 |
-| `county` | 40 | 79 |
-| `localadmin` | 35 | 79 |
-| `locality` | 30 | 79 |
-| `borough` | 20 | 79 |
-| `macrohood` | 15 | 79 |
-| `neighborhood` | 10 | 79 |
-| `microhood` | 5 | 79 |
+**Lift.** For an OSM record or a division with a Wikidata item, the item's Wikipedia page rank `pr` (Nominatim's `wikimedia-importance.csv.gz`, the highest over the item's articles and redirects) raises the score:
 
-The floors fall in [containment](#containment-levels) order, country highest. Countries, dependencies and regions share the 80-to-100 range and everything below them tops out at 79, so the weakest region still outranks the densest city. That's what lets the [overview band](#the-overview-band) be a plain importance cut. Within the upper range the bands overlap on purpose: a floor is a minimum, so a populous dependency can outrank a tiny country.
+    x          = clamp((pr − 0.20) / 0.80, 0, 1)
+    f          = ln(1 + 50x) / ln(51)
+    g          = 1 − clamp(ln(nc / 1000) / ln(10), 0, 1)
+    importance = round(b + (100 − b) · 0.95 · f · g)
 
-The normalization constants (10, 18, 20) and the floors and ceilings are producer parameters, not protocol. Another producer could choose differently and still be an ATGeo gazetteer.
+- `x` and 0.20: below 0.20 a page rank earns no lift. A floor of 0.20 rather than 0.25 lifts more of the moderately known landmarks, and a weakly notable place (page rank 0.25) on a modest base still ranks below a busy place with none.
+- `f` and k = 50: a concave ramp, steep early, so that a moderately notable place (a museum, a bridge) is lifted most of the way and the very best known are still told apart. A linear ramp saturated at the middle of the range and tied Paris with a theatre; k = 50 kept search margins of several points between a city and the best-known lookalike.
+- 0.95: full notability takes 95% of the headroom `100 − b`, never all of it, so the base still orders records of equal notability.
+- `g` damps the lift for names that many places share. `nc` is the largest count, over every record of the build, of the normalized name `lower(strip_accents(trim(name)))` among the records sharing the item. A chain's item (Pizza Hut, McDonald's) sits on thousands of identically named stores, and without damping they would score 84 to 93 and crowd into the overview band. Damping starts at 1,000 because landmark names and mid-size brands overlap in the hundreds (Springfield, 513; Paris, 429), and it reaches zero at 10,000, below the largest chains (McDonald's 29,702, Starbucks 18,355, Lidl 12,897), so they get no lift at all. Taking the per-item maximum also damps a chain's localized names, which are rare on their own. A build over a region sees only that region's counts, so names that would be damped at planet scale may escape it.
+
+The constants (10, 18, 20, 16, 0.8, 0.20, 50, 0.95, 1,000 and 10,000) and the formulas are producer parameters, not protocol. Another producer could choose differently and still be an ATGeo gazetteer.
 
 ## Containment levels
 
@@ -431,7 +429,7 @@ Parameters: `dataset` (required), `collection` (optional), `q` (required, the ke
 
 **Region.** `bbox` uses the same order and antimeridian rule as `getTiles`, but every coordinate is a whole number of degrees: `10` passes, `10.0`, `10.5` and `1e1` are `BboxTooPrecise`. Whole degrees make every side at least 1°. A place is in the region when its point is, or, for a place with only a bounding box, when that box meets the region; edges count as inside. See [The precision floor](#the-precision-floor).
 
-**Ranking.** Places with a Wikipedia page rank come first, highest first; then the rest by `importance` descending (absent counts as 0); then by record key ascending. No distance enters it. A place's page rank is its Wikidata item's, from Nominatim's `wikimedia-importance.csv.gz`, the highest over the item's articles and redirects; the item is an OSM record's `wikidata` attribute or a division's `wikidata`. Overture places carry no item the ranking reads (`brand.wikidata` names a chain, not the store), so they rank by importance after every place with a page rank. Page rank orders results and never appears in them. Without `collection`, every tileset carrying the dataset is searched and the results merged, which is sound while every tileset was indexed from the same page-rank file, and importance is comparable across one producer's tilesets for one dataset ([Importance](#importance)).
+**Ranking.** Results are ordered by `importance` descending (absent counts as 0), then by record key ascending. No distance enters it, and nothing else does: a place's Wikipedia page rank counts only through the `importance` it was scored with ([Importance](#importance)), the same number the tiles carry. Without `collection`, every tileset carrying the dataset is searched and the results merged, which is sound because importance is comparable across one producer's tilesets for one dataset.
 
 Returns `{"places": [...]}`, at most 20, each the same `{uri, url, importance?, value, attribution}` view `getPlace` returns for that place. The bound is fixed; there is no pagination.
 

@@ -13,7 +13,6 @@ import duckdb
 from garganorn.__main__ import create_app
 from garganorn.stages import write_search_index
 from tests.lexicon_helpers import goat_validate, validate_def
-from tests.page_rank_file import write_page_rank
 
 OSM = "openstreetmap.org"
 OVERTURE = "overturemaps.org"
@@ -63,15 +62,13 @@ def place(dataset, collection, id, name="Blue Bottle Coffee", importance=42,
 
 
 def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
-             descriptor=True, page_rank=None):
+             descriptor=True):
     """Write tiles_root/<stamp>/ and return it.
 
     collections: (dataset, collection) pairs the tileset carries.
     tiles: {quadkey: [tile record, ...]}. A quadkey with no records still gets
     a record_tiles row, so the manifest knows the tile.
     complete=False omits manifest.json; descriptor=False omits tileset.json.
-    page_rank: {qid: rank}, written to tiles_root/page_rank.parquet beside the
-    runs (empty by default) and used to order the search index.
     """
     tiles = tiles or {}
     run_dir = tiles_root / stamp
@@ -99,8 +96,7 @@ def make_run(tiles_root, stamp, slug, collections, tiles=None, complete=True,
     finally:
         con.close()
 
-    page_rank_parquet = write_page_rank(tiles_root / "page_rank.parquet", page_rank)
-    write_search_index(str(run_dir), page_rank_parquet=page_rank_parquet)
+    write_search_index(str(run_dir))
 
     if descriptor:
         tileset = {

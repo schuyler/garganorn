@@ -23,6 +23,7 @@ import pytest
 
 import garganorn.stages as _stages
 from tests.quadtree_helpers import write_minimal_overture_parquet
+from tests.page_rank_file import empty_page_rank
 
 _BBOX = (-122.55, 37.60, -122.30, 37.85)
 
@@ -113,8 +114,8 @@ class TestStageImportFreshnessMetaShape:
     """places.parquet .meta.json must record density/idf inputs and norm params.
 
     Mirrors stage_division_import's shape:
-        input_files = division parquet + division_area parquet + density_parquet
-        params = {"source", "bbox", "density_norm", "pop_norm"}
+        input_files = division parquet + division_area parquet + page_rank_parquet
+        params = {"source", "bbox", "pop_norm", "division_area_norm", plus the notability constants}
     """
 
     @pytest.mark.parametrize("source", ["overture_place", "osm"])
@@ -132,6 +133,7 @@ class TestStageImportFreshnessMetaShape:
         _stages.stage_import(
             source, parquet_glob, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
+            page_rank_parquet=empty_page_rank(),
         )
 
         meta = json.loads(pathlib.Path(output + ".meta.json").read_text())
@@ -163,6 +165,7 @@ class TestStageImportFreshnessMetaShape:
             source, parquet_glob, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
             density_norm=12.5, idf_norm=21.0,
+            page_rank_parquet=empty_page_rank(),
         )
 
         meta = json.loads(pathlib.Path(output + ".meta.json").read_text())
@@ -211,6 +214,7 @@ class TestStageImportFreshnessInvalidation:
         _stages.stage_import(
             "overture_place", overture_parquet, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
+            page_rank_parquet=empty_page_rank(),
         )
         assert os.path.exists(output)
         assert os.path.exists(meta_path)
@@ -234,6 +238,7 @@ class TestStageImportFreshnessInvalidation:
             _stages.stage_import(
                 "overture_place", overture_parquet, _BBOX, output,
                 density_parquet=density_parquet, idf_parquet=idf_parquet,
+                page_rank_parquet=empty_page_rank(),
             )
 
         assert any("start" in r.message.lower() for r in caplog.records), (
@@ -257,6 +262,7 @@ class TestStageImportFreshnessInvalidation:
         _stages.stage_import(
             "overture_place", overture_parquet, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
+            page_rank_parquet=empty_page_rank(),
         )
         assert os.path.exists(output)
         assert os.path.exists(meta_path)
@@ -277,6 +283,7 @@ class TestStageImportFreshnessInvalidation:
             _stages.stage_import(
                 "overture_place", overture_parquet, _BBOX, output,
                 density_parquet=density_parquet, idf_parquet=idf_parquet,
+                page_rank_parquet=empty_page_rank(),
             )
 
         assert any("start" in r.message.lower() for r in caplog.records), (
@@ -302,6 +309,7 @@ class TestStageImportFreshnessInvalidation:
         _stages.stage_import(
             "overture_place", overture_parquet, _BBOX, output,
             density_parquet=density_parquet, idf_parquet=idf_parquet,
+            page_rank_parquet=empty_page_rank(),
         )
         assert os.path.exists(output)
         assert os.path.exists(meta_path)
@@ -317,6 +325,7 @@ class TestStageImportFreshnessInvalidation:
             _stages.stage_import(
                 "overture_place", overture_parquet, _BBOX, output,
                 density_parquet=density_parquet, idf_parquet=idf_parquet,
+                page_rank_parquet=empty_page_rank(),
             )
 
         assert any("skip" in r.message.lower() for r in caplog.records), (
@@ -340,7 +349,7 @@ class TestStageImportFreshnessMetaNoDensityIdf:
     ):
         output = str(tmp_path / "places.parquet")
 
-        _stages.stage_import("overture_place", overture_parquet, _BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, _BBOX, output, page_rank_parquet=empty_page_rank())
 
         assert pathlib.Path(output).exists(), (
             "stage_import must still succeed with density_parquet/idf_parquet "
@@ -375,7 +384,7 @@ class TestStageImportFreshnessMetaNoDensityIdf:
         """
         output = str(tmp_path / "places.parquet")
 
-        _stages.stage_import("overture_place", overture_parquet, _BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, _BBOX, output, page_rank_parquet=empty_page_rank())
 
         meta = json.loads(pathlib.Path(output + ".meta.json").read_text())
         params = meta.get("params", {})
@@ -389,35 +398,18 @@ class TestStageImportFreshnessMetaNoDensityIdf:
 
 
 # ---------------------------------------------------------------------------
-# 3. Division import records the importance bands (#14)
+# 3. An unchanged division import is fresh
 # ---------------------------------------------------------------------------
 
-class TestDivisionImportanceBandsMeta:
-    """stage_division_import's places.parquet meta carries the importance
-    bands, so changing a floor or ceiling invalidates the artifact."""
+class TestDivisionImportFreshness:
 
-    def test_meta_params_include_importance_bands(self, division_parquet, tmp_path):
-        """#14: meta['params']['importance_bands'] is IMPORTANCE_BAND with
-        JSON lists, one [floor, ceiling] per subtype."""
+    def test_second_unchanged_division_import_is_fresh(self, division_parquet, tmp_path):
+        """The recorded params compare equal to the JSON-loaded meta, so an
+        unchanged second run skips the rebuild."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, _BBOX, output)
-
-        params = json.loads(pathlib.Path(output + ".meta.json").read_text())["params"]
-
-        assert "importance_bands" in params, (
-            f"division meta params must record importance_bands; got {sorted(params)}"
-        )
-        from garganorn.levels import IMPORTANCE_BAND
-        assert params["importance_bands"] == {k: list(v) for k, v in IMPORTANCE_BAND.items()}
-
-    def test_second_run_with_the_bands_recorded_is_fresh(self, division_parquet, tmp_path):
-        """#14 (R1): the recorded bands compare equal to the JSON-loaded meta
-        (lists, not tuples), so an unchanged second run skips the rebuild.
-        Guard: it passes before the change too, and must keep passing."""
-        output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, _BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, _BBOX, output, page_rank_parquet=empty_page_rank())
         first = os.stat(output).st_mtime_ns
 
-        _stages.stage_import("overture_division", division_parquet, _BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, _BBOX, output, page_rank_parquet=empty_page_rank())
 
         assert os.stat(output).st_mtime_ns == first, "second run rebuilt places.parquet"

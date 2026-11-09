@@ -110,8 +110,7 @@ time:
 
 **Applies to**: `stages.py:compute_containment()`, where `p` is materialized as
 its own `CREATE TEMP TABLE` (not left as a CTE over `places_slim`) for exactly
-this reason; `garganorn/sql/overture_division_import.sql`, which materializes
-`division_base` ahead of the `division_density` join for the same reason.
+this reason.
 
 **Why it matters**: an expensive per-row predicate is not the trigger — the
 second case has none — so any join whose probe side is a filtered CTE over a
@@ -294,8 +293,8 @@ tile-seed set built as the union of the two lobes.
 
 **Applies to**: `stages.py` (`bboxes_intersect` wrap branches) and
 `covering_seed.sql`'s join implement this. The import-side bbox filters do
-not — `overture_place_import.sql`, `overture_division_import.sql` (two
-sites: the bbox filter and the density-tile overlap join), and
+not — `overture_place_import.sql`, `overture_division_import.sql` (the
+bbox filter), and
 `osm_import.sql` (two sites) use the naive `BETWEEN` shape this entry's
 first paragraph names as the bug, so features crossing ±180° are dropped
 there.

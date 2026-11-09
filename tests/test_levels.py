@@ -18,6 +18,7 @@ import duckdb
 import pytest
 
 from garganorn.levels import LEVEL_VOCAB
+from tests.page_rank_file import empty_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +168,7 @@ class TestFailLoudUnmappedSubtype:
         parquet_glob = self._make_bad_division_parquet(tmp_path, "nation_state")
         output = str(tmp_path / "places.parquet")
         with pytest.raises(RuntimeError, match="unmapped division subtype"):
-            stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+            stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
     def test_null_subtype_raises_runtime_error(self, tmp_path):
         """A division row with subtype=NULL raises RuntimeError (never defaults or guesses)."""
@@ -176,7 +177,7 @@ class TestFailLoudUnmappedSubtype:
         parquet_glob = self._make_bad_division_parquet(tmp_path, None)
         output = str(tmp_path / "places.parquet")
         with pytest.raises(RuntimeError, match="unmapped division subtype"):
-            stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+            stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
     def test_fail_loud_check_precedes_artifact_write(self, tmp_path):
         """No places.parquet is written when the fail-loud guard raises (no partial output)."""
@@ -186,7 +187,7 @@ class TestFailLoudUnmappedSubtype:
         parquet_glob = self._make_bad_division_parquet(tmp_path, "nation_state")
         output = str(tmp_path / "places.parquet")
         with pytest.raises(RuntimeError):
-            stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+            stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
         assert not pathlib.Path(output).exists(), (
             "places.parquet must not be written when the fail-loud guard raises"
         )
@@ -280,7 +281,7 @@ class TestBoundaryFilterDelta:
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -297,7 +298,7 @@ class TestBoundaryFilterDelta:
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -315,7 +316,7 @@ class TestBoundaryFilterDelta:
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -348,7 +349,7 @@ class TestNoNullLevelsAllSubtypes:
         helper = TestBoundaryFilterDelta()
         parquet_glob = helper._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -442,7 +443,7 @@ class TestCountyCollapse:
 
         parquet_glob = self._make_two_counties_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -456,47 +457,10 @@ class TestCountyCollapse:
         )
 
 
-# ---------------------------------------------------------------------------
-# Importance bands (#14)
-# ---------------------------------------------------------------------------
-
-class TestImportanceBand:
-    """#14: IMPORTANCE_BAND gives each division subtype a (floor, ceiling).
-    The imports are inside the tests so a missing name fails these tests only."""
-
-    UPPER = ("country", "dependency", "region")
-
-    def test_keys_match_level_vocab(self):
-        """Every LEVEL_VOCAB subtype has a band and nothing else does."""
-        from garganorn.levels import IMPORTANCE_BAND
-        assert IMPORTANCE_BAND.keys() == LEVEL_VOCAB.keys()
-
-    def test_floors_strictly_decrease_down_the_hierarchy(self):
-        """Country highest, then dependency, region, ... down the containment
-        levels: floors strictly decrease in LEVEL_VOCAB-value order."""
-        from garganorn.levels import IMPORTANCE_BAND
-        by_level = sorted(LEVEL_VOCAB, key=LEVEL_VOCAB.get)
-        floors = [IMPORTANCE_BAND[s][0] for s in by_level]
-        assert all(a > b for a, b in zip(floors, floors[1:])), dict(zip(by_level, floors))
-
-    def test_bands_stay_within_0_to_100(self):
-        """importance remains an integer 0..100: 0 <= floor <= ceiling <= 100."""
-        from garganorn.levels import IMPORTANCE_BAND
-        for subtype, (floor, ceiling) in IMPORTANCE_BAND.items():
-            assert 0 <= floor <= ceiling <= 100, subtype
-
-    def test_country_dependency_region_floors_beat_every_other_ceiling(self):
-        """The weakest country/dependency/region outranks the strongest of
-        any lower-level division, so a plain top-N cut keeps them first."""
-        from garganorn.levels import IMPORTANCE_BAND
-        rest = [s for s in LEVEL_VOCAB if s not in self.UPPER]
-        assert min(IMPORTANCE_BAND[s][0] for s in self.UPPER) > max(
-            IMPORTANCE_BAND[s][1] for s in rest)
-
-    def test_level_case_sql_is_unchanged_by_the_refactor(self):
-        """R13 guard: level_case_sql still renders one WHEN per LEVEL_VOCAB
-        entry mapping the subtype to its level."""
-        from garganorn.levels import level_case_sql
-        sql = level_case_sql("x.subtype")
-        for subtype, level in LEVEL_VOCAB.items():
-            assert f"WHEN x.subtype = '{subtype}' THEN {level}" in sql
+def test_level_case_sql_renders_one_when_per_subtype():
+    """level_case_sql renders one WHEN per LEVEL_VOCAB entry mapping the
+    subtype to its level."""
+    from garganorn.levels import level_case_sql
+    sql = level_case_sql("x.subtype")
+    for subtype, level in LEVEL_VOCAB.items():
+        assert f"WHEN x.subtype = '{subtype}' THEN {level}" in sql

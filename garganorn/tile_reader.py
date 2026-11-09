@@ -107,8 +107,8 @@ class TileSearchIndex:
         return self._con.execute("SELECT name_tokens(?)", [q]).fetchone()[0]
 
     def search(self, tokens: list[str], bbox: tuple | None, scope: str | None,
-               limit: int) -> list[tuple[str, float | None, int]]:
-        """(key, page_rank, importance) of up to `limit` records, best first, with some
+               limit: int) -> list[tuple[str, int]]:
+        """(key, importance) of up to `limit` records, best first, with some
         name having every token as a word prefix. bbox is whole-degree
         (west, south, east, north); scope is '{dataset}:{collection}'."""
         rw, rs, re, rn = (int(v) for v in bbox) if bbox else (None,) * 4
@@ -119,7 +119,7 @@ class TileSearchIndex:
         rids = [row[0] for row in self._con.execute(_SEARCH_SQL, params).fetchall()]
         return [
             self._con.execute(
-                "SELECT key, page_rank, importance FROM search_records WHERE rid = ?", [rid]
+                "SELECT key, importance FROM search_records WHERE rid = ?", [rid]
             ).fetchone()
             for rid in rids
         ]

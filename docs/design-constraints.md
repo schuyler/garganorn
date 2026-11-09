@@ -29,58 +29,18 @@ inline in `stages.py:stage_tile_assignment`; `compute_tile_assignments.sql`
 is the reference implementation the parity test compares it against, not
 pipeline SQL.
 
-### Importance scoring varies by entity type
+### Importance is a scaled base plus a notability lift
 
-- **Places (Overture, OSM)**: `60% density + 40% IDF`
-  - Formula: `round(60 * least(density/density_norm, 1.0) + 40 * least(idf/idf_norm, 1.0))`
-  - Defaults: `density_norm=10.0`, `idf_norm=18.0`
-  - OSM's IDF term reads node, way, and relation parquet in both the
-    numerator and the denominator (`osm_idf.sql`), so every OSM
-    importance value shifts whenever the relation arm's counts change.
-- **Divisions (Overture)**: a per-subtype floor and ceiling, with a 0-1
-  signal `s` placing the division between them
-  - Formula: `round(floor + (ceiling - floor) * s)`, with `floor` and
-    `ceiling` from `IMPORTANCE_BAND` in `levels.py`
-  - Localities: `s = 0.6 * least(avg_density/density_norm, 1.0) + 0.4 * least(ln(1+population)/pop_norm, 1.0)`
-  - Every other subtype: `s = least(ln(1+population)/pop_norm, 1.0)`
-  - Defaults: `density_norm=10.0`, `pop_norm=20.0`
-  - Floors fall strictly in `LEVEL_VOCAB` order. Country, dependency and
-    region span 80-100 and every lower subtype tops out at 79, so the
-    weakest region outranks every lower-level division and the summary
-    band's plain top-N cut keeps the upper tier. Before this, non-locality
-    divisions capped at 40 and a dense locality beat every country.
+The spec's [Importance](atgeo-spec.md#importance) section states the formulas and the reasons for the constants. In code:
 
-The norm divisors (`density_norm=10.0`, `idf_norm=18.0`, `pop_norm=20.0`)
-are not arbitrary: each comes from a statistical analysis of that
-variable's distribution, chosen so the term scales to roughly `[0, 1)`
-before weighting. The 60/40 split rests on no such analysis — it was
-chosen by eyeballing search results across categories and picking
-coefficients that made the ranking look subjectively reasonable. Don't
-conflate the two when tuning or explaining this formula. The division
-floors and ceilings rest on no analysis either: only their order and the
-80/79 gap between the upper tier and the rest are load-bearing, and
-`tests/test_levels.py` pins both.
+- **Base, places (Overture, OSM)**: `round(60 * least(density/density_norm, 1.0) + 40 * least(idf/idf_norm, 1.0))`, with `density_norm=10.0` and `idf_norm=18.0`. OSM's IDF term reads node, way, and relation parquet in both the numerator and the denominator (`osm_idf.sql`), so every OSM importance value shifts whenever the relation arm's counts change.
+- **Base, divisions (Overture)**: `round(100 * max(min(ln(1+pop)/pop_norm, 1), min(ln(1+area_km2)/DIVISION_AREA_NORM, 1)))`, with `pop_norm=20.0` and `DIVISION_AREA_NORM=16`; `area_km2` is the planar area of the box spanned by `min_longitude`/`max_longitude` (the minimal longitude interval) and the latitude extent. No subtype, level or density enters it, so being a region gives no advantage over a city.
+- **Scale**: every base is multiplied by `BASE_SCALE = 0.8`.
+- **Lift (OSM and divisions)**: `notability.sql` rewrites the table's `importance` as `round(b + (100 - b) * lift)` after the import, where the lift comes from the QID's page rank (`NOTABILITY_PR_FLOOR`, `NOTABILITY_RAMP`, `NOTABILITY_WEIGHT`) damped by the QID's largest normalized-name count (`NAME_COUNT_FLOOR`, `NAME_COUNT_CEILING`). The QID is OSM's `wikidata` tag or a division's `wikidata`. A row without one is not lifted. The join is exact, so a tag spelt other than as the dump spells the QID (`Q1;Q2`, `q123`) gets no lift. Overture places get no lift: their only QID is `brand.wikidata`, which names the chain, so reading it would lift every store of a chain.
 
-**Applies to**: `overture_place_import.sql`,
-`osm_import.sql`, `overture_division_import.sql`
+The notability constants and `DIVISION_AREA_NORM` live in the block near the top of `stages.py`; `density_norm`, `idf_norm` and `pop_norm` are the import stages' keyword defaults, and all are recorded in the import artifacts' freshness params, so changing one rebuilds the import. The `density_norm`, `idf_norm` and `pop_norm` divisors come from the distribution of each variable, chosen so the term scales to roughly `[0, 1)`. The 60/40 split rests on no such analysis: it was chosen by eyeballing search results across categories. The notability constants were chosen against landmark and chain examples; their reasons are in the spec. Don't conflate the two when tuning or explaining the formula.
 
-### Density tiles use bbox-overlap join
-
-The density spatial join for division localities uses bbox-overlap-bbox
-rather than centroid-in-bbox. A density tile contributes to a locality's
-score if the tile bbox intersects the locality bbox.
-
-**Applies to**: `overture_division_import.sql` (`division_density` CTE)
-
-**Why it matters**: Centroid-based joins systematically under-scored small
-localities, which may contain no tile centroid at all and so scored zero.
-
-The tradeoff is deliberate and unfixed: a tile that barely touches a
-locality's bbox still contributes to its density average, so density is
-over-estimated near division edges. Weighted intersection area would be more
-accurate but needs an `ST_Intersection` per tile per locality. The impact is
-negligible — density is one component of a composite importance score, so a
-few percent of noise moves rankings very little.
+**Applies to**: `overture_place_import.sql`, `osm_import.sql`, `overture_division_import.sql`, `notability.sql`, `stages.py`
 
 ### Seven independent CLI subcommands, six freshness-gated
 
@@ -97,9 +57,9 @@ if their inputs aren't ready. Two ordering constraints remain. With
 `--boundaries`, `run` requires an already-fresh sibling `covering/` and raises
 `RuntimeError` otherwise, since containment computed against a missing or
 stale covering would silently ship tiles with no `relations.within`. And
-`run`, `all` and `search-index` read a `page_rank.parquet` that `page-rank`
-must already have written: none of them builds it, and without it indexing
-a run with tiles fails. Freshness itself is one mechanism
+`run` and `all` read a `page_rank.parquet` that `page-rank`
+must already have written: neither builds it, and without it the OSM and
+`overture_division` imports fail. Freshness itself is one mechanism
 everywhere: an artifact is fresh iff it exists, its meta sidecar exists
 and parses, the sidecar's recorded `params` matches the caller's exactly,
 the sidecar is strictly newer than every resolved input, and
@@ -299,9 +259,9 @@ Each source's tileset carries a z1-z5 band alongside the regular z6-z17 grid,
 holding only the top-N=10,000 records by `importance` DESC (ties by
 `<pk>` ASC), so a client with no region can resolve a name without
 prefetching the whole tileset. The cut is a plain top-N for every source,
-divisions included: the administrative floors in division importance (see
-"Importance scoring varies by entity type") keep countries, dependencies
-and regions in it. The tileset descriptor records the band's actual size as
+divisions included; division importance follows population or area, not
+level, so a division is in the band on its own score ("Importance is a
+scaled base plus a notability lift"). The tileset descriptor records the band's actual size as
 `overview.records`.
 
 z0 is excluded because its quadkey is the empty string, which degenerates
@@ -375,26 +335,9 @@ changes between building and serving.
 `stage_export`), `garganorn/sql/search_index.sql`, `garganorn/__main__.py`
 (`create_app`'s run-readiness check)
 
-### Search ranks notability before importance; tiles don't
+### Search ranks by the importance the tiles carry
 
-`search_records` ranks a record by the page rank of its Wikidata QID,
-descending, records without one last; then by `importance` descending, then
-key. The page rank comes from `page_rank.parquet`, Nominatim's Wikipedia
-importance collapsed to its maximum per QID, joined on the top-level
-`wikidata` attribute an OSM record or division carries. The join is exact,
-so a tag spelt other than as the dump spells the QID gets nothing. An
-Overture place's only QID is `brand.wikidata`, which names the chain, so it
-is deliberately not read: every store of a chain would otherwise outrank
-the other matches. Overture places therefore rank by importance alone,
-after every record with a page rank.
-
-Tile `importance` does not use page rank, and tiles carry none: notability
-orders server-side search only. The parquet is read only when
-`search.duckdb` is written and is not a freshness input to `stage_export`,
-so a new page-rank file reaches search by re-running `search-index` on
-existing runs and restarting the server, with no re-export. The server
-merges tilesets on `(page rank, importance, key)`,
-which is sound only while every run was indexed from the same file.
+`search_records` ranks a record by `importance` descending, then key. Page rank is not a separate sort key: it is an input to `importance` at import ("Importance is a scaled base plus a notability lift"), so the index, the tiles and the server's merge across tilesets (`(importance, key)`) all use one number. `page_rank.parquet` is therefore not read when `search.duckdb` is written, and a new page-rank file reaches search only through a rebuilt import and export.
 
 **Applies to**: `garganorn/sql/search_index.sql`, `garganorn/stages.py`
 (`stage_page_rank`, `write_search_index`), `garganorn/server.py`
@@ -506,7 +449,13 @@ derivation is unnecessary.
 | `density_norm` | 10.0 | Importance density component (all place sources) |
 | `idf_norm` | 18.0 | Importance IDF component (Overture, OSM) |
 | `pop_norm` | 20.0 | Importance population component (Overture divisions) |
-| `IMPORTANCE_BAND` | country 90-100 … microhood 5-79 (`levels.py`) | Per-subtype floor and ceiling of division importance |
+| `DIVISION_AREA_NORM` | 16 | Importance area component (Overture divisions) |
+| `BASE_SCALE` | 0.8 | Scale on every base importance |
+| `NOTABILITY_PR_FLOOR` | 0.20 | Page rank below which there is no lift |
+| `NOTABILITY_RAMP` | 50 | `k` in the page-rank ramp `ln(1 + kx) / ln(1 + k)` |
+| `NOTABILITY_WEIGHT` | 0.95 | Share of the headroom full notability takes |
+| `NAME_COUNT_FLOOR` | 1,000 | Name count where lift damping starts |
+| `NAME_COUNT_CEILING` | 10,000 | Name count where the lift is gone |
 | `COVER_MIN_ZOOM` | 4 | Covering descent start level |
 | `COVER_MIN_LEAF_ZOOM` | 12 | Shallowest level an edge leaf may be emitted at; bounds edge-join fan-out |
 | `COVER_MAX_ZOOM` | 16 | Covering descent end level; a fragment still over capacity here is emitted anyway |

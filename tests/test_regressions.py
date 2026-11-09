@@ -323,10 +323,9 @@ EXEMPT_IMPORT_SQL_FILES = [
     {
         "filename": "overture_division_import.sql",
         "reason": (
-            "division_density aggregates with a scalar avg(density_score) "
-            "over ~1M division rows — not list()/string_agg() over exploded "
-            "per-row state. A scalar avg accumulator is O(1) per group and "
-            "spills gracefully, so this does not exhibit the unbounded "
+            "importance is a scalar expression over each division's own "
+            "columns over ~1M division rows — no list()/string_agg() over "
+            "exploded per-row state, so this does not exhibit the unbounded "
             "complex-state aggregation that overture_place_import.sql "
             "and osm_import.sql have."
         ),

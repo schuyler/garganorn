@@ -14,6 +14,7 @@ from tests.quadtree_helpers import (
 )
 
 import garganorn.stages as _stages
+from tests.page_rank_file import empty_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -312,13 +313,13 @@ class TestOvertureImportArtifactPhase2:
     def test_stage_import_writes_places_parquet(self, overture_parquet, tmp_path):
         """stage_import must write places.parquet for overture_place."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_places_parquet_no_geometry_column(self, overture_parquet, tmp_path):
         """places.parquet must not contain the 'geometry' column."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
             f"DESCRIBE SELECT * FROM read_parquet('{output}')"
@@ -331,7 +332,7 @@ class TestOvertureImportArtifactPhase2:
     def test_places_parquet_retains_bbox_struct(self, overture_parquet, tmp_path):
         """places.parquet must retain the 'bbox' struct (used by _coord_exprs)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
             f"DESCRIBE SELECT * FROM read_parquet('{output}')"
@@ -344,7 +345,7 @@ class TestOvertureImportArtifactPhase2:
     def test_places_parquet_qk17_sorted_nulls_last(self, overture_parquet, tmp_path):
         """places.parquet must be sorted by qk17 NULLS LAST."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output)
+        _stages.stage_import("overture_place", overture_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         rows = [r[0] for r in con.execute(
             f"SELECT qk17 FROM read_parquet('{output}')"

@@ -67,7 +67,7 @@ Use a smaller Geofabrik region for local testing — the default `north-america`
 
 Each source produces a timestamped directory of gzipped JSON tile files under `<output>/<source>/tiles/<timestamp>/`, with a `<output>/<source>/tiles/current` symlink pointing to the latest run. Each stage also writes parquet artifacts alongside — `places.parquet`, `tile_assignments.parquet`, `tile_references.parquet` (division only, expanding the grid to every tile a division's geometry overlaps), `summary_tile_assignments.parquet` and `summary_tile_references.parquet` (division only) for a z1–z5 summary tile band of top-ranked places, `tile_assignments_combined.parquet` (the union that feeds containment, export, and the manifest), `containment/` — and skips itself when that artifact is still newer than its inputs, so re-running only rebuilds what changed. Pass `--force` to rebuild regardless. A run also writes `tileset.json`, the tileset's descriptor, and `manifest.duckdb` and `search.duckdb` beside the tiles; see [`docs/pipeline-artifacts.md`](docs/pipeline-artifacts.md).
 
-Search puts places with a Wikipedia page rank first, so every run needs `page_rank.parquet`, which `page-rank` builds from Nominatim's `wikimedia-importance.csv.gz` (about 300 MB):
+An OSM record's or division's Wikipedia page rank raises its `importance`, so every run needs `page_rank.parquet`, which `page-rank` builds from Nominatim's `wikimedia-importance.csv.gz` (about 300 MB):
 
 ```
 mkdir -p db/cache/wikimedia data/shared
@@ -77,7 +77,7 @@ python -m garganorn.quadtree page-rank \
   --output data/shared/page_rank.parquet
 ```
 
-`run` takes its path as `--page-rank-parquet` (required); `all` reads `<output>/shared/page_rank.parquet`. A new parquet reaches search by re-running `search-index` on each run and restarting the server, with no tile rebuild.
+`run` takes its path as `--page-rank-parquet` (required); `all` reads `<output>/shared/page_rank.parquet`. A new parquet is an input to the OSM and `overture_division` imports, so the next `run` rebuilds them.
 
 Supported sources (for `run --source`):
 
@@ -165,7 +165,7 @@ Mostly you ask for tile coverage over a bounding box, then fetch the tiles and s
 | Endpoint | Returns |
 |---|---|
 | `GET /xrpc/org.atgeo.getTiles?dataset=&collection=&bbox=` | Tile URLs covering the bbox, given as `west,south,east,north`; `collection` is optional and picks tilesets, not records (an OSM `way` search still downloads the area's nodes and relations; see [the spec](docs/atgeo-spec.md#orgatgeogettiles)) |
-| `GET /xrpc/org.atgeo.searchPlaces?dataset=&q=&collection=&bbox=` | Up to 20 places whose name matches the first 12 distinct words of `q`, places with a Wikipedia page rank first, then by importance; `collection` and a whole-degree `bbox` are optional |
+| `GET /xrpc/org.atgeo.searchPlaces?dataset=&q=&collection=&bbox=` | Up to 20 places whose name matches the first 12 distinct words of `q`, by importance (which carries page rank), then key; `collection` and a whole-degree `bbox` are optional |
 | `GET /xrpc/org.atgeo.getPlace?uri=` | One place by its `urn:atgeo:` URN, with its importance and its tileset's attribution |
 | `GET /xrpc/org.atgeo.describeTileset?slug=` | A tileset's descriptor: slug, extent, carried and referenced collections with release, licences and attribution |
 | `GET /xrpc/org.atgeo.describeService` | The service's DID, its tile budget (`maxTiles`), and the slug and collections of each tileset |

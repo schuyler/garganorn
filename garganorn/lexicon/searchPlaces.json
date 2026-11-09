@@ -45,7 +45,7 @@
                         "places": {
                             "type": "array",
                             "maxLength": 20,
-                            "description": "At most 20 matches, those with a Wikipedia page rank first, highest first; then importance descending; then record key ascending",
+                            "description": "At most 20 matches, importance descending, then record key ascending",
                             "items": {
                                 "type": "ref",
                                 "ref": "org.atgeo.getPlace#placeView"
