@@ -340,9 +340,11 @@ changes between building and serving.
 The `search_blocks` insert used to be one `ORDER BY block, rid` over every
 block row, with every name of the record repeated on each row. On the OSM
 planet (89.7M rows) that sort set a peak near 20 GiB and was OOM-killed on a
-32 GiB host beside the serving workers (#70). The builder now sorts one
+32 GiB host beside the serving workers
+([#70](https://github.com/schuyler/garganorn/issues/70)). The builder now sorts one
 block range at a time, sized by `SEARCH_CHUNK_ROWS` rather than by the
-dataset, so the peak no longer grows with the source; it reconnects before
+dataset, so the peak no longer grows with the source, short of a single block
+larger than the target; it reconnects before
 the sorted inserts, because the tile decoding leaves gigabytes freed but
 still held until the database is closed; and it carries only the four
 whole-degree bounds per record, not the location structs.
