@@ -10,6 +10,7 @@ import pytest
 from tests.quadtree_helpers import REPO_ROOT, run_osm_import
 
 import garganorn.stages as _stages
+from tests.page_rank_file import empty_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -353,10 +354,8 @@ class TestOsmImportCharacterization:
         lat=37.7612, lon=-122.4195 -> primary_category 'amenity=cafe'.
         density_score=5.0 (norm 10.0) and idf_score=9.0 (norm 18.0) are each
         exactly half their norm, so the expected value is exact with no
-        rounding ambiguity: round(60*0.5 + 40*0.5) = 50 — the same formula
-        and same exact value as overture_place_import.sql's importance
-        characterization test (tests/test_importance.py), confirming both
-        import paths share the arithmetic.
+        rounding ambiguity: round(60*0.5 + 40*0.5) = 50. This runs the raw
+        osm_import.sql, so the value is the base, before the notability pass.
         """
         probe = duckdb.connect(":memory:")
         probe.execute("INSTALL spatial; LOAD spatial;")
@@ -407,14 +406,14 @@ class TestOsmImportArtifactPhase2:
         """stage_import must write places.parquet for osm."""
         output = str(tmp_path / "places.parquet")
         parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
-        _stages.stage_import("osm", parquet, self._BBOX, output)
+        _stages.stage_import("osm", parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_places_parquet_no_geom_column(self, osm_parquet, tmp_path):
         """places.parquet must not contain the 'geom' column."""
         output = str(tmp_path / "places.parquet")
         parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
-        _stages.stage_import("osm", parquet, self._BBOX, output)
+        _stages.stage_import("osm", parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
             f"DESCRIBE SELECT * FROM read_parquet('{output}')"
@@ -444,7 +443,7 @@ class TestOsmImportArtifactPhase2:
 
         output = str(tmp_path / "places.parquet")
         parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
-        _stages.stage_import("osm", parquet, self._BBOX, output)
+        _stages.stage_import("osm", parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         output_rkeys = {r[0] for r in con.execute(
             f"SELECT rkey FROM read_parquet('{output}')"
@@ -463,7 +462,7 @@ class TestOsmImportArtifactPhase2:
         """places.parquet must be sorted by qk17 NULLS LAST."""
         output = str(tmp_path / "places.parquet")
         parquet = (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"])
-        _stages.stage_import("osm", parquet, self._BBOX, output)
+        _stages.stage_import("osm", parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         rows = [r[0] for r in con.execute(
             f"SELECT qk17 FROM read_parquet('{output}')"
@@ -1321,7 +1320,7 @@ class TestOsmImportRelationParquetGlob:
     def test_stage_import_accepts_relation_glob_triple(self, relation_parquet, tmp_path):
         output = str(tmp_path / "places.parquet")
         parquet = (relation_parquet["node"], relation_parquet["way"], relation_parquet["relation"])
-        _stages.stage_import("osm", parquet, self._BBOX, output)
+        _stages.stage_import("osm", parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         rkeys = {r[0] for r in con.execute(
             f"SELECT rkey FROM read_parquet('{output}')"

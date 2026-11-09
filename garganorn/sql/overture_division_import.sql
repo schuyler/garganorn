@@ -20,12 +20,10 @@
 -- The bbox filter applies to division_area (which has bbox columns), not division.
 -- Divisions with no matching land area after filtering are dropped via INNER JOIN.
 --
--- Importance and variants are computed inline during import. A division's
--- score is its subtype's floor plus the floor-to-ceiling range scaled by a
--- 0-1 signal: density avg and population log for localities, population log
--- for every other subtype. The floors and ceilings come from
--- garganorn.levels.IMPORTANCE_BAND, rendered into two substituted CASE
--- expressions (see the level note above for why they are not named here).
+-- Importance and variants are computed inline during import. The base
+-- importance is the larger of a population signal and a bounding-box area
+-- signal, each saturating at 1, whatever the subtype; stage_division_import
+-- then applies the notability pass (notability.sql).
 
 DROP TABLE IF EXISTS places;
 SET memory_limit='${memory_limit}';
@@ -34,10 +32,6 @@ INSTALL spatial; LOAD spatial;
 CREATE OR REPLACE MACRO atgeo_valid_language(lang) AS (
     lang IS NOT NULL AND regexp_matches(lang, '^(i|[a-z]{2,3})(-[A-Za-z0-9-]+)?$')
 );
-
--- Load density parquet file as temp table (no IDF for divisions)
--- When parquet path is None, create empty temp table (LEFT JOINs produce NULL; density then counts as 0, so a division scores from its subtype floor and population alone)
-${density_cte}
 
 CREATE TEMP TABLE division_base AS
 WITH division AS (
@@ -127,28 +121,18 @@ JOIN merged_areas_interior ma ON ma.division_id = d.id
 LEFT JOIN wide_extent we ON we.division_id = d.id;
 
 CREATE TABLE places AS
--- Compute average density for localities: find all z15 density tiles whose
--- bbox intersects the locality's bounding box. Uses bbox-overlap join
--- (not centroid-point-in-bbox) to ensure small localities receive density scores.
-WITH division_density AS (
-    SELECT p.id,
-           coalesce(avg(d.density_score), 0) AS avg_density
-    FROM division_base p
-    LEFT JOIN density_tiles d
-        ON d.tile_xmin <= p.max_longitude
-       AND d.tile_xmax >= p.min_longitude
-       AND d.tile_ymin <= p.max_latitude
-       AND d.tile_ymax >= p.min_latitude
-    WHERE p.subtype = 'locality'
-    GROUP BY p.id
-)
 SELECT
     db.*,
-    round(${importance_floor} + (${importance_ceiling} - ${importance_floor}) *
-          CASE WHEN db.subtype = 'locality'
-               THEN 0.6 * least(coalesce(dd.avg_density, 0) / ${density_norm}, 1.0)
-                  + 0.4 * least(ln(1 + db.population) / ${pop_norm}, 1.0)
-               ELSE least(ln(1 + db.population) / ${pop_norm}, 1.0) END)::INTEGER AS importance,
+    -- Planar area of the bounding box in km2; the longitude span is widened by
+    -- 360 when it crosses the antimeridian.
+    round(100 * greatest(
+        least(ln(1 + db.population) / ${pop_norm}, 1.0),
+        least(ln(1 + (CASE WHEN db.max_longitude - db.min_longitude < 0
+                           THEN db.max_longitude - db.min_longitude + 360
+                           ELSE db.max_longitude - db.min_longitude END)
+                     * 111.32 * cos(radians((db.min_latitude + db.max_latitude) / 2))
+                     * (db.max_latitude - db.min_latitude) * 110.57)
+                 / ${area_norm}, 1.0)))::INTEGER AS importance,
     -- Compute variants from names.common and names.rules per-row, same
     -- expression and semantics as overture_place_import.sql (no dedup).
     list_sort(list_filter(
@@ -167,9 +151,7 @@ SELECT
                               END,
                       'language': CASE WHEN atgeo_valid_language(r.language) THEN r.language ELSE NULL END}), [])),
         v -> v.name IS NOT NULL AND TRIM(v.name) != '')) AS variants
-FROM division_base db
-LEFT JOIN division_density dd USING (id);
+FROM division_base db;
 
 -- Drop temp tables
 DROP TABLE division_base;
-DROP TABLE density_tiles;

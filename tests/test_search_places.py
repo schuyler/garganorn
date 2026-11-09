@@ -11,7 +11,7 @@ from tests import served_runs
 from tests.duckdb_spy import spy_on_duckdb_connect
 from tests.lexicon_helpers import LEXICON_DIR, validate_def
 from tests.served_runs import (
-    OSM, OVERTURE, STAMP, box, build_app, geo, place, serve_run,
+    OVERTURE, STAMP, box, build_app, geo, place, serve_run,
 )
 
 QK = "012301"
@@ -364,7 +364,7 @@ def test_dataset_wide_search_merges_equal_importance_by_key(tmp_path):
     """N4: tilesets merge by (-importance, key); division sorts before place."""
     places = [place(OVERTURE, "place", "p1", "Paris Place", importance=50),
               place(OVERTURE, "place", "p2", "Paris Other Place", importance=60)]
-    divisions = [place(OVERTURE, "division", "d1", "Paris Division", importance=50, wikidata="Q1"),
+    divisions = [place(OVERTURE, "division", "d1", "Paris Division", importance=50),
                  place(OVERTURE, "division", "d2", "Paris Low Division", importance=40)]
     app = build_app(
         serve_run(tmp_path, "overture-place", [(OVERTURE, "place")], {QK: places}),

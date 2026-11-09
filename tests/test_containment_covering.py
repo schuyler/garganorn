@@ -393,7 +393,7 @@ class TestNoNullLevels:
 
         output = str(tmp_path / "places.parquet")
         bbox = (-122.55, 37.60, -122.30, 37.85)
-        stages.stage_import("overture_division", division_parquet, bbox, output)
+        stages.stage_import("overture_division", division_parquet, bbox, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()

@@ -131,6 +131,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                  memory_limit=memory_limit, temp_directory=temp_directory,
                  max_temp_directory_size=max_temp_directory_size,
                  density_parquet=density_parquet, idf_parquet=idf_parquet,
+                 page_rank_parquet=page_rank_parquet,
                  force=force)
 
     # Division-only: build covering from the just-written boundaries.duckdb
@@ -218,8 +219,7 @@ def run_pipeline(source, parquet_glob, bbox, output_dir, memory_limit="48GB", ma
                  t0, export_workers=export_workers, memory_limit=memory_limit,
                  temp_directory=temp_directory,
                  max_temp_directory_size=max_temp_directory_size,
-                 force=force, idf_parquet=idf_parquet, releases=releases,
-                 page_rank_parquet=page_rank_parquet)
+                 force=force, idf_parquet=idf_parquet, releases=releases)
 
     log.info("[%s] pipeline complete (%.1fs total)", source, time.monotonic() - t0)
 
@@ -339,7 +339,7 @@ def _cmd_search_index(args):
         kwargs["temp_directory"] = args.temp_directory
     if args.max_temp_directory_size is not None:
         kwargs["max_temp_directory_size"] = args.max_temp_directory_size
-    write_search_index(args.run_dir, page_rank_parquet=args.page_rank_parquet, **kwargs)
+    write_search_index(args.run_dir, **kwargs)
 
 
 def _cmd_run(args, run_parser):
@@ -535,7 +535,6 @@ def _cmd_all(args):
             output_dir,
             memory_limit=memory_limit,
             max_per_tile=max_per_tile,
-            density_parquet=density_parquet_path if overture_cfg else None,
             temp_directory=temp_directory,
             max_temp_directory_size=max_temp_directory_size,
             force=args.force,
@@ -675,9 +674,6 @@ def main():
         "search-index", help="Write search.duckdb into an existing run directory"
     )
     search_index_p.add_argument("run_dir", help="Run directory holding the tiles")
-    search_index_p.add_argument("--page-rank-parquet", required=True,
-                                dest="page_rank_parquet",
-                                help="Path to page_rank.parquet (input)")
     search_index_p.add_argument("--memory-limit", default=None, dest="memory_limit",
                                 help="DuckDB memory limit")
     search_index_p.add_argument("--temp-directory", default=None, dest="temp_directory",

@@ -59,7 +59,7 @@ class TestStageTileAssignment:
         ta_parquet = str(tmp_path / "tile_assignments.parquet")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
@@ -76,7 +76,7 @@ class TestStageTileAssignment:
         ta_parquet = str(tmp_path / "tile_assignments_pb.parquet")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         import garganorn.stages as stages_mod
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
@@ -95,7 +95,7 @@ class TestStageTileAssignment:
         ta_parquet = str(tmp_path / "tile_assignments_ml.parquet")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         import garganorn.stages as stages_mod
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
@@ -117,7 +117,7 @@ class TestStageContainment:
         containment_dir = str(tmp_path / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
@@ -147,7 +147,7 @@ class TestStageContainment:
         containment_dir = str(tmp_path / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
 
@@ -173,7 +173,7 @@ class TestStageContainment:
         containment_dir = str(tmp_path / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         stage_covering(str(division_db_path), covering_dir,
@@ -455,7 +455,7 @@ class TestPublishedAtDeterminismAndCoherence:
         containment_dir = str(base / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         pk_expr = SOURCES["overture_place"].source_pk
@@ -484,7 +484,7 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank())
+                               force=True, now=fixed_now, releases=RELEASES)
 
         assert os.path.basename(run_dir.rstrip("/")) == "20260709T180000", (
             f"run dir must be named from the injected now; got {run_dir}"
@@ -502,7 +502,7 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank())
+                               force=True, now=fixed_now, releases=RELEASES)
         run_dir = Path(run_dir)
 
         tile = _read_one_tile(run_dir)
@@ -528,7 +528,7 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir = Path(stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                     tiles_root, time.monotonic(), memory_limit="4GB",
-                                    force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank()))
+                                    force=True, now=fixed_now, releases=RELEASES))
 
         gz_files = list(run_dir.rglob("*.json.gz"))
         assert gz_files, "expected at least one tile"
@@ -555,10 +555,10 @@ class TestPublishedAtDeterminismAndCoherence:
 
         run_dir_a = Path(stage_export("overture_place", places_a, ta_a, cont_a,
                                       str(tmp_path / "tiles_d1"), time.monotonic(),
-                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank()))
+                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES))
         run_dir_b = Path(stage_export("overture_place", places_b, ta_b, cont_b,
                                       str(tmp_path / "tiles_d2"), time.monotonic(),
-                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES, page_rank_parquet=empty_page_rank()))
+                                      memory_limit="4GB", force=True, now=fixed_now, releases=RELEASES))
 
         def _tile_bytes(run_dir):
             out = {}
@@ -784,7 +784,7 @@ class TestStageExportTempDirectory:
         # Must not raise TypeError for an unexpected keyword argument.
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
-                     force=True, temp_directory=str(scratch), releases=RELEASES, page_rank_parquet=empty_page_rank())
+                     force=True, temp_directory=str(scratch), releases=RELEASES)
 
     def test_honors_temp_directory_for_spill_location(
         self, overture_parquet, tmp_path, monkeypatch
@@ -805,7 +805,7 @@ class TestStageExportTempDirectory:
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      tiles_root, time.monotonic(), memory_limit="4GB",
-                     force=True, temp_directory=str(scratch), releases=RELEASES, page_rank_parquet=empty_page_rank())
+                     force=True, temp_directory=str(scratch), releases=RELEASES)
 
         before = _statements_before_write_manifest_db(statements)
         temp_dir_stmts = [s for s in before if "SET temp_directory" in s]
@@ -840,7 +840,7 @@ class TestStageExportTempDirectory:
 
         run_dir = stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                                tiles_root, time.monotonic(), memory_limit="4GB",
-                               force=True, releases=RELEASES, page_rank_parquet=empty_page_rank())
+                               force=True, releases=RELEASES)
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, f"no SET temp_directory statement recorded: {statements}"
@@ -919,7 +919,7 @@ class TestStageImportTempDirectory:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     temp_directory=str(scratch))
+                     temp_directory=str(scratch), page_rank_parquet=empty_page_rank())
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert temp_dir_stmts, (
@@ -947,7 +947,7 @@ class TestStageImportTempDirectory:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         temp_dir_stmts = [s for s in statements if "SET temp_directory" in s]
         assert not temp_dir_stmts, (
@@ -1033,7 +1033,7 @@ class TestStageImportLookupKeyUniqueness:
         with pytest.raises(ValueError) as excinfo:
             stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
-                         density_parquet=str(density_path))
+                         density_parquet=str(density_path), page_rank_parquet=empty_page_rank())
 
         msg = str(excinfo.value)
         assert str(density_path) in msg, f"error must name the offending file; got: {msg!r}"
@@ -1064,7 +1064,7 @@ class TestStageImportLookupKeyUniqueness:
         with pytest.raises(ValueError) as excinfo:
             stage_import(source, parquet_glob, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
-                         density_parquet=str(density_path))
+                         density_parquet=str(density_path), page_rank_parquet=empty_page_rank())
 
         msg = str(excinfo.value)
         assert str(density_path) in msg, f"error must name the offending file; got: {msg!r}"
@@ -1082,7 +1082,7 @@ class TestStageImportLookupKeyUniqueness:
         with pytest.raises(ValueError) as excinfo:
             stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                          places_parquet, memory_limit="4GB", force=True,
-                         idf_parquet=str(idf_path))
+                         idf_parquet=str(idf_path), page_rank_parquet=empty_page_rank())
 
         msg = str(excinfo.value)
         assert str(idf_path) in msg, f"error must name the offending file; got: {msg!r}"
@@ -1106,7 +1106,7 @@ class TestStageImportLookupKeyUniqueness:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=str(density_path))
+                     density_parquet=str(density_path), page_rank_parquet=empty_page_rank())
         assert os.path.exists(places_parquet)
 
     def test_null_idf_category_does_not_raise(self, overture_parquet, tmp_path):
@@ -1118,7 +1118,7 @@ class TestStageImportLookupKeyUniqueness:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     idf_parquet=str(idf_path))
+                     idf_parquet=str(idf_path), page_rank_parquet=empty_page_rank())
         assert os.path.exists(places_parquet)
 
     def test_uniqueness_check_runs_before_expensive_import_sql(
@@ -1150,6 +1150,7 @@ class TestStageImportLookupKeyUniqueness:
                 "overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                 places_parquet, memory_limit="4GB", force=True,
                 density_parquet=str(density_path),
+                page_rank_parquet=empty_page_rank(),
             )
 
         assert not calls, (
@@ -1166,7 +1167,7 @@ class TestStageImportLookupKeyUniqueness:
         places_parquet = str(tmp_path / "places_clean.parquet")
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      places_parquet, memory_limit="4GB", force=True,
-                     density_parquet=density_parquet)
+                     density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
         assert os.path.exists(places_parquet)
 
         con = duckdb.connect()
@@ -1192,7 +1193,7 @@ class TestStageImportLookupKeyUniqueness:
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_stream.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True, density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         assert not any("_density_uniqueness_check" in s for s in statements), (
             f"density_parquet must not be materialized into a TEMP TABLE "
@@ -1215,7 +1216,7 @@ class TestStageImportLookupKeyUniqueness:
         statements = spy_on_duckdb_connect(monkeypatch, stages_mod)
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_memlimit.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True, density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         assert statements, "expected at least one statement recorded"
         assert "SET memory_limit" in statements[0] and "4GB" in statements[0], (
@@ -1265,7 +1266,7 @@ def _build_export_inputs(overture_parquet, tmp_path, subdir):
     containment_dir = str(base / "containment")
 
     stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                 places_parquet, memory_limit="4GB", force=True)
+                 places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
     stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                           max_per_tile=100, memory_limit="4GB", force=True)
     pk_expr = SOURCES["overture_place"].source_pk
@@ -1290,7 +1291,7 @@ class TestConfiguredSourceGlobPreflight:
 
         with pytest.raises(RuntimeError) as excinfo:
             stage_import("overture_place", empty_glob, (-122.55, 37.60, -122.30, 37.85),
-                         places_parquet, memory_limit="4GB", force=True)
+                         places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(places_parquet), (
@@ -1307,7 +1308,7 @@ class TestConfiguredSourceGlobPreflight:
 
         with pytest.raises(RuntimeError) as excinfo:
             stage_import("osm", (node_glob, way_glob, relation_glob), (-122.55, 37.60, -122.30, 37.85),
-                         places_parquet, memory_limit="4GB", force=True)
+                         places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(places_parquet), (
@@ -1329,7 +1330,7 @@ class TestConfiguredSourceGlobPreflight:
         with pytest.raises(RuntimeError) as excinfo:
             stage_import("overture_division", (division_path, division_area_path),
                          (-122.55, 37.60, -122.30, 37.85),
-                         places_parquet, memory_limit="4GB", force=True)
+                         places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
 
         assert empty_glob in str(excinfo.value)
         assert not os.path.exists(places_parquet), (
@@ -1412,7 +1413,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
-                     temp_directory=str(scratch), max_temp_directory_size="8GB")
+                     temp_directory=str(scratch), max_temp_directory_size="8GB", page_rank_parquet=empty_page_rank())
 
         before = self._statements_before_density_check(statements)
         stmts = _max_temp_stmts(before)
@@ -1439,7 +1440,7 @@ class TestAssertDensityParquetUniqueMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_adpu_notd.parquet"), memory_limit="4GB",
-                     force=True, density_parquet=density_parquet)
+                     force=True, density_parquet=density_parquet, page_rank_parquet=empty_page_rank())
 
         before = self._statements_before_density_check(statements)
         stmts = _max_temp_stmts(before)
@@ -1483,7 +1484,7 @@ class TestStageImportMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds.parquet"), memory_limit="4GB",
                      force=True,
-                     temp_directory=str(scratch), max_temp_directory_size="7GB")
+                     temp_directory=str(scratch), max_temp_directory_size="7GB", page_rank_parquet=empty_page_rank())
 
         stmts = _max_temp_stmts(statements)
         assert stmts, (
@@ -1508,7 +1509,7 @@ class TestStageImportMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_def.parquet"), memory_limit="4GB",
                      force=True,
-                     temp_directory=str(scratch))
+                     temp_directory=str(scratch), page_rank_parquet=empty_page_rank())
 
         stmts = _max_temp_stmts(statements)
         assert stmts, f"expected a default bound; statements: {statements}"
@@ -1530,7 +1531,7 @@ class TestStageImportMaxTempDirectorySize:
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_none.parquet"), memory_limit="4GB",
                      force=True, density_parquet=density_parquet,
-                     temp_directory=str(scratch), max_temp_directory_size=None)
+                     temp_directory=str(scratch), max_temp_directory_size=None, page_rank_parquet=empty_page_rank())
 
         assert not _max_temp_stmts(statements), (
             f"max_temp_directory_size=None must issue no bound; got: "
@@ -1550,7 +1551,7 @@ class TestStageImportMaxTempDirectorySize:
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
                      str(tmp_path / "places_mtds_notd.parquet"), memory_limit="4GB",
-                     force=True)
+                     force=True, page_rank_parquet=empty_page_rank())
 
         stmts = _max_temp_stmts(statements)
         assert stmts, (
@@ -1580,7 +1581,7 @@ class TestStageExportMaxTempDirectorySize:
 
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds1"), time.monotonic(),
-                     memory_limit="4GB", force=True, releases=RELEASES, page_rank_parquet=empty_page_rank())
+                     memory_limit="4GB", force=True, releases=RELEASES)
 
         before = _statements_before_write_manifest_db(statements)
         stmts = _max_temp_stmts(before)
@@ -1606,7 +1607,7 @@ class TestStageExportMaxTempDirectorySize:
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_mtds2"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
-                     max_temp_directory_size="9GB", releases=RELEASES, page_rank_parquet=empty_page_rank())
+                     max_temp_directory_size="9GB", releases=RELEASES)
 
         before = _statements_before_write_manifest_db(statements)
         stmts = _max_temp_stmts(before)
@@ -1716,7 +1717,7 @@ class TestWriteManifestDbMaxTempDirectorySize:
         stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
                      str(tmp_path / "tiles_wmdb4"), time.monotonic(),
                      memory_limit="4GB", force=True, temp_directory=str(scratch),
-                     max_temp_directory_size="12GB", releases=RELEASES, page_rank_parquet=empty_page_rank())
+                     max_temp_directory_size="12GB", releases=RELEASES)
 
         assert calls, "stage_export must have called write_manifest_db"
         assert calls[-1].get("temp_directory") == str(scratch), (
@@ -2017,7 +2018,6 @@ class TestTilesetJson:
             tiles_root, time.monotonic(), memory_limit="4GB",
             force=True, idf_parquet=idf_parquet,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         return run_dir, idf_parquet, places_parquet
 
@@ -2068,7 +2068,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2128,7 +2127,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, short_ta, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2167,7 +2165,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             str(tmp_path / "tiles_ov0"), time.monotonic(), memory_limit="4GB",
             force=True, releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2201,7 +2198,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, banded_ta, containment_dir,
             str(tmp_path / "tiles_ov1"), time.monotonic(), memory_limit="4GB",
             force=True, releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2225,7 +2221,7 @@ class TestTilesetJson:
         # stage_import, so stage_tile_assignment and stage_export see zero
         # places/tiles all the way through.
         stage_import("overture_place", overture_parquet, (0.0, 0.0, 0.01, 0.01),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         pk_expr = SOURCES["overture_place"].source_pk
@@ -2239,7 +2235,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
 
         tileset = json.loads((run_dir / "tileset.json").read_text())
@@ -2273,7 +2268,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2299,7 +2293,7 @@ class TestTilesetJson:
         containment_dir = str(base / "containment")
 
         stage_import("overture_place", overture_parquet, (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "overture_place",
                               max_per_tile=100, memory_limit="4GB", force=True)
         stage_covering(str(division_db_path), covering_dir,
@@ -2316,7 +2310,6 @@ class TestTilesetJson:
             "overture_place", places_parquet, ta_parquet, containment_dir,
             tiles_root, time.monotonic(), memory_limit="4GB", force=True,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2346,7 +2339,7 @@ class TestTilesetJson:
 
         stage_import("osm", (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
                      (-122.55, 37.60, -122.30, 37.85),
-                     places_parquet, memory_limit="4GB", force=True)
+                     places_parquet, memory_limit="4GB", force=True, page_rank_parquet=empty_page_rank())
         stage_tile_assignment(places_parquet, ta_parquet, "osm",
                               max_per_tile=100, memory_limit="4GB", force=True)
         pk_expr = SOURCES["osm"].source_pk
@@ -2365,7 +2358,6 @@ class TestTilesetJson:
             tiles_root, time.monotonic(), memory_limit="4GB",
             force=True, idf_parquet=idf_parquet,
             releases=RELEASES,
-            page_rank_parquet=empty_page_rank(),
         ))
         tileset = json.loads((run_dir / "tileset.json").read_text())
 
@@ -2513,7 +2505,7 @@ class TestTilesetJson:
 
         with pytest.raises(RuntimeError, match="simulated crash"):
             stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
-                         tiles_root, time.monotonic(), memory_limit="4GB", force=True, releases=RELEASES, page_rank_parquet=empty_page_rank())
+                         tiles_root, time.monotonic(), memory_limit="4GB", force=True, releases=RELEASES)
 
         run_dirs = [d for d in Path(tiles_root).iterdir() if d.is_dir() and not d.is_symlink()]
         assert run_dirs, "expected the interrupted run dir to remain on disk"

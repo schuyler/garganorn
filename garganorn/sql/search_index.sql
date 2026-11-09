@@ -14,9 +14,8 @@ CREATE MACRO name_tokens(s) AS
             '[\pZ\s]+'),
         t -> t != '');
 
--- One row per record; rid is its rank under page_rank DESC NULLS LAST,
--- importance DESC, key ASC. ${page_rank} is a SQL string: the page-rank parquet.
-CREATE TABLE search_records (rid INTEGER, key VARCHAR, importance INTEGER, page_rank DOUBLE);
+-- One row per record; rid is its rank under importance DESC, key ASC.
+CREATE TABLE search_records (rid INTEGER, key VARCHAR, importance INTEGER);
 
 -- One row per distinct (block, record), sorted by block, rid. block is the
 -- first two characters of a name token of two or more characters. The bounds
@@ -33,7 +32,6 @@ CREATE TEMP TABLE tile_records AS
 SELECT DISTINCT ON (r.value.origin)
     substr(r.value.origin, 11) AS key,
     coalesce(r.importance, 0) AS importance,
-    r.value.attributes.wikidata AS wikidata,
     list_filter(r.value.locations, l -> l."$type" = 'community.lexicon.location.geo')[1] AS geo,
     list_filter(r.value.locations, l -> l."$type" = 'community.lexicon.location.bbox')[1] AS bbox,
     list_prepend(r.value.name, list_transform(coalesce(r.value.variants, []), v -> v.name)) AS raw_names
@@ -44,7 +42,6 @@ FROM (
             importance INTEGER,
             value STRUCT(
                 origin VARCHAR, name VARCHAR,
-                attributes STRUCT(wikidata VARCHAR),
                 variants STRUCT(name VARCHAR)[],
                 locations STRUCT("$type" VARCHAR, latitude VARCHAR, longitude VARCHAR,
                                  west VARCHAR, south VARCHAR, east VARCHAR, north VARCHAR)[]
@@ -54,9 +51,8 @@ FROM (
 );
 
 INSERT INTO search_records
-SELECT row_number() OVER (ORDER BY page_rank DESC NULLS LAST, importance DESC, key) - 1,
-       key, importance, page_rank
-FROM tile_records LEFT JOIN read_parquet(${page_rank}) ON qid = wikidata
+SELECT row_number() OVER (ORDER BY importance DESC, key) - 1, key, importance
+FROM tile_records
 ORDER BY 1;
 
 INSERT INTO search_blocks

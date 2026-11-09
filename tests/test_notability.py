@@ -12,7 +12,6 @@ design's constants; production constants are not imported.
 import math
 
 import duckdb
-import pytest
 
 from garganorn.stages import stage_division_import, stage_import
 from tests.page_rank_file import write_page_rank

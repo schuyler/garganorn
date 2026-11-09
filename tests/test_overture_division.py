@@ -14,6 +14,7 @@ import garganorn.stages as _stages
 from garganorn.quadtree import SOURCES
 
 from tests.quadtree_helpers import REPO_ROOT, _load_sql, _strip_spatial_install, _strip_memory_limit
+from tests.page_rank_file import empty_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -112,8 +113,8 @@ class TestPipelineSkipsImportanceVariants:
     """run_pipeline computes importance/variants inline for all sources.
 
     All sources compute these values inline during import; there is no
-    separate importance or variants stage. overture_division uses a hybrid
-    importance formula (density+population) and derives variants from
+    separate importance or variants stage. overture_division derives its
+    importance from population and bounding-box area, and derives variants from
     names.common/names.rules inline in its import SQL, the same expression
     overture_place uses.
     """
@@ -378,13 +379,13 @@ class TestDivisionImportArtifactPhase2:
     def test_stage_division_import_writes_places_parquet(self, division_parquet, tmp_path):
         """stage_import for overture_division must write places.parquet."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         assert pathlib.Path(output).exists(), f"places.parquet not written to {output}"
 
     def test_stage_division_import_writes_boundaries_duckdb(self, division_parquet, tmp_path):
         """stage_import for overture_division must write boundaries.duckdb in the same dir."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = tmp_path / "boundaries.duckdb"
         assert boundaries.exists(), f"boundaries.duckdb not written alongside places.parquet"
 
@@ -395,7 +396,7 @@ class TestDivisionImportArtifactPhase2:
         integer throughout the boundaries.duckdb export.
         """
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
         con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
@@ -411,7 +412,7 @@ class TestDivisionImportArtifactPhase2:
     def test_boundaries_duckdb_has_rtree_index(self, division_parquet, tmp_path):
         """boundaries.duckdb must have an R-tree index on geometry."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
         con.execute(f"ATTACH '{boundaries}' AS bnd (READ_ONLY)")
@@ -430,7 +431,7 @@ class TestDivisionImportArtifactPhase2:
         """bnd.places must be physically sorted by ST_Hilbert(geometry) over the
         world BOX_2D (zone maps require sorted columns)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
         con.execute("INSTALL spatial; LOAD spatial;")
@@ -448,7 +449,7 @@ class TestDivisionImportArtifactPhase2:
     def test_places_parquet_no_geometry_column(self, division_parquet, tmp_path):
         """division places.parquet must not contain 'geometry' column."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         con = duckdb.connect()
         cols = {r[0] for r in con.execute(
             f"DESCRIBE SELECT * FROM read_parquet('{output}')"
@@ -461,14 +462,14 @@ class TestDivisionImportArtifactPhase2:
     def test_single_meta_gates_both_artifacts(self, division_parquet, tmp_path):
         """Deleting boundaries.duckdb must make stage_import stale (single meta gates both)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         mtime1 = os.path.getmtime(output)
         # Remove boundaries.duckdb to simulate it being stale/missing
         boundaries = tmp_path / "boundaries.duckdb"
         boundaries.unlink()
         time.sleep(0.05)
         # Rerun without force — must rebuild because boundaries.duckdb is gone
-        _stages.stage_import("overture_division", division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         mtime2 = os.path.getmtime(output)
         assert mtime2 > mtime1, (
             "stage_import must rebuild when boundaries.duckdb is missing "
@@ -565,7 +566,7 @@ class TestMultiAreaDivisionMerge:
         bnd.places record, whose geometry is the MULTIPOLYGON union of both
         parts, with extents spanning both squares."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", multi_area_division_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", multi_area_division_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
         boundaries = str(tmp_path / "boundaries.duckdb")
 
         con = duckdb.connect()
@@ -677,7 +678,7 @@ class TestDivisionVariantsDerived:
         names.common) and 'Florence' (official, from names.rules) -- not the
         hardcoded []."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_with_variants_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_with_variants_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         con = duckdb.connect()
         variants = con.execute(
@@ -775,7 +776,7 @@ class TestDivisionVariantLanguageValidation:
         survive; the valid entry is untouched (same-fixture regression
         guard)."""
         output = str(tmp_path / "places.parquet")
-        _stages.stage_import("overture_division", division_invalid_language_parquet, self._BBOX, output)
+        _stages.stage_import("overture_division", division_invalid_language_parquet, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         con = duckdb.connect()
         variants = con.execute(
@@ -914,7 +915,7 @@ def _import_divisions(tmp_path, *divisions):
     conn.execute(f"COPY ({area_rows}) TO '{division_area_path}' (FORMAT PARQUET)")
     conn.close()
     _stages.stage_import("overture_division", (str(division_path), str(division_area_path)),
-                         (-180.0, -90.0, 180.0, 90.0), str(tmp_path / "places.parquet"))
+                         (-180.0, -90.0, 180.0, 90.0), str(tmp_path / "places.parquet"), page_rank_parquet=empty_page_rank())
     return str(tmp_path / "boundaries.duckdb")
 
 

@@ -8,8 +8,6 @@ import duckdb
 import pytest
 
 from garganorn.stages import stage_import
-
-
 from tests.page_rank_file import empty_page_rank
 
 

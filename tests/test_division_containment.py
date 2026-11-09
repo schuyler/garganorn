@@ -18,13 +18,14 @@ from garganorn import stages as _stages
 from garganorn.database import DIVISION_URN_PREFIX
 from garganorn.levels import LEVEL_VOCAB
 from garganorn.stages import stage_division_containment
+from tests.page_rank_file import empty_page_rank
 
 _BBOX = (-122.55, 37.60, -122.30, 37.85)
 
 
 def _make_places_parquet(division_parquet, tmp_path, name="places.parquet"):
     output = str(tmp_path / name)
-    _stages.stage_import("overture_division", division_parquet, _BBOX, output)
+    _stages.stage_import("overture_division", division_parquet, _BBOX, output, page_rank_parquet=empty_page_rank())
     return output
 
 

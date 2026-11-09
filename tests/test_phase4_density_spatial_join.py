@@ -1,15 +1,11 @@
-"""Tests for density-tile spatial join and division import.
+"""Tests for density-tile bounds.
 
 density_extract.sql's output carries tile bounds (tile_xmin, tile_ymin,
 tile_xmax, tile_ymax) instead of centroid columns; bounds are computed in
-SQL via the qk_env() macro. overture_division_import.sql joins on bbox
-overlap between division and tile bounds (not a centroid-in-bbox check),
-so small localities smaller than a z15 tile still receive a non-zero
-density score.
+SQL via the qk_env() macro.
 """
 
 import time
-from pathlib import Path
 
 import duckdb
 import pytest

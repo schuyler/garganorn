@@ -18,6 +18,7 @@ import duckdb
 import pytest
 
 from garganorn.levels import LEVEL_VOCAB
+from tests.page_rank_file import empty_page_rank
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +168,7 @@ class TestFailLoudUnmappedSubtype:
         parquet_glob = self._make_bad_division_parquet(tmp_path, "nation_state")
         output = str(tmp_path / "places.parquet")
         with pytest.raises(RuntimeError, match="unmapped division subtype"):
-            stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+            stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
     def test_null_subtype_raises_runtime_error(self, tmp_path):
         """A division row with subtype=NULL raises RuntimeError (never defaults or guesses)."""
@@ -176,7 +177,7 @@ class TestFailLoudUnmappedSubtype:
         parquet_glob = self._make_bad_division_parquet(tmp_path, None)
         output = str(tmp_path / "places.parquet")
         with pytest.raises(RuntimeError, match="unmapped division subtype"):
-            stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+            stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
     def test_fail_loud_check_precedes_artifact_write(self, tmp_path):
         """No places.parquet is written when the fail-loud guard raises (no partial output)."""
@@ -186,7 +187,7 @@ class TestFailLoudUnmappedSubtype:
         parquet_glob = self._make_bad_division_parquet(tmp_path, "nation_state")
         output = str(tmp_path / "places.parquet")
         with pytest.raises(RuntimeError):
-            stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+            stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
         assert not pathlib.Path(output).exists(), (
             "places.parquet must not be written when the fail-loud guard raises"
         )
@@ -280,7 +281,7 @@ class TestBoundaryFilterDelta:
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -297,7 +298,7 @@ class TestBoundaryFilterDelta:
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -315,7 +316,7 @@ class TestBoundaryFilterDelta:
 
         parquet_glob = self._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -348,7 +349,7 @@ class TestNoNullLevelsAllSubtypes:
         helper = TestBoundaryFilterDelta()
         parquet_glob = helper._make_all_subtypes_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
@@ -442,7 +443,7 @@ class TestCountyCollapse:
 
         parquet_glob = self._make_two_counties_parquet(tmp_path)
         output = str(tmp_path / "places.parquet")
-        stages.stage_import("overture_division", parquet_glob, self._BBOX, output)
+        stages.stage_import("overture_division", parquet_glob, self._BBOX, output, page_rank_parquet=empty_page_rank())
 
         boundaries = str(tmp_path / "boundaries.duckdb")
         con = duckdb.connect()
