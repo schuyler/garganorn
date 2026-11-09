@@ -7,6 +7,7 @@ import random
 from pathlib import Path
 
 import duckdb
+import pytest
 
 import garganorn.stages as stages
 from garganorn.stages import write_search_index
@@ -107,7 +108,10 @@ def _dump(path):
         con.close()
 
 
-def test_chunked_build_matches_reference(tmp_path, monkeypatch):
+@pytest.mark.parametrize("chunk_rows", [CHUNK_ROWS, 1])
+def test_chunked_build_matches_reference(tmp_path, monkeypatch, chunk_rows):
+    """R2. chunk_rows=1 makes every block its own chunk, so every block,
+    including the U+200E and U+00AD ones, is a chunk bound."""
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     _write_tiles(run_dir)
@@ -116,17 +120,19 @@ def test_chunked_build_matches_reference(tmp_path, monkeypatch):
     _build_reference(run_dir, ref_path)
     ref_records, ref_blocks = _dump(ref_path)
 
-    # Precondition: the walk must cut at least three chunks, and no block is
-    # bigger than a chunk (an oversized block would be a chunk of its own).
-    per_block = {}
-    for row in ref_blocks:
-        per_block[row[0]] = per_block.get(row[0], 0) + 1
-    assert len(ref_blocks) > 3 * CHUNK_ROWS
-    assert max(per_block.values()) <= CHUNK_ROWS
+    # Precondition for the CHUNK_ROWS case: the walk must cut at least three
+    # chunks, and no block is bigger than a chunk.
+    if chunk_rows == CHUNK_ROWS:
+        per_block = {}
+        for row in ref_blocks:
+            per_block[row[0]] = per_block.get(row[0], 0) + 1
+        assert len(ref_blocks) > 3 * CHUNK_ROWS
+        assert max(per_block.values()) <= CHUNK_ROWS
 
-    monkeypatch.setattr(stages, "SEARCH_CHUNK_ROWS", CHUNK_ROWS)
+    monkeypatch.setattr(stages, "SEARCH_CHUNK_ROWS", chunk_rows)
     write_search_index(str(run_dir))
     new_records, new_blocks = _dump(run_dir / "search.duckdb")
 
     assert new_records == ref_records
     assert new_blocks == ref_blocks
+    assert not (run_dir / "search.duckdb.scratch").exists()
