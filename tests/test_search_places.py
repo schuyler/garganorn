@@ -416,11 +416,12 @@ def test_null_name_leaves_record_findable_by_its_other_name(tmp_path, where):
 
 @pytest.mark.parametrize("name,variant,other", [
     ("Small store with beer", ".", "Small store with beer"),
-    (".", "Small store with beer", "Small store with beer"),
+    (".", "Small store with beer", "."),
 ])
 def test_wordless_name_or_variant_matches_no_keyword(tmp_path, name, variant, other):
     """R2/AC1 through the real builder: a '.' name or variant, sharing the 'st'
-    block with a genuine match."""
+    block with a genuine match. `other` is the record's primary name, which is
+    what a search returns for it when it matches by its real name."""
     records = [_record("small", name, variants=[variant]), _record("star", "Starbux Cafe")]
     assert _found(tmp_path, records, q="starbux") == ["Starbux Cafe"]
     assert _found(tmp_path / "x", records, q="small") == [other]
