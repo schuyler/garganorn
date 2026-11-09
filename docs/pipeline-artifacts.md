@@ -399,8 +399,8 @@ with `rid` its rank under `importance` DESC (NULL as 0), `key` ASC, sorted by `r
 `search_blocks(block, rid, scope, w, e, s, n, names)`, one row per
 distinct pair of a record and the first two characters of one of its name
 words of two or more characters, sorted by `block, rid`, with whole-degree
-bounds and each name as a
-space-led word string; and the `name_tokens` macro both sides tokenise with
+bounds and each name that has at least one word as a
+space-led word string (a name with none, such as `"."`, is left out); and the `name_tokens` macro both sides tokenise with
 (`design-constraints.md`, "The search index derives from the served tiles").
 A zero-tile run gets the empty tables.
 
