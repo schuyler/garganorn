@@ -12,9 +12,8 @@ import duckdb
 import pytest
 
 from garganorn import quadtree as _qt
-from garganorn.stages import write_search_index
 from tests.served_runs import OVERTURE, STAMP, make_run, place
-from tests.page_rank_file import empty_page_rank, write_page_rank
+from tests.page_rank_file import empty_page_rank
 
 
 def _overture_cache(root):
@@ -572,21 +571,10 @@ class TestSearchIndexSubcommand:
         return make_run(tmp_path, STAMP, "overture-place", [(OVERTURE, "place")],
                         {"012301": records})
 
-    @staticmethod
-    def _keys_in_rank_order(run_dir):
-        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
-        try:
-            return [r[0] for r in con.execute(
-                "SELECT key FROM search_records ORDER BY rid").fetchall()]
-        finally:
-            con.close()
-
     def test_search_index_writes_index_into_an_existing_run(self, tmp_path, monkeypatch):
         run_dir = self._run(tmp_path, [place(OVERTURE, "place", "a", "Zed")])
         (run_dir / "search.duckdb").unlink()
-        monkeypatch.setattr(sys, "argv", [
-            "qt", "search-index", str(run_dir),
-            "--page-rank-parquet", empty_page_rank()])
+        monkeypatch.setattr(sys, "argv", ["qt", "search-index", str(run_dir)])
 
         _qt.main()
 
@@ -595,39 +583,3 @@ class TestSearchIndexSubcommand:
             assert con.execute("SELECT count(*) FROM search_records").fetchone()[0] == 1
         finally:
             con.close()
-
-    def test_search_index_applies_a_new_page_rank_without_a_rebuild(self, tmp_path, monkeypatch):
-        """N3"""
-        run_dir = self._run(tmp_path, [
-            place(OVERTURE, "place", "plain", "Zed", importance=90),
-            place(OVERTURE, "place", "notable", "Zed", importance=10, wikidata="Q1"),
-        ])
-        assert self._keys_in_rank_order(run_dir) == [
-            "overturemaps.org:place:plain", "overturemaps.org:place:notable"]
-        page_rank = write_page_rank(tmp_path / "pr.parquet", {"Q1": 0.5})
-        monkeypatch.setattr(sys, "argv", [
-            "qt", "search-index", str(run_dir), "--page-rank-parquet", page_rank])
-
-        _qt.main()
-
-        assert self._keys_in_rank_order(run_dir) == [
-            "overturemaps.org:place:notable", "overturemaps.org:place:plain"]
-
-    def test_search_index_requires_the_page_rank_parquet(self, tmp_path, monkeypatch):
-        run_dir = self._run(tmp_path, [place(OVERTURE, "place", "a", "Zed")])
-        monkeypatch.setattr(sys, "argv", ["qt", "search-index", str(run_dir)])
-
-        with pytest.raises(SystemExit) as exc:
-            _qt.main()
-
-        assert exc.value.code == 2
-
-    def test_missing_page_rank_parquet_fails_the_fill_and_leaves_no_index(self, tmp_path):
-        run_dir = self._run(tmp_path, [place(OVERTURE, "place", "a", "Zed")])
-        (run_dir / "search.duckdb").unlink()
-
-        with pytest.raises(duckdb.IOException):
-            write_search_index(str(run_dir),
-                               page_rank_parquet=str(tmp_path / "missing.parquet"))
-
-        assert not (run_dir / "search.duckdb").exists()

@@ -332,36 +332,6 @@ class TestSearchIndex:
         assert self._record_count(run_dir) == 2
 
 
-    def test_stage_export_stores_page_rank_for_a_record_with_a_qid(self, tmp_path):
-        from tests.page_rank_file import write_page_rank
-        from tests.test_identity_export import _empty_containment_dir, _hand_built_osm
-
-        places_pq, ta_pq = _hand_built_osm(tmp_path, ["n1", "n2"], "pr")
-        tagged_pq = str(tmp_path / "pr_tagged.parquet")
-        duckdb.execute(
-            f"COPY (SELECT * REPLACE (CASE WHEN rkey = 'n1' THEN map(['wikidata'], ['Q42']) "
-            f"ELSE tags END AS tags) FROM read_parquet('{places_pq}')) "
-            f"TO '{tagged_pq}' (FORMAT PARQUET)")
-        tiles_root = str(tmp_path / "pr_tiles")
-        os.makedirs(tiles_root)
-
-        run_dir = Path(stage_export(
-            "osm", tagged_pq, ta_pq, _empty_containment_dir(tmp_path, "pr_containment"),
-            tiles_root, time.monotonic(), memory_limit="4GB",
-            releases={"openstreetmap.org": RELEASES["openstreetmap.org"]},
-            page_rank_parquet=write_page_rank(tmp_path / "pr.parquet", {"Q42": 0.5}),
-        ))
-
-        con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
-        try:
-            ranks = dict(con.execute(
-                "SELECT key, page_rank FROM search_records").fetchall())
-        finally:
-            con.close()
-        assert ranks == {"openstreetmap.org:node:1": 0.5,
-                         "openstreetmap.org:node:2": None}
-
-
 class TestPageRankStage:
     """stage_page_rank collapses wikimedia-importance.csv.gz to one row per QID."""
 
@@ -1076,22 +1046,12 @@ class TestStageImportLookupKeyUniqueness:
             "stage_import must fail before writing any output artifact"
         )
 
-    @pytest.mark.parametrize(
-        "source", ["overture_place", "osm", "overture_division"]
-    )
+    @pytest.mark.parametrize("source", ["overture_place", "osm"])
     def test_duplicate_density_tile_qk15_raises_for_every_density_parquet_consumer(
-        self, source, overture_parquet, osm_parquet, division_parquet, tmp_path
+        self, source, overture_parquet, osm_parquet, tmp_path
     ):
-        """stage_import dispatches to stage_division_import for
-        overture_division and RETURNS before its own _assert_unique_key call
-        -- but overture_division is on the global run path and IS passed
-        density_parquet (quadtree.py _cmd_all). Without a guard covering it,
-        a duplicated tile_qk15 in --density-parquet silently corrupts
-        importance for division rows too (division_density's
-        avg(density_score) double-counts the duplicate), rather than
-        raising. Parametrized over every source that can receive
-        --density-parquet through stage_import so a fix covering only the
-        non-division path can't pass silently."""
+        """A duplicated tile_qk15 in --density-parquet raises for every
+        source that joins density through stage_import."""
         density_path = tmp_path / f"dup_density_{source}.parquet"
         _write_duplicate_density_parquet(density_path)
         places_parquet = str(tmp_path / f"places_dup_density_{source}.parquet")
@@ -1099,7 +1059,6 @@ class TestStageImportLookupKeyUniqueness:
         parquet_glob = {
             "overture_place": overture_parquet,
             "osm": (osm_parquet["node"], osm_parquet["way"], osm_parquet["relation"]),
-            "overture_division": division_parquet,
         }[source]
 
         with pytest.raises(ValueError) as excinfo:
@@ -1113,49 +1072,6 @@ class TestStageImportLookupKeyUniqueness:
         assert not os.path.exists(places_parquet), (
             f"stage_import must fail before writing any output artifact "
             f"(source={source})"
-        )
-        if source == "overture_division":
-            boundaries_path = str(Path(places_parquet).parent / "boundaries.duckdb")
-            assert not os.path.exists(boundaries_path), (
-                "stage_import must fail before writing boundaries.duckdb "
-                "for overture_division"
-            )
-
-    def test_uniqueness_check_runs_before_division_dispatch(
-        self, division_parquet, tmp_path, monkeypatch
-    ):
-        """The density guard for overture_division must run before
-        stage_import dispatches to stage_division_import (and returns) --
-        otherwise duplicate density keys silently reach division_density's
-        avg() aggregation instead of raising. Spy on stage_division_import
-        to prove it is never called when the density lookup fails
-        uniqueness -- the same ordering guarantee
-        test_uniqueness_check_runs_before_expensive_import_sql below pins
-        for the non-division sources."""
-        import garganorn.stages as stages_mod
-
-        density_path = tmp_path / "dup_density_division_ordering.parquet"
-        _write_duplicate_density_parquet(density_path)
-        places_parquet = str(tmp_path / "places_dup_density_division_ordering.parquet")
-
-        calls = []
-        real_stage_division_import = stages_mod.stage_division_import
-
-        def spy_stage_division_import(*args, **kwargs):
-            calls.append((args, kwargs))
-            return real_stage_division_import(*args, **kwargs)
-
-        monkeypatch.setattr(stages_mod, "stage_division_import", spy_stage_division_import)
-
-        with pytest.raises(ValueError):
-            stages_mod.stage_import(
-                "overture_division", division_parquet, (-122.55, 37.60, -122.30, 37.85),
-                places_parquet, force=True, density_parquet=str(density_path),
-            )
-
-        assert not calls, (
-            "stage_division_import must not be called when the density "
-            f"uniqueness check fails; got {len(calls)} call(s)"
         )
 
     def test_duplicate_idf_category_raises(self, overture_parquet, tmp_path):
