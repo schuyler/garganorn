@@ -490,6 +490,32 @@ class TestPublishedAtDeterminismAndCoherence:
             f"run dir must be named from the injected now; got {run_dir}"
         )
 
+    def test_search_index_memory_default(self, overture_parquet, density_parquet, tmp_path,
+                                         monkeypatch):
+        """The search step has its own 8GB default (#70): write_search_index
+        defaults to it, and stage_export doesn't pass the run-wide memory_limit."""
+        import inspect
+        import garganorn.stages as stages
+        assert inspect.signature(stages.write_search_index).parameters["memory_limit"].default == "8GB"
+
+        calls = []
+        real = stages.write_search_index
+
+        def recording(*args, **kwargs):
+            calls.append(kwargs)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(stages, "write_search_index", recording)
+        places_parquet, ta_parquet, containment_dir = self._build_export_inputs(
+            overture_parquet, density_parquet, tmp_path, "inputs_mem"
+        )
+        stage_export("overture_place", places_parquet, ta_parquet, containment_dir,
+                     str(tmp_path / "tiles_mem"), time.monotonic(), memory_limit="4GB",
+                     force=True, now=datetime(2026, 7, 9, 18, 0, 0, tzinfo=timezone.utc),
+                     releases=RELEASES)
+        assert len(calls) == 1
+        assert "memory_limit" not in calls[0]
+
     def test_published_at_derived_from_injected_now(self, overture_parquet, density_parquet, tmp_path):
         """publishedAt (tile + tileset.json) and manifest.json's generated_at ==
         RFC 3339 Z rendering of the injected now."""
