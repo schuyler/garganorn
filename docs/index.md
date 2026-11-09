@@ -35,8 +35,8 @@
 
 | Document | Description |
 |----------|-------------|
-| [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (search ranking; tile importance planned) |
-| [intermediate-bands.md](intermediate-bands.md) | Sampled overview levels (the pyramid) and a notability signal in `importance`, shipped in one rebuild so city-sized views get their notable places; measured, proposed in [#36](https://github.com/schuyler/garganorn/issues/36) |
+| [wikimedia-importance-evaluation.md](wikimedia-importance-evaluation.md) | Wikipedia page-rank as notability signal (a lift in `importance`, shared by tiles and search) |
+| [intermediate-bands.md](intermediate-bands.md) | Sampled overview levels (the pyramid) so city-sized views get their notable places, and how the notability signal in `importance` feeds them; measured, proposed in [#36](https://github.com/schuyler/garganorn/issues/36) |
 | [planned-features.md](planned-features.md) | New feature ideas not yet designed or scoped |
 
 ## Reference Queries

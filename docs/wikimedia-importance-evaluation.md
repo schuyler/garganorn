@@ -1,18 +1,10 @@
 # Wikimedia Importance as a Data Source
 
-Evaluated 2026-04-11. Search uses it: `searchPlaces` ranks places by the
-page rank of their OSM or division Wikidata QID, ahead of importance
-(`design-constraints.md`, "Search ranks notability before importance; tiles
-don't"). Tile importance does not (#46), and Overture places get no signal:
-their only QID is `brand.wikidata`, deliberately unused.
+Evaluated 2026-04-11. Page rank is an input to `importance` for OSM records and divisions: it lifts the base score of a record whose Wikidata item has a page rank (see [Importance](atgeo-spec.md#importance)). Search and tiles rank by that same `importance`. Overture places get no signal: their only QID is `brand.wikidata`, deliberately unused.
 
 ## Problem
 
-Garganorn's importance formula (`60 * density + 40 * idf` for places; division
-scoring differs — see `design-constraints.md`, "Importance scoring varies by
-entity type") has no notability signal. Ranked by importance alone, a text
-query has nothing to distinguish the Golden Gate Bridge from a nearby
-dentist's office with similar density: both rank equally.
+The base importance score (`60 * density + 40 * idf` for places; population or area for divisions) has no notability signal. Ranked by it alone, a text query has nothing to distinguish the Golden Gate Bridge from a nearby dentist's office with similar density: both rank equally.
 
 ## Nominatim's Approach
 
@@ -119,7 +111,7 @@ For connecting garganorn places to Wikipedia importance scores:
 
 ## Why It Matters
 
-The current importance formula measures "busy area" (density) and "unusual
+The base score measures "busy area" (density) and "unusual
 category" (IDF). Neither measures "famous." A text-only query without a
 bounding box needs a signal that says "Golden Gate Bridge" is a
 globally-known landmark, not just another POI in a dense area.
@@ -129,16 +121,9 @@ place receives. Places with Wikidata QIDs skew toward exactly the class that
 needs this signal: landmarks, monuments, transit stations, universities,
 museums, government buildings, and well-known commercial brands.
 
-## Integration Considerations
+## Integration
 
-- The wikimedia CSV could be collapsed to a parquet lookup table (one row per
-  QID, max importance) and joined during the importance stage.
-- Places with a Wikidata match could receive a notability bonus that
-  supplements or partially replaces the density/IDF formula.
-- Places without Wikidata IDs keep the current formula unchanged.
-- ~3.6M unique QIDs (2026-11-03 download) — small enough for a simple lookup join.
-- The importance float (0–1) would need to be scaled to garganorn's 0–100
-  integer range.
-- The strongest impact would be on the OSM data source, where wikidata tags
-  are common on notable places. Overture Places would see a smaller benefit
-  limited to branded chains.
+- The wikimedia CSV is collapsed to a parquet lookup table (`page_rank.parquet`, one row per QID, max importance) and joined in a notability pass over the finished import table (`garganorn/sql/notability.sql`). The pass raises a record's base score by a share of the headroom, ramped from its page rank and damped for names many places share.
+- Places without a Wikidata QID, or whose QID is absent from the file, keep their scaled base score.
+- ~3.6M unique QIDs (2026-11-03 download) is small enough for a simple lookup join.
+- The strongest impact is on the OSM data source, where wikidata tags are common on notable places. Overture places don't benefit.
