@@ -121,7 +121,7 @@ Optional arguments (`run`, all sources):
 | Argument | Default | Description |
 |---|---|---|
 | `--bbox XMIN YMIN XMAX YMAX` | none | Restrict import to a bounding box |
-| `--memory-limit` | `48GB` | DuckDB memory limit |
+| `--memory-limit` | `48GB` | DuckDB memory limit for every stage except the search index, which uses its own 8GB default |
 | `--max-per-tile` | `1000` | Maximum records per tile in the assignment grid, every source. It does not bound a division tile's exported record count, which follows geometry |
 | `--temp-directory` | DuckDB default | Volume DuckDB spills to when a stage exceeds `--memory-limit` |
 | `--max-temp-directory-size` | `250GB` | Ceiling on that spill; a runaway query fails with "temp directory full" instead of filling the volume |

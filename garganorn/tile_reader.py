@@ -83,7 +83,8 @@ WHERE block = $block
                             OR (e = 180 AND $rw = -180) OR (w = -180 AND $re = 180) END
              ELSE w - e > 1 OR e >= $rw OR w <= $re END)))
   AND len(list_filter(names,
-          nm -> len(list_filter($tokens, t -> NOT contains(nm, ' ' || t))) = 0)) > 0
+          nm -> nm IS NOT NULL
+               AND len(list_filter($tokens, t -> NOT contains(nm, ' ' || t))) = 0)) > 0
 ORDER BY rid
 LIMIT $limit
 """

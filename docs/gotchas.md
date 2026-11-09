@@ -79,6 +79,24 @@ of the containment chain entirely, a way with NULL `nds` drops out of
 `way_node_refs`, and a relation with NULL or empty `members` silently drops
 out of the import.
 
+### An empty list joins to NULL, and a NULL lambda result is silently false
+
+`array_to_string([], ' ')` is NULL, not `''`, so `' ' || array_to_string(...)`
+of an empty list is NULL too. Inside `list_filter`, a lambda that returns NULL
+drops the element just as `false` would, with no error. Together they invert a
+test: `list_filter(tokens, t -> NOT contains(nm, t))` on a NULL `nm` finds no
+missing token, so a NULL name reads as containing every word.
+
+**Applies to**: `garganorn/sql/search_index.sql` (`search_blocks.names` keeps
+only names with at least one token) and `_SEARCH_SQL` in
+`garganorn/tile_reader.py` (the name predicate requires `nm IS NOT NULL`).
+
+**Why it matters**: a name such as `"."` folds to no tokens, and a missing
+name or variant name tokenises to NULL. Before the fix, each was stored as a
+NULL and matched every keyword in any block its record reached through another
+name. Indexes built before the fix still hold those NULLs, so
+the query-side guard stays even though new builds don't produce them.
+
 ### No unbounded complex-state aggregation
 
 DuckDB cannot spill intermediate state for `list()`, `string_agg()`, and other

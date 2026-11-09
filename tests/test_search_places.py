@@ -1,4 +1,5 @@
 """Tests for the org.atgeo.searchPlaces XRPC endpoint, through the Flask client."""
+import gzip
 import json
 import logging
 
@@ -13,6 +14,7 @@ from tests.lexicon_helpers import LEXICON_DIR, validate_def
 from tests.served_runs import (
     OVERTURE, STAMP, box, build_app, geo, place, serve_run,
 )
+from garganorn.stages import write_search_index
 
 QK = "012301"
 REGION = "-123,37,-122,38"
@@ -373,3 +375,86 @@ def test_dataset_wide_search_merges_equal_importance_by_key(tmp_path):
     with app.test_client() as client:
         assert _names(_search(client, q="paris")) == [
             "Paris Other Place", "Paris Division", "Paris Place", "Paris Low Division"]
+
+
+# #69: a name with no words must not match every keyword.
+
+def _inject_null_name(tileset, key, where):
+    """Add a NULL element to `names` in every search_blocks row of `key`, first
+    or last: what the old builder stored for a wordless, missing or nameless
+    variant name. Closed before the app's first request."""
+    con = duckdb.connect(str(tileset["run_dir"] + "/search.duckdb"))
+    try:
+        fn = "list_prepend(NULL::VARCHAR, names)" if where == "first" \
+            else "list_append(names, NULL::VARCHAR)"
+        con.execute(f"UPDATE search_blocks SET names = {fn} "
+                    "WHERE rid IN (SELECT rid FROM search_records WHERE key = ?)", [key])
+    finally:
+        con.close()
+
+
+def _found_with_null(tmp_path, where, **params):
+    records = [_record("small", "Small store with beer"), _record("star", "Starbux Cafe")]
+    tileset = serve_run(tmp_path, tiles={QK: records})
+    _inject_null_name(tileset, "overturemaps.org:place:small", where)
+    with build_app(tileset).test_client() as client:
+        return _names(_search(client, **params))
+
+
+@pytest.mark.parametrize("where", ["first", "last"])
+def test_null_name_matches_no_keyword(tmp_path, where):
+    """R1/AC1, R2, R3, R4: an index holding a NULL name (primary or variant
+    position) beside a genuine match returns only the genuine match."""
+    assert _found_with_null(tmp_path, where, q="starbux") == ["Starbux Cafe"]
+
+
+@pytest.mark.parametrize("where", ["first", "last"])
+def test_null_name_leaves_record_findable_by_its_other_name(tmp_path, where):
+    """R1/AC2: guards against over-fixing; passes before the fix too."""
+    assert _found_with_null(tmp_path, where, q="small") == ["Small store with beer"]
+
+
+@pytest.mark.parametrize("name,variant,other", [
+    ("Small store with beer", ".", "Small store with beer"),
+    (".", "Small store with beer", "."),
+])
+def test_wordless_name_or_variant_matches_no_keyword(tmp_path, name, variant, other):
+    """R2/AC1 through the real builder: a '.' name or variant, sharing the 'st'
+    block with a genuine match. `other` is the record's primary name, which is
+    what a search returns for it when it matches by its real name."""
+    records = [_record("small", name, variants=[variant]), _record("star", "Starbux Cafe")]
+    assert _found(tmp_path, records, q="starbux") == ["Starbux Cafe"]
+    assert _found(tmp_path / "x", records, q="small") == [other]
+
+
+def _write_raw_tile(run_dir, qk, records):
+    (run_dir / qk[:6]).mkdir(parents=True)
+    with gzip.open(run_dir / qk[:6] / f"{qk}.json.gz", "wt") as f:
+        json.dump({"publishedAt": "2026-01-01T00:00:00Z", "attribution": [],
+                   "records": [{"value": v, "importance": 1} for v in records]}, f)
+
+
+def test_built_index_holds_no_null_name(tmp_path):
+    """R7: a '.' variant, a record with no name, and a variant with no name
+    each leave no NULL in names, and each is still indexed under 'ze'."""
+    def value(id, **kw):
+        return {"$type": "org.atgeo.place", "origin": f"urn:atgeo:{OVERTURE}:place:{id}",
+                "locations": [geo("37.774900", "-122.419400")], **kw}
+    run_dir = tmp_path / STAMP
+    _write_raw_tile(run_dir, QK, [
+        value("dot", name="Zebra Cafe", variants=[{"name": "."}]),
+        value("noname", variants=[{"name": "Zebra Bar"}]),
+        value("novariant", name="Zebra Inn", variants=[{}]),
+    ])
+    write_search_index(str(run_dir))
+    con = duckdb.connect(str(run_dir / "search.duckdb"), read_only=True)
+    try:
+        assert con.execute("SELECT count(*) FROM search_blocks "
+                           "WHERE len(list_filter(names, n -> n IS NULL)) > 0"
+                           ).fetchone()[0] == 0, "a NULL element is stored in names"
+        keys = {k for (k,) in con.execute(
+            "SELECT key FROM search_records JOIN search_blocks USING (rid) "
+            "WHERE block = 'ze'").fetchall()}
+    finally:
+        con.close()
+    assert keys == {f"{OVERTURE}:place:{i}" for i in ("dot", "noname", "novariant")}
