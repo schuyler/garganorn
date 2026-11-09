@@ -675,7 +675,7 @@ def main():
     )
     search_index_p.add_argument("run_dir", help="Run directory holding the tiles")
     search_index_p.add_argument("--memory-limit", default=None, dest="memory_limit",
-                                help="DuckDB memory limit")
+                                help="DuckDB memory limit (default 8GB)")
     search_index_p.add_argument("--temp-directory", default=None, dest="temp_directory",
                                 help="DuckDB temp directory")
     search_index_p.add_argument("--max-temp-directory-size", default=None,

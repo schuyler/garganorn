@@ -814,31 +814,93 @@ def write_manifest_db(tile_assignments_parquet: str, output_dir: str, source: st
     os.rename(tmp_path, manifest_path)
 
 
-def write_search_index(run_dir: str, *, memory_limit: str = "48GB",
+# Target rows per chunk of the sorted search_blocks insert; a chunk's memory
+# is set by this, not by the dataset size.
+SEARCH_CHUNK_ROWS = 8_000_000
+
+
+def _search_sections() -> dict[str, str]:
+    """search_index.sql split into its named sections ("-- name: X" lines)."""
+    parts = re.split(r"^-- name: (\w+)\n", (_SQL_DIR / "search_index.sql").read_text(),
+                     flags=re.M)
+    return dict(zip(parts[1::2], parts[2::2]))
+
+
+def _block_chunks(counts: list[tuple[str, int]]) -> list[tuple[str, str]]:
+    """Greedy (first block, last block) ranges over per-block row counts in
+    block order: a chunk is cut when the next block would take it past
+    SEARCH_CHUNK_ROWS. A block is never split; one over the target is a chunk
+    of its own."""
+    chunks = []
+    lo = hi = None
+    rows = 0
+    for block, n in counts:
+        if lo is not None and rows + n > SEARCH_CHUNK_ROWS:
+            chunks.append((lo, hi))
+            lo = None
+            rows = 0
+        if lo is None:
+            lo = block
+        hi = block
+        rows += n
+    if lo is not None:
+        chunks.append((lo, hi))
+    return chunks
+
+
+def write_search_index(run_dir: str, *, memory_limit: str = "8GB",
                        temp_directory: str | None = None,
                        max_temp_directory_size: str | None = "250GB") -> None:
     """Write search.duckdb from the run's tiles. Atomic: builds in .tmp,
     renames into place. A run with no tiles gets the empty tables. Records
-    are ranked by importance, then key."""
+    are ranked by importance, then key.
+
+    The intermediate tables (narrowed tile records, unsorted blocks) live in a
+    separate scratch database, search.duckdb.scratch, so they don't bloat the
+    served file; it is removed before the build and afterwards. The sorted
+    search_blocks insert is done in chunks of whole block ranges of about
+    SEARCH_CHUNK_ROWS rows, after reconnecting to release the memory the JSON
+    read left held, so peak memory stays bounded."""
     search_path = os.path.join(run_dir, "search.duckdb")
     tmp_path = search_path + ".tmp"
-    if os.path.exists(tmp_path):
-        os.remove(tmp_path)
+    scratch_path = search_path + ".scratch"
+    for stale in (tmp_path, scratch_path):
+        if os.path.exists(stale):
+            os.remove(stale)
     tiles = sorted(glob_module.glob(os.path.join(run_dir, "*", "*.json.gz")))
-    schema, fill = (_SQL_DIR / "search_index.sql").read_text().split("-- fill\n")
-    con = duckdb.connect(tmp_path)
-    try:
+    sql = _search_sections()
+
+    def connect():
+        con = duckdb.connect(tmp_path)
         con.execute("SET enable_progress_bar = false")
         con.execute(f"SET memory_limit = '{memory_limit}'")
         if temp_directory:
             con.execute(f"SET temp_directory = '{temp_directory}'")
         if max_temp_directory_size:
             con.execute(f"SET max_temp_directory_size = '{max_temp_directory_size}'")
-        con.execute(schema)
+        return con
+
+    con = connect()
+    try:
+        con.execute(sql["schema"])
         if tiles:
-            con.execute(fill.replace("${tiles}", repr(tiles)))
+            con.execute(f"ATTACH '{scratch_path}' AS scratch")
+            for name in ("tile_records", "search_records", "blocks_unsorted"):
+                con.execute(sql[name].replace("${tiles}", repr(tiles)))
+            con.close()
+            con = connect()
+            con.execute(f"ATTACH '{scratch_path}' AS scratch")
+            counts = con.execute(sql["block_counts"]).fetchall()
+            for lo, hi in _block_chunks(counts):
+                # Chunks are ascending, contiguous block ranges, each sorted by
+                # block, rid; the physical order equals one global sort only
+                # because preserve_insertion_order is at its default (true).
+                # Bounds are bound parameters: blocks can hold U+200E/U+00AD.
+                con.execute(sql["blocks_chunk"], [lo, hi])
     finally:
         con.close()
+        if os.path.exists(scratch_path):
+            os.remove(scratch_path)
     os.rename(tmp_path, search_path)
 
 
@@ -2419,7 +2481,7 @@ def stage_export(source: str, places_parquet: str, tile_assignments_parquet: str
                       temp_directory=temp_directory,
                       max_temp_directory_size=max_temp_directory_size)
     write_search_index(run_dir,
-                       memory_limit=memory_limit, temp_directory=temp_directory,
+                       temp_directory=temp_directory,
                        max_temp_directory_size=max_temp_directory_size)
     write_tileset_json(run_dir, source, source_cls, published_at=published_at,
                        manifest=manifest, places_pq=places_pq,
