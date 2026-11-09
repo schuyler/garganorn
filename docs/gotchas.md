@@ -91,9 +91,10 @@ missing token, so a NULL name reads as containing every word.
 only names with at least one token) and `_SEARCH_SQL` in
 `garganorn/tile_reader.py` (the name predicate requires `nm IS NOT NULL`).
 
-**Why it matters**: a name such as `"."` folds to no tokens. Before #69 it was
-stored as a NULL and matched every keyword in any block its record reached
-through another name. Indexes built before the fix still hold those NULLs, so
+**Why it matters**: a name such as `"."` folds to no tokens, and a missing
+name or variant name tokenises to NULL. Before the fix, each was stored as a
+NULL and matched every keyword in any block its record reached through another
+name. Indexes built before the fix still hold those NULLs, so
 the query-side guard stays even though new builds don't produce them.
 
 ### No unbounded complex-state aggregation
