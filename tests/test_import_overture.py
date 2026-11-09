@@ -412,7 +412,7 @@ class TestOvertureTaxonomyImportance:
         )
 
     def test_place_without_taxonomy_is_imported_and_scores_density_only(self, tmp_path):
-        """A NULL taxonomy contributes 0 to importance: round(60 * 5/10) = 30."""
+        """A NULL taxonomy contributes 0 to importance: round(0.8 * round(60 * 5/10)) = 24."""
         importance = self._import(
             tmp_path,
             [
@@ -421,7 +421,7 @@ class TestOvertureTaxonomyImportance:
             ],
             [("rare_leaf", 15.0)],
         )
-        assert importance["leafless"] == 30, (
-            f"NULL-taxonomy place must score on density alone (30); got {importance}"
+        assert importance["leafless"] == 24, (
+            f"NULL-taxonomy place must score on density alone (24); got {importance}"
         )
         assert importance["leafed"] > importance["leafless"]
