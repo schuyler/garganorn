@@ -29,14 +29,14 @@ def overture_idf_parquet(tmp_path):
     """Minimal Overture parquet with known categories.
 
     Schema:
-        categories  STRUCT("primary" VARCHAR)
+        taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[])
         names       STRUCT("primary" VARCHAR)
 
     Includes:
     - 2 named places with 'cafe' category
     - 1 named place with 'park' category
     - 1 place with NULL names.primary (should be excluded)
-    - 1 place with NULL categories.primary (should be excluded)
+    - 1 place with NULL taxonomy.primary (should be excluded)
     """
     parquet_path = tmp_path / "overture_idf.parquet"
 
@@ -45,18 +45,18 @@ def overture_idf_parquet(tmp_path):
     conn.execute("""
         CREATE TABLE tmp_ov (
             id          VARCHAR,
-            categories  STRUCT("primary" VARCHAR),
+            taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
             names       STRUCT("primary" VARCHAR)
         )
     """)
 
     conn.execute("""
         INSERT INTO tmp_ov VALUES
-            ('ov001', {'primary': 'cafe'}, {'primary': 'Blue Bottle'}),
-            ('ov002', {'primary': 'cafe'}, {'primary': 'Ritual'}),
-            ('ov003', {'primary': 'park'}, {'primary': 'Dolores Park'}),
-            ('ov004', {'primary': 'cafe'}, {'primary': NULL}),
-            ('ov005', {'primary': NULL},   {'primary': 'Named Place'})
+            ('ov001', {'primary': 'cafe', 'hierarchy': ['services', 'cafe'], 'alternates': []}, {'primary': 'Blue Bottle'}),
+            ('ov002', {'primary': 'cafe', 'hierarchy': ['services', 'cafe'], 'alternates': []}, {'primary': 'Ritual'}),
+            ('ov003', {'primary': 'park', 'hierarchy': ['services', 'park'], 'alternates': []}, {'primary': 'Dolores Park'}),
+            ('ov004', {'primary': 'cafe', 'hierarchy': ['services', 'cafe'], 'alternates': []}, {'primary': NULL}),
+            ('ov005', NULL,   {'primary': 'Named Place'})
     """)
 
     conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
@@ -204,7 +204,7 @@ class TestStageIdfOverture:
     def test_null_category_excluded(self, overture_idf_parquet, tmp_path):
         """No NULL categories in output.
 
-        ov005 has categories.primary=NULL. It should not produce a row.
+        ov005 has taxonomy.primary=NULL. It should not produce a row.
         """
         output_path = str(tmp_path / "ov_idf_out.parquet")
         t0 = time.monotonic()
@@ -376,14 +376,14 @@ class TestStageIdfMtimeCaching:
         conn.execute("""
             CREATE TABLE tmp_ov (
                 id          VARCHAR,
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
                 names       STRUCT("primary" VARCHAR)
             )
         """)
         conn.execute("""
             INSERT INTO tmp_ov VALUES
-                ('x001', {'primary': 'cat1'}, {'primary': 'Place A'}),
-                ('x002', {'primary': 'cat2'}, {'primary': 'Place B'})
+                ('x001', {'primary': 'cat1', 'hierarchy': ['services', 'cat1'], 'alternates': []}, {'primary': 'Place A'}),
+                ('x002', {'primary': 'cat2', 'hierarchy': ['services', 'cat2'], 'alternates': []}, {'primary': 'Place B'})
         """)
         conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
         conn.close()
@@ -921,14 +921,14 @@ class TestStageIdfMetaSidecar:
         conn.execute("""
             CREATE TABLE tmp_ov (
                 id          VARCHAR,
-                categories  STRUCT("primary" VARCHAR),
+                taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
                 names       STRUCT("primary" VARCHAR)
             )
         """)
         conn.execute("""
             INSERT INTO tmp_ov VALUES
-                ('x001', {'primary': 'cat1'}, {'primary': 'Place A'}),
-                ('x002', {'primary': 'cat2'}, {'primary': 'Place B'})
+                ('x001', {'primary': 'cat1', 'hierarchy': ['services', 'cat1'], 'alternates': []}, {'primary': 'Place A'}),
+                ('x002', {'primary': 'cat2', 'hierarchy': ['services', 'cat2'], 'alternates': []}, {'primary': 'Place B'})
         """)
         conn.execute(f"COPY tmp_ov TO '{parquet_path}' (FORMAT PARQUET)")
         conn.close()

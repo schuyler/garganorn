@@ -53,7 +53,9 @@ SELECT
             attributes: strip_json_nulls(to_json({
                 id: p.id,
                 names: p.names,
-                categories: p.categories,
+                taxonomy: p.taxonomy,
+                basic_category: p.basic_category,
+                operating_status: p.operating_status,
                 websites: p.websites,
                 socials: p.socials,
                 emails: p.emails,

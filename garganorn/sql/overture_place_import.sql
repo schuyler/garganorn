@@ -76,7 +76,7 @@ LEFT JOIN (
     SELECT category, any_value(idf_score) AS idf_score
     FROM idf_scores
     GROUP BY category
-) oi ON oi.category = b.categories.primary;
+) oi ON oi.category = b.taxonomy.primary;
 
 -- Drop temp tables
 DROP TABLE density_tiles;

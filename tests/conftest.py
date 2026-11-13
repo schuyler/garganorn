@@ -33,7 +33,7 @@ def _create_overture_db(db_path):
             geometry GEOMETRY,
             bbox STRUCT(xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE),
             names STRUCT("primary" VARCHAR),
-            categories STRUCT("primary" VARCHAR),
+            taxonomy STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
             addresses STRUCT(
                 country VARCHAR,
                 postcode VARCHAR,
@@ -84,7 +84,7 @@ def _create_overture_db(db_path):
                 ?, ST_Point(?, ?),
                 {{'xmin': ?-0.001, 'ymin': ?-0.001, 'xmax': ?+0.001, 'ymax': ?+0.001}},
                 {{'primary': ?}},
-                {{'primary': NULL}},
+                NULL,
                 [{{'country': ?, 'postcode': ?, 'locality': ?, 'freeform': ?, 'region': ?}}],
                 NULL, NULL, NULL, NULL,
                 NULL,
@@ -267,7 +267,9 @@ def overture_parquet(tmp_path_factory):
                             common MAP(VARCHAR, VARCHAR),
                             rules  STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]
                         ),
-            categories  STRUCT("primary" VARCHAR),
+            taxonomy    STRUCT("primary" VARCHAR, hierarchy VARCHAR[], alternates VARCHAR[]),
+            basic_category VARCHAR,
+            operating_status VARCHAR,
             addresses   STRUCT(country VARCHAR, postcode VARCHAR, locality VARCHAR, freeform VARCHAR, region VARCHAR)[],
             websites    VARCHAR[],
             socials     VARCHAR[],
@@ -289,7 +291,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Blue Bottle Coffee',
              'common': map(['en'], ['Blue Bottle Coffee']),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'cafe_and_tea', 'coffee_shop'], 'alternates': ['espresso_bar']}, 'food_and_drink', 'open',
             [{'country': 'US', 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '66 Mint St', 'region': 'US-CA'}],
             NULL, NULL, NULL, NULL, NULL, NULL, NULL,
             [{'property': '', 'dataset': 'meta', 'record_id': '123', 'confidence': 0.95}]
@@ -305,7 +307,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'GG Park',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  [{'language': 'en', 'value': 'GG Park', 'variant': 'short'}]},
-            {'primary': 'park'},
+            {'primary': 'park', 'hierarchy': ['attractions_and_activities', 'park'], 'alternates': []}, 'attractions_and_activities', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -320,7 +322,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Place ov003',
              'common': NULL::MAP(VARCHAR, VARCHAR),
              'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -334,7 +336,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Place ov004',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -348,7 +350,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Place ov005',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'unique_venue'},
+            {'primary': 'unique_venue', 'hierarchy': ['services', 'unique_venue'], 'alternates': []}, 'services', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 
         )
@@ -363,7 +365,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': NULL::VARCHAR,
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -377,7 +379,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': NULL::VARCHAR,
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -391,7 +393,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'No Country Place',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'null_country_venue'},
+            {'primary': 'null_country_venue', 'hierarchy': ['services', 'null_country_venue'], 'alternates': []}, 'services', NULL,
             [{'country': NULL::VARCHAR, 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '1 Market St', 'region': 'US-CA'}],
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
@@ -406,7 +408,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Mixed Address Place',
              'common': map([]::VARCHAR[], []::VARCHAR[]),
              'rules':  []::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'mixed_addr_venue'},
+            {'primary': 'mixed_addr_venue', 'hierarchy': ['services', 'mixed_addr_venue'], 'alternates': []}, 'services', NULL,
             [
               {'country': NULL::VARCHAR, 'postcode': '94103', 'locality': 'San Francisco', 'freeform': '1 Market St', 'region': 'US-CA'},
               {'country': 'US', 'postcode': '94105', 'locality': 'San Francisco', 'freeform': '2 Market St', 'region': 'US-CA'}
@@ -432,7 +434,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Rules Only Place',
              'common': NULL::MAP(VARCHAR, VARCHAR),
              'rules':  [{'language': 'en', 'value': 'Rules Value', 'variant': 'official'}]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -448,7 +450,7 @@ def overture_parquet(tmp_path_factory):
             {'primary': 'Common Only Place',
              'common': map(['fr'], ['Nom Commun']),
              'rules':  NULL::STRUCT(language VARCHAR, value VARCHAR, variant VARCHAR)[]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -473,7 +475,7 @@ def overture_parquet(tmp_path_factory):
                  {'language': 'en', 'value': 'Omega Short', 'variant': 'short'},
                  {'language': 'en', 'value': 'Beta Colloquial', 'variant': 'colloquial'}
              ]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -492,7 +494,7 @@ def overture_parquet(tmp_path_factory):
                  {'language': 'de', 'value': NULL::VARCHAR, 'variant': 'short'},
                  {'language': 'es', 'value': '', 'variant': 'official'}
              ]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -513,7 +515,7 @@ def overture_parquet(tmp_path_factory):
                  {'language': 'es', 'value': 'Golden Gate', 'variant': 'official'},
                  {'language': 'de', 'value': 'Zelle', 'variant': 'short'}
              ]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -532,7 +534,7 @@ def overture_parquet(tmp_path_factory):
                  {'language': 'en', 'value': 'Repeat Name', 'variant': 'alternate'},
                  {'language': 'en', 'value': 'Repeat Name', 'variant': 'alternate'}
              ]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -551,7 +553,7 @@ def overture_parquet(tmp_path_factory):
              'rules':  [
                  {'language': 'en', 'value': 'Repeat Name', 'variant': 'alternate'}
              ]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
@@ -571,7 +573,7 @@ def overture_parquet(tmp_path_factory):
                  {'language': 'genitive', 'value': 'Invalid Language Name', 'variant': 'official'},
                  {'language': 'en', 'value': 'Valid Language Name', 'variant': 'alternate'}
              ]},
-            {'primary': 'coffee_shop'},
+            {'primary': 'coffee_shop', 'hierarchy': ['food_and_drink', 'coffee_shop'], 'alternates': []}, 'food_and_drink', NULL,
             NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
         )
     """)
